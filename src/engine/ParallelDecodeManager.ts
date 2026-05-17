@@ -41,6 +41,44 @@ interface Sample {
   timescale: number;
 }
 
+export interface SamplePresentationTiming {
+  cts: number;
+  timescale: number;
+}
+
+export function getPresentationOffsetSeconds(samples: readonly SamplePresentationTiming[]): number {
+  let firstPresentationTime = Infinity;
+
+  for (const sample of samples) {
+    if (!Number.isFinite(sample.cts) || !Number.isFinite(sample.timescale) || sample.timescale <= 0) {
+      continue;
+    }
+
+    firstPresentationTime = Math.min(firstPresentationTime, sample.cts / sample.timescale);
+  }
+
+  return Number.isFinite(firstPresentationTime) ? firstPresentationTime : 0;
+}
+
+export function getNormalizedSampleSourceTime(
+  sample: SamplePresentationTiming,
+  presentationOffsetSeconds: number
+): number {
+  if (!Number.isFinite(sample.cts) || !Number.isFinite(sample.timescale) || sample.timescale <= 0) {
+    return 0;
+  }
+
+  const sourceTime = (sample.cts / sample.timescale) - presentationOffsetSeconds;
+  return Number.isFinite(sourceTime) ? Math.max(0, sourceTime) : 0;
+}
+
+export function getNormalizedSampleTimestampMicroseconds(
+  sample: SamplePresentationTiming,
+  presentationOffsetSeconds: number
+): number {
+  return Math.round(getNormalizedSampleSourceTime(sample, presentationOffsetSeconds) * 1_000_000);
+}
+
 interface MP4VideoTrack {
   id: number;
   codec: string;
@@ -101,8 +139,8 @@ interface ClipInfo {
 
 interface DecodedFrame {
   frame: VideoFrame;
-  sourceTime: number;     // Time in source video (seconds)
-  timestamp: number;      // Original timestamp from VideoFrame (microseconds)
+  sourceTime: number;     // Normalized time in source video (seconds)
+  timestamp: number;      // Normalized timestamp from VideoFrame (microseconds)
 }
 
 interface ClipDecoder {
@@ -113,6 +151,7 @@ interface ClipDecoder {
   sampleIndex: number;
   videoTrack: MP4VideoTrack;
   codecConfig: VideoDecoderConfig;
+  presentationOffsetSeconds: number;
   frameBuffer: Map<number, DecodedFrame>;  // timestamp (μs) -> decoded frame
   sortedTimestamps: number[];              // Sorted list for O(log n) lookup
   oldestTimestamp: number;                 // Track bounds for quick rejection
@@ -206,6 +245,11 @@ export class ParallelDecodeManager {
       throw e;
     }
 
+    const presentationOffsetSeconds = getPresentationOffsetSeconds(parseResult.samples);
+    if (Math.abs(presentationOffsetSeconds) > 0.0005) {
+      log.info(`"${clipInfo.clipName}": normalizing MP4 presentation offset ${presentationOffsetSeconds.toFixed(3)}s so source starts at 0.000s`);
+    }
+
     const clipDecoder: ClipDecoder = {
       clipId: clipInfo.clipId,
       clipName: clipInfo.clipName,
@@ -214,6 +258,7 @@ export class ParallelDecodeManager {
       sampleIndex: 0,
       videoTrack: parseResult.videoTrack,
       codecConfig,
+      presentationOffsetSeconds,
       frameBuffer: new Map(),
       sortedTimestamps: [],
       oldestTimestamp: Infinity,
@@ -424,8 +469,8 @@ export class ParallelDecodeManager {
       return false;
     }
 
-    if (targetTimestamp < clipDecoder.oldestTimestamp - this.frameTolerance) {
-      return true;
+    if (targetTimestamp < clipDecoder.oldestTimestamp - tolerance) {
+      return false;
     }
 
     if (targetTimestamp > clipDecoder.newestTimestamp + tolerance) {
@@ -820,18 +865,28 @@ export class ParallelDecodeManager {
         // Otherwise if we're past the target, framesToDecode will be negative and we'll return early
         if (needsSeek) {
           // Need to seek - find nearest keyframe before the ACTUAL target we need
-          const seekTarget = seekTargetSampleIndex ?? targetSampleIndex;
+          const seekTarget = Math.max(
+            0,
+            Math.min(seekTargetSampleIndex ?? targetSampleIndex, clipDecoder.samples.length - 1)
+          );
           // Find keyframe candidates by CTS (display time), not decode order.
           // Due to B-frame reordering, a keyframe earlier in decode order
           // can have a LATER CTS than the target, causing wrong frames to be decoded.
-          const targetCTS = clipDecoder.samples[seekTarget].cts;
+          const targetSourceTime = getNormalizedSampleSourceTime(
+            clipDecoder.samples[seekTarget],
+            clipDecoder.presentationOffsetSeconds
+          );
           const keyframeCandidates: number[] = [];
           for (let i = 0; i < clipDecoder.samples.length; i++) {
             if (clipDecoder.samples[i].is_sync) {
-              if (clipDecoder.samples[i].cts <= targetCTS) {
+              const sampleSourceTime = getNormalizedSampleSourceTime(
+                clipDecoder.samples[i],
+                clipDecoder.presentationOffsetSeconds
+              );
+              if (sampleSourceTime <= targetSourceTime) {
                 keyframeCandidates.push(i);
               } else {
-                break; // Keyframe CTS values increase monotonically
+                break; // Keyframe presentation times increase monotonically
               }
             }
           }
@@ -846,14 +901,17 @@ export class ParallelDecodeManager {
           for (let k = keyframeCandidates.length - 1; k >= keyframeCandidates.length - maxAttempts; k--) {
             const candidateIndex = keyframeCandidates[k];
             const candidateSample = clipDecoder.samples[candidateIndex];
-            const candidateCTS = (candidateSample.cts / clipDecoder.videoTrack.timescale).toFixed(3);
+            const candidateSourceTime = getNormalizedSampleSourceTime(
+              candidateSample,
+              clipDecoder.presentationOffsetSeconds
+            ).toFixed(3);
 
             clipDecoder.decoder.reset();
             clipDecoder.decoder.configure(exportConfig);
 
             const chunk = new EncodedVideoChunk({
               type: 'key',
-              timestamp: (candidateSample.cts * 1_000_000) / candidateSample.timescale,
+              timestamp: getNormalizedSampleTimestampMicroseconds(candidateSample, clipDecoder.presentationOffsetSeconds),
               duration: (candidateSample.duration * 1_000_000) / candidateSample.timescale,
               data: candidateSample.data,
             });
@@ -861,10 +919,10 @@ export class ParallelDecodeManager {
             try {
               clipDecoder.decoder.decode(chunk);
               clipDecoder.sampleIndex = candidateIndex + 1; // Already decoded this one
-              log.debug(`${clipDecoder.clipName}: Seek keyframe accepted at sample ${candidateIndex} (CTS=${candidateCTS}s, targetCTS=${(targetCTS / clipDecoder.videoTrack.timescale).toFixed(3)}s, bufferTarget=${targetSampleIndex})`);
+              log.debug(`${clipDecoder.clipName}: Seek keyframe accepted at sample ${candidateIndex} (source=${candidateSourceTime}s, targetSource=${targetSourceTime.toFixed(3)}s, bufferTarget=${targetSampleIndex})`);
               break;
             } catch (e) {
-              log.debug(`${clipDecoder.clipName}: Seek keyframe REJECTED at sample ${candidateIndex} (CTS=${candidateCTS}s) - not a real IDR, trying earlier`);
+              log.debug(`${clipDecoder.clipName}: Seek keyframe REJECTED at sample ${candidateIndex} (source=${candidateSourceTime}s) - not a real IDR, trying earlier`);
               if (k === keyframeCandidates.length - maxAttempts) {
                 // Last attempt failed - reset and start from first sample
                 clipDecoder.decoder.reset();
@@ -947,7 +1005,7 @@ export class ParallelDecodeManager {
 
           const chunk = new EncodedVideoChunk({
             type: sample.is_sync ? 'key' : 'delta',
-            timestamp: (sample.cts * 1_000_000) / sample.timescale,
+            timestamp: getNormalizedSampleTimestampMicroseconds(sample, clipDecoder.presentationOffsetSeconds),
             duration: (sample.duration * 1_000_000) / sample.timescale,
             data: sample.data,
           });
@@ -1009,7 +1067,6 @@ export class ParallelDecodeManager {
    * due to B-frame reordering. Binary search doesn't work here.
    */
   private findSampleIndexForTime(clipDecoder: ClipDecoder, sourceTime: number): number {
-    const targetTime = sourceTime * clipDecoder.videoTrack.timescale;
     const samples = clipDecoder.samples;
 
     if (samples.length === 0) return 0;
@@ -1019,7 +1076,11 @@ export class ParallelDecodeManager {
     let closestDiff = Infinity;
 
     for (let i = 0; i < samples.length; i++) {
-      const diff = Math.abs(samples[i].cts - targetTime);
+      const sampleSourceTime = getNormalizedSampleSourceTime(
+        samples[i],
+        clipDecoder.presentationOffsetSeconds
+      );
+      const diff = Math.abs(sampleSourceTime - sourceTime);
       if (diff < closestDiff) {
         closestDiff = diff;
         targetIndex = i;

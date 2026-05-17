@@ -357,6 +357,7 @@ interface ApiRequestInit extends RequestInit {
 }
 
 const DEFAULT_JSON_REQUEST_TIMEOUT_MS = 10_000;
+const AI_CHAT_REQUEST_TIMEOUT_MS = 90_000;
 
 function createRequestController(signal?: AbortSignal | null, timeoutMs?: number): {
   cleanup: () => void;
@@ -535,6 +536,7 @@ export const cloudApi = {
         return requestJson<CloudAiGatewayEnvelope>('/api/ai/chat', {
           body: JSON.stringify(body),
           method: 'POST',
+          timeoutMs: AI_CHAT_REQUEST_TIMEOUT_MS,
         });
       },
       stream(body: CloudAiChatRequest): Promise<Response> {
@@ -571,6 +573,7 @@ export const cloudApi = {
       return requestJson<unknown>('/api/ai/chat', {
         body: JSON.stringify(body),
         method: 'POST',
+        timeoutMs: AI_CHAT_REQUEST_TIMEOUT_MS,
       });
     },
     videoCreate(body: {

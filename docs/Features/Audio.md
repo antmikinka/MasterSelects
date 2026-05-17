@@ -77,12 +77,14 @@ Audio export is handled by `engine/audio`:
 - `FrameExporter` uses `AudioExportPipeline.exportAudio()` for normal video exports with audio.
 - `FrameExporter` uses `AudioExportPipeline.exportRawAudio()` for the FFmpeg export path.
 - `ExportPanel` also exposes standalone audio export through the same pipeline.
+- Audio-only WAV export uses `exportRawAudio()` and writes a 16-bit PCM WAV file.
 - The pipeline applies clip trimming, speed changes, EQ, volume, mixing, and then encoding.
 - `AudioEncoderWrapper` prefers AAC-LC and falls back to Opus if the browser supports it.
 - Peak normalization is optional and only happens during export when enabled.
 
 Important limitation:
-the WebCodecs audio encoder is required for the standalone encoded audio path.
+the WebCodecs audio encoder is required for the standalone browser-compressed audio path.
+Audio-only WAV export does not require WebCodecs audio encoding.
 FFmpeg exports can still receive raw audio because they use `exportRawAudio()`.
 
 ## Limitations

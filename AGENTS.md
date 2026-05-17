@@ -6,7 +6,15 @@ Diese Datei ist das Codex-Pendant zu `CLAUDE.md`. Wenn sich Workflow, Branch-Reg
 
 ---
 
-## 0. Projektziel / Vision
+## -1. Arbeitsprinzip / Top Memory
+
+MasterSelects wird nicht fuer kurzfristige Loesungen optimiert. Da das Projekt AI-powered sehr schnell entwickelt werden kann und aktuell keine externen User blockiert, sind grosse, richtige Architekturentscheidungen ausdruecklich erlaubt und bevorzugt.
+
+Default ist: langfristig denken, echte Zielarchitektur bauen, keine MVPs, keine Mocks, keine Wegwerf-Prototypen und keine kleinen Zwischenloesungen, wenn die robuste Loesung direkt erreichbar ist. Kurzfristige Hacks nur dann verwenden, wenn der User sie explizit verlangt oder ein harter technischer Blocker keine bessere Umsetzung erlaubt.
+
+---
+
+## 0. Projektziel
 
 MasterSelects soll bis Juni 2026 ALLE Media-Dateien unterstuetzen, nicht nur Video, Audio und Bilder, sondern wirklich alles:
 

@@ -25,7 +25,7 @@ FCPXML is exposed as a selectable export container for NLE interchange.
 - `Basic` contains output naming and container selection. The container row is grouped by `Video`, `Image`, `Audio`, and `XML`, and switches output mode by selecting a deliverable directly.
 - The `Video` group contains codec selection, resolution, frame rate, bitrate/rate controls, animated GIF palette controls, stacked-alpha, and range toggles.
 - In `Image` mode the same middle group becomes an `Image` panel with format-aware resolution and quality controls, and it can export either the current playhead frame or a numbered image sequence folder.
-- The `Audio` group contains sample rate, bitrate, normalization, and audio-only range controls.
+- The `Audio` group contains audio-only format selection, sample rate, bitrate for browser-compressed audio, normalization, and audio-only range controls.
 - Lower in the panel, legacy `Advanced Video`, `Advanced Audio`, and `Range & Summary` sections still exist for raw-value access.
 - Export settings and preset selection now live in a shared store, so changes inside the Export tab participate in global undo/redo and are restored with the project.
 
@@ -152,10 +152,13 @@ Audio export is handled separately from the video encoder.
 
 - Audio is extracted from the selected timeline range.
 - `AudioExportPipeline` renders the mixed audio.
+- Audio-only WAV export writes the mixed `AudioBuffer` as 16-bit PCM WAV.
 - WebCodecs export can mux the audio chunks into the final file.
 
 ### Supported Behavior
 
+- Audio-only export supports uncompressed WAV (`.wav`) without WebCodecs audio encoding.
+- The existing browser-compressed audio-only path writes the detected browser codec (`.aac` or `.ogg`).
 - AAC is used for MP4 when supported.
 - Opus is used for WebM when supported.
 - If the browser cannot encode a usable audio format, the export can proceed without audio.

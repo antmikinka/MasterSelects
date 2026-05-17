@@ -53,43 +53,57 @@ export class VideoEncoderWrapper {
       bitrate: this.settings.bitrate,
       framerate: this.settings.fps,
     };
-    try {
-      const requestedSupport = await VideoEncoder.isConfigSupported({
+    const buildEncoderConfigCandidates = (bitrateMode: VideoEncoderBitrateMode): VideoEncoderConfig[] => [
+      {
         ...supportCheckConfig,
-        bitrateMode: requestedBitrateMode,
-      });
+        latencyMode: 'realtime',
+        hardwareAcceleration: 'prefer-hardware',
+        bitrateMode,
+        contentHint: 'motion',
+      },
+      {
+        ...supportCheckConfig,
+        latencyMode: 'realtime',
+        hardwareAcceleration: 'no-preference',
+        bitrateMode,
+        contentHint: 'motion',
+      },
+      {
+        ...supportCheckConfig,
+        latencyMode: 'quality',
+        hardwareAcceleration: 'prefer-hardware',
+        bitrateMode,
+        contentHint: 'motion',
+      },
+      {
+        ...supportCheckConfig,
+        latencyMode: 'quality',
+        hardwareAcceleration: 'no-preference',
+        bitrateMode,
+        contentHint: 'motion',
+      },
+    ];
+    const bitrateModesToTry: VideoEncoderBitrateMode[] = requestedBitrateMode === 'constant'
+      ? ['constant', 'variable']
+      : ['variable'];
+    const supportedEncoderConfigs: VideoEncoderConfig[] = [];
 
-      this.effectiveBitrateMode = requestedBitrateMode;
-
-      if (!requestedSupport.supported) {
-        if (requestedBitrateMode !== 'constant') {
-          log.error(`Codec not supported: ${codecString}`);
-          return false;
-        }
-
-        log.warn('Constant bitrate support check failed for this encoder config, will try configure() and fall back to variable if needed');
-
-        const fallbackSupport = await VideoEncoder.isConfigSupported({
-          ...supportCheckConfig,
-          bitrateMode: 'variable',
-        });
-        if (!fallbackSupport.supported) {
-          this.effectiveBitrateMode = 'variable';
-          log.error(`Codec not supported: ${codecString}`);
-          return false;
-        }
-      } else if (requestedBitrateMode === 'constant') {
-        const fallbackSupport = await VideoEncoder.isConfigSupported({
-          ...supportCheckConfig,
-          bitrateMode: 'variable',
-        });
-        if (!fallbackSupport.supported) {
-          log.error(`Codec not supported: ${codecString}`);
-          return false;
+    try {
+      for (const bitrateMode of bitrateModesToTry) {
+        for (const config of buildEncoderConfigCandidates(bitrateMode)) {
+          const support = await VideoEncoder.isConfigSupported(config);
+          if (support.supported) {
+            supportedEncoderConfigs.push(config);
+          }
         }
       }
     } catch (e) {
       log.error('Codec support check failed:', e);
+      return false;
+    }
+
+    if (supportedEncoderConfigs.length === 0) {
+      log.error(`Codec not supported: ${codecString}`);
       return false;
     }
 
@@ -110,27 +124,32 @@ export class VideoEncoderWrapper {
       },
     });
 
-    const buildEncoderConfig = (bitrateMode: VideoEncoderBitrateMode): VideoEncoderConfig => ({
-      ...supportCheckConfig,
-      latencyMode: 'quality',
-      bitrateMode,
-    });
+    let selectedEncoderConfig: VideoEncoderConfig | null = null;
 
-    try {
-      this.encoder.configure(buildEncoderConfig(requestedBitrateMode));
-      this.effectiveBitrateMode = requestedBitrateMode;
-    } catch (error) {
-      if (requestedBitrateMode !== 'constant') {
-        throw error;
+    for (const config of supportedEncoderConfigs) {
+      try {
+        this.encoder.configure(config);
+        selectedEncoderConfig = config;
+        this.effectiveBitrateMode = config.bitrateMode ?? 'variable';
+        break;
+      } catch (error) {
+        log.warn(
+          `Encoder configure failed for ${config.latencyMode ?? 'default'} / ${config.hardwareAcceleration ?? 'default'} / ${config.bitrateMode ?? 'default'}, trying next config`,
+          error
+        );
       }
+    }
 
-      log.warn('Constant bitrate configure() failed, falling back to variable bitrate', error);
-      this.encoder.configure(buildEncoderConfig('variable'));
-      this.effectiveBitrateMode = 'variable';
+    if (!selectedEncoderConfig) {
+      throw new Error(`Failed to configure encoder for codec ${codecString}`);
+    }
+
+    if (requestedBitrateMode !== this.effectiveBitrateMode) {
+      log.warn(`Requested ${requestedBitrateMode} bitrate mode is not supported for this encoder config; using ${this.effectiveBitrateMode}`);
     }
 
     log.info(
-      `Initialized: ${this.settings.width}x${this.settings.height} @ ${this.settings.fps}fps (${this.effectiveVideoCodec.toUpperCase()}, ${(this.settings.bitrate / 1_000_000).toFixed(1)} Mbps, ${this.effectiveBitrateMode})`
+      `Initialized: ${this.settings.width}x${this.settings.height} @ ${this.settings.fps}fps (${this.effectiveVideoCodec.toUpperCase()}, ${(this.settings.bitrate / 1_000_000).toFixed(1)} Mbps, ${this.effectiveBitrateMode}, ${selectedEncoderConfig.latencyMode ?? 'default'} latency, ${selectedEncoderConfig.hardwareAcceleration ?? 'default'} hw)`
     );
     return true;
   }

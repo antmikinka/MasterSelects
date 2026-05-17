@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import type { ContainerFormat, VideoCodec } from '../engine/export';
+import type { AudioOnlyExportFormat } from '../engine/audio/AudioFileEncoder';
 import type {
   DnxhrProfile,
   FFmpegContainer,
@@ -14,6 +15,7 @@ export type ExportVisualMode = 'video' | 'image' | 'gif';
 export type ExportImageFormat = 'png' | 'jpg' | 'webp' | 'bmp';
 export type ExportImageMode = 'frame' | 'sequence';
 export type ExportSpecialContainer = 'none' | 'xml';
+export type ExportAudioFormat = AudioOnlyExportFormat;
 
 export interface ExportSettings {
   encoder: ExportEncoderType;
@@ -47,6 +49,7 @@ export interface ExportSettings {
   gifAlphaThreshold: number;
   stackedAlpha: boolean;
   includeAudio: boolean;
+  audioOnlyFormat: ExportAudioFormat;
   audioSampleRate: 44100 | 48000;
   audioBitrate: number;
   normalizeAudio: boolean;
@@ -100,6 +103,7 @@ const IMAGE_FORMATS: ExportImageFormat[] = ['png', 'jpg', 'webp', 'bmp'];
 const IMAGE_EXPORT_MODES: ExportImageMode[] = ['frame', 'sequence'];
 const VISUAL_MODES: ExportVisualMode[] = ['video', 'image', 'gif'];
 const SPECIAL_CONTAINERS: ExportSpecialContainer[] = ['none', 'xml'];
+const AUDIO_FORMATS: ExportAudioFormat[] = ['wav', 'browser'];
 const GIF_DITHERS: GifDither[] = ['sierra2_4a', 'floyd_steinberg', 'bayer', 'none'];
 const GIF_LOOPS: GifLoopMode[] = ['forever', 'once'];
 const GIF_PALETTE_MODES: GifPaletteMode[] = ['global', 'per-frame'];
@@ -141,6 +145,7 @@ export function createDefaultExportSettings(): ExportSettings {
     gifAlphaThreshold: 128,
     stackedAlpha: false,
     includeAudio: true,
+    audioOnlyFormat: 'wav',
     audioSampleRate: 48000,
     audioBitrate: 256_000,
     normalizeAudio: false,
@@ -234,6 +239,7 @@ function sanitizeSettings(input?: Partial<ExportSettings> | null): ExportSetting
     gifAlphaThreshold: Math.round(pickNumber(input.gifAlphaThreshold, defaults.gifAlphaThreshold, { min: 0, max: 255 })),
     stackedAlpha: typeof input.stackedAlpha === 'boolean' ? input.stackedAlpha : defaults.stackedAlpha,
     includeAudio: isGifOutput ? false : typeof input.includeAudio === 'boolean' ? input.includeAudio : defaults.includeAudio,
+    audioOnlyFormat: pickEnumValue(input.audioOnlyFormat, AUDIO_FORMATS, defaults.audioOnlyFormat),
     audioSampleRate: input.audioSampleRate === 44100 || input.audioSampleRate === 48000
       ? input.audioSampleRate
       : defaults.audioSampleRate,

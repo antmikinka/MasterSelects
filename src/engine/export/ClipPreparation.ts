@@ -617,6 +617,7 @@ async function initializeParallelDecoding(
 ): Promise<ClipPreparationResult> {
   const parallelDecoder = new ParallelDecodeManager();
 
+  try {
   // Load all clip file data in parallel
   const endLoadAll = log.time('loadAllClipFileData');
   const loadPromises: Promise<ParallelClipInfo>[] = clips.map(async (clip) => {
@@ -773,6 +774,10 @@ async function initializeParallelDecoding(
     useParallelDecode: true,
     exportMode: 'fast',
   };
+  } catch (e) {
+    parallelDecoder.cleanup();
+    throw e;
+  }
 }
 
 /**
