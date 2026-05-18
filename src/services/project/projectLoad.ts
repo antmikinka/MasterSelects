@@ -997,6 +997,8 @@ export async function loadProjectToStores(): Promise<void> {
   const meshItems = normalizeItemFolderParents(projectData.meshItems || [], validFolderIds, 'mesh items');
   const cameraItems = normalizeItemFolderParents(projectData.cameraItems || [], validFolderIds, 'camera items');
   const splatEffectorItems = normalizeItemFolderParents(projectData.splatEffectorItems || [], validFolderIds, 'splat effector items');
+  const mathSceneItems = normalizeItemFolderParents(projectData.mathSceneItems || [], validFolderIds, 'math scene items');
+  const motionShapeItems = normalizeItemFolderParents(projectData.motionShapeItems || [], validFolderIds, 'motion shape items');
 
   // Update media store
   useMediaStore.setState({
@@ -1019,6 +1021,8 @@ export async function loadProjectToStores(): Promise<void> {
     meshItems,
     cameraItems,
     splatEffectorItems,
+    mathSceneItems,
+    motionShapeItems,
     activeCompositionId: projectData.activeCompositionId,
     openCompositionIds: projectData.openCompositionIds || [],
     expandedFolderIds: projectData.expandedFolderIds || [],

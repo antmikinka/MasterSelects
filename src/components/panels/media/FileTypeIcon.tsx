@@ -118,6 +118,22 @@ export const FileTypeIcon = memo(({ type, large }: FileTypeIconProps) => {
           <path d="M8 3.5V5.4M8 10.6V12.5M3.5 8H5.4M10.6 8H12.5M4.8 4.8L6.1 6.1M9.9 9.9L11.2 11.2M11.2 4.8L9.9 6.1M6.1 9.9L4.8 11.2" stroke="#a7f0c0" strokeWidth="0.8" strokeLinecap="round"/>
         </svg>
       );
+    case 'math-scene':
+      return (
+        <svg style={style} viewBox="0 0 16 16" fill="none">
+          <rect x="1" y="2" width="14" height="12" rx="1.5" fill="#3f5478" stroke="#79a8f2" strokeWidth="0.7"/>
+          <path d="M3.5 10.5c1.2-4.1 2.1-5.9 3-5.9.8 0 1.1 1.5 1.8 3.3.5 1.4 1 2.5 1.8 2.5.7 0 1.4-1 2.4-3.4" stroke="#d8e8ff" strokeWidth="1" strokeLinecap="round"/>
+          <path d="M3 8h10M8 4v8" stroke="#79a8f2" strokeWidth="0.5" opacity="0.6"/>
+        </svg>
+      );
+    case 'motion-shape':
+      return (
+        <svg style={style} viewBox="0 0 16 16" fill="none">
+          <rect x="1" y="2" width="14" height="12" rx="1.5" fill="#6a4b5b" stroke="#d28aae" strokeWidth="0.7"/>
+          <rect x="4" y="5" width="5" height="5" rx="0.8" fill="#f0b1cb" opacity="0.9"/>
+          <circle cx="10.6" cy="9.6" r="2.2" fill="#8bd6d0" opacity="0.88"/>
+        </svg>
+      );
     case 'gaussian-avatar':
       return (
         <svg style={style} viewBox="0 0 16 16" fill="none">
@@ -316,6 +332,25 @@ const LargeIcon = memo(({ type, style }: { type?: string; style: React.CSSProper
           <circle cx="24" cy="24" r="7" fill="#173123" stroke="#aef2c7" strokeWidth="1.2"/>
           <path d="M24 11v6M24 31v6M11 24h6M31 24h6M15.5 15.5l4.2 4.2M28.3 28.3l4.2 4.2M32.5 15.5l-4.2 4.2M19.7 28.3l-4.2 4.2" stroke="#aef2c7" strokeWidth="1.4" strokeLinecap="round"/>
           <circle cx="24" cy="24" r="2.2" fill="#d6ffe4"/>
+        </svg>
+      );
+    case 'math-scene':
+      return (
+        <svg style={style} viewBox="0 0 48 48" fill="none">
+          <rect x="4" y="8" width="40" height="32" rx="3" fill="#31486c"/>
+          <rect x="4" y="8" width="40" height="32" rx="3" stroke="#79a8f2" strokeWidth="1"/>
+          <path d="M10 30c3.7-12 6.7-17.4 9.2-17.4 2.2 0 3.3 4.3 5.1 9.8 1.5 4.3 3.1 7.2 5.2 7.2 2.3 0 4.8-4.4 8.5-14.2" stroke="#d8e8ff" strokeWidth="2.2" strokeLinecap="round"/>
+          <path d="M9 24h30M24 12v24" stroke="#79a8f2" strokeWidth="1" opacity="0.45"/>
+        </svg>
+      );
+    case 'motion-shape':
+      return (
+        <svg style={style} viewBox="0 0 48 48" fill="none">
+          <rect x="4" y="8" width="40" height="32" rx="3" fill="#59384c"/>
+          <rect x="4" y="8" width="40" height="32" rx="3" stroke="#d28aae" strokeWidth="1"/>
+          <rect x="12" y="15" width="14" height="14" rx="2" fill="#f0b1cb" opacity="0.9"/>
+          <circle cx="31" cy="29" r="7" fill="#8bd6d0" opacity="0.9"/>
+          <path d="M11 33c8-2 17-2 26 0" stroke="#f5d5e3" strokeWidth="1.4" opacity="0.55" strokeLinecap="round"/>
         </svg>
       );
     case 'gaussian-avatar':

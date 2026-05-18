@@ -492,7 +492,30 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
   const setSceneGizmoClipIdOverride = useEngineStore((s) => s.setSceneGizmoClipIdOverride);
   const activeSplatLoadProgress = useEngineStore(selectActiveGaussianSplatLoadProgress);
   const setSceneNavFpsMoveSpeed = useEngineStore((s) => s.setSceneNavFpsMoveSpeed);
-  const { clips, selectedClipIds, primarySelectedClipId, selectClip, updateClipTransform, updateTextProperties, updateTextBoundsVertex, updateTextBoundsVertices, setPropertyValue, getInterpolatedTextBounds, maskEditMode, maskPanelActive, layers, selectedLayerId, selectLayer, updateLayer, tracks, isPlaying, playheadPosition } = useTimelineStore(useShallow(s => ({
+  const {
+    clips,
+    selectedClipIds,
+    primarySelectedClipId,
+    selectClip,
+    updateClipTransform,
+    updateTextProperties,
+    updateTextBoundsVertex,
+    updateTextBoundsVertices,
+    setPropertyValue,
+    getInterpolatedTextBounds,
+    maskEditMode,
+    maskPanelActive,
+    layers,
+    selectedLayerId,
+    selectLayer,
+    updateLayer,
+    tracks,
+    isPlaying,
+    playheadPosition,
+    playbackWarmup,
+    isExporting,
+    exportPreviewFrame,
+  } = useTimelineStore(useShallow(s => ({
     clips: s.clips,
     selectedClipIds: s.selectedClipIds,
     primarySelectedClipId: s.primarySelectedClipId,
@@ -512,6 +535,9 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
     tracks: s.tracks,
     isPlaying: s.isPlaying,
     playheadPosition: s.playheadPosition,
+    playbackWarmup: s.playbackWarmup,
+    isExporting: s.isExporting,
+    exportPreviewFrame: s.exportPreviewFrame,
   })));
   const { compositions, activeCompositionId } = useMediaStore(useShallow(s => ({
     compositions: s.compositions,
@@ -535,6 +561,7 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasWrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const exportPreviewCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 1920, height: 1080 });
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -1954,6 +1981,41 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
     return () => resizeObserver.disconnect();
   }, [effectiveResolution.width, effectiveResolution.height]);
 
+  const exportPreviewDisplaySize = useMemo(() => {
+    if (!exportPreviewFrame || containerSize.width <= 0 || containerSize.height <= 0) {
+      return canvasSize;
+    }
+
+    const frameAspect = exportPreviewFrame.width / Math.max(1, exportPreviewFrame.height);
+    const containerAspect = containerSize.width / Math.max(1, containerSize.height);
+    if (containerAspect > frameAspect) {
+      const height = containerSize.height;
+      return { width: Math.floor(height * frameAspect), height: Math.floor(height) };
+    }
+
+    const width = containerSize.width;
+    return { width: Math.floor(width), height: Math.floor(width / frameAspect) };
+  }, [
+    canvasSize,
+    containerSize.height,
+    containerSize.width,
+    exportPreviewFrame,
+  ]);
+
+  useEffect(() => {
+    const canvas = exportPreviewCanvasRef.current;
+    if (!canvas || !isExporting || !exportPreviewFrame) return;
+
+    if (canvas.width !== exportPreviewFrame.width) canvas.width = exportPreviewFrame.width;
+    if (canvas.height !== exportPreviewFrame.height) canvas.height = exportPreviewFrame.height;
+
+    const ctx = canvas.getContext('2d', { alpha: false });
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(exportPreviewFrame, 0, 0);
+  }, [exportPreviewFrame, isExporting]);
+
   const zoomEditCameraOrthoView = useCallback((e: PreviewWheelEvent): boolean => {
     if (!editCameraOrthoViewActive || !activeEditCameraOrthoFrame || !editCameraOrthoMode) return false;
     if (!isCanvasInteractionTarget(e.target)) return false;
@@ -2399,6 +2461,16 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
   const editCameraGizmoTransform = editCameraModeActive && activeCameraClipAtPlayhead
     ? resolveCameraClipTransformAtPlayhead(activeCameraClipAtPlayhead)
     : null;
+  const showPlaybackWaiter = Boolean(
+    isEngineReady &&
+    !sourceMonitorActive &&
+    playbackWarmup
+  );
+  const playbackWaiterVideoCount = playbackWarmup?.pendingVideoCount ?? 0;
+  const playbackWaiterLabel = 'Preparing playback';
+  const playbackWaiterDetail = playbackWaiterVideoCount > 0
+    ? `${playbackWaiterVideoCount} video${playbackWaiterVideoCount === 1 ? '' : 's'}`
+    : '';
 
   return (
     <div
@@ -2516,6 +2588,18 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
                   height: canvasSize.height,
                 }}
               />
+              {isExporting && exportPreviewFrame && (
+                <canvas
+                  ref={exportPreviewCanvasRef}
+                  width={exportPreviewFrame.width}
+                  height={exportPreviewFrame.height}
+                  className="preview-export-frame"
+                  style={{
+                    width: exportPreviewDisplaySize.width,
+                    height: exportPreviewDisplaySize.height,
+                  }}
+                />
+              )}
               {isEditableSource && maskPanelActive && maskEditMode !== 'none' && (
                 <MaskOverlay
                   canvasWidth={effectiveResolution.width}
@@ -2561,6 +2645,24 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
             </>
           )}
         </div>
+
+        {showPlaybackWaiter && (
+          <div
+            className="preview-playback-waiter-overlay"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="preview-playback-waiter">
+              <div className="preview-playback-waiter-spinner" aria-hidden="true" />
+              <div className="preview-playback-waiter-copy">
+                <span className="preview-playback-waiter-title">{playbackWaiterLabel}</span>
+                {playbackWaiterDetail && (
+                  <span className="preview-playback-waiter-detail">{playbackWaiterDetail}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {textPreviewEditorEnabled && selectedClip?.textProperties && selectedTextLayer && (
           <TextPreviewEditor

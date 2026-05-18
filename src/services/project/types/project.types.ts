@@ -8,7 +8,9 @@ import type { ProjectFlashBoardState } from '../../../stores/flashboardStore/typ
 import type { ExportStoreData } from '../../../stores/exportStore';
 import type {
   CameraItem,
+  MathSceneItem,
   MeshItem,
+  MotionShapeItem,
   SolidItem,
   SplatEffectorItem,
   TextItem,
@@ -145,4 +147,6 @@ export interface ProjectFile {
   meshItems?: MeshItem[];
   cameraItems?: CameraItem[];
   splatEffectorItems?: SplatEffectorItem[];
+  mathSceneItems?: MathSceneItem[];
+  motionShapeItems?: MotionShapeItem[];
 }

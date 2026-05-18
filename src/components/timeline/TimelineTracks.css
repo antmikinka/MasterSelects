@@ -38,6 +38,29 @@
 
 .track-header.locked {
   border-left: 2px solid var(--warning);
+  filter: saturate(0.78) brightness(0.86);
+}
+
+.track-header.locked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.08) 0,
+      rgba(255, 255, 255, 0.08) 1px,
+      transparent 1px,
+      transparent 7px
+    ),
+    rgba(0, 0, 0, 0.14);
+}
+
+.track-header.locked > * {
+  position: relative;
+  z-index: 2;
 }
 
 /* Green separator line between video and audio track sections */
@@ -123,15 +146,31 @@
 }
 
 .track-controls {
-  display: flex;
-  flex-direction: row;
+  display: grid;
+  grid-template-columns: repeat(2, 16px);
+  grid-auto-rows: 15px;
   align-items: center;
+  justify-items: center;
   gap: 2px;
   margin-left: auto;
   position: absolute;
   right: 4px;
   top: 50%;
   transform: translateY(-50%);
+  z-index: 3;
+}
+
+.track-controls .btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 15px;
+  min-width: 16px;
+  padding: 0;
+  border-radius: 3px;
+  font-size: 9px;
+  line-height: 1;
 }
 
 /* Track pick whip for layer parenting */
@@ -222,6 +261,24 @@
 
 .track-lane.locked {
   background-color: color-mix(in srgb, var(--bg-secondary) 88%, var(--warning) 12%);
+  filter: saturate(0.52) brightness(0.74);
+}
+
+.track-lane.locked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 28;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.13) 0,
+      rgba(255, 255, 255, 0.13) 1px,
+      transparent 1px,
+      transparent 9px
+    ),
+    rgba(0, 0, 0, 0.22);
 }
 
 .composition-exit-clips-overlay {

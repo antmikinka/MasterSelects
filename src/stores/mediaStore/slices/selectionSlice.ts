@@ -38,6 +38,12 @@ export const createSelectionSlice: MediaSliceCreator<SelectionActions> = (set) =
       splatEffectorItems: (state.splatEffectorItems || []).map((effector) =>
         itemIds.includes(effector.id) ? { ...effector, parentId: folderId } : effector
       ),
+      mathSceneItems: (state.mathSceneItems || []).map((item) =>
+        itemIds.includes(item.id) ? { ...item, parentId: folderId } : item
+      ),
+      motionShapeItems: (state.motionShapeItems || []).map((item) =>
+        itemIds.includes(item.id) ? { ...item, parentId: folderId } : item
+      ),
     }));
   },
 
@@ -88,6 +94,12 @@ export const createSelectionSlice: MediaSliceCreator<SelectionActions> = (set) =
       ),
       splatEffectorItems: (state.splatEffectorItems || []).map((effector) =>
         itemIds.includes(effector.id) ? { ...effector, labelColor: color } : effector
+      ),
+      mathSceneItems: (state.mathSceneItems || []).map((item) =>
+        itemIds.includes(item.id) ? { ...item, labelColor: color } : item
+      ),
+      motionShapeItems: (state.motionShapeItems || []).map((item) =>
+        itemIds.includes(item.id) ? { ...item, labelColor: color } : item
       ),
     }));
   },

@@ -91,7 +91,7 @@ Scope:
 
 - Add the dedicated `Math` dock panel.
 - Add object list, parameter list, animation list, and inspector.
-- Add reusable Math Scene media items in the Media panel.
+- Expand the reusable Math Scene media items in the Media panel beyond the current default preset item.
 - Add preset buttons: function, point, tangent, area, label, camera move.
 - Add timeline badges and better clip display.
 - Add copy/paste and duplicate behavior for Math Scene objects.

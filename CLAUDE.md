@@ -1,10 +1,16 @@
 # CLAUDE.md
 
+## -1. Arbeitsprinzip / Top Memory
+
+MasterSelects wird nicht fuer kurzfristige Loesungen optimiert. Da das Projekt AI-powered sehr schnell entwickelt werden kann und aktuell keine externen User blockiert, sind grosse, richtige Architekturentscheidungen ausdruecklich erlaubt und bevorzugt.
+
+Default ist: langfristig denken, echte Zielarchitektur bauen, keine MVPs, keine Mocks, keine Wegwerf-Prototypen und keine kleinen Zwischenloesungen, wenn die robuste Loesung direkt erreichbar ist. Kurzfristige Hacks nur dann verwenden, wenn der User sie explizit verlangt oder ein harter technischer Blocker keine bessere Umsetzung erlaubt.
+
 Anweisungen für AI-Assistenten (Claude, GPT, etc.) bei der Arbeit an diesem Projekt.
 
 ---
 
-## 0. Projektziel / Vision (Deadline: Juni 2026)
+## 0. Projektziel (Deadline: Juni 2026)
 
 **MasterSelects muss ALLE Media-Dateien unterstützen** — nicht nur Video/Audio/Bild, sondern wirklich ALLES:
 3D (OBJ, FBX, glTF), PDF, SVG, CAD (DXF/STEP), Binärdaten, Point Clouds, JSON, CSV, und mehr.

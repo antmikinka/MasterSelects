@@ -6,7 +6,15 @@ import { subscribeWithSelector } from 'zustand/middleware';
 import { Logger } from '../services/logger';
 import { flashBoardMediaBridge } from '../services/flashboard/FlashBoardMediaBridge';
 import type { TimelineClip, TimelineTrack, Layer, Keyframe } from '../types';
-import type { MediaFile, Composition, MediaFolder, TextItem, SolidItem } from './mediaStore/types';
+import type {
+  Composition,
+  MathSceneItem,
+  MediaFile,
+  MediaFolder,
+  MotionShapeItem,
+  SolidItem,
+  TextItem,
+} from './mediaStore/types';
 import type { TimelineMarker } from './timeline/types';
 import type { DockLayout } from '../types/dock';
 import type {
@@ -46,6 +54,8 @@ interface StateSnapshot {
     expandedFolderIds: string[];
     textItems: TextItem[];
     solidItems: SolidItem[];
+    mathSceneItems: MathSceneItem[];
+    motionShapeItems: MotionShapeItem[];
   };
 
   // Dock layout state
@@ -119,6 +129,8 @@ interface MediaStoreState {
   expandedFolderIds: string[];
   textItems: TextItem[];
   solidItems: SolidItem[];
+  mathSceneItems: MathSceneItem[];
+  motionShapeItems: MotionShapeItem[];
 }
 
 interface DockStoreSnapshot {
@@ -275,6 +287,8 @@ function createSnapshot(label: string): StateSnapshot {
       expandedFolderIds: [...(media?.expandedFolderIds || [])],
       textItems: deepClone(media?.textItems || []),
       solidItems: deepClone(media?.solidItems || []),
+      mathSceneItems: deepClone(media?.mathSceneItems || []),
+      motionShapeItems: deepClone(media?.motionShapeItems || []),
     },
     dock: {
       layout: deepClone(dock?.layout ?? null),
@@ -345,6 +359,8 @@ function applySnapshot(snapshot: StateSnapshot) {
       expandedFolderIds: [...snapshot.media.expandedFolderIds],
       textItems: deepClone(snapshot.media.textItems || []),
       solidItems: deepClone(snapshot.media.solidItems || []),
+      mathSceneItems: deepClone(snapshot.media.mathSceneItems || []),
+      motionShapeItems: deepClone(snapshot.media.motionShapeItems || []),
     });
   }
 

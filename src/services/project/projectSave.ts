@@ -536,6 +536,8 @@ export async function syncStoresToProject(): Promise<void> {
       projectData.meshItems = freshState.meshItems;
       projectData.cameraItems = freshState.cameraItems;
       projectData.splatEffectorItems = freshState.splatEffectorItems;
+      projectData.mathSceneItems = freshState.mathSceneItems;
+      projectData.motionShapeItems = freshState.motionShapeItems;
 
       const flashBoardState = useFlashBoardStore.getState();
       const hasBoardsToPersist = flashBoardState.boards.some((board) => board.nodes.length > 0);

@@ -25,6 +25,7 @@ import {
   type ExportEncoderType,
   type ExportImageFormat,
   type ExportImageMode,
+  type ExportAudioFormat,
   type ExportSpecialContainer,
   type ExportVisualMode,
 } from '../../stores/exportStore';
@@ -74,6 +75,7 @@ export function useExportState(_composition: Composition | undefined) {
     gifAlphaThreshold,
     stackedAlpha,
     includeAudio,
+    audioOnlyFormat,
     audioSampleRate,
     audioBitrate,
     normalizeAudio,
@@ -116,8 +118,11 @@ export function useExportState(_composition: Composition | undefined) {
         log.info(`Audio codec detected: ${result.codec.toUpperCase()}`);
       } else {
         setIsAudioSupported(false);
-        setSettings({ includeAudio: false });
-        log.warn('No audio encoding supported in this browser');
+        const currentSettings = useExportStore.getState().settings;
+        if (currentSettings.videoEnabled || currentSettings.audioOnlyFormat === 'browser') {
+          setSettings({ includeAudio: false });
+        }
+        log.warn('No browser audio encoding supported in this browser');
       }
     });
   }, [setSettings]);
@@ -334,6 +339,8 @@ export function useExportState(_composition: Composition | undefined) {
     setStackedAlpha: (value: boolean) => setSettings({ stackedAlpha: value }),
     includeAudio,
     setIncludeAudio: (value: boolean) => setSettings({ includeAudio: value }),
+    audioOnlyFormat,
+    setAudioOnlyFormat: (value: ExportAudioFormat) => setSettings({ audioOnlyFormat: value }),
     audioSampleRate,
     setAudioSampleRate: (value: 44100 | 48000) => setSettings({ audioSampleRate: value }),
     audioBitrate,

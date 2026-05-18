@@ -9,7 +9,7 @@ import { projectFileService } from '../../services/projectFileService';
 const log = Logger.create('ExportPanel');
 import { FrameExporter, downloadBlob } from '../../engine/export';
 import type { VideoCodec, ContainerFormat } from '../../engine/export';
-import { AudioExportPipeline } from '../../engine/audio';
+import { AudioExportPipeline, encodeAudioBufferToWavBlob } from '../../engine/audio';
 import { useShallow } from 'zustand/react/shallow';
 import { useTimelineStore } from '../../stores/timeline';
 import { useMediaStore } from '../../stores/mediaStore';
@@ -241,7 +241,7 @@ export function ExportPanel() {
     gifAlphaThreshold, setGifAlphaThreshold,
     isFFmpegLoading, isFFmpegReady, ffmpegLoadError,
     stackedAlpha, setStackedAlpha,
-    includeAudio, setIncludeAudio, audioSampleRate, setAudioSampleRate,
+    includeAudio, setIncludeAudio, audioOnlyFormat, setAudioOnlyFormat, audioSampleRate, setAudioSampleRate,
     audioBitrate, setAudioBitrate, normalizeAudio, setNormalizeAudio,
     videoEnabled, setVideoEnabled,
     visualMode, setVisualMode,
@@ -368,7 +368,9 @@ export function ExportPanel() {
 
   // Handle cancel
   const handleCancel = useCallback(() => {
-    if (visualMode === 'gif' || visualMode === 'image') {
+    if (!videoEnabled) {
+      ffmpegAudioPipelineRef.current?.cancel();
+    } else if (visualMode === 'gif' || visualMode === 'image') {
       ffmpegFrameRendererRef.current?.cancel();
       const ffmpeg = getFFmpegBridge();
       ffmpeg.cancel();
@@ -387,7 +389,7 @@ export function ExportPanel() {
     setExportPhase('idle');
     // End export progress in timeline
     endExport();
-  }, [exporter, encoder, endExport, setExporter, setExportPhase, setIsExporting, visualMode]);
+  }, [exporter, encoder, endExport, setExporter, setExportPhase, setIsExporting, videoEnabled, visualMode]);
 
   // Handle browser-side GIF export. This is not a WebCodecs codec, but it shares
   // the browser render path so GIF is available without loading FFmpeg.
@@ -848,8 +850,42 @@ export function ExportPanel() {
       bitrate: audioBitrate,
       normalize: normalizeAudio,
     });
+    ffmpegAudioPipelineRef.current = audioPipeline;
+    let timelineExportStarted = false;
 
     try {
+      startExport(startTime, endTime);
+      timelineExportStarted = true;
+
+      if (audioOnlyFormat === 'wav') {
+        const audioBuffer = await audioPipeline.exportRawAudio(
+          startTime,
+          endTime,
+          (audioProgress) => {
+            setProgress({
+              phase: 'audio',
+              currentFrame: 0,
+              totalFrames: 0,
+              percent: audioProgress.percent,
+              estimatedTimeRemaining: 0,
+              currentTime: endTime,
+              audioPhase: audioProgress.phase,
+              audioPercent: audioProgress.percent,
+            });
+            setExportProgress(audioProgress.percent, endTime);
+          }
+        );
+
+        if (audioBuffer && audioBuffer.length > 0) {
+          const audioBlob = encodeAudioBufferToWavBlob(audioBuffer);
+          downloadBlob(audioBlob, `${filename}.wav`);
+          return;
+        }
+
+        setError('No audio clips found in the selected range');
+        return;
+      }
+
       const audioResult = await audioPipeline.exportAudio(
         startTime,
         endTime,
@@ -864,6 +900,7 @@ export function ExportPanel() {
             audioPhase: audioProgress.phase,
             audioPercent: audioProgress.percent,
           });
+          setExportProgress(audioProgress.percent, endTime);
         }
       );
 
@@ -887,9 +924,27 @@ export function ExportPanel() {
       log.error('Audio export failed', e);
       setError(e instanceof Error ? e.message : 'Audio export failed');
     } finally {
+      ffmpegAudioPipelineRef.current = null;
       setIsExporting(false);
+      if (timelineExportStarted) {
+        endExport();
+      }
     }
-  }, [getCurrentExportRange, filename, isExporting, audioSampleRate, audioBitrate, normalizeAudio, setError, setIsExporting, setProgress]);
+  }, [
+    audioBitrate,
+    audioOnlyFormat,
+    audioSampleRate,
+    endExport,
+    filename,
+    getCurrentExportRange,
+    isExporting,
+    normalizeAudio,
+    setError,
+    setExportProgress,
+    setIsExporting,
+    setProgress,
+    startExport,
+  ]);
 
   // Handle FCPXML export
   const handleExportFCPXML = useCallback(() => {
@@ -1168,7 +1223,9 @@ export function ExportPanel() {
     let estimatedBitrate: number;
 
     if (!videoEnabled) {
-      estimatedBitrate = audioBitrate;
+      estimatedBitrate = audioOnlyFormat === 'wav'
+        ? audioSampleRate * 2 * 16
+        : audioBitrate;
     } else if (encoder === 'webcodecs' || encoder === 'htmlvideo') {
       estimatedBitrate = bitrate;
     } else if (ffmpegRateControl === 'crf') {
@@ -1262,14 +1319,19 @@ export function ExportPanel() {
           : 'AAC';
   const effectiveIncludeAudio = (isVideoMode || isXmlMode) && includeAudio && !isGifMode;
   const selectedImageFormat = IMAGE_FORMATS.find(({ id }) => id === imageFormat) ?? IMAGE_FORMATS[0];
-  const audioExtension = audioCodec === 'opus' ? 'ogg' : 'aac';
-  const audioCodecLabel = audioCodec?.toUpperCase() ?? 'AAC';
+  const browserAudioExtension = audioCodec === 'opus' ? 'ogg' : 'aac';
+  const browserAudioCodecLabel = audioCodec?.toUpperCase() ?? 'AAC';
+  const audioOnlyExtension = audioOnlyFormat === 'wav' ? 'wav' : browserAudioExtension;
+  const audioOnlyCodecLabel = audioOnlyFormat === 'wav' ? 'WAV PCM' : browserAudioCodecLabel;
+  const browserAudioUnavailable = isWebCodecsEncoder && !isAudioSupported && !(isAudioOnlyMode && audioOnlyFormat === 'wav');
   const currentAudioCodecLabel = isVideoMode && encoder === 'ffmpeg'
     ? ffmpegAudioCodecLabel
-    : audioCodecLabel;
+    : isAudioOnlyMode
+      ? audioOnlyCodecLabel
+      : browserAudioCodecLabel;
   const outputHeight = stackedAlpha && isVideoMode && !isGifMode ? actualHeight * 2 : actualHeight;
   const frameCount = isImageSequenceMode ? imageSequenceFrameCount : isVideoMode ? Math.ceil((endTime - startTime) * actualFps) : 1;
-  const displayExtension = isXmlMode ? 'fcpxml' : isAudioOnlyMode ? audioExtension : isImageMode ? (isImageSequenceMode ? imageSequenceOutputLabel.toLowerCase() : imageFormat) : isGifMode ? 'gif' : currentContainerId;
+  const displayExtension = isXmlMode ? 'fcpxml' : isAudioOnlyMode ? audioOnlyExtension : isImageMode ? (isImageSequenceMode ? imageSequenceOutputLabel.toLowerCase() : imageFormat) : isGifMode ? 'gif' : currentContainerId;
   const displayOutputName = isImageSequenceMode ? imageSequenceOutputName : `${filename || 'export'}.${displayExtension}`;
   const displayContainerLabel = isImageSequenceMode ? imageSequenceOutputLabel : `.${displayExtension}`;
   const estimatedSizeLabel = isXmlMode ? 'Metadata only' : isImageMode ? (isImageSequenceMode ? `${imageSequenceFrameCount} frames ${imageSequenceOutputLabel}` : 'Current frame') : (!videoEnabled && !includeAudio && !isGifMode) ? '-' : estimatedSize();
@@ -1291,7 +1353,7 @@ export function ExportPanel() {
     isExporting ||
     (isImageSequenceMode && endTime <= startTime) ||
     (!isImageMode && !isXmlMode && endTime <= startTime) ||
-    isAudioOnlyMode && (!includeAudio || !isAudioSupported) ||
+    isAudioOnlyMode && (!includeAudio || (audioOnlyFormat === 'browser' && !isAudioSupported)) ||
     (isVideoMode && encoder === 'ffmpeg' && isFFmpegLoading);
   const primaryExportLabel = 'Export';
   const usesBrowserProgress = isImageSequenceMode || encoder === 'webcodecs' || encoder === 'htmlvideo';
@@ -1299,7 +1361,7 @@ export function ExportPanel() {
     ? [
         { label: currentAudioCodecLabel, target: 'audio-format' as const },
         { label: `${audioSampleRate / 1000} kHz`, target: 'audio-format' as const },
-        { label: `${Math.round(audioBitrate / 1000)} kbps`, target: 'audio-quality' as const },
+        { label: isAudioOnlyMode && audioOnlyFormat === 'wav' ? '16-bit PCM' : `${Math.round(audioBitrate / 1000)} kbps`, target: 'audio-quality' as const },
         { label: normalizeAudio ? 'Normalized' : 'Unprocessed', target: 'audio-processing' as const },
       ]
     : [];
@@ -1815,15 +1877,28 @@ export function ExportPanel() {
                       <div className="export-chip-row">
                         <button
                           type="button"
-                          className={`export-chip${!isXmlMode && isAudioOnlyMode ? ' is-active' : ''}`}
+                          className={`export-chip${!isXmlMode && isAudioOnlyMode && audioOnlyFormat === 'wav' ? ' is-active' : ''}`}
                           onClick={() => {
                             setSpecialContainer('none');
                             setVideoEnabled(false);
                             setIncludeAudio(true);
+                            setAudioOnlyFormat('wav');
+                          }}
+                        >
+                          .wav
+                        </button>
+                        <button
+                          type="button"
+                          className={`export-chip${!isXmlMode && isAudioOnlyMode && audioOnlyFormat === 'browser' ? ' is-active' : ''}`}
+                          onClick={() => {
+                            setSpecialContainer('none');
+                            setVideoEnabled(false);
+                            setIncludeAudio(true);
+                            setAudioOnlyFormat('browser');
                           }}
                           disabled={!isAudioSupported}
                         >
-                          .{audioExtension}
+                          .{browserAudioExtension}
                         </button>
                       </div>
                     </div>
@@ -1921,7 +1996,7 @@ export function ExportPanel() {
                   </div>
                 ) : isAudioOnlyMode ? (
                   <div className="export-inline-note">
-                    Audio-only export uses the detected browser codec.
+                    Audio-only export writes the selected audio file format.
                   </div>
                 ) : null}
               </div>
@@ -2529,7 +2604,7 @@ export function ExportPanel() {
                     type="button"
                     className={`export-toggle${!isGifMode && (isXmlMode ? includeAudio : !isImageMode && includeAudio) ? ' is-active' : ''}`}
                     onClick={() => setIncludeAudio(!includeAudio)}
-                    disabled={isImageMode || isGifMode || (!isXmlMode && isWebCodecsEncoder && !isAudioSupported)}
+                    disabled={isImageMode || isGifMode || (!isXmlMode && browserAudioUnavailable)}
                   >
                     {!isGifMode && (isXmlMode ? includeAudio : !isImageMode && includeAudio) ? 'On' : 'Off'}
                   </button>
@@ -2555,9 +2630,29 @@ export function ExportPanel() {
                         <strong>{currentAudioCodecLabel}</strong>
                       </div>
                       <div className="export-chip-row">
-                        <span className="export-chip export-chip-static">
-                          {currentAudioCodecLabel}{videoEnabled && encoder === 'ffmpeg' ? ' auto' : ''}
-                        </span>
+                        {isAudioOnlyMode ? (
+                          <>
+                            <button
+                              type="button"
+                              className={`export-chip${audioOnlyFormat === 'wav' ? ' is-active' : ''}`}
+                              onClick={() => setAudioOnlyFormat('wav')}
+                            >
+                              WAV PCM
+                            </button>
+                            <button
+                              type="button"
+                              className={`export-chip${audioOnlyFormat === 'browser' ? ' is-active' : ''}`}
+                              onClick={() => setAudioOnlyFormat('browser')}
+                              disabled={!isAudioSupported}
+                            >
+                              {browserAudioCodecLabel}
+                            </button>
+                          </>
+                        ) : (
+                          <span className="export-chip export-chip-static">
+                            {currentAudioCodecLabel}{videoEnabled && encoder === 'ffmpeg' ? ' auto' : ''}
+                          </span>
+                        )}
                         {audioSampleRatePresets.map((preset) => (
                           <button
                             key={preset.value}
@@ -2574,19 +2669,23 @@ export function ExportPanel() {
                     <div className="export-field-card export-subcard" data-export-target="audio-quality">
                       <div className="export-field-head">
                         <span>Quality</span>
-                        <strong>{Math.round(audioBitrate / 1000)} kbps</strong>
+                        <strong>{isAudioOnlyMode && audioOnlyFormat === 'wav' ? '16-bit PCM' : `${Math.round(audioBitrate / 1000)} kbps`}</strong>
                       </div>
                       <div className="export-chip-row">
-                        {audioBitratePresets.map((preset) => (
-                          <button
-                            type="button"
-                            key={preset.value}
-                            className={`export-chip${audioBitrate === preset.value ? ' is-active' : ''}`}
-                            onClick={() => setAudioBitrate(preset.value)}
-                          >
-                            {preset.label}
-                          </button>
-                        ))}
+                        {isAudioOnlyMode && audioOnlyFormat === 'wav' ? (
+                          <span className="export-chip export-chip-static">16-bit PCM</span>
+                        ) : (
+                          audioBitratePresets.map((preset) => (
+                            <button
+                              type="button"
+                              key={preset.value}
+                              className={`export-chip${audioBitrate === preset.value ? ' is-active' : ''}`}
+                              onClick={() => setAudioBitrate(preset.value)}
+                            >
+                              {preset.label}
+                            </button>
+                          ))
+                        )}
                       </div>
                     </div>
 
@@ -2614,7 +2713,7 @@ export function ExportPanel() {
                         )}
                       </div>
 
-                      {isWebCodecsEncoder && !isAudioSupported && (
+                      {browserAudioUnavailable && (
                         <div className="export-inline-note export-inline-note-warning">
                           Browser audio encoding is not available here. Video export still works.
                         </div>
@@ -2956,7 +3055,7 @@ export function ExportPanel() {
                     type="checkbox"
                     checked={includeAudio}
                     onChange={(e) => setIncludeAudio(e.target.checked)}
-                    disabled={isGifMode || ((encoder === 'webcodecs' || encoder === 'htmlvideo') && !isAudioSupported)}
+                    disabled={isGifMode || browserAudioUnavailable}
                   />
                   Include Audio
                 </label>
@@ -2965,7 +3064,7 @@ export function ExportPanel() {
                   GIF is silent
                 </span>
               )}
-              {(encoder === 'webcodecs' || encoder === 'htmlvideo') && !isAudioSupported && (
+              {browserAudioUnavailable && (
                 <span style={{ color: 'var(--warning)', fontSize: '11px', marginLeft: '8px' }}>
                   Not supported
                 </span>
@@ -2987,25 +3086,33 @@ export function ExportPanel() {
 
                 <div className="control-row">
                   <label>Audio Quality</label>
-                  <select
-                    value={audioBitrate}
-                    onChange={(e) => setAudioBitrate(Number(e.target.value))}
-                  >
-                    <option value={128000}>128 kbps</option>
-                    <option value={192000}>192 kbps</option>
-                    <option value={256000}>256 kbps (High)</option>
-                    <option value={320000}>320 kbps (Max)</option>
-                  </select>
+                  {isAudioOnlyMode && audioOnlyFormat === 'wav' ? (
+                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      16-bit PCM
+                    </span>
+                  ) : (
+                    <select
+                      value={audioBitrate}
+                      onChange={(e) => setAudioBitrate(Number(e.target.value))}
+                    >
+                      <option value={128000}>128 kbps</option>
+                      <option value={192000}>192 kbps</option>
+                      <option value={256000}>256 kbps (High)</option>
+                      <option value={320000}>320 kbps (Max)</option>
+                    </select>
+                  )}
                 </div>
 
-                {encoder === 'ffmpeg' && (
+                {(encoder === 'ffmpeg' || isAudioOnlyMode) && (
                   <div className="control-row">
                     <label>Audio Codec</label>
                     <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-                      {ffmpegContainer === 'mov' ? 'AAC' :
-                       ffmpegContainer === 'mkv' ? 'FLAC' :
-                       ffmpegContainer === 'avi' ? 'PCM' :
-                       ffmpegContainer === 'mxf' ? 'PCM' : 'AAC'} (auto)
+                      {isAudioOnlyMode
+                        ? currentAudioCodecLabel
+                        : `${ffmpegContainer === 'mov' ? 'AAC' :
+                           ffmpegContainer === 'mkv' ? 'FLAC' :
+                           ffmpegContainer === 'avi' ? 'PCM' :
+                           ffmpegContainer === 'mxf' ? 'PCM' : 'AAC'} (auto)`}
                     </span>
                   </div>
                 )}

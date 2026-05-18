@@ -29,6 +29,7 @@ import {
 import type { ExternalDragState } from '../types';
 import type { TimelineTrack, TimelineClip } from '../../../types';
 import type { Composition, MediaFile } from '../../../stores/mediaStore';
+import type { ShapePrimitive } from '../../../types/motionDesign';
 import { NativeHelperClient } from '../../../services/nativeHelper/NativeHelperClient';
 import { Logger } from '../../../services/logger';
 
@@ -153,6 +154,7 @@ interface UseExternalDropProps {
   scrollX: number;
   tracks: TimelineTrack[];
   clips: TimelineClip[];
+  isExporting: boolean;
   pixelToTime: (pixel: number) => number;
   addTrack: (type: 'video' | 'audio') => string | undefined;
   addClip: (trackId: string, file: File, startTime: number, duration?: number, mediaFileId?: string, mediaTypeOverride?: string) => void;
@@ -162,6 +164,8 @@ interface UseExternalDropProps {
   addMeshClip: (trackId: string, startTime: number, meshType: import('../../../stores/mediaStore/types').MeshPrimitiveType, duration?: number, skipMediaItem?: boolean) => string | null;
   addCameraClip: (trackId: string, startTime: number, duration?: number, skipMediaItem?: boolean) => string | null;
   addSplatEffectorClip: (trackId: string, startTime: number, duration?: number, skipMediaItem?: boolean) => string | null;
+  addMathSceneClip: (trackId: string, startTime: number, duration?: number, skipMediaItem?: boolean) => string | null;
+  addMotionShapeClip: (trackId: string, startTime: number, options?: { primitive?: ShapePrimitive; duration?: number; name?: string }) => string | null;
 }
 
 interface UseExternalDropReturn {
@@ -195,6 +199,10 @@ function getPayloadMimeTypes(payload: ExternalDragPayload): string[] {
       return ['application/x-camera-item-id'];
     case 'splat-effector':
       return ['application/x-splat-effector-item-id'];
+    case 'math-scene':
+      return ['application/x-math-scene-item-id'];
+    case 'motion-shape':
+      return ['application/x-motion-shape-item-id'];
     case 'media-file':
       return payload.isAudio
         ? ['application/x-media-file-id', 'application/x-media-is-audio']
@@ -209,6 +217,8 @@ function getPayloadMimeData(payload: ExternalDragPayload, mimeType: string): str
   if (mimeType === 'application/x-mesh-item-id' && payload.kind === 'mesh') return payload.id;
   if (mimeType === 'application/x-camera-item-id' && payload.kind === 'camera') return payload.id;
   if (mimeType === 'application/x-splat-effector-item-id' && payload.kind === 'splat-effector') return payload.id;
+  if (mimeType === 'application/x-math-scene-item-id' && payload.kind === 'math-scene') return payload.id;
+  if (mimeType === 'application/x-motion-shape-item-id' && payload.kind === 'motion-shape') return payload.id;
   if (mimeType === 'application/x-media-file-id' && payload.kind === 'media-file') return payload.id;
   if (mimeType === 'application/x-media-is-audio' && payload.kind === 'media-file' && payload.isAudio) return 'true';
   return '';
@@ -293,6 +303,7 @@ export function useExternalDrop({
   scrollX,
   tracks,
   clips,
+  isExporting,
   pixelToTime,
   addTrack,
   addClip,
@@ -302,6 +313,8 @@ export function useExternalDrop({
   addMeshClip,
   addCameraClip,
   addSplatEffectorClip,
+  addMathSceneClip,
+  addMotionShapeClip,
 }: UseExternalDropProps): UseExternalDropReturn {
   const [externalDrag, setExternalDrag] = useState<ExternalDragState | null>(null);
   const dragCounterRef = useRef(0);
@@ -317,6 +330,16 @@ export function useExternalDrop({
     resetVideoNewTrackGesture();
     setExternalDrag(null);
   }, [resetVideoNewTrackGesture]);
+
+  const rejectDropDuringExport = useCallback((e: React.DragEvent) => {
+    if (!isExporting) return false;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'none';
+    dragCounterRef.current = 0;
+    clearExternalDragState();
+    return true;
+  }, [clearExternalDragState, isExporting]);
 
   const updateVideoNewTrackGesture = useCallback((clientY: number, isAudio: boolean) => {
     const rect = timelineRef.current?.getBoundingClientRect();
@@ -580,6 +603,46 @@ export function useExternalDrop({
       };
     }
 
+    if (e.dataTransfer.types.includes('application/x-math-scene-item-id')) {
+      if (dragPayload?.kind === 'math-scene') {
+        return {
+          duration: dragPayload.duration ?? 5,
+          hasAudio: false,
+          isAudio: false,
+          isVideo: true,
+        };
+      }
+
+      const mathSceneItemId = e.dataTransfer.getData('application/x-math-scene-item-id');
+      const mathSceneItem = mediaStore.mathSceneItems.find((item) => item.id === mathSceneItemId);
+      return {
+        duration: mathSceneItem?.duration ?? 5,
+        hasAudio: false,
+        isAudio: false,
+        isVideo: true,
+      };
+    }
+
+    if (e.dataTransfer.types.includes('application/x-motion-shape-item-id')) {
+      if (dragPayload?.kind === 'motion-shape') {
+        return {
+          duration: dragPayload.duration ?? 5,
+          hasAudio: false,
+          isAudio: false,
+          isVideo: true,
+        };
+      }
+
+      const motionShapeItemId = e.dataTransfer.getData('application/x-motion-shape-item-id');
+      const motionShapeItem = mediaStore.motionShapeItems.find((item) => item.id === motionShapeItemId);
+      return {
+        duration: motionShapeItem?.duration ?? 5,
+        hasAudio: false,
+        isAudio: false,
+        isVideo: true,
+      };
+    }
+
     if (e.dataTransfer.types.includes('application/x-media-file-id')) {
       if (dragPayload?.kind === 'media-file') {
         if (dragPayload.file && dragPayload.isVideo && dragPayload.duration === undefined) {
@@ -685,6 +748,7 @@ export function useExternalDrop({
   // Handle external file drag enter on track
   const handleTrackDragEnter = useCallback(
     (e: React.DragEvent, trackId: string) => {
+      if (rejectDropDuringExport(e)) return;
       e.preventDefault();
       dragCounterRef.current++;
 
@@ -987,6 +1051,80 @@ export function useExternalDrop({
         return;
       }
 
+      if (e.dataTransfer.types.includes('application/x-math-scene-item-id')) {
+        const mathSceneItemId = dragPayload?.kind === 'math-scene'
+          ? dragPayload.id
+          : e.dataTransfer.getData('application/x-math-scene-item-id');
+        const mathSceneItem = mathSceneItemId
+          ? mediaStore.mathSceneItems.find((item) => item.id === mathSceneItemId)
+          : null;
+        const duration = dragPayload?.kind === 'math-scene'
+          ? dragPayload.duration ?? 5
+          : mathSceneItem?.duration ?? 5;
+
+        if (isAudioTrack) {
+          setExternalDrag(applyVideoNewTrackOffer({
+            trackId: '',
+            startTime,
+            x: e.clientX,
+            y: e.clientY,
+            duration,
+            hasAudio: false,
+            isVideo: true,
+            isAudio: false,
+          }));
+          return;
+        }
+        setExternalDrag(buildTrackPreviewState({
+          trackId,
+          desiredStartTime: startTime,
+          x: e.clientX,
+          y: e.clientY,
+          duration,
+          hasAudio: false,
+          isVideo: true,
+          isAudio: false,
+        }));
+        return;
+      }
+
+      if (e.dataTransfer.types.includes('application/x-motion-shape-item-id')) {
+        const motionShapeItemId = dragPayload?.kind === 'motion-shape'
+          ? dragPayload.id
+          : e.dataTransfer.getData('application/x-motion-shape-item-id');
+        const motionShapeItem = motionShapeItemId
+          ? mediaStore.motionShapeItems.find((item) => item.id === motionShapeItemId)
+          : null;
+        const duration = dragPayload?.kind === 'motion-shape'
+          ? dragPayload.duration ?? 5
+          : motionShapeItem?.duration ?? 5;
+
+        if (isAudioTrack) {
+          setExternalDrag(applyVideoNewTrackOffer({
+            trackId: '',
+            startTime,
+            x: e.clientX,
+            y: e.clientY,
+            duration,
+            hasAudio: false,
+            isVideo: true,
+            isAudio: false,
+          }));
+          return;
+        }
+        setExternalDrag(buildTrackPreviewState({
+          trackId,
+          desiredStartTime: startTime,
+          x: e.clientX,
+          y: e.clientY,
+          duration,
+          hasAudio: false,
+          isVideo: true,
+          isAudio: false,
+        }));
+        return;
+      }
+
       if (e.dataTransfer.types.includes('Files')) {
         let dur: number | undefined;
         let hasAudio: boolean | undefined;
@@ -1050,12 +1188,13 @@ export function useExternalDrop({
         }));
       }
     },
-    [tracks, getDesiredStartTime, buildTrackPreviewState, requestVideoDragMetadata, updateResolvedDragMetadata, applyVideoNewTrackOffer]
+    [tracks, rejectDropDuringExport, getDesiredStartTime, buildTrackPreviewState, requestVideoDragMetadata, updateResolvedDragMetadata, applyVideoNewTrackOffer]
   );
 
   // Handle external file drag over track
   const handleTrackDragOver = useCallback(
     (e: React.DragEvent, trackId: string) => {
+      if (rejectDropDuringExport(e)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
 
@@ -1063,10 +1202,25 @@ export function useExternalDrop({
       const isMediaPanelDrag = e.dataTransfer.types.includes('application/x-media-file-id');
       const isTextDrag = e.dataTransfer.types.includes('application/x-text-item-id');
       const isSolidDrag = e.dataTransfer.types.includes('application/x-solid-item-id');
+      const isMeshDrag = e.dataTransfer.types.includes('application/x-mesh-item-id');
       const isCameraDrag = e.dataTransfer.types.includes('application/x-camera-item-id');
+      const isSplatEffectorDrag = e.dataTransfer.types.includes('application/x-splat-effector-item-id');
+      const isMathSceneDrag = e.dataTransfer.types.includes('application/x-math-scene-item-id');
+      const isMotionShapeDrag = e.dataTransfer.types.includes('application/x-motion-shape-item-id');
       const isFileDrag = e.dataTransfer.types.includes('Files');
 
-      if (isCompDrag || isMediaPanelDrag || isTextDrag || isSolidDrag || isCameraDrag || isFileDrag) {
+      if (
+        isCompDrag ||
+        isMediaPanelDrag ||
+        isTextDrag ||
+        isSolidDrag ||
+        isMeshDrag ||
+        isCameraDrag ||
+        isSplatEffectorDrag ||
+        isMathSceneDrag ||
+        isMotionShapeDrag ||
+        isFileDrag
+      ) {
         const desiredStartTime = getDesiredStartTime(e.clientX);
         const preview = resolveImmediateDragPreview(e);
 
@@ -1094,8 +1248,11 @@ export function useExternalDrop({
           return;
         }
 
-        // Text, solid, camera, and composition items can only go on video tracks
-        if ((isTextDrag || isSolidDrag || isCameraDrag || isCompDrag) && isAudioTrack) {
+        // Generated visual items and compositions can only go on video tracks
+        if (
+          (isTextDrag || isSolidDrag || isMeshDrag || isCameraDrag || isSplatEffectorDrag || isMathSceneDrag || isMotionShapeDrag || isCompDrag) &&
+          isAudioTrack
+        ) {
           e.dataTransfer.dropEffect = 'none';
           setExternalDrag((prev) => prev ? {
             ...prev,
@@ -1174,7 +1331,7 @@ export function useExternalDrop({
         */
       }
     },
-    [tracks, getDesiredStartTime, buildTrackPreviewState, resolveImmediateDragPreview, updateVideoNewTrackGesture]
+    [tracks, rejectDropDuringExport, getDesiredStartTime, buildTrackPreviewState, resolveImmediateDragPreview, updateVideoNewTrackGesture]
   );
 
   // Handle external file drag leave
@@ -1199,6 +1356,7 @@ export function useExternalDrop({
   // Handle drag over "new track" drop zone
   const handleNewTrackDragOver = useCallback(
     (e: React.DragEvent, trackType: 'video' | 'audio') => {
+      if (rejectDropDuringExport(e)) return;
       e.preventDefault();
       e.stopPropagation();
 
@@ -1251,12 +1409,13 @@ export function useExternalDrop({
         }));
       }
     },
-    [timelineRef, getDesiredStartTime, resolveImmediateDragPreview, updateVideoNewTrackGesture]
+    [timelineRef, rejectDropDuringExport, getDesiredStartTime, resolveImmediateDragPreview, updateVideoNewTrackGesture]
   );
 
   // Handle drop on "new track" zone - creates new track and adds clip
   const handleNewTrackDrop = useCallback(
     async (e: React.DragEvent, trackType: 'video' | 'audio') => {
+      if (rejectDropDuringExport(e)) return;
       e.preventDefault();
       e.stopPropagation();
 
@@ -1378,6 +1537,30 @@ export function useExternalDrop({
         }
       }
 
+      const mathSceneItemId = e.dataTransfer.getData('application/x-math-scene-item-id');
+      if (mathSceneItemId) {
+        const mediaStore = useMediaStore.getState();
+        const mathSceneItem = mediaStore.mathSceneItems.find((item) => item.id === mathSceneItemId);
+        if (mathSceneItem) {
+          addMathSceneClip(newTrackId, startTime, mathSceneItem.duration, true);
+          return;
+        }
+      }
+
+      const motionShapeItemId = e.dataTransfer.getData('application/x-motion-shape-item-id');
+      if (motionShapeItemId) {
+        const mediaStore = useMediaStore.getState();
+        const motionShapeItem = mediaStore.motionShapeItems.find((item) => item.id === motionShapeItemId);
+        if (motionShapeItem) {
+          addMotionShapeClip(newTrackId, startTime, {
+            primitive: motionShapeItem.primitive,
+            duration: motionShapeItem.duration,
+            name: motionShapeItem.name,
+          });
+          return;
+        }
+      }
+
       // Handle media panel drag
       if (mediaFileId) {
         const mediaStore = useMediaStore.getState();
@@ -1445,12 +1628,13 @@ export function useExternalDrop({
         }
       }
     },
-    [scrollX, pixelToTime, addTrack, addCompClip, addClip, addTextClip, addSolidClip, addMeshClip, addCameraClip, addSplatEffectorClip, externalDrag, timelineRef, clearExternalDragState, updateVideoNewTrackGesture]
+    [scrollX, pixelToTime, addTrack, addCompClip, addClip, addTextClip, addSolidClip, addMeshClip, addCameraClip, addSplatEffectorClip, addMathSceneClip, addMotionShapeClip, externalDrag, timelineRef, clearExternalDragState, updateVideoNewTrackGesture, rejectDropDuringExport]
   );
 
   // Handle external file drop on track
   const handleTrackDrop = useCallback(
     async (e: React.DragEvent, trackId: string) => {
+      if (rejectDropDuringExport(e)) return;
       e.preventDefault();
 
       const desiredStartTime = getDesiredStartTime(e.clientX);
@@ -1528,6 +1712,30 @@ export function useExternalDrop({
         const effectorItem = mediaStore.splatEffectorItems.find((effector) => effector.id === effectorItemId);
         if (effectorItem && isVideoTrack) {
           addSplatEffectorClip(trackId, resolveDropStartTime(effectorItem.duration), effectorItem.duration, true);
+          return;
+        }
+      }
+
+      const mathSceneItemId = e.dataTransfer.getData('application/x-math-scene-item-id');
+      if (mathSceneItemId) {
+        const mediaStore = useMediaStore.getState();
+        const mathSceneItem = mediaStore.mathSceneItems.find((item) => item.id === mathSceneItemId);
+        if (mathSceneItem && isVideoTrack) {
+          addMathSceneClip(trackId, resolveDropStartTime(mathSceneItem.duration), mathSceneItem.duration, true);
+          return;
+        }
+      }
+
+      const motionShapeItemId = e.dataTransfer.getData('application/x-motion-shape-item-id');
+      if (motionShapeItemId) {
+        const mediaStore = useMediaStore.getState();
+        const motionShapeItem = mediaStore.motionShapeItems.find((item) => item.id === motionShapeItemId);
+        if (motionShapeItem && isVideoTrack) {
+          addMotionShapeClip(trackId, resolveDropStartTime(motionShapeItem.duration), {
+            primitive: motionShapeItem.primitive,
+            duration: motionShapeItem.duration,
+            name: motionShapeItem.name,
+          });
           return;
         }
       }
@@ -1630,7 +1838,7 @@ export function useExternalDrop({
         }
       }
     },
-    [addCompClip, addClip, addTextClip, addSolidClip, addMeshClip, addCameraClip, addSplatEffectorClip, externalDrag, tracks, getDesiredStartTime, resolveTrackStartTime, clearExternalDragState]
+    [addCompClip, addClip, addTextClip, addSolidClip, addMeshClip, addCameraClip, addSplatEffectorClip, addMathSceneClip, addMotionShapeClip, externalDrag, tracks, rejectDropDuringExport, getDesiredStartTime, resolveTrackStartTime, clearExternalDragState]
   );
 
   useEffect(() => {
