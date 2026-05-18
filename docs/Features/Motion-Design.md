@@ -14,7 +14,7 @@ The motion design system follows `docs/plans/motion-design-system-plan.md`. It i
 - `src/services/properties/PropertyRegistry.ts` describes transform, effect, color, mask, vector-animation, and motion properties without owning Zustand state.
 - `src/stores/timeline/motionClipSlice.ts` can create rectangle/ellipse shape clips, null clips, adjustment clips, update motion definitions, and convert solid clips to motion rectangle clips.
 - `src/components/panels/properties/MotionShapeTab.tsx` exposes primitive, size, corner radius, fill, and stroke controls for motion shape clips.
-- Video track-header context menus can create Motion Rectangle and Motion Ellipse clips at the playhead.
+- The Media panel add/context menu can create Motion Rectangle and Motion Ellipse preset items that can be dragged to video tracks.
 - Solid clip context menus can convert the selected solid to a motion shape while preserving its clip id and timing.
 - The Motion tab exposes a first Grid Replicator section with enable, count, spacing, and opacity fade controls.
 - `src/engine/motion/MotionRenderer.ts` renders rectangle and ellipse primitives into transparent `rgba8unorm` textures using analytic WGSL SDFs.

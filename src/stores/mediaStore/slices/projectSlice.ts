@@ -1,6 +1,17 @@
 // Project persistence slice - save, load, init
 
-import type { Composition, MediaFile, MediaFolder, TextItem, SolidItem, CameraItem, MediaSliceCreator, ProxyStatus } from '../types';
+import type {
+  CameraItem,
+  Composition,
+  MathSceneItem,
+  MediaFile,
+  MediaFolder,
+  MediaSliceCreator,
+  MotionShapeItem,
+  ProxyStatus,
+  SolidItem,
+  TextItem,
+} from '../types';
 import { DEFAULT_COMPOSITION } from '../constants';
 import { generateId } from '../helpers/importPipeline';
 import { getExpectedProxyFps, getProxyProgressFromFrameIndices, isProxyFrameIndexSetComplete } from '../helpers/proxyCompleteness';
@@ -180,6 +191,8 @@ export const createProjectSlice: MediaSliceCreator<ProjectActions> = (set, get) 
       let restoredMeshItems: import('../types').MeshItem[] = [];
       let restoredCameraItems: CameraItem[] = [];
       let restoredSplatEffectorItems: import('../types').SplatEffectorItem[] = [];
+      let restoredMathSceneItems: MathSceneItem[] = [];
+      let restoredMotionShapeItems: MotionShapeItem[] = [];
       try {
         const storedText = localStorage.getItem('ms-textItems');
         if (storedText) restoredTextItems = JSON.parse(storedText);
@@ -200,6 +213,14 @@ export const createProjectSlice: MediaSliceCreator<ProjectActions> = (set, get) 
         const storedSplatEffectors = localStorage.getItem('ms-splatEffectorItems');
         if (storedSplatEffectors) restoredSplatEffectorItems = JSON.parse(storedSplatEffectors);
       } catch { /* ignore parse errors */ }
+      try {
+        const storedMathScenes = localStorage.getItem('ms-mathSceneItems');
+        if (storedMathScenes) restoredMathSceneItems = JSON.parse(storedMathScenes);
+      } catch { /* ignore parse errors */ }
+      try {
+        const storedMotionShapes = localStorage.getItem('ms-motionShapeItems');
+        if (storedMotionShapes) restoredMotionShapeItems = JSON.parse(storedMotionShapes);
+      } catch { /* ignore parse errors */ }
 
       set({
         files: updatedFiles,
@@ -209,6 +230,8 @@ export const createProjectSlice: MediaSliceCreator<ProjectActions> = (set, get) 
         ...(restoredMeshItems.length > 0 && { meshItems: restoredMeshItems }),
         ...(restoredCameraItems.length > 0 && { cameraItems: restoredCameraItems }),
         ...(restoredSplatEffectorItems.length > 0 && { splatEffectorItems: restoredSplatEffectorItems }),
+        ...(restoredMathSceneItems.length > 0 && { mathSceneItems: restoredMathSceneItems }),
+        ...(restoredMotionShapeItems.length > 0 && { motionShapeItems: restoredMotionShapeItems }),
       });
       log.info(`Restored ${storedFiles.length} files from IndexedDB`);
     } catch (e) {
@@ -250,6 +273,8 @@ export const createProjectSlice: MediaSliceCreator<ProjectActions> = (set, get) 
         meshItems: state.meshItems,
         cameraItems: state.cameraItems,
         splatEffectorItems: state.splatEffectorItems,
+        mathSceneItems: state.mathSceneItems,
+        motionShapeItems: state.motionShapeItems,
       },
     };
 
@@ -318,6 +343,8 @@ export const createProjectSlice: MediaSliceCreator<ProjectActions> = (set, get) 
         meshItems: (project.data.meshItems as import('../types').MeshItem[]) || [],
         cameraItems: (project.data.cameraItems as CameraItem[]) || [],
         splatEffectorItems: (project.data.splatEffectorItems as import('../types').SplatEffectorItem[]) || [],
+        mathSceneItems: (project.data.mathSceneItems as MathSceneItem[]) || [],
+        motionShapeItems: (project.data.motionShapeItems as MotionShapeItem[]) || [],
         activeCompositionId: null,
         openCompositionIds: (project.data.openCompositionIds as string[]) || [],
         expandedFolderIds: project.data.expandedFolderIds,
@@ -376,6 +403,8 @@ export const createProjectSlice: MediaSliceCreator<ProjectActions> = (set, get) 
       meshItems: [],
       cameraItems: [],
       splatEffectorItems: [],
+      mathSceneItems: [],
+      motionShapeItems: [],
       activeCompositionId: newCompId,
       openCompositionIds: [newCompId],
       selectedIds: [],
@@ -399,6 +428,8 @@ export const createProjectSlice: MediaSliceCreator<ProjectActions> = (set, get) 
     localStorage.removeItem('ms-meshItems');
     localStorage.removeItem('ms-cameraItems');
     localStorage.removeItem('ms-splatEffectorItems');
+    localStorage.removeItem('ms-mathSceneItems');
+    localStorage.removeItem('ms-motionShapeItems');
 
     // Load empty timeline
     timelineStore.loadState(undefined);

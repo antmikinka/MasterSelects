@@ -10,6 +10,7 @@ import type {
 } from '../../types';
 import type { SplatEffectorSettings } from '../../types/splatEffector';
 import type { VectorAnimationMetadata, VectorAnimationProvider } from '../../types/vectorAnimation';
+import type { ShapePrimitive } from '../../types/motionDesign';
 
 // Media item types
 export type ImportedMediaType =
@@ -26,6 +27,8 @@ export type MediaType =
   | 'composition'
   | 'text'
   | 'solid'
+  | 'math-scene'
+  | 'motion-shape'
   | 'camera'
   | 'splat-effector';
 
@@ -192,6 +195,17 @@ export interface SplatEffectorItem extends MediaItem {
   splatEffectorSettings: SplatEffectorSettings;
 }
 
+export interface MathSceneItem extends MediaItem {
+  type: 'math-scene';
+  duration: number;
+}
+
+export interface MotionShapeItem extends MediaItem {
+  type: 'motion-shape';
+  primitive: ShapePrimitive;
+  duration: number;
+}
+
 // 3D camera configuration for compositions
 export interface CompositionCamera {
   enabled: boolean;
@@ -258,7 +272,17 @@ export interface ProjectLoadProgress {
 }
 
 // Union type for all items
-export type ProjectItem = MediaFile | Composition | MediaFolder | TextItem | SolidItem | MeshItem | CameraItem | SplatEffectorItem;
+export type ProjectItem =
+  | MediaFile
+  | Composition
+  | MediaFolder
+  | TextItem
+  | SolidItem
+  | MeshItem
+  | CameraItem
+  | SplatEffectorItem
+  | MathSceneItem
+  | MotionShapeItem;
 
 // Slice creator type for mediaStore
 export type MediaSliceCreator<T> = (
@@ -277,6 +301,8 @@ export interface MediaState {
   meshItems: MeshItem[];
   cameraItems: CameraItem[];
   splatEffectorItems: SplatEffectorItem[];
+  mathSceneItems: MathSceneItem[];
+  motionShapeItems: MotionShapeItem[];
 
   // Active composition
   activeCompositionId: string | null;

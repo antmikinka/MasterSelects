@@ -33,6 +33,8 @@ export type {
   MeshItem,
   CameraItem,
   SplatEffectorItem,
+  MathSceneItem,
+  MotionShapeItem,
   MeshPrimitiveType,
   SceneCameraSettings,
   SlotClipEndBehavior,
@@ -51,6 +53,13 @@ const MESH_ITEM_LABELS: Record<import('./types').MeshPrimitiveType, string> = {
   torus: 'Torus',
   cone: 'Cone',
   text3d: '3D Text',
+};
+
+const MOTION_SHAPE_LABELS: Record<import('../../types/motionDesign').ShapePrimitive, string> = {
+  rectangle: 'Motion Rectangle',
+  ellipse: 'Motion Ellipse',
+  polygon: 'Motion Polygon',
+  star: 'Motion Star',
 };
 
 // Combined store type with all actions
@@ -84,6 +93,12 @@ type MediaStoreState = MediaState &
     getOrCreateSplatEffectorFolder: () => string;
     createSplatEffectorItem: (name?: string, parentId?: string | null) => string;
     removeSplatEffectorItem: (id: string) => void;
+    getOrCreateMathSceneFolder: () => string;
+    createMathSceneItem: (name?: string, parentId?: string | null) => string;
+    removeMathSceneItem: (id: string) => void;
+    getOrCreateMotionShapeFolder: () => string;
+    createMotionShapeItem: (primitive: import('../../types/motionDesign').ShapePrimitive, name?: string, parentId?: string | null) => string;
+    removeMotionShapeItem: (id: string) => void;
   };
 
 export const useMediaStore = create<MediaStoreState>()(
@@ -97,6 +112,8 @@ export const useMediaStore = create<MediaStoreState>()(
     meshItems: [],
     cameraItems: [],
     splatEffectorItems: [],
+    mathSceneItems: [],
+    motionShapeItems: [],
     activeCompositionId: 'comp-1',
     openCompositionIds: ['comp-1'],
     slotAssignments: {},
@@ -128,7 +145,18 @@ export const useMediaStore = create<MediaStoreState>()(
 
     // Getters
     getItemsByFolder: (folderId: string | null) => {
-      const { files, compositions, folders, textItems, solidItems, meshItems, cameraItems, splatEffectorItems } = get();
+      const {
+        files,
+        compositions,
+        folders,
+        textItems,
+        solidItems,
+        meshItems,
+        cameraItems,
+        splatEffectorItems,
+        mathSceneItems,
+        motionShapeItems,
+      } = get();
       return [
         ...folders.filter((f) => f.parentId === folderId),
         ...compositions.filter((c) => c.parentId === folderId),
@@ -137,12 +165,25 @@ export const useMediaStore = create<MediaStoreState>()(
         ...meshItems.filter((m) => m.parentId === folderId),
         ...cameraItems.filter((c) => c.parentId === folderId),
         ...splatEffectorItems.filter((e) => e.parentId === folderId),
+        ...mathSceneItems.filter((m) => m.parentId === folderId),
+        ...motionShapeItems.filter((m) => m.parentId === folderId),
         ...files.filter((f) => f.parentId === folderId),
       ];
     },
 
     getItemById: (id: string) => {
-      const { files, compositions, folders, textItems, solidItems, meshItems, cameraItems, splatEffectorItems } = get();
+      const {
+        files,
+        compositions,
+        folders,
+        textItems,
+        solidItems,
+        meshItems,
+        cameraItems,
+        splatEffectorItems,
+        mathSceneItems,
+        motionShapeItems,
+      } = get();
       return (
         files.find((f) => f.id === id) ||
         compositions.find((c) => c.id === id) ||
@@ -151,7 +192,9 @@ export const useMediaStore = create<MediaStoreState>()(
         solidItems.find((s) => s.id === id) ||
         meshItems.find((m) => m.id === id) ||
         cameraItems.find((c) => c.id === id) ||
-        splatEffectorItems.find((e) => e.id === id)
+        splatEffectorItems.find((e) => e.id === id) ||
+        mathSceneItems.find((m) => m.id === id) ||
+        motionShapeItems.find((m) => m.id === id)
       );
     },
 
@@ -355,6 +398,66 @@ export const useMediaStore = create<MediaStoreState>()(
 
     removeSplatEffectorItem: (id: string) => {
       set({ splatEffectorItems: get().splatEffectorItems.filter(e => e.id !== id) });
+    },
+
+    getOrCreateMathSceneFolder: () => {
+      const { folders, createFolder } = get();
+      const existingFolder = folders.find((f) => f.name === 'Math Scenes' && f.parentId === null);
+      if (existingFolder) {
+        return existingFolder.id;
+      }
+      const newFolder = createFolder('Math Scenes', null);
+      return newFolder.id;
+    },
+
+    createMathSceneItem: (name?: string, parentId?: string | null) => {
+      const { mathSceneItems } = get();
+      const id = `math-scene-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const newMathScene: import('./types').MathSceneItem = {
+        id,
+        name: name || `Math Scene ${mathSceneItems.length + 1}`,
+        type: 'math-scene',
+        parentId: parentId !== undefined ? parentId : null,
+        createdAt: Date.now(),
+        duration: 5,
+      };
+      set({ mathSceneItems: [...mathSceneItems, newMathScene] });
+      return id;
+    },
+
+    removeMathSceneItem: (id: string) => {
+      set({ mathSceneItems: get().mathSceneItems.filter((item) => item.id !== id) });
+    },
+
+    getOrCreateMotionShapeFolder: () => {
+      const { folders, createFolder } = get();
+      const existingFolder = folders.find((f) => f.name === 'Motion Shapes' && f.parentId === null);
+      if (existingFolder) {
+        return existingFolder.id;
+      }
+      const newFolder = createFolder('Motion Shapes', null);
+      return newFolder.id;
+    },
+
+    createMotionShapeItem: (primitive: import('../../types/motionDesign').ShapePrimitive, name?: string, parentId?: string | null) => {
+      const { motionShapeItems } = get();
+      const id = `motion-shape-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const label = MOTION_SHAPE_LABELS[primitive] || 'Motion Shape';
+      const newMotionShape: import('./types').MotionShapeItem = {
+        id,
+        name: name || `${label} ${motionShapeItems.filter((item) => item.primitive === primitive).length + 1}`,
+        type: 'motion-shape',
+        parentId: parentId !== undefined ? parentId : null,
+        createdAt: Date.now(),
+        primitive,
+        duration: 5,
+      };
+      set({ motionShapeItems: [...motionShapeItems, newMotionShape] });
+      return id;
+    },
+
+    removeMotionShapeItem: (id: string) => {
+      set({ motionShapeItems: get().motionShapeItems.filter((item) => item.id !== id) });
     },
 
     // Merge all slices

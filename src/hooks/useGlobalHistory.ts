@@ -205,6 +205,8 @@ export function useGlobalHistory() {
         folders: state.folders,
         textItems: state.textItems,
         solidItems: state.solidItems,
+        mathSceneItems: state.mathSceneItems,
+        motionShapeItems: state.motionShapeItems,
       }),
       (curr, prev) => {
         if (useHistoryStore.getState().isApplying) return;
@@ -219,6 +221,10 @@ export function useGlobalHistory() {
           debouncedCapture('Modify text items');
         } else if (curr.solidItems !== prev.solidItems) {
           debouncedCapture('Modify solid items');
+        } else if (curr.mathSceneItems !== prev.mathSceneItems) {
+          debouncedCapture('Modify math scene items');
+        } else if (curr.motionShapeItems !== prev.motionShapeItems) {
+          debouncedCapture('Modify motion shape items');
         }
       },
       { equalityFn: shallowEqual, fireImmediately: false }

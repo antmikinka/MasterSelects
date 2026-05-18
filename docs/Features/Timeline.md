@@ -195,7 +195,7 @@ Soloing multiple tracks is supported. Non-solo tracks dim visually when any solo
 
 ### Track Header Context Menu
 
-- Video tracks can create Motion Rectangle, Motion Ellipse, or Math Scene clips at the playhead.
+- Math Scene and Motion Shape presets are created from the Media panel add/context menu and then dragged to video tracks.
 - `Duplicate Track` currently creates a new empty track of the same type.
 - `Delete` is blocked for the last remaining track of that type.
 - Deleting a populated track shows the affected clip count in the menu label/tooltip.

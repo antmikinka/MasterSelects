@@ -265,6 +265,24 @@ function setupItemPersistence(): void {
     }
   );
 
+  useMediaStore.subscribe(
+    (state: MediaState) => state.mathSceneItems,
+    (mathSceneItems: MediaState['mathSceneItems']) => {
+      try {
+        localStorage.setItem('ms-mathSceneItems', JSON.stringify(mathSceneItems));
+      } catch { /* quota exceeded or unavailable */ }
+    }
+  );
+
+  useMediaStore.subscribe(
+    (state: MediaState) => state.motionShapeItems,
+    (motionShapeItems: MediaState['motionShapeItems']) => {
+      try {
+        localStorage.setItem('ms-motionShapeItems', JSON.stringify(motionShapeItems));
+      } catch { /* quota exceeded or unavailable */ }
+    }
+  );
+
   log.info('Item persistence setup complete');
 }
 

@@ -1,5 +1,14 @@
 export interface ExternalDragPayload {
-  kind: 'media-file' | 'composition' | 'text' | 'solid' | 'mesh' | 'camera' | 'splat-effector';
+  kind:
+    | 'media-file'
+    | 'composition'
+    | 'text'
+    | 'solid'
+    | 'mesh'
+    | 'camera'
+    | 'splat-effector'
+    | 'math-scene'
+    | 'motion-shape';
   id: string;
   duration?: number;
   hasAudio?: boolean;
@@ -7,6 +16,7 @@ export interface ExternalDragPayload {
   isVideo: boolean;
   file?: File;
   meshType?: import('../../../stores/mediaStore/types').MeshPrimitiveType;
+  primitive?: import('../../../types/motionDesign').ShapePrimitive;
 }
 
 export const EXTERNAL_DRAG_BRIDGE_EVENT = 'masterselects:external-drag-bridge';

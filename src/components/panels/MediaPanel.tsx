@@ -76,7 +76,14 @@ import { isProxyFrameCountComplete } from '../../stores/mediaStore/helpers/proxy
 
 const log = Logger.create('MediaPanel');
 import { useMediaStore } from '../../stores/mediaStore';
-import type { MediaFile, Composition, ProjectItem, SolidItem, CameraItem } from '../../stores/mediaStore';
+import type {
+  CameraItem,
+  Composition,
+  MediaFile,
+  MotionShapeItem,
+  ProjectItem,
+  SolidItem,
+} from '../../stores/mediaStore';
 import { useTimelineStore } from '../../stores/timeline';
 import { useDockStore } from '../../stores/dockStore';
 import { useContextMenuPosition } from '../../hooks/useContextMenuPosition';
@@ -384,10 +391,12 @@ export function MediaPanel() {
   const compositions = useMediaStore(state => state.compositions);
   const folders = useMediaStore(state => state.folders);
   const textItems = useMediaStore(state => state.textItems);
-  const solidItems = useMediaStore(state => state.solidItems);
-  const meshItems = useMediaStore(state => state.meshItems);
-  const cameraItems = useMediaStore(state => state.cameraItems);
-  const splatEffectorItems = useMediaStore(state => state.splatEffectorItems);
+  const solidItems = useMediaStore(state => state.solidItems ?? []);
+  const meshItems = useMediaStore(state => state.meshItems ?? []);
+  const cameraItems = useMediaStore(state => state.cameraItems ?? []);
+  const splatEffectorItems = useMediaStore(state => state.splatEffectorItems ?? []);
+  const mathSceneItems = useMediaStore(state => state.mathSceneItems ?? []);
+  const motionShapeItems = useMediaStore(state => state.motionShapeItems ?? []);
   const selectedIds = useMediaStore(state => state.selectedIds);
   const expandedFolderIds = useMediaStore(state => state.expandedFolderIds);
   const fileSystemSupported = useMediaStore(state => state.fileSystemSupported);
@@ -423,6 +432,7 @@ export function MediaPanel() {
     removeTextItem,
     createSolidItem,
     getOrCreateSolidFolder,
+    removeSolidItem,
     updateSolidItem,
     createMeshItem,
     getOrCreateMeshFolder,
@@ -433,6 +443,12 @@ export function MediaPanel() {
     createSplatEffectorItem,
     getOrCreateSplatEffectorFolder,
     removeSplatEffectorItem,
+    createMathSceneItem,
+    getOrCreateMathSceneFolder,
+    removeMathSceneItem,
+    createMotionShapeItem,
+    getOrCreateMotionShapeFolder,
+    removeMotionShapeItem,
     setLabelColor,
     importGaussianSplat,
   } = useMediaStore.getState();
@@ -1319,12 +1335,15 @@ export function MediaPanel() {
       else if (compositions.find(c => c.id === id)) removeComposition(id);
       else if (folders.find(f => f.id === id)) removeFolder(id);
       else if (textItems.find(t => t.id === id)) removeTextItem(id);
+      else if (solidItems.find(s => s.id === id)) removeSolidItem(id);
       else if (meshItems.find(m => m.id === id)) removeMeshItem(id);
       else if (cameraItems.find(c => c.id === id)) removeCameraItem(id);
       else if (splatEffectorItems.find(e => e.id === id)) removeSplatEffectorItem(id);
+      else if (mathSceneItems.find(m => m.id === id)) removeMathSceneItem(id);
+      else if (motionShapeItems.find(m => m.id === id)) removeMotionShapeItem(id);
     });
     closeContextMenu();
-  }, [selectedIds, files, compositions, folders, textItems, meshItems, cameraItems, splatEffectorItems, removeFile, removeComposition, removeFolder, removeTextItem, removeMeshItem, removeCameraItem, removeSplatEffectorItem, closeContextMenu]);
+  }, [selectedIds, files, compositions, folders, textItems, solidItems, meshItems, cameraItems, splatEffectorItems, mathSceneItems, motionShapeItems, removeFile, removeComposition, removeFolder, removeTextItem, removeSolidItem, removeMeshItem, removeCameraItem, removeSplatEffectorItem, removeMathSceneItem, removeMotionShapeItem, closeContextMenu]);
 
   // Get the active parent folder (icons view: current open folder, classic/board view: selected folder or null)
   const getActiveParentId = useCallback((): string | null => {
@@ -1388,6 +1407,18 @@ export function MediaPanel() {
     createSplatEffectorItem(undefined, effectorFolderId);
     closeContextMenu();
   }, [createSplatEffectorItem, getOrCreateSplatEffectorFolder, closeContextMenu]);
+
+  const handleNewMathScene = useCallback(() => {
+    const mathFolderId = getOrCreateMathSceneFolder();
+    createMathSceneItem(undefined, mathFolderId);
+    closeContextMenu();
+  }, [createMathSceneItem, getOrCreateMathSceneFolder, closeContextMenu]);
+
+  const handleNewMotionShape = useCallback((primitive: import('../../types/motionDesign').ShapePrimitive) => {
+    const motionFolderId = getOrCreateMotionShapeFolder();
+    createMotionShapeItem(primitive, undefined, motionFolderId);
+    closeContextMenu();
+  }, [createMotionShapeItem, getOrCreateMotionShapeFolder, closeContextMenu]);
 
   // Import Gaussian Avatar (.zip) — opens file picker, imports with forced gaussian-avatar type
   const handleImportGaussianSplat = useCallback(() => {
@@ -1565,6 +1596,42 @@ export function MediaPanel() {
         isVideo: true,
       });
       e.dataTransfer.setData('application/x-splat-effector-item-id', item.id);
+      e.dataTransfer.effectAllowed = 'copyMove';
+      if (e.currentTarget instanceof HTMLElement) {
+        e.dataTransfer.setDragImage(e.currentTarget, 10, 10);
+      }
+      return;
+    }
+
+    if (item.type === 'math-scene') {
+      setExternalDragPayload({
+        kind: 'math-scene',
+        id: item.id,
+        duration: item.duration,
+        hasAudio: false,
+        isAudio: false,
+        isVideo: true,
+      });
+      e.dataTransfer.setData('application/x-math-scene-item-id', item.id);
+      e.dataTransfer.effectAllowed = 'copyMove';
+      if (e.currentTarget instanceof HTMLElement) {
+        e.dataTransfer.setDragImage(e.currentTarget, 10, 10);
+      }
+      return;
+    }
+
+    if (item.type === 'motion-shape') {
+      const motionShape = item as MotionShapeItem;
+      setExternalDragPayload({
+        kind: 'motion-shape',
+        id: item.id,
+        duration: motionShape.duration,
+        hasAudio: false,
+        isAudio: false,
+        isVideo: true,
+        primitive: motionShape.primitive,
+      });
+      e.dataTransfer.setData('application/x-motion-shape-item-id', item.id);
       e.dataTransfer.effectAllowed = 'copyMove';
       if (e.currentTarget instanceof HTMLElement) {
         e.dataTransfer.setDragImage(e.currentTarget, 10, 10);
@@ -2048,6 +2115,7 @@ export function MediaPanel() {
       if (mf.fps) parts.push(`${mf.fps} fps`);
       if (mf.fileSize) parts.push(formatFileSize(mf.fileSize));
       if (mf.bitrate) parts.push(formatBitrate(mf.bitrate));
+      if (!mf.duration && 'duration' in item && item.duration) parts.push(formatDuration(item.duration));
     }
 
     return parts.join('\n');
@@ -2067,7 +2135,7 @@ export function MediaPanel() {
     const importProgress = getItemImportProgress(item);
 
     // Duration badge: videos + compositions
-    const duration = mediaFile?.duration || comp?.duration;
+    const duration = mediaFile?.duration || comp?.duration || ('duration' in item ? item.duration : undefined);
 
     // Folder item count
     const folderCount = isFolder ? getItemsForParent(item.id).length : 0;
@@ -2126,7 +2194,9 @@ export function MediaPanel() {
     ...meshItems,
     ...cameraItems,
     ...splatEffectorItems,
-  ]), [files, compositions, folders, textItems, solidItems, meshItems, cameraItems, splatEffectorItems]);
+    ...mathSceneItems,
+    ...motionShapeItems,
+  ]), [files, compositions, folders, textItems, solidItems, meshItems, cameraItems, splatEffectorItems, mathSceneItems, motionShapeItems]);
 
   const projectListItems = useMemo<ProjectItem[]>(() => ([
     ...folders,
@@ -2136,8 +2206,10 @@ export function MediaPanel() {
     ...meshItems,
     ...cameraItems,
     ...splatEffectorItems,
+    ...mathSceneItems,
+    ...motionShapeItems,
     ...files,
-  ]), [folders, compositions, textItems, solidItems, meshItems, cameraItems, splatEffectorItems, files]);
+  ]), [folders, compositions, textItems, solidItems, meshItems, cameraItems, splatEffectorItems, mathSceneItems, motionShapeItems, files]);
 
   const allProjectItemsById = useMemo(() => new Map(allProjectItems.map((item) => [item.id, item])), [allProjectItems]);
   const totalItems = allProjectItems.length;
@@ -3051,6 +3123,29 @@ export function MediaPanel() {
       };
     }
 
+    if (item.type === 'math-scene') {
+      return {
+        kind: 'math-scene',
+        id: item.id,
+        duration: item.duration,
+        hasAudio: false,
+        isAudio: false,
+        isVideo: true,
+      };
+    }
+
+    if (item.type === 'motion-shape') {
+      return {
+        kind: 'motion-shape',
+        id: item.id,
+        duration: item.duration,
+        hasAudio: false,
+        isAudio: false,
+        isVideo: true,
+        primitive: item.primitive,
+      };
+    }
+
     if (isImportedMediaFileItem(item) && item.file && !item.isImporting) {
       const isAudioOnly =
         item.file.type.startsWith('audio/') ||
@@ -3896,6 +3991,24 @@ export function MediaPanel() {
                   <span className="add-dropdown-icon"><FileTypeIcon type="splat-effector" /></span>
                   <span>3D Effector</span>
                 </div>
+                <div className="add-dropdown-separator" />
+                <div className="add-dropdown-item" onClick={() => { handleNewMathScene(); setAddDropdownOpen(false); }}>
+                  <span className="add-dropdown-icon"><FileTypeIcon type="math-scene" /></span>
+                  <span>Math Scene</span>
+                </div>
+                <div className="add-dropdown-item has-submenu" onMouseEnter={handleSubmenuHover} onMouseLeave={handleSubmenuLeave}>
+                  <span className="add-dropdown-icon"><FileTypeIcon type="motion-shape" /></span>
+                  <span>Motion Shape</span>
+                  <span className="submenu-arrow">&#9654;</span>
+                  <div className="add-dropdown-submenu">
+                    <div className="add-dropdown-item" onClick={() => { handleNewMotionShape('rectangle'); setAddDropdownOpen(false); }}>
+                      <span>Rectangle</span>
+                    </div>
+                    <div className="add-dropdown-item" onClick={() => { handleNewMotionShape('ellipse'); setAddDropdownOpen(false); }}>
+                      <span>Ellipse</span>
+                    </div>
+                  </div>
+                </div>
                 <div className="add-dropdown-item has-submenu" onMouseEnter={handleSubmenuHover} onMouseLeave={handleSubmenuLeave}>
                   <span className="add-dropdown-icon"><FileTypeIcon type="mesh" /></span>
                   <span>Mesh</span>
@@ -4095,7 +4208,9 @@ export function MediaPanel() {
             solidItems.find(s => s.id === contextMenu.itemId) ||
             meshItems.find(m => m.id === contextMenu.itemId) ||
             cameraItems.find(c => c.id === contextMenu.itemId) ||
-            splatEffectorItems.find(e => e.id === contextMenu.itemId)
+            splatEffectorItems.find(e => e.id === contextMenu.itemId) ||
+            mathSceneItems.find(m => m.id === contextMenu.itemId) ||
+            motionShapeItems.find(m => m.id === contextMenu.itemId)
           : null;
         const isVideoFile = selectedItem && 'type' in selectedItem && selectedItem.type === 'video';
         const isComposition = selectedItem && 'type' in selectedItem && selectedItem.type === 'composition';
@@ -4152,6 +4267,24 @@ export function MediaPanel() {
             <div className="context-menu-item" onClick={() => { handleNewSplatEffector(); closeContextMenu(); }}>
               <span className="context-menu-icon"><FileTypeIcon type="splat-effector" /></span>
               3D Effector
+            </div>
+            <div className="context-menu-separator" />
+            <div className="context-menu-item" onClick={() => { handleNewMathScene(); closeContextMenu(); }}>
+              <span className="context-menu-icon"><FileTypeIcon type="math-scene" /></span>
+              Math Scene
+            </div>
+            <div className="context-menu-item has-submenu" onMouseEnter={handleSubmenuHover} onMouseLeave={handleSubmenuLeave}>
+              <span className="context-menu-icon"><FileTypeIcon type="motion-shape" /></span>
+              <span>Motion Shape</span>
+              <span className="submenu-arrow">&#9654;</span>
+              <div className="context-submenu">
+                <div className="context-menu-item" onClick={() => { handleNewMotionShape('rectangle'); closeContextMenu(); }}>
+                  Rectangle
+                </div>
+                <div className="context-menu-item" onClick={() => { handleNewMotionShape('ellipse'); closeContextMenu(); }}>
+                  Ellipse
+                </div>
+              </div>
             </div>
             <div className="context-menu-item has-submenu" onMouseEnter={handleSubmenuHover} onMouseLeave={handleSubmenuLeave}>
               <span className="context-menu-icon"><FileTypeIcon type="mesh" /></span>
