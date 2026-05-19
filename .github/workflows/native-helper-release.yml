@@ -44,7 +44,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang pkg-config
+          sudo apt-get install -y clang pkg-config libwayland-dev libxkbcommon-dev
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
@@ -57,7 +57,7 @@ jobs:
         shell: pwsh
         run: |
           dotnet tool install --global wix --version 6.0.2
-          wix extension add WixToolset.UI.wixext
+          wix extension add WixToolset.UI.wixext/6.0.2
 
       - name: Build
         if: runner.os != 'Windows'
