@@ -141,5 +141,6 @@ jobs:
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.msi
+          overwrite_files: true
           draft: false
           prerelease: false
