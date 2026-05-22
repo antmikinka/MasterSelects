@@ -1,5 +1,13 @@
 [
   {
+    "date": "2026-05-22",
+    "type": "fix",
+    "title": "AI Preview Tool Context Sanitization",
+    "description": "AI chat tool history now keeps preview image payloads out of model-visible text context while preserving full preview results for the UI.",
+    "section": "AI / Reliability",
+    "commits": ["ee7f0da9"]
+  },
+  {
     "date": "2026-05-20",
     "type": "new",
     "title": "Rive Runtime WASM",
