@@ -404,6 +404,7 @@ export type EffectType =
   | 'levels'
   | 'acuarela'
   | 'rom1'
+  | 'voxel-relief'
   // Audio effects
   | 'audio-eq'
   | 'audio-volume';

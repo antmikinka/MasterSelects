@@ -240,6 +240,7 @@ describe('isAudioEffect', () => {
       'invert',
       'rgb-split',
       'levels',
+      'voxel-relief',
     ];
     for (const effect of visualEffects) {
       expect(isAudioEffect(effect)).toBe(false);
@@ -250,15 +251,15 @@ describe('isAudioEffect', () => {
     const allEffects: EffectType[] = [
       'hue-shift', 'saturation', 'brightness', 'contrast',
       'blur', 'pixelate', 'kaleidoscope', 'mirror',
-      'invert', 'rgb-split', 'levels',
+      'invert', 'rgb-split', 'levels', 'voxel-relief',
       'audio-eq', 'audio-volume',
     ];
     const audioEffects = allEffects.filter(e => isAudioEffect(e));
     const visualEffects = allEffects.filter(e => !isAudioEffect(e));
     // Audio effects should be exactly the two known ones
     expect(audioEffects).toEqual(['audio-eq', 'audio-volume']);
-    // Visual effects should be the remaining 11
-    expect(visualEffects).toHaveLength(11);
+    // Visual effects should be the remaining 12
+    expect(visualEffects).toHaveLength(12);
     // Together they cover all
     expect(audioEffects.length + visualEffects.length).toBe(allEffects.length);
   });
