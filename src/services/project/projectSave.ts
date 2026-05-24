@@ -42,7 +42,7 @@ import type {
 } from './types/project.types';
 
 const log = Logger.create('ProjectSync');
-let projectStoreSyncInProgress = false;
+let projectStoreSyncDepth = 0;
 
 type ProjectSaveClip = SerializableClip & {
   source?: TimelineClip['source'];
@@ -56,15 +56,15 @@ type ProjectSaveTrack = NonNullable<Composition['timelineData']>['tracks'][numbe
 };
 
 export function isProjectStoreSyncInProgress(): boolean {
-  return projectStoreSyncInProgress;
+  return projectStoreSyncDepth > 0;
 }
 
 export async function withProjectStoreSyncGuard<T>(work: () => Promise<T>): Promise<T> {
-  projectStoreSyncInProgress = true;
+  projectStoreSyncDepth++;
   try {
     return await work();
   } finally {
-    projectStoreSyncInProgress = false;
+    projectStoreSyncDepth = Math.max(0, projectStoreSyncDepth - 1);
   }
 }
 
@@ -558,6 +558,11 @@ export async function syncStoresToProject(): Promise<void> {
 export async function saveCurrentProject(): Promise<boolean> {
   if (!projectFileService.isProjectOpen()) {
     log.error(' No project open');
+    return false;
+  }
+
+  if (isProjectStoreSyncInProgress()) {
+    log.warn('Skipped project save while project stores are being synchronized');
     return false;
   }
 
