@@ -1963,6 +1963,7 @@ export const createSerializationUtils: SliceCreator<SerializationUtils> = (set, 
       expandedTrackPropertyGroups: new Map<string, Set<string>>(),
       selectedKeyframeIds: new Set<string>(),
       expandedCurveProperties: new Map<string, Set<import('../../types').AnimatableProperty>>(),
+      runtimeAudioMeters: { trackMeters: {} },
       timelineSessionId: nextTimelineSessionId,
     });
 

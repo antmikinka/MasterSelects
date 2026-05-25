@@ -390,6 +390,10 @@
   font-size: calc(1em * var(--panel-zoom, 1));
 }
 
+.dock-panel-content-inner--media {
+  overflow: hidden;
+}
+
 /* Make child panels fill the space */
 .dock-panel-content-inner > * {
   flex: 1;

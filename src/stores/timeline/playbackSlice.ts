@@ -362,6 +362,36 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
     set({ audioRegionSelection: null });
   },
 
+  setAudioSpectralRegionSelection: (selection) => {
+    if (!selection) {
+      set({ audioSpectralRegionSelection: null });
+      return;
+    }
+
+    const startTime = Math.max(0, Math.min(selection.startTime, selection.endTime));
+    const endTime = Math.max(startTime, Math.max(selection.startTime, selection.endTime));
+    const sourceInPoint = Math.min(selection.sourceInPoint, selection.sourceOutPoint);
+    const sourceOutPoint = Math.max(selection.sourceInPoint, selection.sourceOutPoint);
+    const frequencyMinHz = Math.max(0, Math.min(selection.frequencyMinHz, selection.frequencyMaxHz));
+    const frequencyMaxHz = Math.max(frequencyMinHz, Math.max(selection.frequencyMinHz, selection.frequencyMaxHz));
+
+    set({
+      audioSpectralRegionSelection: {
+        ...selection,
+        startTime,
+        endTime,
+        sourceInPoint,
+        sourceOutPoint,
+        frequencyMinHz,
+        frequencyMaxHz,
+      },
+    });
+  },
+
+  clearAudioSpectralRegionSelection: () => {
+    set({ audioSpectralRegionSelection: null });
+  },
+
   toggleTranscriptMarkers: () => {
     set({ showTranscriptMarkers: !get().showTranscriptMarkers });
   },

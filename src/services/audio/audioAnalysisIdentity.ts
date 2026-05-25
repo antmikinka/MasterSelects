@@ -21,6 +21,12 @@ export interface ClipAudioAnalysisIdentityInput {
     ClipAudioState,
     'sourceAudioRevisionId' | 'editStack' | 'effectStack' | 'spectralLayers' | 'muted' | 'soloSafe'
   > | null;
+  automationKeyframes?: readonly {
+    property: string;
+    time: number;
+    value: number;
+    easing?: string | null;
+  }[];
   inPoint?: number;
   outPoint?: number;
   duration?: number;
@@ -196,6 +202,7 @@ export function createClipAudioStateIdentityPayload(
     editStack,
     effectStack,
     spectralLayers,
+    automationKeyframes: input.automationKeyframes,
     trackGraphIdentity: input.trackGraphIdentity || undefined,
     masterGraphIdentity: input.masterGraphIdentity || undefined,
   }) ?? {};

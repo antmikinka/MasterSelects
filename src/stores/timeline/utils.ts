@@ -2,6 +2,10 @@
 
 import type { EffectType } from '../../types';
 import { getDefaultParams as getRegistryDefaultParams, hasEffect } from '../../effects';
+import {
+  getAudioEffectDefaultParams,
+  hasAudioEffect,
+} from '../../engine/audio/AudioEffectRegistry';
 // Helper to seek video and wait for it to be ready
 export function seekVideo(video: HTMLVideoElement, time: number): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -26,18 +30,11 @@ export function getDefaultEffectParams(type: string | EffectType): Record<string
     return getRegistryDefaultParams(type);
   }
 
-  // Fallback for audio effects (not yet in the modular system)
-  switch (type) {
-    case 'audio-eq':
-      return {
-        band31: 0, band62: 0, band125: 0, band250: 0, band500: 0,
-        band1k: 0, band2k: 0, band4k: 0, band8k: 0, band16k: 0
-      };
-    case 'audio-volume':
-      return { volume: 1 };
-    default:
-      return {};
+  if (hasAudioEffect(type)) {
+    return getAudioEffectDefaultParams(type);
   }
+
+  return {};
 }
 
 // Quantize time to 30fps for caching

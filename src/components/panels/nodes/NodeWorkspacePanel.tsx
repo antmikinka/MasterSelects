@@ -23,6 +23,7 @@ import {
 import { createEffectProperty, createNodeGraphParamProperty } from '../../../types';
 import type {
   AnimatableProperty,
+  AudioAnalysisArtifactKind,
   BlendMode,
   ClipCustomNodeConversationKind,
   ClipCustomNodeConversationMessage,
@@ -30,6 +31,7 @@ import type {
   ClipCustomNodeParamDefinition,
   ClipCustomNodeParamValue,
   Effect,
+  MasterAudioState,
   TimelineClip,
   TimelineTrack,
 } from '../../../types';
@@ -68,6 +70,7 @@ interface NodeWorkspaceContextMenuState {
 interface AINodeProjectContext {
   clips: TimelineClip[];
   tracks: TimelineTrack[];
+  masterAudioState?: MasterAudioState;
 }
 
 function clampNodeWorkspaceInspectorWidth(width: number, panelWidth?: number): number {
@@ -818,18 +821,83 @@ function TransformNodeParameters({ clip }: { clip: TimelineClip }) {
   );
 }
 
-function PortList({ title, ports }: { title: string; ports: NodeGraphPort[] }) {
+const IMPLEMENTED_AUDIO_ANALYSIS_KINDS = new Set<AudioAnalysisArtifactKind>([
+  'waveform-pyramid',
+  'processed-waveform-pyramid',
+  'spectrogram-tiles',
+  'loudness-envelope',
+  'beat-grid',
+  'onset-map',
+  'phase-correlation',
+  'frequency-summary',
+]);
+
+function isImplementedAudioAnalysisKind(kind: string | undefined): kind is AudioAnalysisArtifactKind {
+  return !!kind && IMPLEMENTED_AUDIO_ANALYSIS_KINDS.has(kind as AudioAnalysisArtifactKind);
+}
+
+function PortList({
+  title,
+  ports,
+  clip,
+  onGenerateAudioAnalysis,
+  onCancelAudioAnalysis,
+}: {
+  title: string;
+  ports: NodeGraphPort[];
+  clip?: TimelineClip | null;
+  onGenerateAudioAnalysis?: (clipId: string, kind: AudioAnalysisArtifactKind) => void;
+  onCancelAudioAnalysis?: (clipId: string) => void;
+}) {
   return (
     <div className="node-workspace-inspector-section">
       <div className="node-workspace-inspector-section-title">{title}</div>
       {ports.length > 0 ? (
         <div className="node-workspace-inspector-ports">
-          {ports.map((port) => (
-            <div key={port.id} className="node-workspace-inspector-port">
-              <span>{port.label}</span>
-              <span>{port.type}</span>
-            </div>
-          ))}
+          {ports.map((port) => {
+            const generateAction = port.metadata?.generateAction;
+            const artifactKind = generateAction?.type === 'generate-audio-analysis'
+              ? generateAction.artifactKind
+              : undefined;
+            const audioAnalysisBusy = clip?.audioAnalysisJob !== undefined || clip?.waveformGenerating === true;
+            const canGenerate = !!clip
+              && !!artifactKind
+              && isImplementedAudioAnalysisKind(artifactKind)
+              && !audioAnalysisBusy;
+            const canCancel = !!clip && !!artifactKind && audioAnalysisBusy;
+            const available = port.metadata?.available !== false;
+
+            return (
+              <div key={port.id} className="node-workspace-inspector-port">
+                <span className="node-workspace-inspector-port-main">
+                  <span>{port.label}</span>
+                  {port.metadata?.artifactId && (
+                    <span className="node-workspace-inspector-port-artifact">{port.metadata.artifactId}</span>
+                  )}
+                </span>
+                <span className="node-workspace-inspector-port-side">
+                  <span>{port.type}</span>
+                  {artifactKind && (
+                    <button
+                      type="button"
+                      className="node-workspace-port-action"
+                      disabled={!canGenerate && !canCancel}
+                      onClick={() => {
+                        if (!clip) return;
+                        if (audioAnalysisBusy) {
+                          onCancelAudioAnalysis?.(clip.id);
+                        } else if (isImplementedAudioAnalysisKind(artifactKind)) {
+                          onGenerateAudioAnalysis?.(clip.id, artifactKind);
+                        }
+                      }}
+                    >
+                      {audioAnalysisBusy ? 'Cancel' : available ? 'Refresh' : 'Generate'}
+                    </button>
+                  )}
+                </span>
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div className="node-workspace-inspector-empty">None</div>
@@ -906,6 +974,35 @@ function NodeInspector({
   const canEditTransform = !!clip && node?.id === 'transform';
   const canEditEffect = !!clip && node?.id.startsWith('effect-');
   const canEditCustom = !!clip && node?.kind === 'custom';
+  const generateWaveformForClip = useTimelineStore((state) => state.generateWaveformForClip);
+  const generateProcessedWaveformForClip = useTimelineStore((state) => state.generateProcessedWaveformForClip);
+  const generateSpectrogramForClip = useTimelineStore((state) => state.generateSpectrogramForClip);
+  const generateLoudnessForClip = useTimelineStore((state) => state.generateLoudnessForClip);
+  const generateBeatOnsetForClip = useTimelineStore((state) => state.generateBeatOnsetForClip);
+  const generateFrequencyPhaseForClip = useTimelineStore((state) => state.generateFrequencyPhaseForClip);
+  const cancelAudioAnalysisForClip = useTimelineStore((state) => state.cancelAudioAnalysisForClip);
+  const generateAudioAnalysis = useCallback((clipId: string, kind: AudioAnalysisArtifactKind) => {
+    if (kind === 'processed-waveform-pyramid') {
+      void generateProcessedWaveformForClip(clipId);
+    } else if (kind === 'waveform-pyramid') {
+      void generateWaveformForClip(clipId);
+    } else if (kind === 'spectrogram-tiles') {
+      void generateSpectrogramForClip(clipId);
+    } else if (kind === 'loudness-envelope') {
+      void generateLoudnessForClip(clipId);
+    } else if (kind === 'beat-grid' || kind === 'onset-map') {
+      void generateBeatOnsetForClip(clipId);
+    } else if (kind === 'phase-correlation' || kind === 'frequency-summary') {
+      void generateFrequencyPhaseForClip(clipId);
+    }
+  }, [
+    generateBeatOnsetForClip,
+    generateFrequencyPhaseForClip,
+    generateLoudnessForClip,
+    generateProcessedWaveformForClip,
+    generateSpectrogramForClip,
+    generateWaveformForClip,
+  ]);
 
   if (!node) {
     return (
@@ -944,8 +1041,20 @@ function NodeInspector({
         )}
       </div>
 
-      <PortList title="Inputs" ports={node.inputs} />
-      <PortList title="Outputs" ports={node.outputs} />
+      <PortList
+        title="Inputs"
+        ports={node.inputs}
+        clip={clip}
+        onGenerateAudioAnalysis={generateAudioAnalysis}
+        onCancelAudioAnalysis={cancelAudioAnalysisForClip}
+      />
+      <PortList
+        title="Outputs"
+        ports={node.outputs}
+        clip={clip}
+        onGenerateAudioAnalysis={generateAudioAnalysis}
+        onCancelAudioAnalysis={cancelAudioAnalysisForClip}
+      />
 
       <div className="node-workspace-inspector-section">
         <div className="node-workspace-inspector-section-title">Parameters</div>
@@ -987,6 +1096,7 @@ function CustomNodeParameters({ clip, node }: { clip: TimelineClip; node: NodeGr
   const accountSession = useAccountStore((state) => state.session);
   const clips = useTimelineStore((state) => state.clips);
   const tracks = useTimelineStore((state) => state.tracks);
+  const masterAudioState = useTimelineStore((state) => state.masterAudioState);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
@@ -1059,7 +1169,7 @@ function CustomNodeParameters({ clip, node }: { clip: TimelineClip; node: NodeGr
         clip,
         definition,
         access,
-        { clips, tracks },
+        { clips, tracks, masterAudioState },
       );
       if (!response) {
         throw new Error('AI returned an empty response.');

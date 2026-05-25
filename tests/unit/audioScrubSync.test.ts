@@ -14,6 +14,7 @@ type ProxyFrameCacheTestAccess = typeof proxyFrameCache & {
   preloadAudioProxy: typeof proxyFrameCache.preloadAudioProxy;
   getAudioBuffer: typeof proxyFrameCache.getAudioBuffer;
   stopScrubAudio: typeof proxyFrameCache.stopScrubAudio;
+  getScrubMeterSnapshot: typeof proxyFrameCache.getScrubMeterSnapshot;
 };
 type AudioTrackSyncManagerTestAccess = {
   audioSyncHandler: Pick<AudioSyncHandler, 'syncAudioElement' | 'stopScrubAudio'>;
@@ -77,12 +78,14 @@ function stubProxyFrameCache(overrides: { hasAudioBuffer?: boolean } = {}) {
   const originalPreloadAudioProxy = testProxyFrameCache.preloadAudioProxy;
   const originalGetAudioBuffer = testProxyFrameCache.getAudioBuffer;
   const originalStopScrubAudio = testProxyFrameCache.stopScrubAudio;
+  const originalGetScrubMeterSnapshot = testProxyFrameCache.getScrubMeterSnapshot;
   const playScrubAudio = vi.fn();
   const hasAudioBuffer = vi.fn(() => overrides.hasAudioBuffer ?? true);
   const getCachedAudioProxy = vi.fn(() => null);
   const preloadAudioProxy = vi.fn();
   const getAudioBuffer = vi.fn();
   const stopScrubAudio = vi.fn();
+  const getScrubMeterSnapshot = vi.fn(() => null);
 
   testProxyFrameCache.playScrubAudio = playScrubAudio;
   testProxyFrameCache.hasAudioBuffer = hasAudioBuffer;
@@ -90,6 +93,7 @@ function stubProxyFrameCache(overrides: { hasAudioBuffer?: boolean } = {}) {
   testProxyFrameCache.preloadAudioProxy = preloadAudioProxy;
   testProxyFrameCache.getAudioBuffer = getAudioBuffer;
   testProxyFrameCache.stopScrubAudio = stopScrubAudio;
+  testProxyFrameCache.getScrubMeterSnapshot = getScrubMeterSnapshot;
 
   return {
     playScrubAudio,
@@ -98,6 +102,7 @@ function stubProxyFrameCache(overrides: { hasAudioBuffer?: boolean } = {}) {
     preloadAudioProxy,
     getAudioBuffer,
     stopScrubAudio,
+    getScrubMeterSnapshot,
     restore: () => {
       testProxyFrameCache.playScrubAudio = originalPlayScrubAudio;
       testProxyFrameCache.hasAudioBuffer = originalHasAudioBuffer;
@@ -105,6 +110,7 @@ function stubProxyFrameCache(overrides: { hasAudioBuffer?: boolean } = {}) {
       testProxyFrameCache.preloadAudioProxy = originalPreloadAudioProxy;
       testProxyFrameCache.getAudioBuffer = originalGetAudioBuffer;
       testProxyFrameCache.stopScrubAudio = originalStopScrubAudio;
+      testProxyFrameCache.getScrubMeterSnapshot = originalGetScrubMeterSnapshot;
     },
   };
 }
@@ -182,7 +188,72 @@ describe('scrub audio sync', () => {
       { audioPlayingCount: 0, maxAudioDrift: 0, hasAudioError: false, masterSet: false }
     );
 
-    expect(applyEffects).toHaveBeenCalledWith(element, 0.75, [0, 0, 0, 0, 0, 6, 0, 0, 0, 0]);
+    expect(applyEffects).toHaveBeenCalledWith(element, 0.75, [0, 0, 0, 0, 0, 6, 0, 0, 0, 0], 0, []);
+  });
+
+  it('routes playback through Web Audio when live processors are present', () => {
+    const handler = new AudioSyncHandler();
+    const applyEffects = vi.spyOn(audioRoutingManager, 'applyEffects').mockResolvedValue(true);
+    const element = {
+      muted: false,
+      volume: 1,
+      playbackRate: 1,
+      currentTime: 0,
+      paused: true,
+      play: vi.fn().mockResolvedValue(undefined),
+      pause: vi.fn(),
+    } as unknown as HTMLAudioElement;
+    const processors = [{ id: 'hp', type: 'high-pass' as const, frequencyHz: 100, q: 0.707 }];
+
+    handler.syncAudioElement(
+      {
+        element,
+        clip: makeClip(),
+        clipTime: 0.5,
+        absSpeed: 1,
+        isMuted: false,
+        canBeMaster: false,
+        type: 'audioTrack',
+        volume: 1,
+        processors,
+      },
+      makeFrameContext({ isDraggingPlayhead: false, isPlaying: true }),
+      { audioPlayingCount: 0, maxAudioDrift: 0, hasAudioError: false, masterSet: false }
+    );
+
+    expect(applyEffects).toHaveBeenCalledWith(element, 1, new Array(10).fill(0), 0, processors);
+  });
+
+  it('routes playback through Web Audio when a runtime meter target exists', () => {
+    const handler = new AudioSyncHandler();
+    const applyEffects = vi.spyOn(audioRoutingManager, 'applyEffects').mockResolvedValue(true);
+    const element = {
+      muted: false,
+      volume: 1,
+      playbackRate: 1,
+      currentTime: 0,
+      paused: true,
+      play: vi.fn().mockResolvedValue(undefined),
+      pause: vi.fn(),
+    } as unknown as HTMLAudioElement;
+
+    handler.syncAudioElement(
+      {
+        element,
+        clip: makeClip(),
+        clipTime: 0.5,
+        absSpeed: 1,
+        isMuted: false,
+        canBeMaster: false,
+        type: 'audioTrack',
+        volume: 0.75,
+        meterTrackId: 'audio-track',
+      },
+      makeFrameContext({ isDraggingPlayhead: false, isPlaying: true }),
+      { audioPlayingCount: 0, maxAudioDrift: 0, hasAudioError: false, masterSet: false }
+    );
+
+    expect(applyEffects).toHaveBeenCalledWith(element, 0.75, new Array(10).fill(0), 0, []);
   });
 
   it('uses linked audio clip settings for varispeed scrub audio and skips proxy fallback duplication', () => {

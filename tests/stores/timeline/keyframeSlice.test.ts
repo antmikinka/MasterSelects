@@ -1083,6 +1083,156 @@ describe('keyframeSlice', () => {
     expect(updatedClip.audioState?.processedAnalysisRefs).toBeUndefined();
   });
 
+  it('setPropertyValue: keeps processed audio refs when static legacy clip volume changes', () => {
+    const audioState = {
+      sourceAnalysisRefs: { waveformPyramidId: 'source-waveform' },
+      processedAnalysisRefs: { processedWaveformPyramidId: 'processed-waveform' },
+    };
+    store = createTestTimelineStore({
+      clips: [
+        createMockClip({
+          id: 'clip-legacy-volume',
+          trackId: 'video-1',
+          audioState,
+          effects: [
+            { id: 'volume-fx', name: 'Volume', type: 'audio-volume', enabled: true, params: { volume: 1 } },
+          ],
+        }),
+      ],
+    });
+
+    store.getState().setPropertyValue('clip-legacy-volume', 'effect.volume-fx.volume', 0.42);
+    const updatedClip = store.getState().clips.find(c => c.id === 'clip-legacy-volume')!;
+
+    expect(updatedClip.effects.find(effect => effect.id === 'volume-fx')?.params.volume).toBe(0.42);
+    expect(updatedClip.audioState?.sourceAnalysisRefs).toEqual(audioState.sourceAnalysisRefs);
+    expect(updatedClip.audioState?.processedAnalysisRefs).toEqual(audioState.processedAnalysisRefs);
+  });
+
+  it('setPropertyValue: keeps processed audio refs when static registry clip volume changes', () => {
+    const audioState = {
+      sourceAnalysisRefs: { waveformPyramidId: 'source-waveform' },
+      processedAnalysisRefs: { processedWaveformPyramidId: 'processed-waveform' },
+      effectStack: [
+        {
+          id: 'registry-volume',
+          descriptorId: 'audio-volume',
+          enabled: true,
+          params: { volume: 1 },
+          automationMode: 'clip' as const,
+        },
+      ],
+    };
+    store = createTestTimelineStore({
+      clips: [
+        createMockClip({
+          id: 'clip-registry-volume',
+          trackId: 'video-1',
+          audioState,
+        }),
+      ],
+    });
+
+    store.getState().setPropertyValue('clip-registry-volume', 'effect.registry-volume.volume', 0.42);
+    const updatedClip = store.getState().clips.find(c => c.id === 'clip-registry-volume')!;
+
+    expect(updatedClip.audioState?.effectStack?.find(effect => effect.id === 'registry-volume')?.params.volume).toBe(0.42);
+    expect(updatedClip.audioState?.sourceAnalysisRefs).toEqual(audioState.sourceAnalysisRefs);
+    expect(updatedClip.audioState?.processedAnalysisRefs).toEqual(audioState.processedAnalysisRefs);
+  });
+
+  it('addKeyframe: keeps processed audio refs for gain-only volume automation', () => {
+    const audioState = {
+      sourceAnalysisRefs: { waveformPyramidId: 'source-waveform' },
+      processedAnalysisRefs: { processedWaveformPyramidId: 'processed-waveform' },
+    };
+    store = createTestTimelineStore({
+      clips: [
+        createMockClip({
+          id: 'clip-volume',
+          trackId: 'video-1',
+          audioState,
+          effects: [
+            { id: 'volume-fx', name: 'Volume', type: 'audio-volume', enabled: true, params: { volume: 1 } },
+          ],
+        }),
+      ],
+    });
+
+    store.getState().addKeyframe('clip-volume', 'effect.volume-fx.volume', 0.5, 1);
+    const updatedClip = store.getState().clips.find(c => c.id === 'clip-volume')!;
+
+    expect(updatedClip.audioState?.sourceAnalysisRefs).toEqual(audioState.sourceAnalysisRefs);
+    expect(updatedClip.audioState?.processedAnalysisRefs).toEqual(audioState.processedAnalysisRefs);
+  });
+
+  it('addKeyframe: invalidates processed audio refs for signal-shaping effect automation', () => {
+    const audioState = {
+      sourceAnalysisRefs: { waveformPyramidId: 'source-waveform' },
+      processedAnalysisRefs: { processedWaveformPyramidId: 'processed-waveform' },
+    };
+    store = createTestTimelineStore({
+      clips: [
+        createMockClip({
+          id: 'clip-eq',
+          trackId: 'video-1',
+          audioState,
+          effects: [
+            { id: 'eq-fx', name: 'EQ', type: 'audio-eq', enabled: true, params: {} },
+          ],
+        }),
+      ],
+    });
+
+    store.getState().addKeyframe('clip-eq', 'effect.eq-fx.band1k', 3, 1);
+    const updatedClip = store.getState().clips.find(c => c.id === 'clip-eq')!;
+
+    expect(updatedClip.audioState?.sourceAnalysisRefs).toEqual(audioState.sourceAnalysisRefs);
+    expect(updatedClip.audioState?.processedAnalysisRefs).toBeUndefined();
+  });
+
+  it('disablePropertyKeyframes: writes registry audio effect static values', () => {
+    store = createTestTimelineStore({
+      clips: [
+        createMockClip({
+          id: 'clip-registry-audio',
+          trackId: 'video-1',
+          audioState: {
+            effectStack: [
+              {
+                id: 'compressor-fx',
+                descriptorId: 'audio-compressor',
+                enabled: true,
+                params: { thresholdDb: -24, ratio: 2, attackMs: 5, releaseMs: 120, makeupGainDb: 0 },
+              },
+            ],
+          },
+        }),
+      ],
+      clipKeyframes: new Map([
+        [
+          'clip-registry-audio',
+          [
+            {
+              id: 'kf-compressor',
+              clipId: 'clip-registry-audio',
+              property: 'effect.compressor-fx.thresholdDb',
+              time: 1,
+              value: -18,
+              easing: 'linear',
+            },
+          ],
+        ],
+      ]),
+    });
+
+    store.getState().disablePropertyKeyframes('clip-registry-audio', 'effect.compressor-fx.thresholdDb', -12);
+    const updatedClip = store.getState().clips.find(c => c.id === 'clip-registry-audio')!;
+
+    expect(updatedClip.audioState?.effectStack?.[0].params.thresholdDb).toBe(-12);
+    expect(store.getState().clipKeyframes.get('clip-registry-audio')).toBeUndefined();
+  });
+
   it('setPropertyValue: updates static AI node param when not recording and no keyframes', () => {
     const aiClip = createMockClip({
       id: 'clip-ai',

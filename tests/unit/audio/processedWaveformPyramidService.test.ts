@@ -4,6 +4,7 @@ import { AudioArtifactStore } from '../../../src/services/audio/AudioArtifactSto
 import {
   ProcessedWaveformPyramidService,
   clipRequiresProcessedWaveformPyramid,
+  collectProcessedAnalysisClipAudioEffectInstances,
   collectRenderableClipAudioEditOperations,
   collectRenderableClipAudioEffectInstances,
   createProcessedClipAudioStateHash,
@@ -79,8 +80,28 @@ describe('ProcessedWaveformPyramidService', () => {
     const visualOnly = createMockClip({
       effects: [{ id: 'blur', name: 'blur', type: 'blur', enabled: true, params: {} }],
     });
-    const audioEffect = createMockClip({
+    const volumeOnly = createMockClip({
       effects: [{ id: 'gain', name: 'Volume', type: 'audio-volume', enabled: true, params: { volume: 0.75 } }],
+    });
+    const defaultEq = createMockClip({
+      effects: [{ id: 'eq-default', name: 'EQ', type: 'audio-eq', enabled: true, params: {} }],
+    });
+    const defaultFilter = createMockClip({
+      audioState: {
+        effectStack: [
+          { id: 'hp-default', descriptorId: 'audio-high-pass', enabled: true, params: {} },
+        ],
+      },
+    });
+    const audioEffect = createMockClip({
+      effects: [{ id: 'eq', name: 'EQ', type: 'audio-eq', enabled: true, params: { band1k: 3 } }],
+    });
+    const professionalAudioEffect = createMockClip({
+      audioState: {
+        effectStack: [
+          { id: 'compressor', descriptorId: 'audio-compressor', enabled: true, params: { thresholdDb: -18, ratio: 3 } },
+        ],
+      },
     });
     const audioEdit = createMockClip({
       audioState: {
@@ -99,13 +120,20 @@ describe('ProcessedWaveformPyramidService', () => {
 
     expect(clipRequiresProcessedWaveformPyramid(plain)).toBe(false);
     expect(clipRequiresProcessedWaveformPyramid(visualOnly)).toBe(false);
+    expect(clipRequiresProcessedWaveformPyramid(volumeOnly)).toBe(false);
+    expect(clipRequiresProcessedWaveformPyramid(defaultEq)).toBe(false);
+    expect(clipRequiresProcessedWaveformPyramid(defaultFilter)).toBe(false);
     expect(clipRequiresProcessedWaveformPyramid(audioEffect)).toBe(true);
+    expect(clipRequiresProcessedWaveformPyramid(professionalAudioEffect)).toBe(true);
     expect(clipRequiresProcessedWaveformPyramid(audioEdit)).toBe(true);
     expect(clipRequiresProcessedWaveformPyramid(createMockClip({ speed: 0.5 }))).toBe(true);
     expect(clipRequiresProcessedWaveformPyramid(createMockClip({ reversed: true }))).toBe(true);
     expect(clipRequiresProcessedWaveformPyramid(createMockClip(), [
       { id: 'speed-kf', clipId: 'clip_1', property: 'speed', time: 0, value: 1.25, easing: 'linear' },
     ])).toBe(true);
+    expect(clipRequiresProcessedWaveformPyramid(volumeOnly, [
+      { id: 'volume-kf', clipId: 'clip_1', property: 'effect.gain.volume', time: 0, value: 0.25, easing: 'linear' },
+    ])).toBe(false);
   });
 
   it('collects only renderable enabled audio edit operations for processed waveforms', () => {
@@ -124,6 +152,55 @@ describe('ProcessedWaveformPyramidService', () => {
     ]);
   });
 
+  it('keeps static volume out of processed analysis effects while preserving output render effects', () => {
+    const clip = createMockClip({
+      effects: [
+        { id: 'gain', name: 'Volume', type: 'audio-volume', enabled: true, params: { volume: 0.5 } },
+        { id: 'eq', name: 'EQ', type: 'audio-eq', enabled: true, params: { band1k: 3 } },
+      ] satisfies Effect[],
+    });
+
+    expect(collectRenderableClipAudioEffectInstances(clip).map(effect => effect.id)).toEqual(['gain', 'eq']);
+    expect(collectProcessedAnalysisClipAudioEffectInstances(clip).map(effect => effect.id)).toEqual(['eq']);
+  });
+
+  it('keeps static volume changes out of processed analysis identity', () => {
+    const baseline = createMockClip({
+      effects: [
+        { id: 'gain', name: 'Volume', type: 'audio-volume', enabled: true, params: { volume: 1 } },
+        { id: 'eq', name: 'EQ', type: 'audio-eq', enabled: true, params: { band1k: 3 } },
+      ] satisfies Effect[],
+    });
+    const quieter = createMockClip({
+      ...baseline,
+      effects: [
+        { id: 'gain', name: 'Volume', type: 'audio-volume', enabled: true, params: { volume: 0.35 } },
+        { id: 'eq', name: 'EQ', type: 'audio-eq', enabled: true, params: { band1k: 3 } },
+      ] satisfies Effect[],
+    });
+
+    expect(createProcessedClipAudioStateHash(quieter)).toBe(createProcessedClipAudioStateHash(baseline));
+  });
+
+  it('keeps volume automation out of processed analysis identity', () => {
+    const clip = createMockClip({
+      effects: [
+        { id: 'gain', name: 'Volume', type: 'audio-volume', enabled: true, params: { volume: 1 } },
+        { id: 'eq', name: 'EQ', type: 'audio-eq', enabled: true, params: { band1k: 3 } },
+      ] satisfies Effect[],
+    });
+    const eqKeyframes = [
+      { id: 'eq-kf', clipId: clip.id, property: 'effect.eq.band1k', time: 0, value: 3, easing: 'linear' },
+    ] as const;
+    const eqAndVolumeKeyframes = [
+      ...eqKeyframes,
+      { id: 'volume-kf', clipId: clip.id, property: 'effect.gain.volume', time: 0.25, value: 0.5, easing: 'linear' },
+    ] as const;
+
+    expect(createProcessedClipAudioStateHash(clip, { keyframes: eqAndVolumeKeyframes }))
+      .toBe(createProcessedClipAudioStateHash(clip, { keyframes: eqKeyframes }));
+  });
+
   it('renders clip audio effects, stores a processed waveform pyramid, and primes timeline cache', async () => {
     const store = createStore();
     const sourceBuffer = createMockAudioBuffer([[0, 0.25, -0.75, 1]], 8);
@@ -140,6 +217,7 @@ describe('ProcessedWaveformPyramidService', () => {
       outPoint: 0.5,
       effects: [
         { id: 'gain', name: 'Volume', type: 'audio-volume', enabled: true, params: { volume: 0.5 } },
+        { id: 'eq', name: 'EQ', type: 'audio-eq', enabled: true, params: { band1k: 3 } },
       ] satisfies Effect[],
     });
 
@@ -152,12 +230,12 @@ describe('ProcessedWaveformPyramidService', () => {
 
     expect(effectRenderer.renderEffectInstances).toHaveBeenCalledWith(
       sourceBuffer,
-      [expect.objectContaining({ id: 'gain', descriptorId: 'audio-volume' })],
+      [expect.objectContaining({ id: 'eq', descriptorId: 'audio-eq' })],
       [],
       0.5,
       expect.any(Function),
     );
-    expect(result.clipAudioStateHash).toBe(createProcessedClipAudioStateHash(clip));
+    expect(result.clipAudioStateHash).toBe(createProcessedClipAudioStateHash(clip, { keyframes: [] }));
     expect(result.audioAnalysisRefs.processedWaveformPyramidId).toBe(result.artifact.manifestRef.artifactId);
     expect(result.artifact).toMatchObject({
       kind: 'processed-waveform-pyramid',

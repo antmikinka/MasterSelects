@@ -12,7 +12,7 @@
  */
 
 import { Logger } from '../../services/logger';
-import type { AudioEffectInstance, Keyframe, Effect, AnimatableProperty } from '../../types';
+import type { AudioEffectInstance, Keyframe, Effect, EffectType, AnimatableProperty } from '../../types';
 import { normalizeEasingType } from '../../utils/easing';
 import {
   getAudioEffect,
@@ -32,16 +32,52 @@ export const EQ_BAND_PARAMS = getAudioEffectParamNames('audio-eq');
 
 const AUDIO_EQ_EFFECT_ID = 'audio-eq' satisfies AudioEffectId;
 const AUDIO_VOLUME_EFFECT_ID = 'audio-volume' satisfies AudioEffectId;
+const AUDIO_HIGH_PASS_EFFECT_ID = 'audio-high-pass' satisfies AudioEffectId;
+const AUDIO_LOW_PASS_EFFECT_ID = 'audio-low-pass' satisfies AudioEffectId;
+const AUDIO_COMPRESSOR_EFFECT_ID = 'audio-compressor' satisfies AudioEffectId;
+const AUDIO_DE_ESSER_EFFECT_ID = 'audio-de-esser' satisfies AudioEffectId;
+const AUDIO_LIMITER_EFFECT_ID = 'audio-limiter' satisfies AudioEffectId;
+const AUDIO_NOISE_GATE_EFFECT_ID = 'audio-noise-gate' satisfies AudioEffectId;
+const AUDIO_DELAY_EFFECT_ID = 'audio-delay' satisfies AudioEffectId;
+const AUDIO_REVERB_EFFECT_ID = 'audio-reverb' satisfies AudioEffectId;
 const AUDIO_VOLUME_PARAM = getAudioEffectParamNames(AUDIO_VOLUME_EFFECT_ID)[0] ?? 'volume';
 const LEGACY_AUDIO_EFFECT_RENDER_ORDER = [
+  AUDIO_HIGH_PASS_EFFECT_ID,
+  AUDIO_LOW_PASS_EFFECT_ID,
   AUDIO_EQ_EFFECT_ID,
+  AUDIO_DE_ESSER_EFFECT_ID,
+  AUDIO_COMPRESSOR_EFFECT_ID,
+  AUDIO_NOISE_GATE_EFFECT_ID,
+  AUDIO_DELAY_EFFECT_ID,
+  AUDIO_REVERB_EFFECT_ID,
+  AUDIO_LIMITER_EFFECT_ID,
   AUDIO_VOLUME_EFFECT_ID,
 ] as const satisfies readonly AudioEffectId[];
+
+const DEFAULT_PARAM_EPSILON = 0.001;
+const EQ_PARAM_EPSILON = 0.01;
 
 type RenderableAudioEffectInstance = AudioEffectInstance & {
   bypassed?: boolean;
   disabled?: boolean;
 };
+
+function hasRenderableAudioEffect(effect: AudioEffectInstance & { bypassed?: boolean; disabled?: boolean }): boolean {
+  return effect.enabled !== false &&
+    effect.disabled !== true &&
+    effect.bypassed !== true &&
+    getAudioEffect(effect.descriptorId) !== undefined;
+}
+
+function dbToLinearGain(db: number): number {
+  if (!Number.isFinite(db)) return 1;
+  return Math.pow(10, db / 20);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, value));
+}
 
 export interface EffectRenderProgress {
   phase: 'preparing' | 'rendering' | 'complete';
@@ -67,76 +103,25 @@ export class AudioEffectRenderer {
     clipDuration?: number,
     onProgress?: EffectRenderProgressCallback
   ): Promise<AudioBuffer> {
-    const duration = clipDuration ?? buffer.duration;
-
-    const renderableEffects = this.getRenderableAudioEffects(effects);
-    const hasEffectsToApply = renderableEffects.some(effect =>
-      this.shouldRenderAudioEffect(effect, keyframes)
+    const renderableEffects = this.getRenderableAudioEffects(effects)
+      .filter(effect => this.shouldRenderAudioEffect(effect, keyframes));
+    return this.renderEffectInstances(
+      buffer,
+      renderableEffects.flatMap(effect => {
+        const descriptor = getAudioEffect(effect.type);
+        if (!descriptor) return [];
+        return [{
+          id: effect.id,
+          descriptorId: descriptor.id,
+          enabled: effect.enabled !== false,
+          params: { ...effect.params },
+          automationMode: 'clip' as const,
+        }];
+      }),
+      keyframes,
+      clipDuration,
+      onProgress
     );
-
-    // If no effects or all defaults, return original buffer
-    if (!hasEffectsToApply) {
-      log.debug('No effects to apply, returning original');
-      return buffer;
-    }
-
-    log.debug(`Rendering effects for ${duration.toFixed(2)}s audio`);
-
-    onProgress?.({ phase: 'preparing', percent: 0 });
-
-    // Create offline context
-    const offlineContext = new OfflineAudioContext(
-      buffer.numberOfChannels,
-      buffer.length,
-      buffer.sampleRate
-    );
-
-    // Create source
-    const source = offlineContext.createBufferSource();
-    source.buffer = buffer;
-
-    // Build effect chain
-    let currentNode: AudioNode = source;
-
-    for (const effect of renderableEffects) {
-      const descriptor = getAudioEffect(effect.type);
-      if (!descriptor) continue;
-
-      if (descriptor.id === AUDIO_EQ_EFFECT_ID) {
-        currentNode = this.createEQChain(
-          offlineContext,
-          currentNode,
-          effect,
-          keyframes,
-          duration
-        );
-      }
-
-      if (descriptor.id === AUDIO_VOLUME_EFFECT_ID) {
-        currentNode = this.createGainNode(
-          offlineContext,
-          currentNode,
-          effect,
-          keyframes,
-          duration
-        );
-      }
-    }
-
-    // Connect to destination
-    currentNode.connect(offlineContext.destination);
-
-    onProgress?.({ phase: 'rendering', percent: 50 });
-
-    // Start source and render
-    source.start(0);
-    const renderedBuffer = await offlineContext.startRendering();
-
-    onProgress?.({ phase: 'complete', percent: 100 });
-
-    log.debug(`Rendered ${renderedBuffer.duration.toFixed(2)}s with effects`);
-
-    return renderedBuffer;
   }
 
   /**
@@ -150,16 +135,49 @@ export class AudioEffectRenderer {
     clipDuration?: number,
     onProgress?: EffectRenderProgressCallback
   ): Promise<AudioBuffer> {
-    return this.renderEffects(
-      buffer,
-      effectStack.flatMap(effect => {
-        const legacyEffect = this.audioEffectInstanceToLegacyEffect(effect);
-        return legacyEffect ? [legacyEffect] : [];
-      }),
-      keyframes,
-      clipDuration,
-      onProgress
+    const duration = clipDuration ?? buffer.duration;
+    const renderableEffects = this.getRenderableAudioEffectInstances(effectStack);
+    const effectsToApply = renderableEffects.filter(effect =>
+      this.shouldRenderAudioEffectInstance(effect, keyframes)
     );
+
+    if (effectsToApply.length === 0) {
+      log.debug('No effects to apply, returning original');
+      return buffer;
+    }
+
+    log.debug(`Rendering ${effectsToApply.length} audio effects for ${duration.toFixed(2)}s audio`);
+
+    onProgress?.({ phase: 'preparing', percent: 0 });
+
+    let workingBuffer = buffer;
+    let pendingOfflineEffects: RenderableAudioEffectInstance[] = [];
+
+    const flushOfflineEffects = async () => {
+      if (pendingOfflineEffects.length === 0) return;
+      workingBuffer = await this.renderOfflineNodeEffects(
+        workingBuffer,
+        pendingOfflineEffects,
+        keyframes,
+        duration,
+      );
+      pendingOfflineEffects = [];
+    };
+
+    for (const effect of effectsToApply) {
+      if (this.isPureSampleEffect(effect.descriptorId)) {
+        await flushOfflineEffects();
+        workingBuffer = this.renderPureSampleEffect(workingBuffer, effect);
+      } else {
+        pendingOfflineEffects.push(effect);
+      }
+    }
+
+    await flushOfflineEffects();
+
+    onProgress?.({ phase: 'complete', percent: 100 });
+    log.debug(`Rendered ${workingBuffer.duration.toFixed(2)}s with effects`);
+    return workingBuffer;
   }
 
   /**
@@ -176,6 +194,18 @@ export class AudioEffectRenderer {
         candidate.enabled !== false
       );
       return effect ? [effect] : [];
+    });
+  }
+
+  private getRenderableAudioEffectInstances(
+    effectStack: readonly AudioEffectInstance[]
+  ): RenderableAudioEffectInstance[] {
+    return effectStack.flatMap(effect => {
+      if (!hasRenderableAudioEffect(effect)) return [];
+      return [{
+        ...effect,
+        params: { ...effect.params },
+      }];
     });
   }
 
@@ -202,10 +232,36 @@ export class AudioEffectRenderer {
       return this.hasNonDefaultVolume(effect);
     }
 
-    return false;
+    return this.hasNonDefaultRegistryParams(descriptor.id, effect.params);
   }
 
-  private audioEffectInstanceToLegacyEffect(
+  private shouldRenderAudioEffectInstance(
+    effect: RenderableAudioEffectInstance,
+    keyframes: Keyframe[]
+  ): boolean {
+    if (effect.enabled === false || effect.disabled === true || effect.bypassed === true) {
+      return false;
+    }
+
+    const descriptor = getAudioEffect(effect.descriptorId);
+    if (!descriptor) return false;
+
+    if (this.hasEffectKeyframes(keyframes, effect.id)) {
+      return true;
+    }
+
+    if (descriptor.id === AUDIO_VOLUME_EFFECT_ID) {
+      return this.hasNonDefaultRegistryParams(descriptor.id, effect.params);
+    }
+
+    if (descriptor.id === AUDIO_EQ_EFFECT_ID) {
+      return this.hasNonDefaultRegistryParams(descriptor.id, effect.params, EQ_PARAM_EPSILON);
+    }
+
+    return this.hasNonDefaultRegistryParams(descriptor.id, effect.params);
+  }
+
+  audioEffectInstanceToLegacyEffect(
     effect: RenderableAudioEffectInstance
   ): Effect | null {
     const descriptor = getAudioEffect(effect.descriptorId);
@@ -214,10 +270,196 @@ export class AudioEffectRenderer {
     return {
       id: effect.id,
       name: descriptor.name,
-      type: descriptor.id,
+      type: descriptor.id as EffectType,
       enabled: effect.enabled !== false && effect.disabled !== true && effect.bypassed !== true,
       params: { ...effect.params },
     };
+  }
+
+  private async renderOfflineNodeEffects(
+    buffer: AudioBuffer,
+    effects: readonly RenderableAudioEffectInstance[],
+    keyframes: Keyframe[],
+    duration: number,
+  ): Promise<AudioBuffer> {
+    const offlineContext = new OfflineAudioContext(
+      buffer.numberOfChannels,
+      buffer.length,
+      buffer.sampleRate
+    );
+
+    const source = offlineContext.createBufferSource();
+    source.buffer = buffer;
+
+    let currentNode: AudioNode = source;
+
+    for (const effect of effects) {
+      switch (effect.descriptorId) {
+        case AUDIO_EQ_EFFECT_ID:
+          currentNode = this.createEQChain(offlineContext, currentNode, effect, keyframes, duration);
+          break;
+        case AUDIO_VOLUME_EFFECT_ID:
+          currentNode = this.createGainNode(offlineContext, currentNode, effect, keyframes, duration);
+          break;
+        case AUDIO_HIGH_PASS_EFFECT_ID:
+          currentNode = this.createFilterNode(offlineContext, currentNode, effect, 'highpass', keyframes, duration);
+          break;
+        case AUDIO_LOW_PASS_EFFECT_ID:
+          currentNode = this.createFilterNode(offlineContext, currentNode, effect, 'lowpass', keyframes, duration);
+          break;
+        case AUDIO_COMPRESSOR_EFFECT_ID:
+          currentNode = this.createCompressorChain(offlineContext, currentNode, effect, keyframes, duration);
+          break;
+        case AUDIO_DE_ESSER_EFFECT_ID:
+          currentNode = this.createDeEsserChain(offlineContext, currentNode, effect, keyframes, duration);
+          break;
+      }
+    }
+
+    currentNode.connect(offlineContext.destination);
+    source.start(0);
+    return offlineContext.startRendering();
+  }
+
+  private isPureSampleEffect(effectId: string): boolean {
+    return effectId === AUDIO_LIMITER_EFFECT_ID ||
+      effectId === AUDIO_NOISE_GATE_EFFECT_ID ||
+      effectId === AUDIO_DELAY_EFFECT_ID ||
+      effectId === AUDIO_REVERB_EFFECT_ID;
+  }
+
+  private renderPureSampleEffect(
+    buffer: AudioBuffer,
+    effect: RenderableAudioEffectInstance,
+  ): AudioBuffer {
+    switch (effect.descriptorId) {
+      case AUDIO_LIMITER_EFFECT_ID:
+        return this.applyPeakLimiter(buffer, effect);
+      case AUDIO_NOISE_GATE_EFFECT_ID:
+        return this.applyNoiseGate(buffer, effect);
+      case AUDIO_DELAY_EFFECT_ID:
+        return this.applyDelay(buffer, effect);
+      case AUDIO_REVERB_EFFECT_ID:
+        return this.applyReverb(buffer, effect);
+      default:
+        return buffer;
+    }
+  }
+
+  private createFilterNode(
+    context: OfflineAudioContext,
+    inputNode: AudioNode,
+    filterEffect: RenderableAudioEffectInstance,
+    type: BiquadFilterType,
+    keyframes: Keyframe[],
+    duration: number,
+  ): AudioNode {
+    const filter = context.createBiquadFilter();
+    filter.type = type;
+    const effectId = filterEffect.descriptorId as AudioEffectId;
+    const defaultFrequency = this.getNumericEffectParamDefault(effectId, 'frequencyHz', type === 'highpass' ? 20 : 22000);
+    const defaultQ = this.getNumericEffectParamDefault(effectId, 'q', 0.707);
+    const frequency = this.getNumericEffectParam(filterEffect, 'frequencyHz', defaultFrequency);
+    const q = this.getNumericEffectParam(filterEffect, 'q', defaultQ);
+
+    this.automateEffectParam(filter.frequency, filterEffect, 'frequencyHz', frequency, keyframes, duration);
+    this.automateEffectParam(filter.Q, filterEffect, 'q', q, keyframes, duration);
+
+    inputNode.connect(filter);
+    return filter;
+  }
+
+  private createCompressorChain(
+    context: OfflineAudioContext,
+    inputNode: AudioNode,
+    compressorEffect: RenderableAudioEffectInstance,
+    keyframes: Keyframe[],
+    duration: number,
+  ): AudioNode {
+    const compressor = context.createDynamicsCompressor();
+    const threshold = this.getNumericEffectParam(compressorEffect, 'thresholdDb', 0);
+    const ratio = this.getNumericEffectParam(compressorEffect, 'ratio', 1);
+    const knee = this.getNumericEffectParam(compressorEffect, 'kneeDb', 0);
+    const attackSeconds = this.getNumericEffectParam(compressorEffect, 'attackMs', 10) / 1000;
+    const releaseSeconds = this.getNumericEffectParam(compressorEffect, 'releaseMs', 120) / 1000;
+
+    this.automateEffectParam(compressor.threshold, compressorEffect, 'thresholdDb', threshold, keyframes, duration);
+    this.automateEffectParam(compressor.ratio, compressorEffect, 'ratio', ratio, keyframes, duration);
+    this.automateEffectParam(compressor.knee, compressorEffect, 'kneeDb', knee, keyframes, duration);
+    this.automateEffectParam(compressor.attack, compressorEffect, 'attackMs', attackSeconds, keyframes, duration, value => value / 1000);
+    this.automateEffectParam(compressor.release, compressorEffect, 'releaseMs', releaseSeconds, keyframes, duration, value => value / 1000);
+
+    inputNode.connect(compressor);
+
+    const makeupGainDb = this.getNumericEffectParam(compressorEffect, 'makeupGainDb', 0);
+    if (Math.abs(makeupGainDb) <= 0.001 && !this.hasEffectParamKeyframes(keyframes, compressorEffect.id, 'makeupGainDb')) {
+      return compressor;
+    }
+
+    const makeupGain = context.createGain();
+    this.automateEffectParam(
+      makeupGain.gain,
+      compressorEffect,
+      'makeupGainDb',
+      dbToLinearGain(makeupGainDb),
+      keyframes,
+      duration,
+      dbToLinearGain,
+    );
+    compressor.connect(makeupGain);
+    return makeupGain;
+  }
+
+  private createDeEsserChain(
+    context: OfflineAudioContext,
+    inputNode: AudioNode,
+    deEsserEffect: RenderableAudioEffectInstance,
+    keyframes: Keyframe[],
+    duration: number,
+  ): AudioNode {
+    const splitFrequency = this.getNumericEffectParam(deEsserEffect, 'frequencyHz', 6500);
+    const threshold = this.getNumericEffectParam(deEsserEffect, 'thresholdDb', 0);
+    const ratio = this.getNumericEffectParam(deEsserEffect, 'ratio', 1);
+    const knee = this.getNumericEffectParam(deEsserEffect, 'kneeDb', 6);
+    const attackSeconds = this.getNumericEffectParam(deEsserEffect, 'attackMs', 1) / 1000;
+    const releaseSeconds = this.getNumericEffectParam(deEsserEffect, 'releaseMs', 80) / 1000;
+    const makeupGainDb = this.getNumericEffectParam(deEsserEffect, 'makeupGainDb', 0);
+    const lowBand = context.createBiquadFilter();
+    const highBand = context.createBiquadFilter();
+    const compressor = context.createDynamicsCompressor();
+    const makeupGain = context.createGain();
+    const output = context.createGain();
+
+    lowBand.type = 'lowpass';
+    lowBand.Q.value = 0.707;
+    highBand.type = 'highpass';
+    highBand.Q.value = 0.707;
+
+    this.automateEffectParam(lowBand.frequency, deEsserEffect, 'frequencyHz', splitFrequency, keyframes, duration);
+    this.automateEffectParam(highBand.frequency, deEsserEffect, 'frequencyHz', splitFrequency, keyframes, duration);
+    this.automateEffectParam(compressor.threshold, deEsserEffect, 'thresholdDb', threshold, keyframes, duration);
+    this.automateEffectParam(compressor.ratio, deEsserEffect, 'ratio', ratio, keyframes, duration);
+    this.automateEffectParam(compressor.knee, deEsserEffect, 'kneeDb', knee, keyframes, duration);
+    this.automateEffectParam(compressor.attack, deEsserEffect, 'attackMs', attackSeconds, keyframes, duration, value => value / 1000);
+    this.automateEffectParam(compressor.release, deEsserEffect, 'releaseMs', releaseSeconds, keyframes, duration, value => value / 1000);
+    this.automateEffectParam(
+      makeupGain.gain,
+      deEsserEffect,
+      'makeupGainDb',
+      dbToLinearGain(makeupGainDb),
+      keyframes,
+      duration,
+      dbToLinearGain,
+    );
+
+    inputNode.connect(lowBand);
+    inputNode.connect(highBand);
+    lowBand.connect(output);
+    highBand.connect(compressor);
+    compressor.connect(makeupGain);
+    makeupGain.connect(output);
+
+    return output;
   }
 
   /**
@@ -226,7 +468,7 @@ export class AudioEffectRenderer {
   private createEQChain(
     context: OfflineAudioContext,
     inputNode: AudioNode,
-    eqEffect: Effect,
+    eqEffect: RenderableAudioEffectInstance,
     keyframes: Keyframe[],
     duration: number
   ): AudioNode {
@@ -275,7 +517,7 @@ export class AudioEffectRenderer {
   private createGainNode(
     context: OfflineAudioContext,
     inputNode: AudioNode,
-    volumeEffect: Effect,
+    volumeEffect: RenderableAudioEffectInstance,
     keyframes: Keyframe[],
     duration: number
   ): AudioNode {
@@ -490,6 +732,64 @@ export class AudioEffectRenderer {
     return typeof defaultValue === 'number' ? defaultValue : fallback;
   }
 
+  private getNumericEffectParam(
+    effect: RenderableAudioEffectInstance,
+    paramName: string,
+    fallback: number
+  ): number {
+    const value = effect.params?.[paramName];
+    return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+  }
+
+  private hasEffectParamKeyframes(
+    keyframes: Keyframe[],
+    effectId: string,
+    paramName: string,
+  ): boolean {
+    return keyframes.some(k => k.property === `effect.${effectId}.${paramName}`);
+  }
+
+  private automateEffectParam(
+    param: AudioParam,
+    effect: RenderableAudioEffectInstance,
+    paramName: string,
+    defaultValue: number,
+    keyframes: Keyframe[],
+    duration: number,
+    transformValue: (value: number) => number = value => value,
+  ): void {
+    const property = `effect.${effect.id}.${paramName}` as AnimatableProperty;
+    const paramKeyframes = keyframes
+      .filter(k => k.property === property)
+      .map(k => ({ ...k, value: transformValue(k.value) }));
+
+    if (paramKeyframes.length > 0) {
+      this.automateParam(param, paramKeyframes, defaultValue, duration);
+    } else {
+      param.value = defaultValue;
+    }
+  }
+
+  private hasNonDefaultRegistryParams(
+    effectId: AudioEffectId,
+    params: Record<string, number | boolean | string> | undefined,
+    epsilon = DEFAULT_PARAM_EPSILON,
+  ): boolean {
+    const descriptor = getAudioEffect(effectId);
+    if (!descriptor) return false;
+
+    const defaults = getAudioEffectDefaultParams(effectId);
+    return descriptor.paramNames.some(paramName => {
+      const defaultValue = defaults[paramName];
+      const value = params?.[paramName];
+      if (value === undefined) return false;
+      if (typeof defaultValue === 'number') {
+        return typeof value !== 'number' || Math.abs(value - defaultValue) > epsilon;
+      }
+      return value !== defaultValue;
+    });
+  }
+
   /**
    * Check if volume has a non-default value.
    */
@@ -516,6 +816,161 @@ export class AudioEffectRenderer {
         typeof defaultValue === 'number' &&
         Math.abs(value - defaultValue) > 0.01;
     });
+  }
+
+  private createMutableAudioBufferLike(buffer: AudioBuffer): AudioBuffer {
+    const maybeWindow = globalThis as typeof globalThis & {
+      webkitAudioContext?: typeof AudioContext;
+    };
+    const AudioContextCtor = globalThis.AudioContext ?? maybeWindow.webkitAudioContext;
+    if (!AudioContextCtor) {
+      throw new Error('AudioContext is required for audio effect sample processing.');
+    }
+
+    const audioContext = new AudioContextCtor();
+    const nextBuffer = audioContext.createBuffer(
+      buffer.numberOfChannels,
+      buffer.length,
+      buffer.sampleRate
+    );
+    audioContext.close();
+    return nextBuffer;
+  }
+
+  private applyPeakLimiter(
+    buffer: AudioBuffer,
+    effect: RenderableAudioEffectInstance,
+  ): AudioBuffer {
+    const ceilingDb = this.getNumericEffectParam(effect, 'ceilingDb', 0);
+    const inputGainDb = this.getNumericEffectParam(effect, 'inputGainDb', 0);
+    const ceiling = Math.max(0.000001, dbToLinearGain(ceilingDb));
+    const inputGain = dbToLinearGain(inputGainDb);
+    const output = this.createMutableAudioBufferLike(buffer);
+
+    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+      const input = buffer.getChannelData(channel);
+      const target = output.getChannelData(channel);
+      for (let index = 0; index < buffer.length; index += 1) {
+        const value = (input[index] ?? 0) * inputGain;
+        target[index] = clamp(value, -ceiling, ceiling);
+      }
+    }
+
+    return output;
+  }
+
+  private applyNoiseGate(
+    buffer: AudioBuffer,
+    effect: RenderableAudioEffectInstance,
+  ): AudioBuffer {
+    const threshold = dbToLinearGain(this.getNumericEffectParam(effect, 'thresholdDb', -120));
+    const floorGain = dbToLinearGain(this.getNumericEffectParam(effect, 'floorDb', -80));
+    const attackMs = Math.max(0.001, this.getNumericEffectParam(effect, 'attackMs', 2));
+    const releaseMs = Math.max(0.001, this.getNumericEffectParam(effect, 'releaseMs', 80));
+    const attackCoefficient = Math.exp(-1 / (buffer.sampleRate * attackMs / 1000));
+    const releaseCoefficient = Math.exp(-1 / (buffer.sampleRate * releaseMs / 1000));
+    const output = this.createMutableAudioBufferLike(buffer);
+
+    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+      const input = buffer.getChannelData(channel);
+      const target = output.getChannelData(channel);
+      let gain = 1;
+
+      for (let index = 0; index < buffer.length; index += 1) {
+        const sample = input[index] ?? 0;
+        const targetGain = Math.abs(sample) >= threshold ? 1 : floorGain;
+        const coefficient = targetGain > gain ? attackCoefficient : releaseCoefficient;
+        gain = targetGain + coefficient * (gain - targetGain);
+        target[index] = sample * gain;
+      }
+    }
+
+    return output;
+  }
+
+  private applyDelay(
+    buffer: AudioBuffer,
+    effect: RenderableAudioEffectInstance,
+  ): AudioBuffer {
+    const delayMs = clamp(this.getNumericEffectParam(effect, 'delayMs', 250), 1, 2000);
+    const feedback = clamp(this.getNumericEffectParam(effect, 'feedback', 0), 0, 0.95);
+    const mix = clamp(this.getNumericEffectParam(effect, 'mix', 0), 0, 1);
+    const delaySamples = Math.max(1, Math.round(buffer.sampleRate * delayMs / 1000));
+
+    if (mix <= 0.0001) {
+      return buffer;
+    }
+
+    const output = this.createMutableAudioBufferLike(buffer);
+
+    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+      const input = buffer.getChannelData(channel);
+      const target = output.getChannelData(channel);
+      const feedbackBuffer = new Float32Array(buffer.length);
+
+      for (let index = 0; index < buffer.length; index += 1) {
+        const dry = input[index] ?? 0;
+        const delayed = index >= delaySamples ? feedbackBuffer[index - delaySamples] : 0;
+        feedbackBuffer[index] = clamp(dry + delayed * feedback, -4, 4);
+        target[index] = dry * (1 - mix) + delayed * mix;
+      }
+    }
+
+    return output;
+  }
+
+  private applyReverb(
+    buffer: AudioBuffer,
+    effect: RenderableAudioEffectInstance,
+  ): AudioBuffer {
+    const mix = clamp(this.getNumericEffectParam(effect, 'mix', 0), 0, 1);
+    if (mix <= 0.0001) {
+      return buffer;
+    }
+
+    const roomSize = clamp(this.getNumericEffectParam(effect, 'roomSize', 0.35), 0, 1);
+    const decaySeconds = clamp(this.getNumericEffectParam(effect, 'decaySeconds', 1.2), 0.1, 12);
+    const damping = clamp(this.getNumericEffectParam(effect, 'damping', 0.35), 0, 1);
+    const output = this.createMutableAudioBufferLike(buffer);
+    const baseDelaysMs = [23, 31, 37, 43, 53, 61];
+    const roomScale = 0.35 + roomSize * 1.65;
+    const dampingKeep = 1 - damping * 0.72;
+
+    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+      const input = buffer.getChannelData(channel);
+      const target = output.getChannelData(channel);
+      const channelOffset = channel * 0.17;
+      const delays = baseDelaysMs.map(delayMs =>
+        Math.max(1, Math.round(buffer.sampleRate * (delayMs * (roomScale + channelOffset)) / 1000))
+      );
+      const lines = delays.map(delay => new Float32Array(delay));
+      const positions = delays.map(() => 0);
+      const filtered = delays.map(() => 0);
+      const feedbacks = delays.map(delay => {
+        const delaySeconds = delay / buffer.sampleRate;
+        return clamp(Math.pow(0.001, delaySeconds / decaySeconds), 0.08, 0.93);
+      });
+
+      for (let index = 0; index < buffer.length; index += 1) {
+        const dry = input[index] ?? 0;
+        let wet = 0;
+
+        for (let tap = 0; tap < lines.length; tap += 1) {
+          const line = lines[tap];
+          const position = positions[tap];
+          const delayed = line[position] ?? 0;
+          filtered[tap] = filtered[tap] * (1 - dampingKeep) + delayed * dampingKeep;
+          wet += filtered[tap];
+          line[position] = clamp(dry + filtered[tap] * feedbacks[tap], -4, 4);
+          positions[tap] = (position + 1) % line.length;
+        }
+
+        wet /= Math.max(1, lines.length);
+        target[index] = dry * (1 - mix) + wet * mix;
+      }
+    }
+
+    return output;
   }
 
   /**

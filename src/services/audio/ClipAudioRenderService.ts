@@ -2,8 +2,10 @@ import type { EffectRenderProgress } from '../../engine/audio/AudioEffectRendere
 import { AudioEffectRenderer, audioEffectRenderer } from '../../engine/audio/AudioEffectRenderer';
 import { AudioExtractor, audioExtractor } from '../../engine/audio/AudioExtractor';
 import { TimeStretchProcessor, timeStretchProcessor, type TimeStretchProgress } from '../../engine/audio/TimeStretchProcessor';
-import type { ClipAudioEditOperation, Keyframe, TimelineClip } from '../../types';
+import type { ClipAudioEditOperation, Keyframe, SpectralImageLayer, TimelineClip } from '../../types';
+import { useMediaStore } from '../../stores/mediaStore';
 import {
+  collectProcessedAnalysisClipAudioEffectInstances,
   collectRenderableClipAudioEditOperations,
   collectRenderableClipAudioEffectInstances,
 } from './processedWaveformEligibility';
@@ -11,6 +13,7 @@ import {
 export type ClipAudioRenderPhase =
   | 'trimming'
   | 'edit-stack'
+  | 'spectral-layers'
   | 'reversing'
   | 'speed'
   | 'muting'
@@ -29,6 +32,7 @@ export interface ClipAudioRenderRequest {
   clip: TimelineClip;
   sourceBuffer: AudioBuffer;
   keyframes?: readonly Keyframe[];
+  effectMode?: 'output' | 'analysis-shape';
   onProgress?: (progress: ClipAudioRenderProgress) => void;
 }
 
@@ -36,10 +40,23 @@ export interface ClipAudioRenderResult {
   buffer: AudioBuffer;
 }
 
+export interface SpectralImageLayerMask {
+  width: number;
+  height: number;
+  luminance: Float32Array;
+  alpha?: Float32Array;
+}
+
+export type SpectralImageLayerMaskProvider = (
+  layer: SpectralImageLayer,
+  clip: TimelineClip,
+) => Promise<SpectralImageLayerMask | null>;
+
 export interface ClipAudioRenderServiceOptions {
   effectRenderer?: Pick<AudioEffectRenderer, 'renderEffectInstances'>;
   timeStretchProcessor?: Pick<TimeStretchProcessor, 'processConstantSpeed' | 'processWithKeyframes'>;
   extractor?: Pick<AudioExtractor, 'trimBuffer'>;
+  spectralImageLayerMaskProvider?: SpectralImageLayerMaskProvider;
 }
 
 type AudioContextConstructor = new () => AudioContext;
@@ -101,6 +118,342 @@ function cloneAudioBuffer(buffer: AudioBuffer): AudioBuffer {
 
 function finiteNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function dbToLinearGain(db: number): number {
+  if (!Number.isFinite(db)) return 1;
+  return Math.pow(10, db / 20);
+}
+
+const SPECTRAL_IMAGE_MASK_MAX_WIDTH = 160;
+const SPECTRAL_IMAGE_MASK_MAX_HEIGHT = 96;
+const SPECTRAL_IMAGE_LAYER_SUBBANDS = 16;
+const spectralImageMaskCache = new Map<string, Promise<SpectralImageLayerMask | null>>();
+
+type SpectralImageLayerAutomatedProperty = 'opacity' | 'gainDb' | 'frequencyMin' | 'frequencyMax';
+
+interface SpectralImageLayerRenderState {
+  opacity: number;
+  gainDb: number;
+  frequencyMin: number;
+  frequencyMax: number;
+}
+
+interface SpectralImageLayerAutomationPoint {
+  time: number;
+  value: number;
+}
+
+type SpectralImageLayerAutomationTracks = Partial<Record<SpectralImageLayerAutomatedProperty, SpectralImageLayerAutomationPoint[]>>;
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function isSpectralLayerEnabled(layer: SpectralImageLayer & { enabled?: boolean }): boolean {
+  const hasAudibleKeyframe = (layer.keyframes ?? []).some(keyframe =>
+    typeof keyframe.opacity === 'number' ? keyframe.opacity > 0 : false
+  );
+  return layer.enabled !== false && layer.duration > 0 && (layer.opacity > 0 || hasAudibleKeyframe);
+}
+
+function createSpectralLayerSampleRange(
+  layer: SpectralImageLayer,
+  clip: TimelineClip,
+  buffer: AudioBuffer,
+): { start: number; end: number } {
+  const clipSourceStart = Math.max(0, finiteNumber(clip.inPoint, 0));
+  const localStartSeconds = Math.max(0, layer.timeStart - clipSourceStart);
+  const localEndSeconds = Math.max(localStartSeconds, layer.timeStart + layer.duration - clipSourceStart);
+  const start = Math.max(0, Math.min(buffer.length, Math.floor(localStartSeconds * buffer.sampleRate)));
+  const end = Math.max(start, Math.min(buffer.length, Math.ceil(localEndSeconds * buffer.sampleRate)));
+  return { start, end };
+}
+
+function sampleSpectralImageMask(mask: SpectralImageLayerMask, xUnit: number, yUnit: number): number {
+  const x = Math.max(0, Math.min(mask.width - 1, Math.round(xUnit * (mask.width - 1))));
+  const y = Math.max(0, Math.min(mask.height - 1, Math.round(yUnit * (mask.height - 1))));
+  const index = y * mask.width + x;
+  const luminance = Math.max(0, Math.min(1, mask.luminance[index] ?? 0));
+  const alpha = mask.alpha ? Math.max(0, Math.min(1, mask.alpha[index] ?? 1)) : 1;
+  return luminance * alpha;
+}
+
+function createSpectralLayerAutomationTracks(layer: SpectralImageLayer): SpectralImageLayerAutomationTracks {
+  const tracks: SpectralImageLayerAutomationTracks = {};
+  for (const property of ['opacity', 'gainDb', 'frequencyMin', 'frequencyMax'] as const) {
+    const points = (layer.keyframes ?? [])
+      .filter(keyframe => typeof keyframe[property] === 'number' && Number.isFinite(keyframe[property]))
+      .map(keyframe => ({
+        time: keyframe.time,
+        value: finiteNumber(keyframe[property], 0),
+      }))
+      .toSorted((a, b) => a.time - b.time);
+    if (points.length > 0) {
+      tracks[property] = points;
+    }
+  }
+  return tracks;
+}
+
+function interpolateSpectralLayerProperty(
+  tracks: SpectralImageLayerAutomationTracks,
+  property: SpectralImageLayerAutomatedProperty,
+  localTimeSeconds: number,
+  fallback: number,
+): number {
+  const keyframes = tracks[property];
+  if (!keyframes?.length) return fallback;
+
+  const first = keyframes[0];
+  const firstValue = first.value;
+  if (localTimeSeconds <= first.time || keyframes.length === 1) return firstValue;
+
+  const last = keyframes[keyframes.length - 1];
+  const lastValue = last.value;
+  if (localTimeSeconds >= last.time) return lastValue;
+
+  for (let index = 1; index < keyframes.length; index += 1) {
+    const prev = keyframes[index - 1];
+    const next = keyframes[index];
+    if (localTimeSeconds > next.time) continue;
+
+    const span = Math.max(0.0001, next.time - prev.time);
+    const mix = clamp01((localTimeSeconds - prev.time) / span);
+    return prev.value + (next.value - prev.value) * mix;
+  }
+
+  return fallback;
+}
+
+function evaluateSpectralLayerRenderState(
+  layer: SpectralImageLayer,
+  automationTracks: SpectralImageLayerAutomationTracks,
+  localTimeSeconds: number,
+  nyquist: number,
+): SpectralImageLayerRenderState {
+  const rawMin = interpolateSpectralLayerProperty(automationTracks, 'frequencyMin', localTimeSeconds, layer.frequencyMin);
+  const rawMax = interpolateSpectralLayerProperty(automationTracks, 'frequencyMax', localTimeSeconds, layer.frequencyMax);
+  const frequencyMin = Math.max(20, Math.min(nyquist - 1, Math.min(rawMin, rawMax)));
+  const frequencyMax = Math.max(frequencyMin + 1, Math.min(nyquist - 1, Math.max(rawMin, rawMax)));
+
+  return {
+    opacity: clamp01(interpolateSpectralLayerProperty(automationTracks, 'opacity', localTimeSeconds, layer.opacity)),
+    gainDb: Math.max(-60, Math.min(24, interpolateSpectralLayerProperty(automationTracks, 'gainDb', localTimeSeconds, layer.gainDb))),
+    frequencyMin,
+    frequencyMax,
+  };
+}
+
+function spectralImageLayerFrequencyUnion(
+  layer: SpectralImageLayer,
+  nyquist: number,
+): { minHz: number; maxHz: number } {
+  let minHz = Math.min(layer.frequencyMin, layer.frequencyMax);
+  let maxHz = Math.max(layer.frequencyMin, layer.frequencyMax);
+  for (const keyframe of layer.keyframes ?? []) {
+    if (typeof keyframe.frequencyMin === 'number' && Number.isFinite(keyframe.frequencyMin)) {
+      minHz = Math.min(minHz, keyframe.frequencyMin);
+      maxHz = Math.max(maxHz, keyframe.frequencyMin);
+    }
+    if (typeof keyframe.frequencyMax === 'number' && Number.isFinite(keyframe.frequencyMax)) {
+      minHz = Math.min(minHz, keyframe.frequencyMax);
+      maxHz = Math.max(maxHz, keyframe.frequencyMax);
+    }
+  }
+
+  const clampedMinHz = Math.max(20, Math.min(nyquist - 1, minHz));
+  return {
+    minHz: clampedMinHz,
+    maxHz: Math.max(clampedMinHz + 1, Math.min(nyquist - 1, maxHz)),
+  };
+}
+
+function spectralImageLayerGainDelta(
+  layer: SpectralImageLayer,
+  state: SpectralImageLayerRenderState,
+  maskStrength: number,
+): number {
+  const strength = Math.max(0, Math.min(1, maskStrength * state.opacity));
+  if (strength <= 0) return 0;
+
+  switch (layer.blendMode) {
+    case 'boost': {
+      const targetGain = dbToLinearGain(Math.abs(finiteNumber(state.gainDb, 6)));
+      return (targetGain - 1) * strength;
+    }
+    case 'gate':
+    case 'sidechain-mask': {
+      return strength - 1;
+    }
+    case 'replace': {
+      const targetGain = dbToLinearGain(finiteNumber(state.gainDb, 0)) * strength;
+      return targetGain - 1;
+    }
+    case 'attenuate':
+    default: {
+      const targetGain = dbToLinearGain(-Math.abs(finiteNumber(state.gainDb, -18)));
+      return (targetGain - 1) * strength;
+    }
+  }
+}
+
+function spectralLayerFrequencyFeather(
+  frequencyHz: number,
+  minHz: number,
+  maxHz: number,
+  featherHz: number,
+): number {
+  if (featherHz <= 0) return 1;
+  const low = Math.max(0, Math.min(1, (frequencyHz - minHz) / featherHz));
+  const high = Math.max(0, Math.min(1, (maxHz - frequencyHz) / featherHz));
+  return Math.min(low, high);
+}
+
+function applySpectralImageLayer(
+  buffer: AudioBuffer,
+  clip: TimelineClip,
+  layer: SpectralImageLayer,
+  mask: SpectralImageLayerMask,
+): void {
+  const range = createSpectralLayerSampleRange(layer, clip, buffer);
+  if (range.end <= range.start) return;
+
+  const nyquist = Math.max(20, buffer.sampleRate / 2 - 1);
+  const frequencyUnion = spectralImageLayerFrequencyUnion(layer, nyquist);
+  if (frequencyUnion.maxHz <= frequencyUnion.minHz) return;
+
+  const featherSamples = Math.max(0, Math.min(
+    Math.floor((range.end - range.start) / 2),
+    Math.round(finiteNumber(layer.featherTime, 0) * buffer.sampleRate),
+  ));
+  const featherHz = Math.max(0, finiteNumber(layer.featherFrequency, 0));
+  const clipSourceStart = Math.max(0, finiteNumber(clip.inPoint, 0));
+  const automationTracks = createSpectralLayerAutomationTracks(layer);
+  const subbandCount = Math.max(1, Math.min(
+    SPECTRAL_IMAGE_LAYER_SUBBANDS,
+    mask.height,
+    Math.ceil((frequencyUnion.maxHz - frequencyUnion.minHz) / 120),
+  ));
+
+  for (let subband = 0; subband < subbandCount; subband += 1) {
+    const subStartUnit = subband / subbandCount;
+    const subEndUnit = (subband + 1) / subbandCount;
+    const subMinHz = frequencyUnion.minHz + (frequencyUnion.maxHz - frequencyUnion.minHz) * subStartUnit;
+    const subMaxHz = frequencyUnion.minHz + (frequencyUnion.maxHz - frequencyUnion.minHz) * subEndUnit;
+    const subCenterUnit = (subStartUnit + subEndUnit) / 2;
+    const subCenterHz = frequencyUnion.minHz + (frequencyUnion.maxHz - frequencyUnion.minHz) * subCenterUnit;
+    const coefficients = createBandpassCoefficients(buffer.sampleRate, subMinHz, subMaxHz);
+    if (!coefficients) continue;
+
+    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+      const data = buffer.getChannelData(channel);
+      let x1 = 0;
+      let x2 = 0;
+      let y1 = 0;
+      let y2 = 0;
+
+      for (let sample = range.start; sample < range.end; sample += 1) {
+        const x0 = data[sample] ?? 0;
+        const band = coefficients.b0 * x0 +
+          coefficients.b1 * x1 +
+          coefficients.b2 * x2 -
+          coefficients.a1 * y1 -
+          coefficients.a2 * y2;
+        x2 = x1;
+        x1 = x0;
+        y2 = y1;
+        y1 = band;
+
+        const sourceTimeSeconds = clipSourceStart + sample / buffer.sampleRate;
+        const localTimeSeconds = Math.max(0, sourceTimeSeconds - layer.timeStart);
+        const state = evaluateSpectralLayerRenderState(layer, automationTracks, localTimeSeconds, nyquist);
+        if (state.opacity <= 0 || subCenterHz < state.frequencyMin || subCenterHz > state.frequencyMax) continue;
+
+        const frequencyFeather = spectralLayerFrequencyFeather(
+          subCenterHz,
+          state.frequencyMin,
+          state.frequencyMax,
+          featherHz,
+        );
+        if (frequencyFeather <= 0) continue;
+
+        const xUnit = (sample - range.start) / Math.max(1, range.end - range.start - 1);
+        const activeFrequencyUnit = clamp01((subCenterHz - state.frequencyMin) / Math.max(1, state.frequencyMax - state.frequencyMin));
+        const imageY = 1 - activeFrequencyUnit;
+        const maskStrength = sampleSpectralImageMask(mask, xUnit, imageY);
+        const timeFeather = rangeFeatherFactor(sample, range, featherSamples);
+        const delta = spectralImageLayerGainDelta(layer, state, maskStrength) * timeFeather * frequencyFeather;
+        data[sample] = x0 + band * delta;
+      }
+    }
+  }
+}
+
+async function loadImageElement(src: string): Promise<HTMLImageElement | null> {
+  if (typeof Image === 'undefined') return null;
+  const image = new Image();
+  image.decoding = 'async';
+  image.crossOrigin = 'anonymous';
+  return new Promise((resolve) => {
+    image.onload = () => resolve(image);
+    image.onerror = () => resolve(null);
+    image.src = src;
+  });
+}
+
+async function defaultSpectralImageLayerMaskProvider(
+  layer: SpectralImageLayer,
+): Promise<SpectralImageLayerMask | null> {
+  if (typeof document === 'undefined') return null;
+  const mediaFile = useMediaStore.getState().files.find(file => file.id === layer.imageMediaFileId);
+  if (!mediaFile || mediaFile.type !== 'image') return null;
+
+  const src = mediaFile.url || mediaFile.thumbnailUrl;
+  if (!src) return null;
+
+  const cacheKey = `${mediaFile.id}:${src}:${mediaFile.fileHash ?? ''}`;
+  let promise = spectralImageMaskCache.get(cacheKey);
+  if (!promise) {
+    promise = (async () => {
+      const image = await loadImageElement(src);
+      if (!image) return null;
+
+      const scale = Math.min(
+        1,
+        SPECTRAL_IMAGE_MASK_MAX_WIDTH / Math.max(1, image.naturalWidth || image.width),
+        SPECTRAL_IMAGE_MASK_MAX_HEIGHT / Math.max(1, image.naturalHeight || image.height),
+      );
+      const width = Math.max(1, Math.round((image.naturalWidth || image.width || 1) * scale));
+      const height = Math.max(1, Math.round((image.naturalHeight || image.height || 1) * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return null;
+      ctx.drawImage(image, 0, 0, width, height);
+
+      try {
+        const data = ctx.getImageData(0, 0, width, height).data;
+        const luminance = new Float32Array(width * height);
+        const alpha = new Float32Array(width * height);
+        for (let index = 0; index < width * height; index += 1) {
+          const offset = index * 4;
+          const r = data[offset] ?? 0;
+          const g = data[offset + 1] ?? 0;
+          const b = data[offset + 2] ?? 0;
+          luminance[index] = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+          alpha[index] = (data[offset + 3] ?? 255) / 255;
+        }
+        return { width, height, luminance, alpha };
+      } catch {
+        return null;
+      }
+    })();
+    spectralImageMaskCache.set(cacheKey, promise);
+  }
+
+  return promise;
 }
 
 function getOperationChannelIndexes(
@@ -286,6 +639,316 @@ function pasteRangePreservingDuration(
   }
 }
 
+function createBandpassCoefficients(
+  sampleRate: number,
+  frequencyMinHz: number,
+  frequencyMaxHz: number,
+): {
+  b0: number;
+  b1: number;
+  b2: number;
+  a1: number;
+  a2: number;
+} | null {
+  const nyquist = sampleRate / 2;
+  const minHz = Math.max(20, Math.min(nyquist - 1, frequencyMinHz));
+  const maxHz = Math.max(minHz + 1, Math.min(nyquist - 1, frequencyMaxHz));
+  if (maxHz <= minHz || nyquist <= 20) return null;
+
+  const centerHz = Math.max(20, Math.min(nyquist - 1, Math.sqrt(minHz * maxHz)));
+  const bandwidthHz = Math.max(1, maxHz - minHz);
+  const q = Math.max(0.2, Math.min(32, centerHz / bandwidthHz));
+  const omega = 2 * Math.PI * (centerHz / sampleRate);
+  const sin = Math.sin(omega);
+  const cos = Math.cos(omega);
+  const alpha = sin / (2 * q);
+  const a0 = 1 + alpha;
+
+  return {
+    b0: alpha / a0,
+    b1: 0,
+    b2: -alpha / a0,
+    a1: (-2 * cos) / a0,
+    a2: (1 - alpha) / a0,
+  };
+}
+
+function applySpectralBandGainRange(
+  buffer: AudioBuffer,
+  range: { start: number; end: number },
+  channels: readonly number[],
+  operation: ClipAudioEditOperation,
+): void {
+  const frequencyMinHz = finiteNumber(operation.params.frequencyMinHz, 0);
+  const frequencyMaxHz = finiteNumber(operation.params.frequencyMaxHz, 0);
+  const gainDb = finiteNumber(operation.params.gainDb, operation.type === 'spectral-mask' ? -18 : 6);
+  const bandGain = Math.max(0, Math.min(8, dbToLinearGain(gainDb)));
+  const bandDelta = bandGain - 1;
+  if (range.end <= range.start || Math.abs(bandDelta) < 0.001) return;
+
+  const coefficients = createBandpassCoefficients(buffer.sampleRate, frequencyMinHz, frequencyMaxHz);
+  if (!coefficients) return;
+
+  const featherSamples = Math.max(0, Math.min(
+    Math.floor((range.end - range.start) / 2),
+    Math.round(finiteNumber(operation.params.featherTime, 0.015) * buffer.sampleRate),
+  ));
+
+  for (const channel of channels) {
+    const data = buffer.getChannelData(channel);
+    let x1 = 0;
+    let x2 = 0;
+    let y1 = 0;
+    let y2 = 0;
+
+    for (let sample = range.start; sample < range.end; sample += 1) {
+      const x0 = data[sample] ?? 0;
+      const band = coefficients.b0 * x0 +
+        coefficients.b1 * x1 +
+        coefficients.b2 * x2 -
+        coefficients.a1 * y1 -
+        coefficients.a2 * y2;
+      x2 = x1;
+      x1 = x0;
+      y2 = y1;
+      y1 = band;
+
+      const distanceToEdge = Math.min(sample - range.start, range.end - 1 - sample);
+      const feather = featherSamples > 0
+        ? Math.max(0, Math.min(1, distanceToEdge / featherSamples))
+        : 1;
+      data[sample] = x0 + band * bandDelta * feather;
+    }
+  }
+}
+
+function rangeFeatherFactor(
+  sample: number,
+  range: { start: number; end: number },
+  featherSamples: number,
+): number {
+  if (featherSamples <= 0) return 1;
+  const distanceToEdge = Math.min(sample - range.start, range.end - 1 - sample);
+  return Math.max(0, Math.min(1, (distanceToEdge + 1) / featherSamples));
+}
+
+function createNotchCoefficients(
+  sampleRate: number,
+  frequencyHz: number,
+  q: number,
+): {
+  b0: number;
+  b1: number;
+  b2: number;
+  a1: number;
+  a2: number;
+} | null {
+  const nyquist = sampleRate / 2;
+  const frequency = Math.max(20, Math.min(nyquist - 1, frequencyHz));
+  if (frequency <= 0 || frequency >= nyquist || nyquist <= 20) return null;
+
+  const clampedQ = Math.max(0.5, Math.min(100, q));
+  const omega = 2 * Math.PI * (frequency / sampleRate);
+  const sin = Math.sin(omega);
+  const cos = Math.cos(omega);
+  const alpha = sin / (2 * clampedQ);
+  const a0 = 1 + alpha;
+
+  return {
+    b0: 1 / a0,
+    b1: (-2 * cos) / a0,
+    b2: 1 / a0,
+    a1: (-2 * cos) / a0,
+    a2: (1 - alpha) / a0,
+  };
+}
+
+function applyNotchFilterRange(
+  buffer: AudioBuffer,
+  range: { start: number; end: number },
+  channels: readonly number[],
+  frequencyHz: number,
+  q: number,
+  featherSamples: number,
+): void {
+  const coefficients = createNotchCoefficients(buffer.sampleRate, frequencyHz, q);
+  if (!coefficients) return;
+
+  for (const channel of channels) {
+    const data = buffer.getChannelData(channel);
+    let x1 = 0;
+    let x2 = 0;
+    let y1 = 0;
+    let y2 = 0;
+
+    for (let sample = range.start; sample < range.end; sample += 1) {
+      const x0 = data[sample] ?? 0;
+      const filtered = coefficients.b0 * x0 +
+        coefficients.b1 * x1 +
+        coefficients.b2 * x2 -
+        coefficients.a1 * y1 -
+        coefficients.a2 * y2;
+      x2 = x1;
+      x1 = x0;
+      y2 = y1;
+      y1 = filtered;
+
+      const feather = rangeFeatherFactor(sample, range, featherSamples);
+      data[sample] = x0 + (filtered - x0) * feather;
+    }
+  }
+}
+
+function applyHumNotchRepairRange(
+  buffer: AudioBuffer,
+  range: { start: number; end: number },
+  channels: readonly number[],
+  operation: ClipAudioEditOperation,
+): void {
+  const baseFrequencyHz = Math.max(20, finiteNumber(operation.params.baseFrequencyHz, 50));
+  const harmonicCount = Math.max(1, Math.min(16, Math.round(finiteNumber(operation.params.harmonicCount, 6))));
+  const q = finiteNumber(operation.params.q, 35);
+  const featherSamples = Math.max(0, Math.min(
+    Math.floor((range.end - range.start) / 2),
+    Math.round(finiteNumber(operation.params.featherTime, 0.02) * buffer.sampleRate),
+  ));
+
+  for (let harmonic = 1; harmonic <= harmonicCount; harmonic += 1) {
+    const frequencyHz = baseFrequencyHz * harmonic;
+    if (frequencyHz >= buffer.sampleRate / 2 - 1) break;
+    applyNotchFilterRange(buffer, range, channels, frequencyHz, q, featherSamples);
+  }
+}
+
+function applyDeClickRepairRange(
+  buffer: AudioBuffer,
+  range: { start: number; end: number },
+  channels: readonly number[],
+  operation: ClipAudioEditOperation,
+): void {
+  if (range.end - range.start < 3) return;
+
+  const threshold = Math.max(0.01, finiteNumber(operation.params.threshold, 0.35));
+  const ratio = Math.max(1, finiteNumber(operation.params.ratio, 4));
+
+  for (const channel of channels) {
+    const data = buffer.getChannelData(channel);
+    const original = data.slice(range.start, range.end);
+    for (let local = 1; local < original.length - 1; local += 1) {
+      const previous = original[local - 1] ?? 0;
+      const current = original[local] ?? 0;
+      const next = original[local + 1] ?? 0;
+      const prediction = (previous + next) / 2;
+      const residual = Math.abs(current - prediction);
+      const neighborEnergy = (Math.abs(previous) + Math.abs(next)) / 2;
+      if (residual >= threshold && residual >= neighborEnergy * ratio) {
+        data[range.start + local] = prediction;
+      }
+    }
+  }
+}
+
+function applySpliceSmoothRepairRange(
+  buffer: AudioBuffer,
+  range: { start: number; end: number },
+  channels: readonly number[],
+  operation: ClipAudioEditOperation,
+): void {
+  const edgeSeconds = Math.max(0.001, finiteNumber(operation.params.edgeSeconds, 0.008));
+  const edgeSamples = Math.max(1, Math.min(
+    Math.floor((range.end - range.start) / 2),
+    Math.round(edgeSeconds * buffer.sampleRate),
+  ));
+  if (edgeSamples <= 0) return;
+
+  for (const channel of channels) {
+    const data = buffer.getChannelData(channel);
+    if (range.start > 0) {
+      const leftAnchor = data[range.start - 1] ?? 0;
+      for (let index = 0; index < edgeSamples; index += 1) {
+        const sample = range.start + index;
+        const t = (index + 1) / (edgeSamples + 1);
+        const smooth = t * t * (3 - 2 * t);
+        data[sample] = leftAnchor * (1 - smooth) + (data[sample] ?? 0) * smooth;
+      }
+    }
+
+    if (range.end < buffer.length) {
+      const rightAnchor = data[range.end] ?? 0;
+      for (let index = 0; index < edgeSamples; index += 1) {
+        const sample = range.end - 1 - index;
+        const t = (index + 1) / (edgeSamples + 1);
+        const smooth = t * t * (3 - 2 * t);
+        data[sample] = rightAnchor * (1 - smooth) + (data[sample] ?? 0) * smooth;
+      }
+    }
+  }
+}
+
+function applyLoudnessMatchRepairRange(
+  buffer: AudioBuffer,
+  range: { start: number; end: number },
+  channels: readonly number[],
+  operation: ClipAudioEditOperation,
+): void {
+  let sum = 0;
+  let count = 0;
+  for (const channel of channels) {
+    const data = buffer.getChannelData(channel);
+    for (let sample = range.start; sample < range.end; sample += 1) {
+      const value = data[sample] ?? 0;
+      sum += value * value;
+      count += 1;
+    }
+  }
+  if (count === 0) return;
+
+  const rms = Math.sqrt(sum / count);
+  if (rms <= 0.000001) return;
+
+  const targetDb = finiteNumber(operation.params.targetDb, finiteNumber(operation.params.targetLufs, -20));
+  const minGain = dbToLinearGain(finiteNumber(operation.params.minGainDb, -24));
+  const maxGain = dbToLinearGain(finiteNumber(operation.params.maxGainDb, 24));
+  const targetRms = dbToLinearGain(targetDb);
+  const gain = Math.max(minGain, Math.min(maxGain, targetRms / rms));
+  if (Math.abs(gain - 1) < 0.001) return;
+
+  const featherSamples = Math.max(0, Math.min(
+    Math.floor((range.end - range.start) / 2),
+    Math.round(finiteNumber(operation.params.featherTime, 0.01) * buffer.sampleRate),
+  ));
+
+  for (const channel of channels) {
+    const data = buffer.getChannelData(channel);
+    for (let sample = range.start; sample < range.end; sample += 1) {
+      const feather = rangeFeatherFactor(sample, range, featherSamples);
+      data[sample] = (data[sample] ?? 0) * (1 + (gain - 1) * feather);
+    }
+  }
+}
+
+function applyRepairRange(
+  buffer: AudioBuffer,
+  range: { start: number; end: number },
+  channels: readonly number[],
+  operation: ClipAudioEditOperation,
+): void {
+  switch (operation.params.repairType) {
+    case 'hum-notch':
+      applyHumNotchRepairRange(buffer, range, channels, operation);
+      break;
+    case 'de-click':
+      applyDeClickRepairRange(buffer, range, channels, operation);
+      break;
+    case 'splice-smooth':
+      applySpliceSmoothRepairRange(buffer, range, channels, operation);
+      break;
+    case 'loudness-match':
+      applyLoudnessMatchRepairRange(buffer, range, channels, operation);
+      break;
+  }
+}
+
 function normalizeSpeedKeyframesForClipAudioRender(
   keyframes: readonly Keyframe[],
 ): Keyframe[] {
@@ -298,18 +961,21 @@ export class ClipAudioRenderService {
   private readonly effectRenderer: Pick<AudioEffectRenderer, 'renderEffectInstances'>;
   private readonly timeStretchProcessor: Pick<TimeStretchProcessor, 'processConstantSpeed' | 'processWithKeyframes'>;
   private readonly extractor: Pick<AudioExtractor, 'trimBuffer'>;
+  private readonly spectralImageLayerMaskProvider: SpectralImageLayerMaskProvider;
 
   constructor(options: ClipAudioRenderServiceOptions = {}) {
     this.effectRenderer = options.effectRenderer ?? audioEffectRenderer;
     this.timeStretchProcessor = options.timeStretchProcessor ?? timeStretchProcessor;
     this.extractor = options.extractor ?? audioExtractor;
+    this.spectralImageLayerMaskProvider = options.spectralImageLayerMaskProvider ?? defaultSpectralImageLayerMaskProvider;
   }
 
   async render(request: ClipAudioRenderRequest): Promise<ClipAudioRenderResult> {
-    const { clip, sourceBuffer, keyframes = [], onProgress } = request;
+    const { clip, sourceBuffer, keyframes = [], effectMode = 'output', onProgress } = request;
 
     let processedBuffer = this.trimClipBuffer(clip, sourceBuffer, onProgress);
     processedBuffer = this.renderEditStack(clip, processedBuffer, onProgress);
+    processedBuffer = await this.renderSpectralImageLayers(clip, processedBuffer, onProgress);
 
     if (clip.reversed) {
       emitProgress(onProgress, {
@@ -322,7 +988,7 @@ export class ClipAudioRenderService {
 
     processedBuffer = await this.processSpeed(clip, processedBuffer, keyframes, onProgress);
 
-    if (clip.audioState?.muted === true) {
+    if (clip.audioState?.muted === true && effectMode !== 'analysis-shape') {
       emitProgress(onProgress, {
         phase: 'muting',
         percent: 54,
@@ -330,7 +996,7 @@ export class ClipAudioRenderService {
       });
       processedBuffer = createSilentLike(processedBuffer);
     } else {
-      processedBuffer = await this.renderEffects(clip, processedBuffer, keyframes, onProgress);
+      processedBuffer = await this.renderEffects(clip, processedBuffer, keyframes, effectMode, onProgress);
     }
 
     emitProgress(onProgress, {
@@ -340,6 +1006,32 @@ export class ClipAudioRenderService {
     });
 
     return { buffer: processedBuffer };
+  }
+
+  private async renderSpectralImageLayers(
+    clip: TimelineClip,
+    buffer: AudioBuffer,
+    onProgress?: (progress: ClipAudioRenderProgress) => void,
+  ): Promise<AudioBuffer> {
+    const layers = (clip.audioState?.spectralLayers ?? []).filter(isSpectralLayerEnabled);
+    if (layers.length === 0) return buffer;
+
+    emitProgress(onProgress, {
+      phase: 'spectral-layers',
+      percent: 22,
+      message: 'Rendering spectral image layers',
+    });
+
+    const edited = cloneAudioBuffer(buffer);
+    for (const layer of layers) {
+      const mask = await this.spectralImageLayerMaskProvider(layer, clip);
+      if (!mask || mask.width <= 0 || mask.height <= 0 || mask.luminance.length < mask.width * mask.height) {
+        continue;
+      }
+      applySpectralImageLayer(edited, clip, layer, mask);
+    }
+
+    return edited;
   }
 
   private renderEditStack(
@@ -388,6 +1080,13 @@ export class ClipAudioRenderService {
           break;
         case 'delete-silence':
           deleteRangePreservingDuration(edited, range, channels);
+          break;
+        case 'repair':
+          applyRepairRange(edited, range, channels, operation);
+          break;
+        case 'spectral-mask':
+        case 'spectral-resynthesis':
+          applySpectralBandGainRange(edited, range, channels, operation);
           break;
       }
     }
@@ -459,9 +1158,12 @@ export class ClipAudioRenderService {
     clip: TimelineClip,
     buffer: AudioBuffer,
     keyframes: readonly Keyframe[],
+    effectMode: ClipAudioRenderRequest['effectMode'],
     onProgress?: (progress: ClipAudioRenderProgress) => void,
   ): Promise<AudioBuffer> {
-    const effects = collectRenderableClipAudioEffectInstances(clip);
+    const effects = effectMode === 'analysis-shape'
+      ? collectProcessedAnalysisClipAudioEffectInstances(clip, keyframes)
+      : collectRenderableClipAudioEffectInstances(clip);
     if (effects.length === 0) return buffer;
 
     emitProgress(onProgress, {

@@ -2,9 +2,12 @@ import type {
   ClipCustomNodeDefinition,
   ClipCustomNodeParamValue,
   LayerSource,
+  MasterAudioState,
   NodeGraph,
   TextClipProperties,
+  TimelineTrack,
   TimelineClip,
+  AudioEffectInstance,
 } from '../../types';
 import type { AudioAnalysisArtifactKind, MediaFileAudioAnalysisRefs } from '../../types/audio';
 import { Logger } from '../logger';
@@ -13,12 +16,22 @@ import { createTextLayoutSnapshot, type TextBoxRect, type TextLayoutSnapshot } f
 import { getCanvasVersion, markDynamicCanvasUpdated } from '../canvasVersion';
 import { extractAINodeGeneratedCode } from './aiNodeDefinition';
 import { buildClipNodeGraph } from './clipGraphProjection';
+import { getCachedTimelineLoudnessEnvelope } from '../audio/timelineLoudnessEnvelopeCache';
+import {
+  getCachedTimelineFrequencySummary,
+  getCachedTimelinePhaseCorrelation,
+} from '../audio/timelineFrequencyPhaseCache';
+import {
+  buildAudioRepairSuggestionsFromRefs,
+  type AudioRepairSuggestion,
+} from '../audio/audioRepairSuggestions';
 
 const log = Logger.create('AINodeRuntime');
 
 const PIXEL_SORT_MAX_PIXELS = 320 * 180;
 const GENERATED_NODE_MAX_PIXELS = 96 * 54;
 const MAX_RUNTIME_AUDIO_SPECTROGRAM_REFS = 16;
+const MAX_RUNTIME_AUDIO_REPAIR_SUGGESTIONS = 6;
 
 export interface AINodeRuntimeTexture {
   data: Uint8ClampedArray;
@@ -50,6 +63,59 @@ interface AINodeRuntimeAudioArtifactSignal {
   provenance: 'source' | 'processed';
   available: true;
   stale: boolean;
+  loudnessSummary?: AINodeRuntimeLoudnessSummary;
+  phaseCorrelationSummary?: AINodeRuntimePhaseCorrelationSummary;
+  frequencyBandSummary?: AINodeRuntimeFrequencyBandSummary;
+}
+
+interface AINodeRuntimeLoudnessCurvePreview {
+  metric: string;
+  pointCount: number;
+  minDb: number;
+  maxDb: number;
+  previewDb: number[];
+}
+
+interface AINodeRuntimeLoudnessSummary {
+  integratedLufs?: number;
+  truePeakDbtp?: number;
+  samplePeakDbfs?: number;
+  rmsDbfs?: number;
+  curves: AINodeRuntimeLoudnessCurvePreview[];
+}
+
+interface AINodeRuntimeFrequencyBandSummary {
+  spectralCentroidHz: number;
+  lowEnergyShare: number;
+  midEnergyShare: number;
+  highEnergyShare: number;
+  dominantBandId?: string;
+  bands: Array<{
+    bandId: string;
+    label: string;
+    minFrequency: number;
+    maxFrequency: number;
+    rmsDb: number;
+    peakDb: number;
+    energyShare: number;
+    centroidHz: number;
+  }>;
+}
+
+interface AINodeRuntimePhaseCorrelationSummary {
+  averageCorrelation: number;
+  minimumCorrelation: number;
+  maximumCorrelation: number;
+  negativeCorrelationPercent: number;
+  averageMidSideRatioDb: number;
+  stereoWidth: number;
+  monoCompatible: boolean;
+  pointCount: number;
+  preview: Array<{
+    time: number;
+    correlation: number;
+    midSideRatioDb: number;
+  }>;
 }
 
 interface AINodeRuntimeWaveformSummary {
@@ -59,6 +125,42 @@ interface AINodeRuntimeWaveformSummary {
   min: number;
   max: number;
   preview: number[];
+}
+
+interface AINodeRuntimeAudioEffectSummary {
+  id: string;
+  descriptorId: string;
+  enabled: boolean;
+  params: Record<string, string | number | boolean>;
+}
+
+interface AINodeRuntimeClipAudioRoutingContext {
+  muted: boolean;
+  soloSafe: boolean;
+  sourceAudioRevisionId?: string;
+  editStackCount: number;
+  spectralLayerCount: number;
+  effectStack: AINodeRuntimeAudioEffectSummary[];
+}
+
+interface AINodeRuntimeTrackAudioRoutingContext {
+  trackId: string;
+  name?: string;
+  muted: boolean;
+  solo: boolean;
+  volumeDb: number;
+  pan: number;
+  meterMode?: string;
+  sendCount: number;
+  effectStack: AINodeRuntimeAudioEffectSummary[];
+}
+
+interface AINodeRuntimeMasterAudioRoutingContext {
+  volumeDb: number;
+  limiterEnabled: boolean;
+  truePeakCeilingDb: number;
+  targetLufs?: number;
+  effectStack: AINodeRuntimeAudioEffectSummary[];
 }
 
 interface AINodeRuntimeAudioAnalysisNamespace {
@@ -84,11 +186,17 @@ interface AINodeRuntimeAudioContext {
     outPoint: number;
   };
   waveform?: AINodeRuntimeWaveformSummary;
+  routing: {
+    clip: AINodeRuntimeClipAudioRoutingContext;
+    track?: AINodeRuntimeTrackAudioRoutingContext;
+    master: AINodeRuntimeMasterAudioRoutingContext;
+  };
   analysis: {
     source: AINodeRuntimeAudioAnalysisNamespace;
     processed: AINodeRuntimeAudioAnalysisNamespace;
     effective: AINodeRuntimeAudioAnalysisNamespace;
   };
+  repairSuggestions: AudioRepairSuggestion[];
 }
 
 interface AINodeRuntimeContext {
@@ -131,6 +239,11 @@ interface RuntimeCacheEntry {
 }
 
 type AINodeParamResolver = (nodeId: string) => Record<string, ClipCustomNodeParamValue>;
+
+interface AINodeRuntimeAudioOptions {
+  track?: TimelineTrack;
+  masterAudioState?: MasterAudioState;
+}
 
 const runtimeCache = new Map<string, RuntimeCacheEntry>();
 const executableCache = new Map<string, AINodeExecutable | null>();
@@ -321,6 +434,45 @@ function stableStringifyParams(params: Record<string, ClipCustomNodeParamValue>)
     .join(',');
 }
 
+function createRuntimeAudioOptionsSignature(options: AINodeRuntimeAudioOptions = {}): string {
+  const { track, masterAudioState } = options;
+  return JSON.stringify({
+    track: track ? {
+      id: track.id,
+      muted: track.audioState?.muted ?? track.muted === true,
+      solo: track.audioState?.solo ?? track.solo === true,
+      volumeDb: track.audioState?.volumeDb ?? 0,
+      pan: track.audioState?.pan ?? 0,
+      meterMode: track.audioState?.meterMode,
+      sendCount: track.audioState?.sends?.length ?? 0,
+      effectStack: summarizeAudioEffectStack(track.audioState?.effectStack),
+    } : null,
+    master: masterAudioState ? {
+      volumeDb: masterAudioState.volumeDb,
+      limiterEnabled: masterAudioState.limiterEnabled,
+      truePeakCeilingDb: masterAudioState.truePeakCeilingDb,
+      targetLufs: masterAudioState.targetLufs,
+      effectStack: summarizeAudioEffectStack(masterAudioState.effectStack),
+    } : null,
+  });
+}
+
+function createRuntimeClipAudioSignature(clip: TimelineClip): string {
+  return JSON.stringify({
+    sourceType: clip.source?.type,
+    mediaFileId: clip.mediaFileId ?? clip.source?.mediaFileId,
+    waveformSampleCount: clip.waveform?.length ?? 0,
+    sourceAudioRevisionId: clip.audioState?.sourceAudioRevisionId,
+    muted: clip.audioState?.muted === true,
+    soloSafe: clip.audioState?.soloSafe === true,
+    editStackCount: clip.audioState?.editStack?.length ?? 0,
+    spectralLayerCount: clip.audioState?.spectralLayers?.length ?? 0,
+    effectStack: summarizeAudioEffectStack(clip.audioState?.effectStack),
+    sourceAnalysisRefs: clip.audioState?.sourceAnalysisRefs ?? null,
+    processedAnalysisRefs: clip.audioState?.processedAnalysisRefs ?? null,
+  });
+}
+
 function createSourceContentSignature(source: LayerSource): string {
   const canvas = source.textCanvas;
   if (canvas) {
@@ -410,12 +562,154 @@ function createAudioArtifactSignal(
     return undefined;
   }
 
+  const loudnessSummary = kind === 'loudness-envelope'
+    ? createCachedLoudnessSummary(artifactId)
+    : undefined;
+  const phaseCorrelationSummary = kind === 'phase-correlation'
+    ? createCachedPhaseCorrelationSummary(artifactId)
+    : undefined;
+  const frequencyBandSummary = kind === 'frequency-summary'
+    ? createCachedFrequencyBandSummary(artifactId)
+    : undefined;
+
   return {
     artifactId,
     kind,
     provenance,
     available: true,
     stale: false,
+    ...(loudnessSummary ? { loudnessSummary } : {}),
+    ...(phaseCorrelationSummary ? { phaseCorrelationSummary } : {}),
+    ...(frequencyBandSummary ? { frequencyBandSummary } : {}),
+  };
+}
+
+function roundAudioValue(value: number, decimals = 4): number {
+  return Number.isFinite(value) ? Number(value.toFixed(decimals)) : value;
+}
+
+function roundAudioDb(value: number): number {
+  return Number.isFinite(value) ? Number(value.toFixed(2)) : value;
+}
+
+function createPreview(values: Float32Array, maxPoints: number): number[] {
+  if (values.length === 0) {
+    return [];
+  }
+
+  const count = Math.min(maxPoints, values.length);
+  return Array.from({ length: count }, (_, index) => {
+    const sourceIndex = Math.min(
+      values.length - 1,
+      Math.floor((index / Math.max(1, count - 1)) * (values.length - 1)),
+    );
+    return roundAudioDb(values[sourceIndex] ?? 0);
+  });
+}
+
+function createCachedLoudnessSummary(artifactId: string): AINodeRuntimeLoudnessSummary | undefined {
+  const envelope = getCachedTimelineLoudnessEnvelope(artifactId);
+  if (!envelope) {
+    return undefined;
+  }
+
+  return {
+    integratedLufs: envelope.summary?.integratedLufs === undefined
+      ? undefined
+      : roundAudioDb(envelope.summary.integratedLufs),
+    truePeakDbtp: envelope.summary?.truePeakDbtp === undefined
+      ? undefined
+      : roundAudioDb(envelope.summary.truePeakDbtp),
+    samplePeakDbfs: envelope.summary?.samplePeakDbfs === undefined
+      ? undefined
+      : roundAudioDb(envelope.summary.samplePeakDbfs),
+    rmsDbfs: envelope.summary?.rmsDbfs === undefined
+      ? undefined
+      : roundAudioDb(envelope.summary.rmsDbfs),
+    curves: envelope.curves.slice(0, 8).map((curve) => {
+      let minDb = Number.POSITIVE_INFINITY;
+      let maxDb = Number.NEGATIVE_INFINITY;
+      for (const value of curve.values) {
+        const finite = Number.isFinite(value) ? value : 0;
+        minDb = Math.min(minDb, finite);
+        maxDb = Math.max(maxDb, finite);
+      }
+
+      return {
+        metric: curve.metric,
+        pointCount: curve.pointCount,
+        minDb: roundAudioDb(minDb === Number.POSITIVE_INFINITY ? 0 : minDb),
+        maxDb: roundAudioDb(maxDb === Number.NEGATIVE_INFINITY ? 0 : maxDb),
+        previewDb: createPreview(curve.values, 32),
+      };
+    }),
+  };
+}
+
+function createCachedFrequencyBandSummary(artifactId: string): AINodeRuntimeFrequencyBandSummary | undefined {
+  const summary = getCachedTimelineFrequencySummary(artifactId);
+  if (!summary) {
+    return undefined;
+  }
+
+  return {
+    spectralCentroidHz: roundAudioValue(summary.summary.spectralCentroidHz, 2),
+    lowEnergyShare: roundAudioValue(summary.summary.lowEnergyShare),
+    midEnergyShare: roundAudioValue(summary.summary.midEnergyShare),
+    highEnergyShare: roundAudioValue(summary.summary.highEnergyShare),
+    dominantBandId: summary.summary.dominantBandId,
+    bands: summary.bands.slice(0, 12).map((band) => ({
+      bandId: band.bandId,
+      label: band.label,
+      minFrequency: roundAudioValue(band.minFrequency, 2),
+      maxFrequency: roundAudioValue(band.maxFrequency, 2),
+      rmsDb: roundAudioDb(band.rmsDb),
+      peakDb: roundAudioDb(band.peakDb),
+      energyShare: roundAudioValue(band.energyShare),
+      centroidHz: roundAudioValue(band.centroidHz, 2),
+    })),
+  };
+}
+
+function createPhaseCorrelationPreview(
+  points: NonNullable<ReturnType<typeof getCachedTimelinePhaseCorrelation>>['points'],
+  maxPoints: number,
+): AINodeRuntimePhaseCorrelationSummary['preview'] {
+  if (points.length === 0) {
+    return [];
+  }
+
+  const count = Math.min(maxPoints, points.length);
+  return Array.from({ length: count }, (_, index) => {
+    const sourceIndex = Math.min(
+      points.length - 1,
+      Math.floor((index / Math.max(1, count - 1)) * (points.length - 1)),
+    );
+    const point = points[sourceIndex] ?? { time: 0, correlation: 1, midSideRatioDb: 0 };
+    return {
+      time: roundAudioValue(point.time, 3),
+      correlation: roundAudioValue(point.correlation),
+      midSideRatioDb: roundAudioDb(point.midSideRatioDb),
+    };
+  });
+}
+
+function createCachedPhaseCorrelationSummary(artifactId: string): AINodeRuntimePhaseCorrelationSummary | undefined {
+  const phase = getCachedTimelinePhaseCorrelation(artifactId);
+  if (!phase) {
+    return undefined;
+  }
+
+  return {
+    averageCorrelation: roundAudioValue(phase.summary.averageCorrelation),
+    minimumCorrelation: roundAudioValue(phase.summary.minimumCorrelation),
+    maximumCorrelation: roundAudioValue(phase.summary.maximumCorrelation),
+    negativeCorrelationPercent: roundAudioValue(phase.summary.negativeCorrelationPercent),
+    averageMidSideRatioDb: roundAudioDb(phase.summary.averageMidSideRatioDb),
+    stereoWidth: roundAudioValue(phase.summary.stereoWidth),
+    monoCompatible: phase.summary.monoCompatible,
+    pointCount: phase.points.length,
+    preview: createPhaseCorrelationPreview(phase.points, 32),
   };
 }
 
@@ -447,6 +741,32 @@ function createAudioAnalysisNamespace(
     phaseCorrelation: createAudioArtifactSignal(refs?.phaseCorrelationId, 'phase-correlation', provenance),
     transcriptTiming: createAudioArtifactSignal(refs?.transcriptTimingId, 'transcript-timing', provenance),
     frequencySummary: createAudioArtifactSignal(refs?.frequencySummaryId, 'frequency-summary', provenance),
+  };
+}
+
+function firstNonEmptyRefs<T>(preferred: T[] | undefined, fallback: T[] | undefined): T[] | undefined {
+  return preferred && preferred.length > 0 ? preferred : fallback;
+}
+
+function getEffectiveAudioAnalysisRefs(clip: TimelineClip): MediaFileAudioAnalysisRefs | undefined {
+  const source = clip.audioState?.sourceAnalysisRefs;
+  const processed = clip.audioState?.processedAnalysisRefs;
+  if (!source && !processed) {
+    return undefined;
+  }
+
+  return {
+    waveformPyramidId: processed?.processedWaveformPyramidId ??
+      processed?.waveformPyramidId ??
+      source?.waveformPyramidId,
+    processedWaveformPyramidId: processed?.processedWaveformPyramidId ?? source?.processedWaveformPyramidId,
+    spectrogramTileSetIds: firstNonEmptyRefs(processed?.spectrogramTileSetIds, source?.spectrogramTileSetIds),
+    loudnessEnvelopeId: processed?.loudnessEnvelopeId ?? source?.loudnessEnvelopeId,
+    beatGridId: processed?.beatGridId ?? source?.beatGridId,
+    onsetMapId: processed?.onsetMapId ?? source?.onsetMapId,
+    phaseCorrelationId: processed?.phaseCorrelationId ?? source?.phaseCorrelationId,
+    transcriptTimingId: processed?.transcriptTimingId ?? source?.transcriptTimingId,
+    frequencySummaryId: processed?.frequencySummaryId ?? source?.frequencySummaryId,
   };
 }
 
@@ -509,6 +829,66 @@ function summarizeWaveform(waveform: number[] | undefined): AINodeRuntimeWavefor
   };
 }
 
+function sanitizeAudioEffectParams(
+  params: AudioEffectInstance['params'] | undefined,
+): Record<string, string | number | boolean> {
+  const sanitized: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(params ?? {})) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      sanitized[key] = value;
+    }
+  }
+  return sanitized;
+}
+
+function summarizeAudioEffectStack(
+  effects: readonly AudioEffectInstance[] | undefined,
+): AINodeRuntimeAudioEffectSummary[] {
+  return (effects ?? []).slice(0, 32).map(effect => ({
+    id: effect.id,
+    descriptorId: effect.descriptorId,
+    enabled: effect.enabled !== false,
+    params: sanitizeAudioEffectParams(effect.params),
+  }));
+}
+
+function createRuntimeAudioRoutingContext(
+  clip: TimelineClip,
+  track?: TimelineTrack,
+  masterAudioState?: MasterAudioState,
+): AINodeRuntimeAudioContext['routing'] {
+  return {
+    clip: {
+      muted: clip.audioState?.muted === true,
+      soloSafe: clip.audioState?.soloSafe === true,
+      sourceAudioRevisionId: clip.audioState?.sourceAudioRevisionId,
+      editStackCount: clip.audioState?.editStack?.length ?? 0,
+      spectralLayerCount: clip.audioState?.spectralLayers?.length ?? 0,
+      effectStack: summarizeAudioEffectStack(clip.audioState?.effectStack),
+    },
+    ...(track ? {
+      track: {
+        trackId: track.id,
+        name: track.name,
+        muted: track.audioState?.muted ?? track.muted === true,
+        solo: track.audioState?.solo ?? track.solo === true,
+        volumeDb: track.audioState?.volumeDb ?? 0,
+        pan: track.audioState?.pan ?? 0,
+        meterMode: track.audioState?.meterMode,
+        sendCount: track.audioState?.sends?.length ?? 0,
+        effectStack: summarizeAudioEffectStack(track.audioState?.effectStack),
+      },
+    } : {}),
+    master: {
+      volumeDb: masterAudioState?.volumeDb ?? 0,
+      limiterEnabled: masterAudioState?.limiterEnabled ?? false,
+      truePeakCeilingDb: masterAudioState?.truePeakCeilingDb ?? 0,
+      targetLufs: masterAudioState?.targetLufs,
+      effectStack: summarizeAudioEffectStack(masterAudioState?.effectStack),
+    },
+  };
+}
+
 function hasAudioAnalysis(namespace: AINodeRuntimeAudioAnalysisNamespace): boolean {
   return Boolean(
     namespace.waveform ||
@@ -523,12 +903,22 @@ function hasAudioAnalysis(namespace: AINodeRuntimeAudioAnalysisNamespace): boole
   );
 }
 
-function createRuntimeAudioContext(clip: TimelineClip): AINodeRuntimeAudioContext | undefined {
+function createRuntimeAudioContext(
+  clip: TimelineClip,
+  track?: TimelineTrack,
+  masterAudioState?: MasterAudioState,
+): AINodeRuntimeAudioContext | undefined {
   const source = createAudioAnalysisNamespace(clip.audioState?.sourceAnalysisRefs, 'source');
   const processed = createAudioAnalysisNamespace(clip.audioState?.processedAnalysisRefs, 'processed');
   const effective = mergeAudioAnalysisNamespaces(source, processed);
+  const effectiveRefs = getEffectiveAudioAnalysisRefs(clip);
+  const repairSuggestions = buildAudioRepairSuggestionsFromRefs(effectiveRefs, {
+    maxSuggestions: MAX_RUNTIME_AUDIO_REPAIR_SUGGESTIONS,
+  });
   const waveform = summarizeWaveform(clip.waveform);
+  const routing = createRuntimeAudioRoutingContext(clip, track, masterAudioState);
   const hasAudioSource = clip.source?.type === 'audio' ||
+    clip.source?.type === 'video' ||
     clip.file?.type?.startsWith('audio/') ||
     Boolean(clip.audioState) ||
     Boolean(waveform) ||
@@ -547,11 +937,13 @@ function createRuntimeAudioContext(clip: TimelineClip): AINodeRuntimeAudioContex
       outPoint: clip.outPoint,
     },
     waveform,
+    routing,
     analysis: {
       source,
       processed,
       effective,
     },
+    repairSuggestions,
   };
 }
 
@@ -795,12 +1187,13 @@ function processTexture(
   texture: AINodeRuntimeTexture,
   clipLocalTime: number,
   resolveParams: AINodeParamResolver,
+  audioOptions: AINodeRuntimeAudioOptions = {},
 ): AINodeRuntimeTexture {
   const graph = buildClipNodeGraph(clip);
   const graphSignal = createSerializableGraph(graph);
   const clipSignal = createRuntimeClipMetadata(clip);
   const sourceSignal = createRuntimeSourceMetadata(source);
-  const audioSignal = createRuntimeAudioContext(clip);
+  const audioSignal = createRuntimeAudioContext(clip, audioOptions.track, audioOptions.masterAudioState);
 
   return definitions.reduce((current, definition) => {
     const params = resolveParams(definition.id);
@@ -856,6 +1249,7 @@ function processTexture(
         node: { id: definition.id, label: definition.label },
         audio: audioSignal,
         audioAnalysis: audioSignal?.analysis,
+        audioRepairSuggestions: audioSignal?.repairSuggestions,
         text: textSignal,
       },
       text: textSignal,
@@ -869,6 +1263,7 @@ export function renderClipAINodesToCanvas(
   layerId: string,
   clipLocalTime: number,
   resolveParams: AINodeParamResolver = () => ({}),
+  audioOptions: AINodeRuntimeAudioOptions = {},
 ): HTMLCanvasElement | null {
   const runnableNodes = getConnectedRunnableCustomNodes(clip);
   if (runnableNodes.length === 0 || typeof document === 'undefined') {
@@ -892,6 +1287,8 @@ export function renderClipAINodesToCanvas(
     createSourceContentSignature(source),
     processSize.width,
     processSize.height,
+    createRuntimeClipAudioSignature(clip),
+    createRuntimeAudioOptionsSignature(audioOptions),
     runnableNodes
       .map((definition) => {
         const params = resolveParams(definition.id);
@@ -926,6 +1323,7 @@ export function renderClipAINodesToCanvas(
       },
       clipLocalTime,
       resolveParams,
+      audioOptions,
     );
 
     entry.canvas.width = output.width;

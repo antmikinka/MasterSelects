@@ -14,6 +14,8 @@ import { useFlashBoardStore } from '../../stores/flashboardStore';
 import { getExportStoreData, useExportStore } from '../../stores/exportStore';
 import { useMIDIStore } from '../../stores/midiStore';
 import { isProxyFrameCountComplete } from '../../stores/mediaStore/helpers/proxyCompleteness';
+import { buildProjectAudioStateIndex } from '../audio/projectAudioState';
+import { createCurrentAudioArtifactStore } from '../audio/timelineWaveformPyramidCache';
 import { cloneClipNodeGraph } from '../nodeGraph';
 import type {
   FlashBoardGenerationMetadata,
@@ -449,8 +451,10 @@ export async function syncStoresToProject(): Promise<void> {
     }
 
     // Update project file data
-    projectFileService.updateMedia(convertMediaFiles(freshState.files));
-    projectFileService.updateCompositions(convertCompositions(freshState.compositions));
+    const projectMedia = convertMediaFiles(freshState.files);
+    const projectCompositions = convertCompositions(freshState.compositions);
+    projectFileService.updateMedia(projectMedia);
+    projectFileService.updateCompositions(projectCompositions);
     projectFileService.updateFolders(convertFolders(freshState.folders));
 
     // Update active state
@@ -460,6 +464,24 @@ export async function syncStoresToProject(): Promise<void> {
       projectData.expandedFolderIds = freshState.expandedFolderIds;
       projectData.slotAssignments = freshState.slotAssignments;
       projectData.slotClipSettings = freshState.slotClipSettings;
+
+      let audioArtifactStore: ReturnType<typeof createCurrentAudioArtifactStore> | undefined;
+      try {
+        audioArtifactStore = createCurrentAudioArtifactStore();
+      } catch (error) {
+        log.warn('Could not open audio artifact store while building project audio index', error);
+      }
+      const projectAudioState = await buildProjectAudioStateIndex({
+        media: projectMedia,
+        compositions: projectCompositions,
+        activeCompositionId: freshState.activeCompositionId,
+        artifactStore: audioArtifactStore,
+      });
+      if (projectAudioState) {
+        projectData.audio = projectAudioState;
+      } else {
+        delete projectData.audio;
+      }
 
       const signalAssets = freshState.signalAssets ?? [];
       const signalArtifacts = signalAssets.reduce(

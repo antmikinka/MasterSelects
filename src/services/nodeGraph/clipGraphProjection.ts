@@ -1,5 +1,6 @@
-import type { Effect, TimelineClip, TimelineTrack } from '../../types';
+import type { AudioEffectInstance, Effect, TimelineClip, TimelineTrack } from '../../types';
 import type { AudioAnalysisArtifactKind, MediaFileAudioAnalysisRefs } from '../../types/audio';
+import { getAudioEffect, hasAudioEffect } from '../../engine/audio/AudioEffectRegistry';
 import { DEFAULT_TRANSFORM } from '../../stores/timeline/constants';
 import type {
   ClipNodeGraph,
@@ -185,7 +186,7 @@ function hasForcedBuiltInNode(clip: TimelineClip, node: ClipNodeGraphForcedBuilt
 }
 
 function isAudioEffect(effect: Effect): boolean {
-  return effect.type === 'audio-eq' || effect.type === 'audio-volume';
+  return hasAudioEffect(effect.type);
 }
 
 interface ResolvedAudioAnalysisRef {
@@ -335,7 +336,10 @@ function appendAudioAnalysisPorts(outputs: NodeGraphPort[], clip: TimelineClip):
 function createSourceNode(clip: TimelineClip, track?: TimelineTrack): NodeGraphNode {
   const outputs: NodeGraphPort[] = [];
   const primaryOutput = sourceOutputType(clip);
-  const hasAudioAnalysisSurface = (clip.waveform?.length ?? 0) > 0 ||
+  const hasAudioAnalysisSurface = clip.source?.type === 'audio' ||
+    clip.source?.type === 'video' ||
+    clip.file?.type?.startsWith('audio/') === true ||
+    (clip.waveform?.length ?? 0) > 0 ||
     hasAnyAudioAnalysisRef(clip.audioState?.sourceAnalysisRefs) ||
     hasAnyAudioAnalysisRef(clip.audioState?.processedAnalysisRefs);
 
@@ -460,6 +464,28 @@ function createEffectNode(effect: Effect, depth: number, laneY: number, signalTy
   };
 }
 
+function createAudioEffectInstanceNode(effect: AudioEffectInstance, depth: number): NodeGraphNode {
+  const descriptor = getAudioEffect(effect.descriptorId);
+  const paramCount = Object.keys(effect.params ?? {}).length;
+
+  return {
+    id: `audio-effect-${effect.id}`,
+    kind: 'effect',
+    runtime: 'builtin',
+    label: descriptor?.name ?? effect.descriptorId,
+    description: `${effect.enabled === false ? 'Disabled ' : ''}${effect.descriptorId} registry audio effect`,
+    inputs: [inputPort('input', 'audio', 'audio')],
+    outputs: [outputPort('output', 'audio', 'audio')],
+    params: {
+      enabled: effect.enabled !== false,
+      params: paramCount,
+      descriptorId: effect.descriptorId,
+      automationMode: effect.automationMode ?? 'none',
+    },
+    layout: { x: depth * NODE_SPACING_X, y: AUDIO_LANE_Y },
+  };
+}
+
 function createCustomNode(definition: ClipCustomNodeDefinition, depth: number): NodeGraphNode {
   const promptState = definition.ai.prompt.trim().length > 0 ? 'configured' : 'empty';
   return {
@@ -531,6 +557,9 @@ function getNodeBacking(node: NodeGraphNode): ClipNodeGraphBacking {
     default:
       if (node.id.startsWith('custom-')) {
         return { kind: 'clip-custom-node', nodeId: node.id };
+      }
+      if (node.id.startsWith('audio-effect-')) {
+        return { kind: 'clip-audio-effect-instance', effectId: node.id.slice('audio-effect-'.length) };
       }
       if (node.id.startsWith('effect-')) {
         return { kind: 'clip-effect', effectId: node.id.slice('effect-'.length) };
@@ -1022,9 +1051,21 @@ function buildClipNodeGraphView(clip: TimelineClip, track?: TimelineTrack): Node
 
   const audioSourceAvailable = clip.source?.type === 'audio' || clip.source?.type === 'video';
   const audioEffects = clip.effects.filter(isAudioEffect);
-  if (audioSourceAvailable && audioEffects.length > 0) {
+  const registryAudioEffects = clip.audioState?.effectStack ?? [];
+  if (audioSourceAvailable && (registryAudioEffects.length > 0 || audioEffects.length > 0)) {
     let audioDepth = 1;
     let audioChain: NodeGraphChainHead = { nodeId: sourceNode.id, portId: 'audio' };
+    for (const effect of registryAudioEffects) {
+      audioChain = appendProcessingNode(
+        nodes,
+        edges,
+        audioChain.nodeId,
+        audioChain.portId,
+        createAudioEffectInstanceNode(effect, audioDepth),
+        'audio',
+      );
+      audioDepth += 1;
+    }
     for (const effect of audioEffects) {
       audioChain = appendProcessingNode(
         nodes,

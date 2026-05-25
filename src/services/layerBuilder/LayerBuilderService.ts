@@ -596,12 +596,17 @@ export class LayerBuilderService {
     }
 
     const timeInfo = getClipTimeInfo(ctx, clip);
+    const track = ctx.tracks.find(candidate => candidate.id === clip.trackId);
     const canvas = renderClipAINodesToCanvas(
       clip,
       layer.source,
       layer.id,
       timeInfo.clipLocalTime,
       (nodeId) => ctx.getInterpolatedNodeGraphParams(clip.id, nodeId, timeInfo.clipLocalTime),
+      {
+        track,
+        masterAudioState: ctx.masterAudioState,
+      },
     );
     if (!canvas) {
       return layer;

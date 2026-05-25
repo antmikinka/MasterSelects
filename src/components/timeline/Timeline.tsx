@@ -63,7 +63,7 @@ import { getTimelineTrackBaseHeight } from './utils/timelineAudioLayout';
 
 const KEYFRAME_TIME_GROUP_PRECISION = 1000;
 const RAM_PREVIEW_FEATURE_ENABLED = false;
-const TRACK_HEADER_WIDTH = 150;
+const TRACK_HEADER_WIDTH = 210;
 
 function buildCompositionSwitchTracks(
   currentTracks: TimelineTrackType[],
@@ -1280,13 +1280,13 @@ export function Timeline() {
                     playheadPosition={playheadPosition}
                     onToggleExpand={() => toggleTrackExpanded(track.id)}
                     onToggleSolo={() =>
-                      useTimelineStore.getState().setTrackSolo(track.id, !track.solo)
+                      useTimelineStore.getState().setTrackSolo(track.id, !(track.audioState?.solo ?? track.solo))
                     }
                     onToggleLocked={() =>
                       useTimelineStore.getState().setTrackLocked(track.id, !track.locked)
                     }
                     onToggleMuted={() =>
-                      useTimelineStore.getState().setTrackMuted(track.id, !track.muted)
+                      useTimelineStore.getState().setTrackMuted(track.id, !(track.audioState?.muted ?? track.muted))
                     }
                     onToggleVisible={() =>
                       useTimelineStore.getState().setTrackVisible(track.id, !track.visible)

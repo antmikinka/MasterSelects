@@ -144,6 +144,182 @@ describe('timeline audio edit slice', () => {
     ]);
   });
 
+  it('adds a non-destructive spectral edit operation from the active time-frequency selection', () => {
+    const clip = createMockClip({
+      id: 'audio-clip',
+      trackId: 'audio-1',
+      file: new File([], 'dialog.wav', { type: 'audio/wav' }),
+      source: { type: 'audio', naturalDuration: 10 },
+      duration: 10,
+      inPoint: 0,
+      outPoint: 10,
+      audioState: {
+        sourceAnalysisRefs: { spectrogramTileSetIds: ['source-spectrum'] },
+        processedAnalysisRefs: { spectrogramTileSetIds: ['processed-spectrum'] },
+      },
+    });
+    const store = createTestTimelineStore({
+      clips: [clip],
+      audioSpectralRegionSelection: {
+        clipId: 'audio-clip',
+        trackId: 'audio-1',
+        startTime: 2,
+        endTime: 4,
+        sourceInPoint: 2,
+        sourceOutPoint: 4,
+        frequencyMinHz: 240,
+        frequencyMaxHz: 2400,
+      },
+    });
+
+    const operationId = store.getState().applySpectralRegionEdit('spectral-mask');
+
+    const updated = store.getState().clips[0];
+    expect(operationId).toBeTruthy();
+    expect(store.getState().audioSpectralRegionSelection).toBeNull();
+    expect(updated.audioState?.sourceAnalysisRefs?.spectrogramTileSetIds).toEqual(['source-spectrum']);
+    expect(updated.audioState?.processedAnalysisRefs).toBeUndefined();
+    expect(updated.audioState?.editStack).toEqual([
+      expect.objectContaining({
+        id: operationId,
+        type: 'spectral-mask',
+        enabled: true,
+        timeRange: { start: 2, end: 4 },
+        params: expect.objectContaining({
+          frequencyMinHz: 240,
+          frequencyMaxHz: 2400,
+          blendMode: 'attenuate',
+        }),
+      }),
+    ]);
+  });
+
+  it('adds image-in-spectrum layers and invalidates only processed analysis refs', () => {
+    const clip = createMockClip({
+      id: 'audio-clip',
+      trackId: 'audio-1',
+      file: new File([], 'dialog.wav', { type: 'audio/wav' }),
+      source: { type: 'audio', naturalDuration: 10 },
+      duration: 10,
+      inPoint: 0,
+      outPoint: 10,
+      audioState: {
+        sourceAnalysisRefs: { spectrogramTileSetIds: ['source-spectrum'] },
+        processedAnalysisRefs: { spectrogramTileSetIds: ['processed-spectrum'] },
+      },
+    });
+    const store = createTestTimelineStore({ clips: [clip] });
+
+    const layerId = store.getState().addClipSpectralImageLayer('audio-clip', {
+      imageMediaFileId: 'image-1',
+      timeStart: -1,
+      duration: 2,
+      frequencyMin: 4000,
+      frequencyMax: 200,
+      opacity: 2,
+      blendMode: 'attenuate',
+      gainDb: -80,
+      featherTime: -2,
+      featherFrequency: 120,
+      keyframes: [
+        { id: 'kf-2', time: 5, opacity: 2, gainDb: 48, frequencyMin: 5000, frequencyMax: 1000 },
+        { id: 'kf-1', time: -1, opacity: -1, gainDb: -90, frequencyMin: -20, frequencyMax: 300 },
+      ],
+    });
+
+    const updated = store.getState().clips[0];
+    expect(layerId).toBeTruthy();
+    expect(updated.audioState?.sourceAnalysisRefs?.spectrogramTileSetIds).toEqual(['source-spectrum']);
+    expect(updated.audioState?.processedAnalysisRefs).toBeUndefined();
+    expect(updated.audioState?.spectralLayers).toEqual([
+      expect.objectContaining({
+        id: layerId,
+        imageMediaFileId: 'image-1',
+        timeStart: 0,
+        duration: 2,
+        frequencyMin: 200,
+        frequencyMax: 4000,
+        opacity: 1,
+        blendMode: 'attenuate',
+        gainDb: -60,
+        featherTime: 0,
+        featherFrequency: 120,
+        keyframes: [
+          {
+            id: 'kf-1',
+            time: 0,
+            opacity: 0,
+            gainDb: -60,
+            frequencyMin: 0,
+            frequencyMax: 300,
+          },
+          {
+            id: 'kf-2',
+            time: 2,
+            opacity: 1,
+            gainDb: 24,
+            frequencyMin: 1000,
+            frequencyMax: 5000,
+          },
+        ],
+      }),
+    ]);
+  });
+
+  it('adds repair operations to the same non-destructive region edit stack', () => {
+    const clip = createMockClip({
+      id: 'audio-clip',
+      trackId: 'audio-1',
+      file: new File([], 'dialog.wav', { type: 'audio/wav' }),
+      source: { type: 'audio', naturalDuration: 10 },
+      duration: 10,
+      inPoint: 0,
+      outPoint: 10,
+      audioState: {
+        sourceAnalysisRefs: { waveformPyramidId: 'source-waveform' },
+        processedAnalysisRefs: { processedWaveformPyramidId: 'processed-waveform' },
+      },
+    });
+    const store = createTestTimelineStore({
+      clips: [clip],
+      audioRegionSelection: {
+        clipId: 'audio-clip',
+        trackId: 'audio-1',
+        startTime: 1,
+        endTime: 3,
+        sourceInPoint: 1,
+        sourceOutPoint: 3,
+      },
+    });
+
+    const operationId = store.getState().applyAudioRegionEdit('repair', {
+      params: {
+        label: 'Hum notch',
+        repairType: 'hum-notch',
+        baseFrequencyHz: 50,
+        harmonicCount: 6,
+      },
+    });
+
+    const updated = store.getState().clips[0];
+    expect(operationId).toBeTruthy();
+    expect(updated.audioState?.sourceAnalysisRefs?.waveformPyramidId).toBe('source-waveform');
+    expect(updated.audioState?.processedAnalysisRefs).toBeUndefined();
+    expect(updated.audioState?.editStack).toEqual([
+      expect.objectContaining({
+        id: operationId,
+        type: 'repair',
+        enabled: true,
+        timeRange: { start: 1, end: 3 },
+        params: expect.objectContaining({
+          label: 'Hum notch',
+          repairType: 'hum-notch',
+          baseFrequencyHz: 50,
+        }),
+      }),
+    ]);
+  });
+
   it('does not edit audio clips on locked tracks', () => {
     const store = createTestTimelineStore({
       tracks: [

@@ -56,6 +56,7 @@ import { composeTransforms } from '../../utils/transformComposition';
 import { calculateSourceTime, getSpeedAtTime, calculateTimelineDuration } from '../../utils/speedIntegration';
 import { dispatchKeyframeRecordingFeedback } from '../../utils/keyframeRecordingFeedback';
 import { clearProcessedAudioAnalysisRefs } from './helpers/audioAnalysisStateHelpers';
+import { hasAudioEffect } from '../../engine/audio/AudioEffectRegistry';
 import {
   getHexColorChannel,
   normalizeHexColor,
@@ -104,6 +105,69 @@ function isAnyKeyframeOnLockedTrack(
 
 function isCustomNodeParamValue(value: unknown): value is ClipCustomNodeParamValue {
   return ['string', 'number', 'boolean'].includes(typeof value);
+}
+
+interface AudioKeyframeInvalidationTarget {
+  clipId: string;
+  property: AnimatableProperty;
+}
+
+function parseEffectKeyframeProperty(property: AnimatableProperty): { effectId: string; paramName: string } | null {
+  const parts = property.split('.');
+  if (parts.length !== 3 || parts[0] !== 'effect') return null;
+  return { effectId: parts[1], paramName: parts[2] };
+}
+
+function keyframePropertyInvalidatesProcessedAudio(
+  clip: TimelineClip,
+  property: AnimatableProperty,
+): boolean {
+  if (property === 'speed') return true;
+
+  const effectProperty = parseEffectKeyframeProperty(property);
+  if (!effectProperty) return false;
+
+  const audioEffect = clip.audioState?.effectStack?.find(effect => effect.id === effectProperty.effectId);
+  if (audioEffect && hasAudioEffect(audioEffect.descriptorId)) {
+    return audioEffect.descriptorId !== 'audio-volume';
+  }
+
+  const legacyEffect = clip.effects?.find(effect => effect.id === effectProperty.effectId);
+  if (legacyEffect && hasAudioEffect(legacyEffect.type)) {
+    return legacyEffect.type !== 'audio-volume';
+  }
+
+  return false;
+}
+
+function clearProcessedAudioAnalysisRefsForKeyframeTargets(
+  clips: TimelineClip[],
+  targets: readonly AudioKeyframeInvalidationTarget[],
+): TimelineClip[] {
+  if (targets.length === 0) return clips;
+
+  const targetsByClip = new Map<string, Set<AnimatableProperty>>();
+  for (const target of targets) {
+    const properties = targetsByClip.get(target.clipId) ?? new Set<AnimatableProperty>();
+    properties.add(target.property);
+    targetsByClip.set(target.clipId, properties);
+  }
+
+  let changed = false;
+  const nextClips = clips.map(clip => {
+    const properties = targetsByClip.get(clip.id);
+    if (!properties) return clip;
+    const shouldInvalidate = [...properties].some(property =>
+      keyframePropertyInvalidatesProcessedAudio(clip, property)
+    );
+    if (!shouldInvalidate) return clip;
+
+    const nextClip = clearProcessedAudioAnalysisRefs(clip);
+    if (nextClip !== clip) changed = true;
+    return nextClip;
+  });
+
+  return changed ? nextClips : clips;
 }
 
 function getCustomNodeParamDefaults(
@@ -756,7 +820,10 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
     // Update state
     const newMap = new Map(clipKeyframes);
     newMap.set(clipId, newKeyframes);
-    set({ clipKeyframes: newMap });
+    const nextClips = clearProcessedAudioAnalysisRefsForKeyframeTargets(clips, [{ clipId, property }]);
+    set(nextClips === clips
+      ? { clipKeyframes: newMap }
+      : { clipKeyframes: newMap, clips: nextClips });
 
     // Invalidate cache since animation changed
     invalidateCache();
@@ -927,8 +994,13 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
     const { clipKeyframes, clips, tracks, invalidateCache, selectedKeyframeIds } = get();
     if (isAnyKeyframeOnLockedTrack(clipKeyframes, clips, tracks, [keyframeId])) return;
     const newMap = new Map<string, Keyframe[]>();
+    const invalidationTargets: AudioKeyframeInvalidationTarget[] = [];
 
     clipKeyframes.forEach((keyframes, clipId) => {
+      const removed = keyframes.find(k => k.id === keyframeId);
+      if (removed) {
+        invalidationTargets.push({ clipId, property: removed.property });
+      }
       const filtered = keyframes.filter(k => k.id !== keyframeId);
       if (filtered.length > 0) {
         newMap.set(clipId, filtered);
@@ -939,7 +1011,10 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
     const newSelection = new Set(selectedKeyframeIds);
     newSelection.delete(keyframeId);
 
-    set({ clipKeyframes: newMap, selectedKeyframeIds: newSelection });
+    const nextClips = clearProcessedAudioAnalysisRefsForKeyframeTargets(clips, invalidationTargets);
+    set(nextClips === clips
+      ? { clipKeyframes: newMap, selectedKeyframeIds: newSelection }
+      : { clipKeyframes: newMap, selectedKeyframeIds: newSelection, clips: nextClips });
     invalidateCache();
   },
 
@@ -951,12 +1026,17 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
     const baseNormalizedUpdates = easing !== undefined
       ? { ...restUpdates, easing: normalizeEasingType(easing, 'linear') }
       : restUpdates;
+    const invalidationTargets: AudioKeyframeInvalidationTarget[] = [];
 
     clipKeyframes.forEach((keyframes, clipId) => {
       const clip = findClipById(clips, clipId);
       newMap.set(clipId, keyframes.map(k => {
         if (k.id !== keyframeId) {
           return k;
+        }
+        invalidationTargets.push({ clipId, property: k.property });
+        if (baseNormalizedUpdates.property) {
+          invalidationTargets.push({ clipId, property: baseNormalizedUpdates.property });
         }
 
         const vectorAnimationState = parseVectorAnimationStateProperty(k.property);
@@ -974,7 +1054,10 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
       }));
     });
 
-    set({ clipKeyframes: newMap });
+    const nextClips = clearProcessedAudioAnalysisRefsForKeyframeTargets(clips, invalidationTargets);
+    set(nextClips === clips
+      ? { clipKeyframes: newMap }
+      : { clipKeyframes: newMap, clips: nextClips });
     invalidateCache();
   },
 
@@ -982,18 +1065,26 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
     const { clipKeyframes, clips, tracks, invalidateCache } = get();
     if (isAnyKeyframeOnLockedTrack(clipKeyframes, clips, tracks, [keyframeId])) return;
     const newMap = new Map<string, Keyframe[]>();
+    const invalidationTargets: AudioKeyframeInvalidationTarget[] = [];
 
     clipKeyframes.forEach((keyframes, clipId) => {
       const clip = clips.find(c => c.id === clipId);
       const maxTime = clip?.duration ?? 999;
+      const clampedTime = Math.max(0, Math.min(newTime, maxTime));
 
       newMap.set(clipId, keyframes.map(k => {
         if (k.id !== keyframeId) return k;
-        return { ...k, time: Math.max(0, Math.min(newTime, maxTime)) };
+        if (k.time !== clampedTime) {
+          invalidationTargets.push({ clipId, property: k.property });
+        }
+        return { ...k, time: clampedTime };
       }).sort((a, b) => a.time - b.time));
     });
 
-    set({ clipKeyframes: newMap });
+    const nextClips = clearProcessedAudioAnalysisRefsForKeyframeTargets(clips, invalidationTargets);
+    set(nextClips === clips
+      ? { clipKeyframes: newMap }
+      : { clipKeyframes: newMap, clips: nextClips });
     invalidateCache();
   },
 
@@ -1005,6 +1096,7 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
     const targetIds = new Set(keyframeIds);
     const newMap = new Map<string, Keyframe[]>();
     let changed = false;
+    const invalidationTargets: AudioKeyframeInvalidationTarget[] = [];
 
     clipKeyframes.forEach((keyframes, clipId) => {
       const clip = clips.find(c => c.id === clipId);
@@ -1017,6 +1109,7 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
         if (k.time === clampedTime) return k;
         clipChanged = true;
         changed = true;
+        invalidationTargets.push({ clipId, property: k.property });
         return { ...k, time: clampedTime };
       });
 
@@ -1030,7 +1123,10 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
 
     if (!changed) return;
 
-    set({ clipKeyframes: newMap });
+    const nextClips = clearProcessedAudioAnalysisRefsForKeyframeTargets(clips, invalidationTargets);
+    set(nextClips === clips
+      ? { clipKeyframes: newMap }
+      : { clipKeyframes: newMap, clips: nextClips });
     invalidateCache();
   },
 
@@ -1504,7 +1600,7 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
   },
 
   setPropertyValue: (clipId, property, value) => {
-    const { isRecording, addKeyframe, updateClipTransform, updateClipEffect, updateColorNodeParam, updateMask, updateTextProperties, clips, tracks, hasKeyframes, isPlaying } = get();
+    const { isRecording, addKeyframe, updateClipTransform, updateClipEffect, updateClipAudioEffectInstance, updateColorNodeParam, updateMask, updateTextProperties, clips, tracks, hasKeyframes, isPlaying } = get();
     if (isClipOnLockedTrack(clips, tracks, clipId)) return;
     const currentClip = clips.find(c => c.id === clipId);
     const cameraPropertyForValue = parseCameraProperty(property);
@@ -1721,7 +1817,12 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
         if (parts.length === 3) {
           const effectId = parts[1];
           const paramName = parts[2];
-          updateClipEffect(clipId, effectId, { [paramName]: value });
+          const audioEffect = clip.audioState?.effectStack?.find(effect => effect.id === effectId);
+          if (audioEffect) {
+            updateClipAudioEffectInstance(clipId, effectId, { [paramName]: value });
+          } else {
+            updateClipEffect(clipId, effectId, { [paramName]: value });
+          }
         }
         return;
       }
@@ -1917,7 +2018,17 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
 
   // Disable keyframes for a property: save current value as static, remove all keyframes, disable recording
   disablePropertyKeyframes: (clipId, property, currentValue) => {
-    const { clips, clipKeyframes, keyframeRecordingEnabled, invalidateCache, updateClipTransform, updateClipEffect, updateColorNodeParam, updateMask } = get();
+    const {
+      clips,
+      clipKeyframes,
+      keyframeRecordingEnabled,
+      invalidateCache,
+      updateClipTransform,
+      updateClipEffect,
+      updateClipAudioEffectInstance,
+      updateColorNodeParam,
+      updateMask,
+    } = get();
     const clip = clips.find(c => c.id === clipId);
     if (!clip) return;
 
@@ -2010,7 +2121,12 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
       if (parts.length === 3) {
         const effectId = parts[1];
         const paramName = parts[2];
-        updateClipEffect(clipId, effectId, { [paramName]: currentValue });
+        const audioEffect = clip.audioState?.effectStack?.find(effect => effect.id === effectId);
+        if (audioEffect) {
+          updateClipAudioEffectInstance(clipId, effectId, { [paramName]: currentValue });
+        } else {
+          updateClipEffect(clipId, effectId, { [paramName]: currentValue });
+        }
       }
     } else if (parseMaskProperty(property)) {
       const maskProperty = parseMaskProperty(property)!;

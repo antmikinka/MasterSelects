@@ -4,6 +4,7 @@ import { useMediaStore } from '../../../stores/mediaStore';
 import { useTimelineStore } from '../../../stores/timeline';
 import { useEngineStore } from '../../../stores/engineStore';
 import { DEFAULT_TEXT_3D_PROPERTIES } from '../../../stores/timeline/constants';
+import { isAudioEffect } from '../../../types';
 import { isVectorAnimationSourceType } from '../../../types/vectorAnimation';
 import { TextTab } from '../TextTab';
 import './PropertiesPanel.css';
@@ -259,7 +260,7 @@ export function PropertiesPanel() {
   const interpolatedSpeed = getInterpolatedSpeed(selectedClip.id, clipLocalTime);
 
   // Count non-audio effects for badge
-  const visualEffects = (selectedClip.effects || []).filter(e => e.type !== 'audio-volume' && e.type !== 'audio-eq');
+  const visualEffects = (selectedClip.effects || []).filter(e => !isAudioEffect(e.type));
   const audioEditCount = selectedClipAudioEditCount;
 
   return (

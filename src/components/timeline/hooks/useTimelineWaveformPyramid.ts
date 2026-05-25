@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { TimelineWaveformPyramid } from '../utils/waveformLod';
 import {
   getCachedTimelineWaveformPyramid,
@@ -31,9 +31,16 @@ export function useTimelineWaveformPyramidState(
 ): TimelineWaveformPyramidLoadState {
   const cached = getCachedTimelineWaveformPyramid(refId);
   const [loaded, setLoaded] = useState<TimelineWaveformPyramidLoadState>(() => createInitialState(refId));
+  const fallback = useMemo(() => createInitialState(refId), [refId]);
+  const cachedState = useMemo<TimelineWaveformPyramidLoadState | null>(() => {
+    if (!cached) return null;
+    return { refId, pyramid: cached, status: 'ready' };
+  }, [cached, refId]);
 
   useEffect(() => {
     let cancelled = false;
+
+    setLoaded(createInitialState(refId));
 
     if (!refId || cached) {
       return () => {
@@ -58,11 +65,11 @@ export function useTimelineWaveformPyramidState(
     };
   }, [cached, refId]);
 
-  if (cached) {
-    return { refId, pyramid: cached, status: 'ready' };
+  if (cachedState) {
+    return cachedState;
   }
 
-  return loaded.refId === refId ? loaded : createInitialState(refId);
+  return loaded.refId === refId ? loaded : fallback;
 }
 
 export function useTimelineWaveformPyramid(

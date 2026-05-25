@@ -6,11 +6,13 @@ import { EQ_FREQUENCIES } from '../../../services/audioManager';
 import { DraggableNumber, EffectKeyframeToggle, EQKeyframeToggle } from './shared';
 import { EQ_BAND_PARAMS } from './sharedConstants';
 import { MIDIParameterLabel } from './MIDIParameterLabel';
+import { AudioEffectStackControl } from './AudioEffectStackControl';
 
 // dB conversion helpers (internal gain 0–2 ↔ display dB)
 const SILENCE_THRESHOLD_DB = -60;
 const gainToDb = (gain: number): number => gain <= 0 ? SILENCE_THRESHOLD_DB : Math.max(SILENCE_THRESHOLD_DB, 20 * Math.log10(gain));
 const dbToGain = (db: number): number => db <= SILENCE_THRESHOLD_DB ? 0 : Math.pow(10, db / 20);
+const LEGACY_VOLUME_EQ_EFFECT_IDS = new Set(['audio-volume', 'audio-eq']);
 
 interface VolumeTabProps {
   clipId: string;
@@ -22,11 +24,22 @@ export function VolumeTab({ clipId, effects }: VolumeTabProps) {
   const playheadPosition = useTimelineStore(state => state.playheadPosition);
   const clips = useTimelineStore(state => state.clips);
   // Actions from getState() - stable, no subscription needed
-  const { setPropertyValue, getInterpolatedEffects, addClipEffect, setClipPreservesPitch } = useTimelineStore.getState();
+  const {
+    setPropertyValue,
+    getInterpolatedEffects,
+    addClipEffect,
+    setClipPreservesPitch,
+    addClipAudioEffectInstance,
+    updateClipAudioEffectInstance,
+    setClipAudioEffectInstanceEnabled,
+    removeClipAudioEffectInstance,
+    reorderClipAudioEffectInstance,
+  } = useTimelineStore.getState();
   const clip = clips.find(c => c.id === clipId);
   const clipLocalTime = clip ? playheadPosition - clip.startTime : 0;
   const interpolatedEffects = getInterpolatedEffects(clipId, clipLocalTime);
   const preservesPitch = clip?.preservesPitch !== false; // default true
+  const clipAudioEffectStack = clip?.audioState?.effectStack ?? [];
 
   // Auto-add audio effects if they don't exist
   useEffect(() => {
@@ -165,6 +178,20 @@ export function VolumeTab({ clipId, effects }: VolumeTabProps) {
           <span>0dB</span>
           <span>-12dB</span>
         </div>
+      </div>
+
+      {/* Registry Audio Effects Section */}
+      <div className="properties-section audio-effect-stack-section">
+        <AudioEffectStackControl
+          effects={clipAudioEffectStack}
+          excludeDescriptorIds={LEGACY_VOLUME_EQ_EFFECT_IDS}
+          keyframeClipId={clipId}
+          onAddEffect={(descriptorId) => addClipAudioEffectInstance(clipId, descriptorId)}
+          onUpdateEffect={(effect, paramName, value) => updateClipAudioEffectInstance(clipId, effect.id, { [paramName]: value })}
+          onSetEffectEnabled={(effectId, enabled) => setClipAudioEffectInstanceEnabled(clipId, effectId, enabled)}
+          onRemoveEffect={(effectId) => removeClipAudioEffectInstance(clipId, effectId)}
+          onReorderEffect={(effectId, newIndex) => reorderClipAudioEffectInstance(clipId, effectId, newIndex)}
+        />
       </div>
     </div>
   );

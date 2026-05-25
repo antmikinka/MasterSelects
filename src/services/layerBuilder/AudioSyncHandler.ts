@@ -9,6 +9,8 @@ import { playheadState, setMasterAudio } from './PlayheadState';
 import { audioManager, audioStatusTracker } from '../audioManager';
 import { audioRoutingManager } from '../audioRoutingManager';
 import { vfPipelineMonitor } from '../vfPipelineMonitor';
+import { useTimelineStore } from '../../stores/timeline';
+import { createSilentAudioMeterSnapshot } from '../audio/audioMetering';
 
 const log = Logger.create('AudioSyncHandler');
 
@@ -29,11 +31,27 @@ export class AudioSyncHandler {
     ctx: FrameContext,
     state: AudioSyncState
   ): void {
-    const { element, clip, clipTime, absSpeed, isMuted, canBeMaster, type, volume = 1, eqGains } = target;
+    const {
+      element,
+      clip,
+      clipTime,
+      absSpeed,
+      isMuted,
+      canBeMaster,
+      type,
+      volume = 1,
+      eqGains,
+      pan = 0,
+      processors = [],
+      meterTrackId,
+    } = target;
     const effectivelyMuted = isMuted || volume <= 0.01;
 
     // Set muted state
     element.muted = effectivelyMuted;
+    if (effectivelyMuted) {
+      this.publishMeter(meterTrackId, createSilentAudioMeterSnapshot(ctx.now));
+    }
 
     // Set pitch preservation
     this.setPitchPreservation(element, clip.preservesPitch !== false);
@@ -42,11 +60,12 @@ export class AudioSyncHandler {
 
     // Handle scrubbing
     if (ctx.isDraggingPlayhead && !effectivelyMuted) {
-      this.handleScrub(element, clipTime, ctx, volume, eqGains);
+      this.handleScrub(element, clipTime, ctx, volume, eqGains, pan, processors, meterTrackId);
     } else if (shouldPlay) {
-      this.handlePlayback(element, clipTime, absSpeed, clip, canBeMaster, type, state, volume, eqGains);
+      this.handlePlayback(element, clipTime, absSpeed, clip, canBeMaster, type, state, volume, eqGains, pan, processors, meterTrackId);
     } else {
       this.pauseIfPlaying(element);
+      this.publishMeter(meterTrackId, createSilentAudioMeterSnapshot(ctx.now));
     }
   }
 
@@ -58,7 +77,10 @@ export class AudioSyncHandler {
     clipTime: number,
     ctx: FrameContext,
     volume: number,
-    eqGains?: number[]
+    eqGains?: number[],
+    pan = 0,
+    processors: AudioSyncTarget['processors'] = [],
+    meterTrackId?: string
   ): void {
     const timeSinceLastScrub = ctx.now - this.lastScrubTime;
     const positionChanged = Math.abs(ctx.playheadPosition - this.lastScrubPosition) > 0.005;
@@ -67,7 +89,7 @@ export class AudioSyncHandler {
       this.lastScrubPosition = ctx.playheadPosition;
       this.lastScrubTime = ctx.now;
       element.playbackRate = 1;
-      this.applyScrubEffects(element, volume, eqGains);
+      this.applyScrubEffects(element, volume, eqGains, pan, processors, meterTrackId);
       this.playScrubAudio(element, clipTime);
     }
   }
@@ -79,12 +101,20 @@ export class AudioSyncHandler {
   private applyScrubEffects(
     element: HTMLAudioElement | HTMLVideoElement,
     volume: number,
-    eqGains?: number[]
+    eqGains?: number[],
+    pan = 0,
+    processors: AudioSyncTarget['processors'] = [],
+    meterTrackId?: string
   ): void {
     const hasEQ = eqGains?.some(g => Math.abs(g) > 0.01) ?? false;
+    const hasPan = Math.abs(pan) > 0.001;
+    const hasProcessors = (processors?.length ?? 0) > 0;
+    const needsMeter = Boolean(meterTrackId);
 
-    if (hasEQ || volume > 1) {
-      void audioRoutingManager.applyEffects(element, volume, eqGains ?? new Array(10).fill(0));
+    if (hasEQ || hasPan || hasProcessors || volume > 1 || needsMeter) {
+      void audioRoutingManager
+        .applyEffects(element, volume, eqGains ?? new Array(10).fill(0), pan, processors)
+        .then((routed) => this.publishRouteMeter(meterTrackId, routed ? element : null));
       return;
     }
 
@@ -122,7 +152,10 @@ export class AudioSyncHandler {
     type: AudioSyncTarget['type'],
     state: AudioSyncState,
     volume: number = 1,
-    eqGains?: number[]
+    eqGains?: number[],
+    pan = 0,
+    processors: AudioSyncTarget['processors'] = [],
+    meterTrackId?: string
   ): void {
     // Set playback rate
     const targetRate = absSpeed > 0.1 ? absSpeed : 1;
@@ -137,11 +170,16 @@ export class AudioSyncHandler {
 
     // Check if we have EQ to apply (any non-zero gain)
     const hasEQ = eqGains && eqGains.some(g => Math.abs(g) > 0.01);
+    const hasPan = Math.abs(pan) > 0.001;
+    const hasProcessors = (processors?.length ?? 0) > 0;
+    const needsMeter = Boolean(meterTrackId);
 
-    if (hasEQ) {
+    if (hasEQ || hasPan || hasProcessors || volume > 1 || needsMeter) {
       // Use Web Audio routing for volume + EQ
       // This handles both volume and EQ through the audio graph
-      audioRoutingManager.applyEffects(element, volume, eqGains!);
+      audioRoutingManager
+        .applyEffects(element, volume, eqGains ?? new Array(10).fill(0), pan, processors)
+        .then((routed) => this.publishRouteMeter(meterTrackId, routed ? element : null));
     } else {
       // Simple volume-only path (no Web Audio overhead)
       // HTMLMediaElement.volume only accepts [0, 1] range - clamp to prevent errors
@@ -217,6 +255,22 @@ export class AudioSyncHandler {
     if (el.preservesPitch !== preserve) {
       el.preservesPitch = preserve;
     }
+  }
+
+  private publishRouteMeter(trackId: string | undefined, element: HTMLMediaElement | null): void {
+    if (!trackId || !element) return;
+    const snapshot = audioRoutingManager.getMeterSnapshot(element);
+    if (snapshot) {
+      this.publishMeter(trackId, snapshot);
+    }
+  }
+
+  private publishMeter(
+    trackId: string | undefined,
+    snapshot: ReturnType<typeof createSilentAudioMeterSnapshot>,
+  ): void {
+    if (!trackId) return;
+    useTimelineStore.getState().updateRuntimeAudioMeter(trackId, snapshot);
   }
 
   /**

@@ -477,7 +477,7 @@
 
 .node-workspace-inspector-meta span,
 .node-workspace-param span,
-.node-workspace-inspector-port span:last-child {
+.node-workspace-inspector-port-side > span:first-child {
   display: block;
   color: var(--text-muted);
   font-size: 10px;
@@ -486,7 +486,7 @@
 
 .node-workspace-inspector-meta strong,
 .node-workspace-param strong,
-.node-workspace-inspector-port span:first-child {
+.node-workspace-inspector-port-main > span:first-child {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -526,6 +526,56 @@
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 5px;
   background: rgba(255, 255, 255, 0.028);
+}
+
+.node-workspace-inspector-port-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.node-workspace-inspector-port-side {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.node-workspace-inspector-port-artifact {
+  min-width: 0;
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 9px;
+  line-height: 1.15;
+}
+
+.node-workspace-port-action {
+  height: 20px;
+  min-width: 58px;
+  padding: 0 6px;
+  border: 1px solid rgba(84, 190, 142, 0.35);
+  border-radius: 4px;
+  background: rgba(84, 190, 142, 0.09);
+  color: rgba(185, 238, 213, 0.95);
+  font-size: 10px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.node-workspace-port-action:hover:not(:disabled) {
+  border-color: rgba(84, 190, 142, 0.62);
+  background: rgba(84, 190, 142, 0.16);
+  color: #d7f6e7;
+}
+
+.node-workspace-port-action:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .node-workspace-param-editable {

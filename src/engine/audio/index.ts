@@ -13,8 +13,22 @@
 export { AudioExtractor, audioExtractor } from './AudioExtractor';
 export { AudioEncoderWrapper, getRecommendedAudioBitrate, AUDIO_CODEC_INFO } from './AudioEncoder';
 export type { AudioEncoderSettings, EncodedAudioResult, AudioEncoderProgressCallback, AudioCodec } from './AudioEncoder';
-export { encodeAudioBufferToWavBlob, encodeAudioBufferToWavBytes, estimateWavByteSize } from './AudioFileEncoder';
-export type { AudioBufferLike, AudioOnlyExportFormat, WavBitDepth, WavEncodeOptions } from './AudioFileEncoder';
+export {
+  encodeAudioBufferToWavBlob,
+  encodeAudioBufferToWavBytes,
+  encodeFloat32PcmChunksToWavBlob,
+  encodeFloat32PcmChunksToWavBytes,
+  estimateFloat32PcmWavByteSize,
+  estimateWavByteSize,
+} from './AudioFileEncoder';
+export type {
+  AudioBufferLike,
+  AudioOnlyExportFormat,
+  Float32PcmChunk,
+  Float32PcmWavEncodeInput,
+  WavBitDepth,
+  WavEncodeOptions,
+} from './AudioFileEncoder';
 export { AudioMixer, audioMixer } from './AudioMixer';
 export type { AudioTrackData, MixerSettings, MixProgress, MixProgressCallback } from './AudioMixer';
 export { TimeStretchProcessor, timeStretchProcessor } from './TimeStretchProcessor';

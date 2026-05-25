@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTimelineStore } from '../../../stores/timeline';
-import type { ClipAudioEditOperation } from '../../../types';
+import { useMediaStore } from '../../../stores/mediaStore';
+import type { ClipAudioEditOperation, SpectralImageLayer, SpectralImageLayerKeyframe, TimelineClip } from '../../../types';
 
 const OPERATION_LABELS: Record<ClipAudioEditOperation['type'], string> = {
   trim: 'Trim',
@@ -53,6 +54,65 @@ function getTimelineRange(operation: ClipAudioEditOperation): string {
   return `${formatSeconds(start)} - ${formatSeconds(end)}`;
 }
 
+function formatFrequency(value: number | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-';
+  return value >= 1000 ? `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)} kHz` : `${Math.round(value)} Hz`;
+}
+
+const SPECTRAL_LAYER_BLEND_MODES: SpectralImageLayer['blendMode'][] = [
+  'attenuate',
+  'boost',
+  'gate',
+  'sidechain-mask',
+  'replace',
+];
+
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, value));
+}
+
+function createSpectralLayerKeyframeId(layerId: string): string {
+  return `${layerId}-kf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function timelineTimeToClipSourceTime(clip: TimelineClip, timelineTime: number): number {
+  const clipDuration = Math.max(0.001, clip.duration);
+  const timelineRatio = clamp((timelineTime - clip.startTime) / clipDuration, 0, 1);
+  const sourceStart = clip.inPoint ?? 0;
+  const sourceEnd = Math.max(sourceStart + 0.001, clip.outPoint ?? sourceStart + clipDuration);
+  const sourceSpan = sourceEnd - sourceStart;
+  return clip.reversed
+    ? sourceEnd - timelineRatio * sourceSpan
+    : sourceStart + timelineRatio * sourceSpan;
+}
+
+function createSpectralLayerKeyframe(
+  layer: SpectralImageLayer,
+  clip: TimelineClip,
+  playheadPosition: number,
+): SpectralImageLayerKeyframe {
+  const sourceTime = timelineTimeToClipSourceTime(clip, playheadPosition);
+  return {
+    id: createSpectralLayerKeyframeId(layer.id),
+    time: clamp(sourceTime - layer.timeStart, 0, Math.max(0.001, layer.duration)),
+    opacity: layer.opacity,
+    gainDb: layer.gainDb,
+    frequencyMin: layer.frequencyMin,
+    frequencyMax: layer.frequencyMax,
+  };
+}
+
+function replaceSpectralLayerKeyframe(
+  layer: SpectralImageLayer,
+  keyframeId: string,
+  patch: Partial<SpectralImageLayerKeyframe>,
+): SpectralImageLayerKeyframe[] {
+  return (layer.keyframes ?? [])
+    .map(keyframe => keyframe.id === keyframeId ? { ...keyframe, ...patch } : keyframe)
+    .toSorted((a, b) => a.time - b.time);
+}
+
 interface AudioEditStackTabProps {
   clipId: string;
 }
@@ -63,12 +123,23 @@ export function AudioEditStackTab({ clipId }: AudioEditStackTabProps) {
   const removeClipAudioEditOperation = useTimelineStore(state => state.removeClipAudioEditOperation);
   const clearClipAudioEditStack = useTimelineStore(state => state.clearClipAudioEditStack);
   const bakeClipAudioEditStack = useTimelineStore(state => state.bakeClipAudioEditStack);
+  const updateClipSpectralImageLayer = useTimelineStore(state => state.updateClipSpectralImageLayer);
+  const removeClipSpectralImageLayer = useTimelineStore(state => state.removeClipSpectralImageLayer);
+  const playheadPosition = useTimelineStore(state => state.playheadPosition);
+  const mediaFiles = useMediaStore(state => state.files);
+  const imageFilesById = useMemo(() => new Map(
+    mediaFiles
+      .filter(file => file.type === 'image')
+      .map(file => [file.id, file] as const)
+  ), [mediaFiles]);
   const [selectedOperationId, setSelectedOperationId] = useState<string | null>(null);
   const [baking, setBaking] = useState(false);
 
   const editStack = useMemo(() => clip?.audioState?.editStack ?? [], [clip?.audioState?.editStack]);
+  const spectralLayers = clip?.audioState?.spectralLayers ?? [];
   const bakeHistory = clip?.audioState?.bakeHistory ?? [];
   const activeOperationCount = editStack.filter(operation => operation.enabled !== false).length;
+  const activeSpectralLayerCount = spectralLayers.filter(layer => layer.enabled !== false).length;
   const selectedOperation = editStack.find(operation => operation.id === selectedOperationId) ?? editStack[0] ?? null;
 
   useEffect(() => {
@@ -94,12 +165,39 @@ export function AudioEditStackTab({ clipId }: AudioEditStackTabProps) {
     }
   };
 
+  const addSpectralLayerKeyframe = (layer: SpectralImageLayer) => {
+    const keyframe = createSpectralLayerKeyframe(layer, clip, playheadPosition);
+    updateClipSpectralImageLayer(clip.id, layer.id, {
+      keyframes: [
+        ...(layer.keyframes ?? []),
+        keyframe,
+      ].toSorted((a, b) => a.time - b.time),
+    });
+  };
+
+  const updateSpectralLayerKeyframe = (
+    layer: SpectralImageLayer,
+    keyframeId: string,
+    patch: Partial<SpectralImageLayerKeyframe>,
+  ) => {
+    updateClipSpectralImageLayer(clip.id, layer.id, {
+      keyframes: replaceSpectralLayerKeyframe(layer, keyframeId, patch),
+    });
+  };
+
+  const removeSpectralLayerKeyframe = (layer: SpectralImageLayer, keyframeId: string) => {
+    updateClipSpectralImageLayer(clip.id, layer.id, {
+      keyframes: (layer.keyframes ?? []).filter(keyframe => keyframe.id !== keyframeId),
+    });
+  };
+
   return (
     <div className="properties-tab-content audio-edit-stack-tab">
       <div className="audio-edit-stack-header">
         <div className="audio-edit-stack-title">
           <span>{activeOperationCount} active</span>
           <span>{editStack.length} total</span>
+          <span>{activeSpectralLayerCount}/{spectralLayers.length} image layers</span>
         </div>
         <div className="audio-edit-stack-actions">
           <button className="btn btn-sm" onClick={handleBake} disabled={baking || activeOperationCount === 0}>
@@ -178,6 +276,173 @@ export function AudioEditStackTab({ clipId }: AudioEditStackTabProps) {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {spectralLayers.length > 0 && (
+        <div className="audio-spectral-layer-section">
+          <div className="audio-spectral-layer-section-header">
+            <h4>Image-In-Spectrum Layers</h4>
+            <span>{activeSpectralLayerCount} active</span>
+          </div>
+          <div className="audio-spectral-layer-list">
+            {spectralLayers.map((layer) => {
+              const imageFile = imageFilesById.get(layer.imageMediaFileId);
+              return (
+                <div key={layer.id} className={`audio-spectral-layer-card ${layer.enabled === false ? 'bypassed' : ''}`}>
+                  <div className="audio-spectral-layer-preview">
+                    {imageFile?.thumbnailUrl || imageFile?.url ? (
+                      <img src={imageFile.thumbnailUrl || imageFile.url} alt="" />
+                    ) : (
+                      <span>IMG</span>
+                    )}
+                  </div>
+                  <div className="audio-spectral-layer-main">
+                    <div className="audio-spectral-layer-title">
+                      <strong>{imageFile?.name ?? layer.imageMediaFileId}</strong>
+                      <span>{formatSeconds(layer.timeStart)} + {formatSeconds(layer.duration)}</span>
+                    </div>
+                    <div className="audio-spectral-layer-meta">
+                      {formatFrequency(layer.frequencyMin)} - {formatFrequency(layer.frequencyMax)}
+                      {layer.keyframes?.length ? ` | ${layer.keyframes.length} keyframes` : ''}
+                    </div>
+                    <div className="audio-spectral-layer-controls">
+                      <label>
+                        <span>Mode</span>
+                        <select
+                          value={layer.blendMode}
+                          onChange={(event) => updateClipSpectralImageLayer(clip.id, layer.id, {
+                            blendMode: event.currentTarget.value as SpectralImageLayer['blendMode'],
+                          })}
+                        >
+                          {SPECTRAL_LAYER_BLEND_MODES.map(mode => (
+                            <option key={mode} value={mode}>{mode}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Opacity</span>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={layer.opacity}
+                          onChange={(event) => updateClipSpectralImageLayer(clip.id, layer.id, { opacity: Number(event.currentTarget.value) })}
+                        />
+                      </label>
+                      <label>
+                        <span>Gain</span>
+                        <input
+                          type="number"
+                          min="-60"
+                          max="24"
+                          step="0.5"
+                          value={layer.gainDb}
+                          onChange={(event) => updateClipSpectralImageLayer(clip.id, layer.id, { gainDb: Number(event.currentTarget.value) })}
+                        />
+                      </label>
+                    </div>
+                    <div className="audio-spectral-layer-keyframes">
+                      <div className="audio-spectral-layer-keyframe-header">
+                        <span>Layer Keyframes</span>
+                        <button className="btn btn-sm" onClick={() => addSpectralLayerKeyframe(layer)}>
+                          Add at Playhead
+                        </button>
+                      </div>
+                      {layer.keyframes?.length ? (
+                        <div className="audio-spectral-layer-keyframe-list">
+                          {layer.keyframes.map(keyframe => (
+                            <div key={keyframe.id} className="audio-spectral-layer-keyframe-row">
+                              <label>
+                                <span>Time</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max={layer.duration}
+                                  step="0.01"
+                                  value={keyframe.time}
+                                  onChange={(event) => updateSpectralLayerKeyframe(layer, keyframe.id, {
+                                    time: Number(event.currentTarget.value),
+                                  })}
+                                />
+                              </label>
+                              <label>
+                                <span>Opacity</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="1"
+                                  step="0.01"
+                                  value={keyframe.opacity ?? layer.opacity}
+                                  onChange={(event) => updateSpectralLayerKeyframe(layer, keyframe.id, {
+                                    opacity: Number(event.currentTarget.value),
+                                  })}
+                                />
+                              </label>
+                              <label>
+                                <span>Gain</span>
+                                <input
+                                  type="number"
+                                  min="-60"
+                                  max="24"
+                                  step="0.5"
+                                  value={keyframe.gainDb ?? layer.gainDb}
+                                  onChange={(event) => updateSpectralLayerKeyframe(layer, keyframe.id, {
+                                    gainDb: Number(event.currentTarget.value),
+                                  })}
+                                />
+                              </label>
+                              <label>
+                                <span>Min Hz</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="10"
+                                  value={keyframe.frequencyMin ?? layer.frequencyMin}
+                                  onChange={(event) => updateSpectralLayerKeyframe(layer, keyframe.id, {
+                                    frequencyMin: Number(event.currentTarget.value),
+                                  })}
+                                />
+                              </label>
+                              <label>
+                                <span>Max Hz</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="10"
+                                  value={keyframe.frequencyMax ?? layer.frequencyMax}
+                                  onChange={(event) => updateSpectralLayerKeyframe(layer, keyframe.id, {
+                                    frequencyMax: Number(event.currentTarget.value),
+                                  })}
+                                />
+                              </label>
+                              <button className="btn btn-sm btn-danger" onClick={() => removeSpectralLayerKeyframe(layer, keyframe.id)}>
+                                Remove
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="audio-spectral-layer-keyframe-empty">No layer automation</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="audio-spectral-layer-actions">
+                    <button
+                      className="btn btn-sm"
+                      onClick={() => updateClipSpectralImageLayer(clip.id, layer.id, { enabled: layer.enabled === false })}
+                    >
+                      {layer.enabled === false ? 'Enable' : 'Bypass'}
+                    </button>
+                    <button className="btn btn-sm btn-danger" onClick={() => removeClipSpectralImageLayer(clip.id, layer.id)}>
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

@@ -227,6 +227,17 @@ describe('isAudioEffect', () => {
     expect(isAudioEffect('audio-volume')).toBe(true);
   });
 
+  it('professional audio effects are true', () => {
+    expect(isAudioEffect('audio-high-pass')).toBe(true);
+    expect(isAudioEffect('audio-low-pass')).toBe(true);
+    expect(isAudioEffect('audio-compressor')).toBe(true);
+    expect(isAudioEffect('audio-de-esser')).toBe(true);
+    expect(isAudioEffect('audio-limiter')).toBe(true);
+    expect(isAudioEffect('audio-noise-gate')).toBe(true);
+    expect(isAudioEffect('audio-delay')).toBe(true);
+    expect(isAudioEffect('audio-reverb')).toBe(true);
+  });
+
   it('visual effects → false', () => {
     const visualEffects: EffectType[] = [
       'hue-shift',
@@ -252,12 +263,25 @@ describe('isAudioEffect', () => {
       'hue-shift', 'saturation', 'brightness', 'contrast',
       'blur', 'pixelate', 'kaleidoscope', 'mirror',
       'invert', 'rgb-split', 'levels', 'voxel-relief',
-      'audio-eq', 'audio-volume',
+      'audio-eq', 'audio-volume', 'audio-high-pass', 'audio-low-pass',
+      'audio-compressor', 'audio-de-esser', 'audio-limiter', 'audio-noise-gate',
+      'audio-delay', 'audio-reverb',
     ];
     const audioEffects = allEffects.filter(e => isAudioEffect(e));
     const visualEffects = allEffects.filter(e => !isAudioEffect(e));
-    // Audio effects should be exactly the two known ones
-    expect(audioEffects).toEqual(['audio-eq', 'audio-volume']);
+    // Audio effects should be exactly the registered audio effect union
+    expect(audioEffects).toEqual([
+      'audio-eq',
+      'audio-volume',
+      'audio-high-pass',
+      'audio-low-pass',
+      'audio-compressor',
+      'audio-de-esser',
+      'audio-limiter',
+      'audio-noise-gate',
+      'audio-delay',
+      'audio-reverb',
+    ]);
     // Visual effects should be the remaining 12
     expect(visualEffects).toHaveLength(12);
     // Together they cover all

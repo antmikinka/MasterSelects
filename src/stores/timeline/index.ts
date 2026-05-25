@@ -199,6 +199,7 @@ export const useTimelineStore = create<TimelineStore>()(
       audioDisplayMode: 'detailed' as const,
       audioFocusMode: false,
       audioRegionSelection: null,
+      audioSpectralRegionSelection: null,
       audioRegionClipboard: null,
       showTranscriptMarkers: true,
 
@@ -227,6 +228,9 @@ export const useTimelineStore = create<TimelineStore>()(
 
       // Composition-level audio master bus state
       masterAudioState: undefined,
+      runtimeAudioMeters: {
+        trackMeters: {},
+      },
 
       // Clip entrance animation key (increments on composition switch)
       clipEntranceAnimationKey: 0,

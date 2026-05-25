@@ -1,11 +1,22 @@
 import type { ClipCustomNodeDefinition, NodeGraph, NodeGraphEdge, NodeGraphNode, TimelineClip, TimelineTrack } from '../../types';
-import type { MediaFileAudioAnalysisRefs } from '../../types/audio';
+import type { AudioEffectInstance, MasterAudioState, MediaFileAudioAnalysisRefs } from '../../types/audio';
+import { getAudioEffect } from '../../engine/audio/AudioEffectRegistry';
 import { createTextLayoutSnapshot } from '../textLayout';
+import { getCachedTimelineLoudnessEnvelope } from '../audio/timelineLoudnessEnvelopeCache';
+import {
+  getCachedTimelineFrequencySummary,
+  getCachedTimelinePhaseCorrelation,
+} from '../audio/timelineFrequencyPhaseCache';
+import {
+  buildAudioRepairSuggestionsFromRefs,
+  type AudioRepairSuggestion,
+} from '../audio/audioRepairSuggestions';
 import { buildClipNodeGraph } from './clipGraphProjection';
 
 interface AINodeAuthoringProjectContext {
   clips?: TimelineClip[];
   tracks?: TimelineTrack[];
+  masterAudioState?: MasterAudioState;
 }
 
 const MAX_CONTEXT_CLIPS = 24;
@@ -17,6 +28,9 @@ const MAX_TEXT_LAYOUT_LINES = 24;
 const MAX_TEXT_LAYOUT_CHARACTERS = 80;
 const MAX_AUDIO_CONTEXT_REFS = 16;
 const MAX_AUDIO_CONTEXT_REF_ID_CHARS = 120;
+const MAX_AUDIO_CONTEXT_EFFECTS = 16;
+const MAX_AUDIO_CONTEXT_PARAMS = 8;
+const MAX_AUDIO_CONTEXT_REPAIR_SUGGESTIONS = 6;
 const AUDIO_ANALYSIS_SEMANTICS = new Set([
   'waveform',
   'spectrum',
@@ -237,6 +251,157 @@ function formatAudioRefs(refs: MediaFileAudioAnalysisRefs | undefined): string {
   ].filter(Boolean).join(' ') || 'none';
 }
 
+function formatAudioEffectParams(params: AudioEffectInstance['params']): string {
+  const entries = Object.entries(params ?? {}).slice(0, MAX_AUDIO_CONTEXT_PARAMS);
+  if (entries.length === 0) {
+    return 'none';
+  }
+
+  return entries.map(([key, value]) => `${key}=${String(value)}`).join(',');
+}
+
+function formatAudioEffectStack(effects: readonly AudioEffectInstance[] | undefined): string {
+  if (!effects || effects.length === 0) {
+    return 'none';
+  }
+
+  const visible = effects.slice(0, MAX_AUDIO_CONTEXT_EFFECTS).map((effect, index) => {
+    const descriptor = getAudioEffect(effect.descriptorId);
+    return [
+      `${index + 1}:${effect.id}`,
+      `name="${descriptor?.name ?? effect.descriptorId}"`,
+      `descriptor=${effect.descriptorId}`,
+      `enabled=${effect.enabled !== false}`,
+      `automation=${effect.automationMode ?? 'none'}`,
+      `params=[${formatAudioEffectParams(effect.params)}]`,
+    ].join(' ');
+  });
+  const omitted = effects.length - visible.length;
+  return `${visible.join('; ')}${omitted > 0 ? `; ... ${omitted} more` : ''}`;
+}
+
+function roundAudioDb(value: number): string {
+  return Number.isFinite(value) ? String(Number(value.toFixed(2))) : String(value);
+}
+
+function roundAudioValue(value: number, decimals = 4): string {
+  return Number.isFinite(value) ? String(Number(value.toFixed(decimals))) : String(value);
+}
+
+function formatCachedLoudnessSummary(refId: string | undefined): string {
+  if (!refId) {
+    return 'none';
+  }
+
+  const envelope = getCachedTimelineLoudnessEnvelope(refId);
+  if (!envelope) {
+    return `ref=${formatAudioRefId(refId)} summary=not-loaded`;
+  }
+
+  const summary = envelope.summary;
+  const summaryParts = [
+    summary?.integratedLufs !== undefined ? `integratedLufs=${roundAudioDb(summary.integratedLufs)}` : '',
+    summary?.truePeakDbtp !== undefined ? `truePeakDbtp=${roundAudioDb(summary.truePeakDbtp)}` : '',
+    summary?.samplePeakDbfs !== undefined ? `samplePeakDbfs=${roundAudioDb(summary.samplePeakDbfs)}` : '',
+    summary?.rmsDbfs !== undefined ? `rmsDbfs=${roundAudioDb(summary.rmsDbfs)}` : '',
+  ].filter(Boolean).join(' ') || 'summary=empty';
+  const curveParts = envelope.curves
+    .slice(0, 8)
+    .map((curve) => `${curve.metric}:${curve.pointCount}`)
+    .join(',');
+
+  return `ref=${formatAudioRefId(refId)} ${summaryParts} curves=${curveParts || 'none'}`;
+}
+
+function formatCachedFrequencySummary(refId: string | undefined): string {
+  if (!refId) {
+    return 'none';
+  }
+
+  const frequency = getCachedTimelineFrequencySummary(refId);
+  if (!frequency) {
+    return `ref=${formatAudioRefId(refId)} summary=not-loaded`;
+  }
+
+  const dominantBand = frequency.summary.dominantBandId ?? 'none';
+  const bands = frequency.bands
+    .slice(0, 8)
+    .map((band) => (
+      `${band.bandId}:share=${roundAudioValue(band.energyShare)} rms=${roundAudioDb(band.rmsDb)} peak=${roundAudioDb(band.peakDb)} centroid=${roundAudioValue(band.centroidHz, 1)}`
+    ))
+    .join(';');
+
+  return [
+    `ref=${formatAudioRefId(refId)}`,
+    `centroidHz=${roundAudioValue(frequency.summary.spectralCentroidHz, 1)}`,
+    `dominantBand=${dominantBand}`,
+    `low=${roundAudioValue(frequency.summary.lowEnergyShare)}`,
+    `mid=${roundAudioValue(frequency.summary.midEnergyShare)}`,
+    `high=${roundAudioValue(frequency.summary.highEnergyShare)}`,
+    `bands=${bands || 'none'}`,
+  ].join(' ');
+}
+
+function formatCachedPhaseCorrelationSummary(refId: string | undefined): string {
+  if (!refId) {
+    return 'none';
+  }
+
+  const phase = getCachedTimelinePhaseCorrelation(refId);
+  if (!phase) {
+    return `ref=${formatAudioRefId(refId)} summary=not-loaded`;
+  }
+
+  return [
+    `ref=${formatAudioRefId(refId)}`,
+    `avg=${roundAudioValue(phase.summary.averageCorrelation)}`,
+    `min=${roundAudioValue(phase.summary.minimumCorrelation)}`,
+    `max=${roundAudioValue(phase.summary.maximumCorrelation)}`,
+    `negativePct=${roundAudioValue(phase.summary.negativeCorrelationPercent)}`,
+    `midSideDb=${roundAudioDb(phase.summary.averageMidSideRatioDb)}`,
+    `width=${roundAudioValue(phase.summary.stereoWidth)}`,
+    `monoCompatible=${phase.summary.monoCompatible}`,
+    `points=${phase.points.length}`,
+  ].join(' ');
+}
+
+function formatRepairSuggestion(suggestion: AudioRepairSuggestion): string {
+  const params = Object.entries(suggestion.operation.params)
+    .slice(0, MAX_AUDIO_CONTEXT_PARAMS)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(',');
+  const evidence = Object.entries(suggestion.evidence)
+    .slice(0, MAX_AUDIO_CONTEXT_PARAMS)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(',');
+
+  return [
+    suggestion.kind,
+    `severity=${suggestion.severity}`,
+    `confidence=${suggestion.confidence}`,
+    `label=${formatQuoted(suggestion.label, 96)}`,
+    `reason=${formatQuoted(suggestion.reason, 180)}`,
+    `operation=${suggestion.operation.editType}`,
+    `params=[${params || 'none'}]`,
+    `evidence=[${evidence || 'none'}]`,
+  ].join(' ');
+}
+
+function formatAudioRepairSuggestions(refs: MediaFileAudioAnalysisRefs | undefined): string {
+  if (!refs) {
+    return 'none';
+  }
+
+  const suggestions = buildAudioRepairSuggestionsFromRefs(refs, {
+    maxSuggestions: MAX_AUDIO_CONTEXT_REPAIR_SUGGESTIONS,
+  });
+  if (suggestions.length === 0) {
+    return 'none';
+  }
+
+  return suggestions.map(formatRepairSuggestion).join('; ');
+}
+
 function firstNonEmpty<T>(preferred: T[] | undefined, fallback: T[] | undefined): T[] | undefined {
   return preferred && preferred.length > 0 ? preferred : fallback;
 }
@@ -270,9 +435,15 @@ function isAudioPort(port: NodeGraphNode['outputs'][number]): boolean {
     AUDIO_ANALYSIS_SEMANTICS.has(semanticKind);
 }
 
-function buildAudioSourceContext(clip: TimelineClip, graph: NodeGraph): string | null {
+function buildAudioSourceContext(
+  clip: TimelineClip,
+  graph: NodeGraph,
+  track?: TimelineTrack,
+  masterAudioState?: MasterAudioState,
+): string | null {
   const sourceNode = graph.nodes.find((node) => node.id === 'source');
   const audioPorts = sourceNode?.outputs.filter(isAudioPort) ?? [];
+  const effectiveRefs = getEffectiveAudioRefs(clip);
   const hasAudio = clip.source?.type === 'audio'
     || clip.source?.type === 'video'
     || (clip.waveform?.length ?? 0) > 0
@@ -291,7 +462,17 @@ function buildAudioSourceContext(clip: TimelineClip, graph: NodeGraph): string |
     `- waveformSamples=${clip.waveform?.length ?? 0}`,
     `- sourceAnalysisRefs=${formatAudioRefs(clip.audioState?.sourceAnalysisRefs)}`,
     `- processedAnalysisRefs=${formatAudioRefs(clip.audioState?.processedAnalysisRefs)}`,
-    `- effectiveAnalysisRefs=${formatAudioRefs(getEffectiveAudioRefs(clip))}`,
+    `- effectiveAnalysisRefs=${formatAudioRefs(effectiveRefs)}`,
+    `- effectiveLoudnessSummary=${formatCachedLoudnessSummary(effectiveRefs?.loudnessEnvelopeId)}`,
+    `- effectiveFrequencySummary=${formatCachedFrequencySummary(effectiveRefs?.frequencySummaryId)}`,
+    `- effectivePhaseCorrelationSummary=${formatCachedPhaseCorrelationSummary(effectiveRefs?.phaseCorrelationId)}`,
+    `- effectiveRepairSuggestions=${formatAudioRepairSuggestions(effectiveRefs)}`,
+    `- clipEditStack=${clip.audioState?.editStack?.length ?? 0}`,
+    `- clipEffectStack=${formatAudioEffectStack(clip.audioState?.effectStack)}`,
+    `- trackAudio=${track ? `id=${track.id} name="${track.name}" muted=${track.audioState?.muted ?? track.muted === true} solo=${track.audioState?.solo ?? track.solo === true} volumeDb=${track.audioState?.volumeDb ?? 0} pan=${track.audioState?.pan ?? 0} meter=${track.audioState?.meterMode ?? 'peak'} sends=${track.audioState?.sends?.length ?? 0}` : 'unknown'}`,
+    `- trackEffectStack=${formatAudioEffectStack(track?.audioState?.effectStack)}`,
+    `- masterAudio=${masterAudioState ? `volumeDb=${masterAudioState.volumeDb} limiter=${masterAudioState.limiterEnabled} truePeakCeilingDb=${masterAudioState.truePeakCeilingDb} targetLufs=${masterAudioState.targetLufs ?? 'none'}` : 'default'}`,
+    `- masterEffectStack=${formatAudioEffectStack(masterAudioState?.effectStack)}`,
     '- graphPorts:',
     ...(audioPorts.length > 0
       ? audioPorts.map((port) => (
@@ -347,6 +528,7 @@ export function buildAINodeAuthoringContext(
   context?: AINodeAuthoringProjectContext,
 ): string {
   const graph = buildClipNodeGraph(clip);
+  const track = context?.tracks?.find(candidate => candidate.id === clip.trackId);
 
   return [
     'MASTERSELECTS AI NODE AUTHORING CONTEXT',
@@ -366,7 +548,7 @@ export function buildAINodeAuthoringContext(
     '',
     buildTextSourceContext(clip),
     '',
-    buildAudioSourceContext(clip, graph),
+    buildAudioSourceContext(clip, graph, track, context?.masterAudioState),
     '',
     buildTimelineContext(clip, context),
     '',

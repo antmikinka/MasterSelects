@@ -135,6 +135,7 @@ export type ClipNodeGraphBacking =
   | { kind: 'clip-mask-stack' }
   | { kind: 'clip-color-correction' }
   | { kind: 'clip-effect'; effectId: string }
+  | { kind: 'clip-audio-effect-instance'; effectId: string }
   | { kind: 'clip-custom-node'; nodeId: string }
   | { kind: 'clip-output' }
   | { kind: 'clip-audio-output' };

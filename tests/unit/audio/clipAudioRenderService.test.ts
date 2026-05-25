@@ -31,6 +31,21 @@ function installAudioContextMock(): void {
   vi.stubGlobal('AudioContext', AudioContextMock);
 }
 
+function sineWave(length: number, sampleRate: number, frequencyHz: number): number[] {
+  return Array.from({ length }, (_, index) => Math.sin((2 * Math.PI * frequencyHz * index) / sampleRate));
+}
+
+function rms(values: ArrayLike<number>, start = 0, end = values.length): number {
+  let sum = 0;
+  let count = 0;
+  for (let index = start; index < end; index += 1) {
+    const value = values[index] ?? 0;
+    sum += value * value;
+    count += 1;
+  }
+  return count > 0 ? Math.sqrt(sum / count) : 0;
+}
+
 describe('ClipAudioRenderService', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -312,5 +327,236 @@ describe('ClipAudioRenderService', () => {
     const result = await service.render({ clip, sourceBuffer });
 
     expect(Array.from(result.buffer.getChannelData(0))).toEqual([1, 2, 3, 1, 2, 6]);
+  });
+
+  it('renders repair edit operations as non-destructive region processors', async () => {
+    installAudioContextMock();
+    const sourceBuffer = createMockAudioBuffer([[0, 0, 1, 0, 0, 0.2, 0.2, 0.2, 0.2, 0.2]], 10);
+    const service = new ClipAudioRenderService({
+      extractor: { trimBuffer: vi.fn((buffer: AudioBuffer) => buffer) },
+      timeStretchProcessor: {
+        processConstantSpeed: vi.fn(),
+        processWithKeyframes: vi.fn(),
+      },
+      effectRenderer: { renderEffectInstances: vi.fn(async (buffer: AudioBuffer) => buffer) },
+    });
+    const clip = createMockClip({
+      id: 'clip-repair-stack',
+      duration: 1,
+      inPoint: 0,
+      outPoint: 1,
+      audioState: {
+        editStack: [
+          {
+            id: 'click-repair',
+            type: 'repair',
+            enabled: true,
+            params: { repairType: 'de-click', threshold: 0.35, ratio: 2 },
+            timeRange: { start: 0, end: 0.5 },
+            createdAt: 1,
+          },
+          {
+            id: 'loudness-repair',
+            type: 'repair',
+            enabled: true,
+            params: { repairType: 'loudness-match', targetDb: -6, featherTime: 0 },
+            timeRange: { start: 0.5, end: 1 },
+            createdAt: 2,
+          },
+        ],
+      },
+    });
+
+    const result = await service.render({ clip, sourceBuffer });
+    const rendered = result.buffer.getChannelData(0);
+
+    expect(rendered[2]).toBe(0);
+    expect(rms(rendered, 5, 10)).toBeCloseTo(0.501, 3);
+  });
+
+  it('attenuates hum repair notch frequencies inside the selected range', async () => {
+    installAudioContextMock();
+    const sampleRate = 1000;
+    const sourceBuffer = createMockAudioBuffer([sineWave(sampleRate, sampleRate, 50).map(value => value * 0.5)], sampleRate);
+    const service = new ClipAudioRenderService({
+      extractor: { trimBuffer: vi.fn((buffer: AudioBuffer) => buffer) },
+      timeStretchProcessor: {
+        processConstantSpeed: vi.fn(),
+        processWithKeyframes: vi.fn(),
+      },
+      effectRenderer: { renderEffectInstances: vi.fn(async (buffer: AudioBuffer) => buffer) },
+    });
+    const clip = createMockClip({
+      id: 'clip-hum-repair',
+      duration: 1,
+      inPoint: 0,
+      outPoint: 1,
+      audioState: {
+        editStack: [
+          {
+            id: 'hum-repair',
+            type: 'repair',
+            enabled: true,
+            params: { repairType: 'hum-notch', baseFrequencyHz: 50, harmonicCount: 1, q: 20, featherTime: 0 },
+            timeRange: { start: 0, end: 1 },
+            createdAt: 1,
+          },
+        ],
+      },
+    });
+
+    const result = await service.render({ clip, sourceBuffer });
+
+    expect(rms(result.buffer.getChannelData(0))).toBeLessThan(rms(sourceBuffer.getChannelData(0)) * 0.65);
+  });
+
+  it('renders spectral mask edit operations as deterministic band attenuation', async () => {
+    installAudioContextMock();
+    const sampleRate = 1024;
+    const samples = sineWave(sampleRate * 2, sampleRate, 128);
+    const sourceBuffer = createMockAudioBuffer([samples], sampleRate);
+    const service = new ClipAudioRenderService({
+      extractor: { trimBuffer: vi.fn((buffer: AudioBuffer) => buffer) },
+      timeStretchProcessor: {
+        processConstantSpeed: vi.fn(),
+        processWithKeyframes: vi.fn(),
+      },
+      effectRenderer: { renderEffectInstances: vi.fn(async (buffer: AudioBuffer) => buffer) },
+    });
+    const clip = createMockClip({
+      id: 'clip-spectral-mask',
+      duration: 2,
+      inPoint: 0,
+      outPoint: 2,
+      audioState: {
+        editStack: [
+          {
+            id: 'spectral-mask',
+            type: 'spectral-mask',
+            enabled: true,
+            params: {
+              frequencyMinHz: 96,
+              frequencyMaxHz: 172,
+              gainDb: -48,
+              featherTime: 0,
+            },
+            timeRange: { start: 0, end: 2 },
+            createdAt: 1,
+          },
+        ],
+      },
+    });
+
+    const result = await service.render({ clip, sourceBuffer });
+    const rendered = result.buffer.getChannelData(0);
+
+    expect(rms(rendered, 512, 1536)).toBeLessThan(rms(samples, 512, 1536) * 0.55);
+  });
+
+  it('renders spectral image layers as deterministic image-driven band operations', async () => {
+    installAudioContextMock();
+    const sampleRate = 1024;
+    const samples = sineWave(sampleRate * 2, sampleRate, 128);
+    const sourceBuffer = createMockAudioBuffer([samples], sampleRate);
+    const spectralImageLayerMaskProvider = vi.fn(async () => ({
+      width: 2,
+      height: 2,
+      luminance: Float32Array.from([1, 1, 1, 1]),
+      alpha: Float32Array.from([1, 1, 1, 1]),
+    }));
+    const service = new ClipAudioRenderService({
+      extractor: { trimBuffer: vi.fn((buffer: AudioBuffer) => buffer) },
+      timeStretchProcessor: {
+        processConstantSpeed: vi.fn(),
+        processWithKeyframes: vi.fn(),
+      },
+      effectRenderer: { renderEffectInstances: vi.fn(async (buffer: AudioBuffer) => buffer) },
+      spectralImageLayerMaskProvider,
+    });
+    const clip = createMockClip({
+      id: 'clip-spectral-image',
+      duration: 2,
+      inPoint: 0,
+      outPoint: 2,
+      audioState: {
+        spectralLayers: [
+          {
+            id: 'image-layer',
+            imageMediaFileId: 'image-1',
+            timeStart: 0,
+            duration: 2,
+            frequencyMin: 96,
+            frequencyMax: 172,
+            opacity: 1,
+            blendMode: 'attenuate',
+            gainDb: -48,
+            featherTime: 0,
+            featherFrequency: 0,
+          },
+        ],
+      },
+    });
+
+    const result = await service.render({ clip, sourceBuffer });
+    const rendered = result.buffer.getChannelData(0);
+
+    expect(spectralImageLayerMaskProvider).toHaveBeenCalledOnce();
+    expect(rms(rendered, 512, 1536)).toBeLessThan(rms(samples, 512, 1536) * 0.6);
+  });
+
+  it('renders spectral image layer keyframes as time-varying band operations', async () => {
+    installAudioContextMock();
+    const sampleRate = 1024;
+    const samples = sineWave(sampleRate * 2, sampleRate, 128);
+    const sourceBuffer = createMockAudioBuffer([samples], sampleRate);
+    const service = new ClipAudioRenderService({
+      extractor: { trimBuffer: vi.fn((buffer: AudioBuffer) => buffer) },
+      timeStretchProcessor: {
+        processConstantSpeed: vi.fn(),
+        processWithKeyframes: vi.fn(),
+      },
+      effectRenderer: { renderEffectInstances: vi.fn(async (buffer: AudioBuffer) => buffer) },
+      spectralImageLayerMaskProvider: vi.fn(async () => ({
+        width: 2,
+        height: 2,
+        luminance: Float32Array.from([1, 1, 1, 1]),
+        alpha: Float32Array.from([1, 1, 1, 1]),
+      })),
+    });
+    const clip = createMockClip({
+      id: 'clip-spectral-image-keyframes',
+      duration: 2,
+      inPoint: 0,
+      outPoint: 2,
+      audioState: {
+        spectralLayers: [
+          {
+            id: 'image-layer',
+            imageMediaFileId: 'image-1',
+            timeStart: 0,
+            duration: 2,
+            frequencyMin: 96,
+            frequencyMax: 172,
+            opacity: 1,
+            blendMode: 'attenuate',
+            gainDb: 0,
+            featherTime: 0,
+            featherFrequency: 0,
+            keyframes: [
+              { id: 'gain-a', time: 0, gainDb: 0 },
+              { id: 'gain-b', time: 0.95, gainDb: 0 },
+              { id: 'gain-c', time: 1.05, gainDb: -48 },
+              { id: 'gain-d', time: 2, gainDb: -48 },
+            ],
+          },
+        ],
+      },
+    });
+
+    const result = await service.render({ clip, sourceBuffer });
+    const rendered = result.buffer.getChannelData(0);
+
+    expect(rms(rendered, 256, 768)).toBeGreaterThan(rms(samples, 256, 768) * 0.9);
+    expect(rms(rendered, 1280, 1792)).toBeLessThan(rms(samples, 1280, 1792) * 0.6);
   });
 });

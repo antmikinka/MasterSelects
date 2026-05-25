@@ -76,6 +76,7 @@ function getInitialState(): Partial<TimelineStore> {
     audioFocusMode: false,
     audioRegionSelection: null,
     audioRegionClipboard: null,
+    runtimeAudioMeters: { trackMeters: {} },
     showTranscriptMarkers: false,
     // Clip animation / slot grid
     clipAnimationPhase: 'idle' as const,

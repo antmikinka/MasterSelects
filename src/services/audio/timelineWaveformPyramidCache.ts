@@ -26,6 +26,7 @@ export interface GenerateTimelineWaveformAnalysisOptions {
   mediaFileId?: string;
   clipAudioStateHash?: string;
   samplesPerSecond?: number;
+  signal?: AbortSignal;
   onProgress?: (progress: number, partialWaveform: number[]) => void;
   onPyramidProgress?: (progress: WaveformPyramidGenerationProgress) => void;
 }
@@ -90,6 +91,12 @@ function generateLegacyWaveformFromBuffer(
 
   const max = Math.max(0, ...samples);
   return max > 0 ? samples.map((sample) => clampAbs01(sample / max)) : samples;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw signal.reason ?? new DOMException('Audio waveform generation cancelled', 'AbortError');
+  }
 }
 
 async function decodeStatPayload(
@@ -174,10 +181,13 @@ export async function generateTimelineWaveformAnalysisForFile(
   options: GenerateTimelineWaveformAnalysisOptions = {},
 ): Promise<TimelineWaveformAnalysisResult> {
   const audioContext = new AudioContext();
+  throwIfAborted(options.signal);
   const arrayBuffer = await file.arrayBuffer();
+  throwIfAborted(options.signal);
 
   try {
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+    throwIfAborted(options.signal);
     const waveform = generateLegacyWaveformFromBuffer(
       audioBuffer,
       options.samplesPerSecond ?? DEFAULT_LEGACY_SAMPLES_PER_SECOND,
@@ -186,6 +196,7 @@ export async function generateTimelineWaveformAnalysisForFile(
 
     try {
       const hash = await sha256ArrayBuffer(arrayBuffer);
+      throwIfAborted(options.signal);
       const mediaFileId = options.mediaFileId ?? `file:${file.name}:${file.size}:${file.lastModified}`;
       const store = createCurrentAudioArtifactStore();
       const generator = new WaveformPyramidGenerator({ artifactStore: store });
@@ -202,6 +213,7 @@ export async function generateTimelineWaveformAnalysisForFile(
           sourceLastModified: file.lastModified,
         },
       }, {
+        signal: options.signal,
         onProgress: options.onPyramidProgress,
       });
       const pyramid = await readTimelineWaveformPyramid(generated.manifest, store);

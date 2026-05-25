@@ -10,7 +10,12 @@ import type {
 import type { ColorCorrectionState, RuntimeColorGrade } from './colorCorrection';
 import type { MotionLayerDefinition, MotionProperty } from './motionDesign';
 import type { ClipNodeGraph } from './nodeGraph';
-import type { ClipAudioState, MasterAudioState, TrackAudioState } from './audio';
+import type {
+  ClipAudioAnalysisJobState,
+  ClipAudioState,
+  MasterAudioState,
+  TrackAudioState,
+} from './audio';
 
 export * from './audio';
 export * from './colorCorrection';
@@ -409,11 +414,28 @@ export type EffectType =
   | 'voxel-relief'
   // Audio effects
   | 'audio-eq'
-  | 'audio-volume';
+  | 'audio-volume'
+  | 'audio-high-pass'
+  | 'audio-low-pass'
+  | 'audio-compressor'
+  | 'audio-de-esser'
+  | 'audio-limiter'
+  | 'audio-noise-gate'
+  | 'audio-delay'
+  | 'audio-reverb';
 
 // Helper to check if an effect type is an audio effect
 export function isAudioEffect(type: EffectType): boolean {
-  return type === 'audio-eq' || type === 'audio-volume';
+  return type === 'audio-eq' ||
+    type === 'audio-volume' ||
+    type === 'audio-high-pass' ||
+    type === 'audio-low-pass' ||
+    type === 'audio-compressor' ||
+    type === 'audio-de-esser' ||
+    type === 'audio-limiter' ||
+    type === 'audio-noise-gate' ||
+    type === 'audio-delay' ||
+    type === 'audio-reverb';
 }
 
 export interface Project {
@@ -685,6 +707,7 @@ export interface TimelineClip {
   linkedGroupId?: string; // ID of multicam group (clips synced together)
   parentClipId?: string;  // ID of parent clip for transform inheritance (like AE parenting)
   audioState?: ClipAudioState; // Advanced audio workstation state (optional, legacy-safe)
+  audioAnalysisJob?: ClipAudioAnalysisJobState; // Transient current audio-analysis job state
   waveform?: number[];    // Array of normalized amplitude values (0-1) for audio waveform
   waveformGenerating?: boolean;  // True while waveform is being generated
   waveformProgress?: number;     // 0-100 progress of waveform generation

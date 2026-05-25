@@ -223,6 +223,28 @@ function drawSpectralWaveform(ctx: CanvasRenderingContext2D, columns: WaveformCo
   drawDetailedWaveform(ctx, columns, width, height);
 }
 
+function applyDisplayGain(
+  columns: readonly WaveformColumn[],
+  gain: number | undefined,
+): WaveformColumn[] {
+  if (!Number.isFinite(gain) || Math.abs((gain ?? 1) - 1) < 0.001) {
+    return columns.map(column => ({ ...column }));
+  }
+
+  const clampedGain = Math.max(0, Math.min(8, gain ?? 1));
+  return columns.map(column => {
+    const min = Math.max(-1, Math.min(1, column.min * clampedGain));
+    const max = Math.max(-1, Math.min(1, column.max * clampedGain));
+    const rms = Math.max(0, Math.min(1, column.rms * clampedGain));
+    const peak = Math.max(
+      Math.max(0, Math.min(1, column.peak * clampedGain)),
+      Math.abs(min),
+      Math.abs(max),
+    );
+    return { min, max, rms, peak };
+  });
+}
+
 function getLegacySmoothingRadius(
   pixelsPerSecond: number,
   sourceSamplesPerSecond: number | undefined,
@@ -243,6 +265,7 @@ export const ClipWaveform = memo(function ClipWaveform({
   pixelsPerSecond,
   pyramid,
   waveformVariant = 'legacy',
+  displayGain = 1,
   renderStartPx = 0,
   renderWidth,
 }: {
@@ -256,6 +279,7 @@ export const ClipWaveform = memo(function ClipWaveform({
   pixelsPerSecond?: number;
   pyramid?: TimelineWaveformPyramid | null;
   waveformVariant?: 'legacy' | 'source' | 'processed';
+  displayGain?: number;
   renderStartPx?: number;
   renderWidth?: number;
 }) {
@@ -313,11 +337,11 @@ export const ClipWaveform = memo(function ClipWaveform({
           getLegacySmoothingRadius(lod.pixelsPerSecond, lod.sourceSamplesPerSecond),
           0.78,
         );
-    const columns = normalizeWaveformColumnsForDisplay(smoothedColumns, {
+    const columns = applyDisplayGain(normalizeWaveformColumnsForDisplay(smoothedColumns, {
       targetPeak: displayMode === 'compact' ? 0.52 : 0.66,
       minReferencePeak: displayMode === 'spectral' ? 0.025 : 0.032,
       maxGain: displayMode === 'spectral' ? 20 : 16,
-    });
+    }), displayGain);
     if (displayMode === 'compact') {
       drawCompactWaveform(ctx, columns, canvasWidth, height);
     } else if (displayMode === 'spectral') {
@@ -325,7 +349,7 @@ export const ClipWaveform = memo(function ClipWaveform({
     } else {
       drawDetailedWaveform(ctx, columns, canvasWidth, height);
     }
-  }, [waveform, width, height, inPoint, outPoint, naturalDuration, displayMode, pixelsPerSecond, pyramid, renderStartPx, renderWidth]);
+  }, [waveform, width, height, inPoint, outPoint, naturalDuration, displayMode, pixelsPerSecond, pyramid, waveformVariant, displayGain, renderStartPx, renderWidth]);
 
   if (!waveform || waveform.length === 0 || width <= 0 || renderWidth === 0) return null;
 

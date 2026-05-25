@@ -252,6 +252,28 @@ describe('project media persistence', () => {
   }, 10_000);
 
   it('persists advanced audio refs and state without embedding payload bytes', async () => {
+    const projectData: {
+      media: unknown[];
+      compositions: unknown[];
+      folders: unknown[];
+      settings: { width: number; height: number; frameRate: number };
+      activeCompositionId: string | null;
+      openCompositionIds: string[];
+      expandedFolderIds: string[];
+      slotAssignments: Record<string, number>;
+      uiState: Record<string, unknown>;
+      audio?: unknown;
+    } = {
+      media: [],
+      compositions: [],
+      folders: [],
+      settings: { width: 1920, height: 1080, frameRate: 30 },
+      activeCompositionId: null,
+      openCompositionIds: [],
+      expandedFolderIds: [],
+      slotAssignments: {},
+      uiState: {},
+    };
     const audioAnalysisRefs = {
       waveformPyramidId: 'artifact:waveform-manifest',
       loudnessEnvelopeId: 'artifact:loudness-manifest',
@@ -285,6 +307,7 @@ describe('project media persistence', () => {
       targetLufs: -14,
     };
 
+    mocks.getProjectData.mockReturnValue(projectData);
     mocks.mediaState.activeCompositionId = 'comp-1';
     mocks.mediaState.files = [{
       id: 'media-audio-1',
@@ -337,6 +360,19 @@ describe('project media persistence', () => {
         sourceType: 'audio',
         naturalDuration: 12,
         waveform: [0.1, 0.2],
+        waveformGenerating: true,
+        waveformProgress: 37,
+        audioAnalysisJob: {
+          jobId: 'job-transient',
+          kind: 'frequency-phase-analysis',
+          label: 'Frequency/Phase',
+          artifactKinds: ['frequency-summary', 'phase-correlation'],
+          processed: false,
+          phase: 'analyzing',
+          progress: 37,
+          startedAt: '2026-05-25T10:00:00.000Z',
+          updatedAt: '2026-05-25T10:00:01.000Z',
+        },
         audioState: clipAudioState,
         transform: {
           opacity: 1,
@@ -378,8 +414,22 @@ describe('project media persistence', () => {
         ],
       }),
     ]);
-    expect(JSON.stringify(mocks.updateCompositions.mock.calls[0][0])).not.toContain('Float32Array');
-    expect(JSON.stringify(mocks.updateCompositions.mock.calls[0][0])).not.toContain('blob:');
+    expect(projectData.audio).toEqual(expect.objectContaining({
+      schemaVersion: 1,
+      analysisArtifactIds: expect.arrayContaining([
+        'artifact:waveform-manifest',
+        'artifact:loudness-manifest',
+        'artifact:spectrogram-tiles',
+        'artifact:processed-waveform-manifest',
+      ]),
+      masterAudioState,
+    }));
+    const serializedProjectCompositions = JSON.stringify(mocks.updateCompositions.mock.calls[0][0]);
+    expect(serializedProjectCompositions).not.toContain('Float32Array');
+    expect(serializedProjectCompositions).not.toContain('blob:');
+    expect(serializedProjectCompositions).not.toContain('audioAnalysisJob');
+    expect(serializedProjectCompositions).not.toContain('waveformGenerating');
+    expect(serializedProjectCompositions).not.toContain('waveformProgress');
   });
 
   it('persists marker MIDI bindings when syncing stores to the project file', async () => {
@@ -1595,6 +1645,19 @@ describe('project media persistence', () => {
           volume: 1,
           audioEnabled: true,
           audioState: clipAudioState,
+          audioAnalysisJob: {
+            jobId: 'stale-job',
+            kind: 'loudness-envelope',
+            label: 'Loudness',
+            artifactKinds: ['loudness-envelope'],
+            processed: false,
+            phase: 'analyzing',
+            progress: 50,
+            startedAt: '2026-05-25T10:00:00.000Z',
+            updatedAt: '2026-05-25T10:00:01.000Z',
+          },
+          waveformGenerating: true,
+          waveformProgress: 50,
           reversed: false,
           disabled: false,
         }],
@@ -1623,9 +1686,17 @@ describe('project media persistence', () => {
         expect.objectContaining({ id: 'track-a1', audioState: trackAudioState }),
       ],
       clips: [
-        expect.objectContaining({ id: 'clip-a1', audioState: clipAudioState }),
+        expect.not.objectContaining({
+          id: 'clip-a1',
+          audioAnalysisJob: expect.anything(),
+        }),
       ],
     }));
+    const loadedClips = mocks.timelineState.loadState.mock.calls[0][0].clips;
+    expect(loadedClips[0]).toEqual(expect.objectContaining({ id: 'clip-a1', audioState: clipAudioState }));
+    expect(loadedClips[0]).not.toHaveProperty('audioAnalysisJob');
+    expect(loadedClips[0]).not.toHaveProperty('waveformGenerating');
+    expect(loadedClips[0]).not.toHaveProperty('waveformProgress');
   });
 
   it('restores model sequence frame urls from project RAW files when loading a project', async () => {

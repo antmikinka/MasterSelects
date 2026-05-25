@@ -10,9 +10,31 @@ import {
 } from '../../src/engine/audio/AudioEffectRegistry';
 
 describe('AudioEffectRegistry', () => {
-  it('registers only the existing audio effect descriptors', () => {
-    expect(Array.from(AUDIO_EFFECT_REGISTRY.keys())).toEqual(['audio-volume', 'audio-eq']);
-    expect(getAllAudioEffects().map(effect => effect.id)).toEqual(['audio-volume', 'audio-eq']);
+  it('registers professional audio effect descriptors in stable UI/render order', () => {
+    expect(Array.from(AUDIO_EFFECT_REGISTRY.keys())).toEqual([
+      'audio-volume',
+      'audio-eq',
+      'audio-high-pass',
+      'audio-low-pass',
+      'audio-compressor',
+      'audio-de-esser',
+      'audio-limiter',
+      'audio-noise-gate',
+      'audio-delay',
+      'audio-reverb',
+    ]);
+    expect(getAllAudioEffects().map(effect => effect.id)).toEqual([
+      'audio-volume',
+      'audio-eq',
+      'audio-high-pass',
+      'audio-low-pass',
+      'audio-compressor',
+      'audio-de-esser',
+      'audio-limiter',
+      'audio-noise-gate',
+      'audio-delay',
+      'audio-reverb',
+    ]);
   });
 
   it('describes audio-volume defaults and params', () => {
@@ -56,6 +78,88 @@ describe('AudioEffectRegistry', () => {
       band4k: 0,
       band8k: 0,
       band16k: 0,
+    });
+  });
+
+  it('describes filter and dynamics defaults', () => {
+    expect(getAudioEffect('audio-high-pass')).toMatchObject({
+      id: 'audio-high-pass',
+      name: 'High Pass Filter',
+      category: 'filter',
+      paramNames: ['frequencyHz', 'q'],
+    });
+    expect(getAudioEffectDefaultParams('audio-high-pass')).toEqual({ frequencyHz: 20, q: 0.707 });
+
+    expect(getAudioEffect('audio-low-pass')).toMatchObject({
+      id: 'audio-low-pass',
+      name: 'Low Pass Filter',
+      category: 'filter',
+      paramNames: ['frequencyHz', 'q'],
+    });
+    expect(getAudioEffectDefaultParams('audio-low-pass')).toEqual({ frequencyHz: 22000, q: 0.707 });
+
+    expect(getAudioEffect('audio-compressor')).toMatchObject({
+      id: 'audio-compressor',
+      name: 'Compressor',
+      category: 'dynamics',
+    });
+    expect(getAudioEffectDefaultParams('audio-compressor')).toEqual({
+      thresholdDb: 0,
+      ratio: 1,
+      kneeDb: 0,
+      attackMs: 10,
+      releaseMs: 120,
+      makeupGainDb: 0,
+    });
+    expect(getAudioEffect('audio-de-esser')).toMatchObject({
+      id: 'audio-de-esser',
+      name: 'De-esser',
+      category: 'dynamics',
+      paramNames: ['frequencyHz', 'thresholdDb', 'ratio', 'kneeDb', 'attackMs', 'releaseMs', 'makeupGainDb'],
+    });
+    expect(getAudioEffectDefaultParams('audio-de-esser')).toEqual({
+      frequencyHz: 6500,
+      thresholdDb: 0,
+      ratio: 1,
+      kneeDb: 6,
+      attackMs: 1,
+      releaseMs: 80,
+      makeupGainDb: 0,
+    });
+
+    expect(getAudioEffectDefaultParams('audio-limiter')).toEqual({
+      ceilingDb: 0,
+      inputGainDb: 0,
+    });
+    expect(getAudioEffectDefaultParams('audio-noise-gate')).toEqual({
+      thresholdDb: -120,
+      floorDb: -80,
+      attackMs: 2,
+      releaseMs: 80,
+    });
+    expect(getAudioEffect('audio-delay')).toMatchObject({
+      id: 'audio-delay',
+      name: 'Delay',
+      category: 'time',
+      paramNames: ['delayMs', 'feedback', 'mix', 'toneHz'],
+    });
+    expect(getAudioEffectDefaultParams('audio-delay')).toEqual({
+      delayMs: 250,
+      feedback: 0,
+      mix: 0,
+      toneHz: 12000,
+    });
+    expect(getAudioEffect('audio-reverb')).toMatchObject({
+      id: 'audio-reverb',
+      name: 'Reverb',
+      category: 'time',
+      paramNames: ['roomSize', 'decaySeconds', 'damping', 'mix'],
+    });
+    expect(getAudioEffectDefaultParams('audio-reverb')).toEqual({
+      roomSize: 0.35,
+      decaySeconds: 1.2,
+      damping: 0.35,
+      mix: 0,
     });
   });
 

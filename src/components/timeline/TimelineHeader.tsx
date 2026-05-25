@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useMemo, useState, useRef, useEffect } from 'react';
 import type { TimelineHeaderProps } from './types';
-import type { AnimatableProperty, ClipMask, ClipTransform, ColorCorrectionState, Keyframe, TimelineClip } from '../../types';
+import type { AnimatableProperty, AudioSendState, ClipMask, ClipTransform, ColorCorrectionState, Keyframe, TimelineClip } from '../../types';
 import {
   PRIMARY_COLOR_PARAM_DEFS,
   ensureColorCorrectionState,
@@ -28,6 +28,8 @@ import { CurveEditorHeader } from './CurveEditorHeader';
 import { useMediaStore } from '../../stores/mediaStore';
 import { DEFAULT_SCENE_CAMERA_SETTINGS } from '../../stores/mediaStore/types';
 import { useTimelineStore } from '../../stores/timeline';
+import { AudioLevelMeter } from './components/AudioLevelMeter';
+import { AudioEffectStackControl } from '../panels/properties/AudioEffectStackControl';
 import {
   getCameraLookRotationAxis,
   resolveCameraLookAtFixedEyeUpdates,
@@ -922,6 +924,80 @@ function TrackPropertyLabels({
   );
 }
 
+function TrackSendStackControl({
+  trackId,
+  sends,
+}: {
+  trackId: string;
+  sends: readonly AudioSendState[];
+}) {
+  const addSend = useCallback(() => {
+    useTimelineStore.getState().addTrackAudioSend(trackId);
+  }, [trackId]);
+
+  return (
+    <div className="audio-send-stack">
+      <div className="audio-send-stack-header">
+        <span>Sends</span>
+        <button type="button" onClick={addSend} title="Add send">+ Send</button>
+      </div>
+      {sends.length === 0 ? (
+        <div className="audio-send-empty">No sends</div>
+      ) : (
+        <div className="audio-send-list">
+          {sends.map((send, index) => (
+            <div className="audio-send-row" key={send.id}>
+              <button
+                type="button"
+                className={`audio-send-enable ${send.enabled !== false ? 'active' : ''}`}
+                onClick={() => useTimelineStore.getState().updateTrackAudioSend(trackId, send.id, { enabled: send.enabled === false })}
+                title={send.enabled === false ? 'Enable send' : 'Bypass send'}
+              >
+                {index + 1}
+              </button>
+              <input
+                className="audio-send-target"
+                type="text"
+                value={send.targetBusId}
+                aria-label="Send target bus"
+                onChange={(event) => useTimelineStore.getState().updateTrackAudioSend(trackId, send.id, { targetBusId: event.currentTarget.value })}
+              />
+              <input
+                className="audio-send-gain"
+                type="range"
+                min="-60"
+                max="18"
+                step="0.5"
+                value={send.gainDb}
+                aria-label="Send gain"
+                title={`${send.gainDb.toFixed(1)} dB`}
+                onChange={(event) => useTimelineStore.getState().updateTrackAudioSend(trackId, send.id, { gainDb: Number(event.currentTarget.value) })}
+              />
+              <span className="audio-send-gain-value">{send.gainDb.toFixed(1)}</span>
+              <label className="audio-send-prefader" title="Pre-fader send">
+                <input
+                  type="checkbox"
+                  checked={send.preFader}
+                  onChange={(event) => useTimelineStore.getState().updateTrackAudioSend(trackId, send.id, { preFader: event.currentTarget.checked })}
+                />
+                Pre
+              </label>
+              <button
+                type="button"
+                className="audio-send-remove"
+                onClick={() => useTimelineStore.getState().removeTrackAudioSend(trackId, send.id)}
+                title="Remove send"
+              >
+                x
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TimelineHeaderComponent({
   track,
   tracks,
@@ -957,6 +1033,19 @@ function TimelineHeaderComponent({
   const selectedTrackClip = trackClips.find((c) => selectedClipIds.has(c.id));
   const videoLayerIndex = tracks.filter((timelineTrack) => timelineTrack.type === 'video').findIndex((timelineTrack) => timelineTrack.id === track.id);
   const layerDisplayId = videoLayerIndex >= 0 ? videoLayerIndex + 1 : null;
+  const effectiveMuted = track.audioState?.muted ?? track.muted;
+  const effectiveSolo = track.audioState?.solo ?? track.solo;
+  const trackRecordArm = track.audioState?.recordArm === true;
+  const trackInputMonitor = track.audioState?.inputMonitor === true;
+  const trackVolumeDb = track.audioState?.volumeDb ?? 0;
+  const trackPan = track.audioState?.pan ?? 0;
+  const audioMeter = useTimelineStore(state => track.type === 'audio'
+    ? state.runtimeAudioMeters.trackMeters[track.id]
+    : undefined);
+  const [audioFxOpen, setAudioFxOpen] = useState(false);
+  const [audioSendsOpen, setAudioSendsOpen] = useState(false);
+  const audioFxPopoverRef = useRef<HTMLDivElement>(null);
+  const audioSendsPopoverRef = useRef<HTMLDivElement>(null);
 
   // Editing state for track name
   const [isEditing, setIsEditing] = useState(false);
@@ -970,6 +1059,30 @@ function TimelineHeaderComponent({
       inputRef.current.select();
     }
   }, [isEditing]);
+
+  useEffect(() => {
+    if (!audioFxOpen) return undefined;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (audioFxPopoverRef.current?.contains(event.target as Node)) return;
+      setAudioFxOpen(false);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [audioFxOpen]);
+
+  useEffect(() => {
+    if (!audioSendsOpen) return undefined;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (audioSendsPopoverRef.current?.contains(event.target as Node)) return;
+      setAudioSendsOpen(false);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [audioSendsOpen]);
 
   const startNameEdit = () => {
     setEditValue(track.name);
@@ -1011,17 +1124,27 @@ function TimelineHeaderComponent({
     // Don't toggle if editing or if click was on a button
     if (isEditing) return;
     if ((e.target as HTMLElement).closest('.track-controls')) return;
+    if ((e.target as HTMLElement).closest('.audio-track-faders')) return;
+    if ((e.target as HTMLElement).closest('.audio-track-popover')) return;
     // Both video and audio tracks can expand
     if (track.type === 'video' || track.type === 'audio') {
       onToggleExpand();
     }
   };
 
+  const handleTrackVolumeChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    useTimelineStore.getState().setTrackAudioVolumeDb(track.id, Number(event.currentTarget.value));
+  }, [track.id]);
+
+  const handleTrackPanChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    useTimelineStore.getState().setTrackAudioPan(track.id, Number(event.currentTarget.value));
+  }, [track.id]);
+
   return (
     <div
       className={`track-header ${track.type} ${isDimmed ? 'dimmed' : ''} ${
         isExpanded ? 'expanded' : ''
-      } ${track.locked ? 'locked' : ''}`}
+      } ${track.locked ? 'locked' : ''} ${audioFxOpen || audioSendsOpen ? 'popover-open' : ''}`}
       style={{ height: dynamicHeight }}
       onWheel={onWheel}
       onContextMenu={onContextMenu}
@@ -1077,41 +1200,163 @@ function TimelineHeaderComponent({
             </>
           )}
         </div>
-        <div className="track-controls">
-          {/* Pick Whip disabled */}
-          <button
-            className={`btn-icon ${track.solo ? 'solo-active' : ''}`}
-            onClick={(e) => { e.stopPropagation(); onToggleSolo(); }}
-            title={track.solo ? 'Solo On' : 'Solo Off'}
-          >
-            S
-          </button>
-          <button
-            className={`btn-icon ${track.locked ? 'locked-active' : ''}`}
-            onClick={(e) => { e.stopPropagation(); onToggleLocked?.(); }}
-            title={track.locked ? 'Unlock Track' : 'Lock Track'}
-          >
-            {track.locked ? '\uD83D\uDD12' : '\uD83D\uDD13'}
-          </button>
-          {track.type === 'audio' && (
-            <button
-              className={`btn-icon ${track.muted ? 'muted' : ''}`}
-              onClick={(e) => { e.stopPropagation(); onToggleMuted(); }}
-              title={track.muted ? 'Unmute' : 'Mute'}
-            >
-              {track.muted ? '\uD83D\uDD07' : '\uD83D\uDD0A'}
-            </button>
-          )}
-          {track.type === 'video' && (
-            <button
-              className={`btn-icon ${!track.visible ? 'hidden' : ''}`}
-              onClick={(e) => { e.stopPropagation(); onToggleVisible(); }}
-              title={track.visible ? 'Hide' : 'Show'}
-            >
-              {track.visible ? '\uD83D\uDC41' : '\uD83D\uDC41\u200D\uD83D\uDDE8'}
-            </button>
+        <div className={`track-controls ${track.type === 'audio' ? 'audio-strip-controls' : ''}`}>
+          {track.type === 'audio' ? (
+            <>
+              <button
+                className={`btn-icon ${effectiveSolo ? 'solo-active' : ''}`}
+                onClick={(e) => { e.stopPropagation(); onToggleSolo(); }}
+                title={effectiveSolo ? 'Solo On' : 'Solo Off'}
+              >
+                S
+              </button>
+              <button
+                className={`btn-icon ${effectiveMuted ? 'muted' : ''}`}
+                onClick={(e) => { e.stopPropagation(); onToggleMuted(); }}
+                title={effectiveMuted ? 'Unmute' : 'Mute'}
+              >
+                M
+              </button>
+              <button
+                className={`btn-icon ${trackInputMonitor ? 'btn-active' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  useTimelineStore.getState().updateTrackAudioState(track.id, { inputMonitor: !trackInputMonitor });
+                }}
+                title={trackInputMonitor ? 'Input monitor on' : 'Input monitor off'}
+              >
+                {'\uD83D\uDD0A'}
+              </button>
+              <button
+                className={`btn-icon ${trackRecordArm ? 'record-active' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  useTimelineStore.getState().updateTrackAudioState(track.id, { recordArm: !trackRecordArm });
+                }}
+                title={trackRecordArm ? 'Record armed' : 'Record arm'}
+              >
+                R
+              </button>
+              <button
+                className={`btn-icon ${(audioSendsOpen || (track.audioState?.sends?.length ?? 0) > 0) ? 'btn-active' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setAudioFxOpen(false);
+                  setAudioSendsOpen(open => !open);
+                }}
+                title="Track sends"
+              >
+                Aux
+              </button>
+              <button
+                className={`btn-icon ${track.locked ? 'locked-active' : ''}`}
+                onClick={(e) => { e.stopPropagation(); onToggleLocked?.(); }}
+                title={track.locked ? 'Unlock Track' : 'Lock Track'}
+              >
+                {track.locked ? '\uD83D\uDD12' : '\uD83D\uDD13'}
+              </button>
+              <button
+                className={`btn-icon ${audioFxOpen || (track.audioState?.effectStack?.length ?? 0) > 0 ? 'btn-active' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setAudioSendsOpen(false);
+                  setAudioFxOpen(open => !open);
+                }}
+                title="Track audio FX"
+              >
+                FX
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className={`btn-icon ${effectiveSolo ? 'solo-active' : ''}`}
+                onClick={(e) => { e.stopPropagation(); onToggleSolo(); }}
+                title={effectiveSolo ? 'Solo On' : 'Solo Off'}
+              >
+                S
+              </button>
+              <button
+                className={`btn-icon ${track.locked ? 'locked-active' : ''}`}
+                onClick={(e) => { e.stopPropagation(); onToggleLocked?.(); }}
+                title={track.locked ? 'Unlock Track' : 'Lock Track'}
+              >
+                {track.locked ? '\uD83D\uDD12' : '\uD83D\uDD13'}
+              </button>
+              <button
+                className={`btn-icon ${!track.visible ? 'hidden' : ''}`}
+                onClick={(e) => { e.stopPropagation(); onToggleVisible(); }}
+                title={track.visible ? 'Hide' : 'Show'}
+              >
+                {track.visible ? '\uD83D\uDC41' : '\uD83D\uDC41\u200D\uD83D\uDDE8'}
+              </button>
+            </>
           )}
         </div>
+        {track.type === 'audio' && (
+          <div
+            className="audio-track-faders"
+            onClick={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <input
+              className="audio-track-fader"
+              type="range"
+              min="-60"
+              max="18"
+              step="0.5"
+              value={trackVolumeDb}
+              aria-label={`${track.name} volume`}
+              title={`Volume ${trackVolumeDb.toFixed(1)} dB`}
+              onChange={handleTrackVolumeChange}
+            />
+            <AudioLevelMeter meter={audioMeter} label={`${track.name} level`} orientation="vertical" />
+            <input
+              className="audio-track-fader audio-track-pan"
+              type="range"
+              min="-1"
+              max="1"
+              step="0.01"
+              value={trackPan}
+              aria-label={`${track.name} pan`}
+              title={`Pan ${trackPan === 0 ? 'C' : trackPan < 0 ? `L${Math.round(Math.abs(trackPan) * 100)}` : `R${Math.round(trackPan * 100)}`}`}
+              onChange={handleTrackPanChange}
+            />
+          </div>
+        )}
+        {track.type === 'audio' && audioFxOpen && (
+          <div
+            ref={audioFxPopoverRef}
+            className="audio-track-popover audio-track-fx-popover"
+            onClick={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <AudioEffectStackControl
+              title={`${track.name} FX`}
+              className="audio-effect-stack-compact"
+              effects={track.audioState?.effectStack ?? []}
+              emptyLabel="No track FX"
+              onAddEffect={(descriptorId) => useTimelineStore.getState().addTrackAudioEffectInstance(track.id, descriptorId)}
+              onUpdateEffect={(effect, paramName, value) => useTimelineStore.getState().updateTrackAudioEffectInstance(track.id, effect.id, { [paramName]: value })}
+              onSetEffectEnabled={(effectId, enabled) => useTimelineStore.getState().setTrackAudioEffectInstanceEnabled(track.id, effectId, enabled)}
+              onRemoveEffect={(effectId) => useTimelineStore.getState().removeTrackAudioEffectInstance(track.id, effectId)}
+              onReorderEffect={(effectId, newIndex) => useTimelineStore.getState().reorderTrackAudioEffectInstance(track.id, effectId, newIndex)}
+            />
+          </div>
+        )}
+        {track.type === 'audio' && audioSendsOpen && (
+          <div
+            ref={audioSendsPopoverRef}
+            className="audio-track-popover audio-track-sends-popover"
+            onClick={(event) => event.stopPropagation()}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <TrackSendStackControl
+              trackId={track.id}
+              sends={track.audioState?.sends ?? []}
+            />
+          </div>
+        )}
       </div>
       {/* Property labels - shown when track is expanded (for both video and audio with keyframes) */}
       {(track.type === 'video' || track.type === 'audio') && isExpanded && (

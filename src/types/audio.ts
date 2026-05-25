@@ -1,3 +1,9 @@
+import type {
+  SignalArtifactEncoding,
+  SignalArtifactStorage,
+  SignalMetadata,
+} from '../signals';
+
 // Shared audio workstation contracts.
 // These types are intentionally JSON-safe so project state can reference
 // analysis artifacts without embedding large audio buffers in project JSON.
@@ -13,13 +19,20 @@ export type AudioAnalysisArtifactKind =
   | 'transcript-timing'
   | 'frequency-summary';
 
-export type AudioChannelLayout =
+export type AudioChannelLayoutKind =
   | 'mono'
   | 'stereo'
   | 'surround'
   | 'ambisonic'
+  | 'discrete'
   | 'multi-channel'
   | 'unknown';
+
+export interface AudioChannelLayout {
+  kind: AudioChannelLayoutKind;
+  channelCount: number;
+  labels?: string[];
+}
 
 export interface AudioArtifactByteRange {
   offset: number;
@@ -29,16 +42,24 @@ export interface AudioArtifactByteRange {
 export interface AudioSignalArtifactRef {
   artifactId: string;
   hash?: string;
+  size?: number;
+  mimeType?: string;
+  encoding?: SignalArtifactEncoding;
+  storage?: SignalArtifactStorage;
+  createdAt?: string;
   byteRange?: AudioArtifactByteRange;
+  metadata?: SignalMetadata;
 }
 
 export interface AudioAnalysisWarning {
   code: string;
   message: string;
-  severity: 'info' | 'warning' | 'error';
+  severity?: 'info' | 'warning' | 'error';
+  details?: SignalMetadata;
 }
 
 export interface AudioAnalysisArtifact {
+  schemaVersion?: 1;
   id: string;
   kind: AudioAnalysisArtifactKind;
   mediaFileId: string;
@@ -55,6 +76,7 @@ export interface AudioAnalysisArtifact {
   createdAt: number;
   stale: boolean;
   warnings?: AudioAnalysisWarning[];
+  metadata?: SignalMetadata;
 }
 
 export interface MediaFileAudioAnalysisRefs {
@@ -69,6 +91,34 @@ export interface MediaFileAudioAnalysisRefs {
   frequencySummaryId?: string;
 }
 
+export type ClipAudioAnalysisJobKind =
+  | AudioAnalysisArtifactKind
+  | 'beat-onset-analysis'
+  | 'frequency-phase-analysis';
+
+export type ClipAudioAnalysisJobPhase =
+  | 'queued'
+  | 'preparing'
+  | 'rendering-processed-audio'
+  | 'analyzing'
+  | 'storing'
+  | 'complete'
+  | 'cancelled'
+  | 'failed';
+
+export interface ClipAudioAnalysisJobState {
+  jobId: string;
+  kind: ClipAudioAnalysisJobKind;
+  label: string;
+  artifactKinds: AudioAnalysisArtifactKind[];
+  processed: boolean;
+  phase: ClipAudioAnalysisJobPhase;
+  progress: number;
+  startedAt: string;
+  updatedAt: string;
+  message?: string;
+}
+
 export interface AudioDerivedAssetRef {
   id: string;
   mediaFileId: string;
@@ -77,6 +127,104 @@ export interface AudioDerivedAssetRef {
   operationIds: string[];
   createdAt: number;
   provenance?: Record<string, string | number | boolean | null>;
+}
+
+export type AudioRecordingPhase =
+  | 'idle'
+  | 'waiting-for-punch'
+  | 'requesting-input'
+  | 'recording'
+  | 'stopping'
+  | 'complete'
+  | 'error';
+
+export interface AudioRecordingTarget {
+  trackId: string;
+  trackName?: string;
+  inputDeviceId?: string;
+}
+
+export type AudioRecordingStorageWarningCode =
+  | 'storage-estimate-unavailable'
+  | 'storage-persistence-denied'
+  | 'storage-persistence-granted'
+  | 'storage-quota-low'
+  | 'storage-quota-near-full';
+
+export interface AudioRecordingStorageWarning {
+  code: AudioRecordingStorageWarningCode;
+  severity: 'info' | 'warning';
+  message: string;
+  usageBytes?: number;
+  quotaBytes?: number;
+  availableBytes?: number;
+  estimatedSessionBytes?: number;
+  persistent?: boolean;
+  persistRequested?: boolean;
+  persistGranted?: boolean;
+}
+
+export interface AudioRecordingRecoveryEntry {
+  sessionId: string;
+  targetTrackIds: string[];
+  inputDeviceIds: string[];
+  startedAt: number;
+  startTime: number;
+  punchInTime?: number;
+  punchOutTime?: number;
+  assets?: AudioRecordingRecoveryAssetRef[];
+  chunks?: AudioRecordingRecoveryChunkRef[];
+  status: 'active' | 'stopped' | 'cancelled' | 'error';
+  message?: string;
+}
+
+export interface AudioRecordingRecoveryAssetRef {
+  id: string;
+  artifactId: string;
+  inputDeviceId?: string;
+  trackIds: string[];
+  fileName: string;
+  mimeType: string;
+  sourceMimeType: string;
+  duration: number;
+  startTime: number;
+  startedAt: number;
+  stoppedAt: number;
+  sampleRate?: number;
+  channelCount?: number;
+  chunkCount: number;
+}
+
+export interface AudioRecordingRecoveryChunkRef {
+  artifactId: string;
+  inputDeviceId?: string;
+  trackIds: string[];
+  chunkIndex: number;
+  kind: 'media-recorder' | 'audio-worklet-pcm-f32';
+  mimeType: string;
+  startedAt: number;
+  startTime: number;
+  timeStart: number;
+  duration?: number;
+  sampleRate?: number;
+  channelCount?: number;
+  frameCount?: number;
+}
+
+export interface AudioRecordingState {
+  phase: AudioRecordingPhase;
+  sessionId?: string;
+  targetTrackIds?: string[];
+  startedAt?: number;
+  startTime?: number;
+  punchInTime?: number;
+  punchOutTime?: number;
+  elapsedSeconds?: number;
+  inputDeviceIds?: string[];
+  lastError?: string;
+  lastCompletedAt?: number;
+  recoveryEntries?: AudioRecordingRecoveryEntry[];
+  storageWarnings?: AudioRecordingStorageWarning[];
 }
 
 export interface AudioEffectInstance {
@@ -104,6 +252,7 @@ export interface SpectralImageLayer {
   frequencyMin: number;
   frequencyMax: number;
   opacity: number;
+  enabled?: boolean;
   blendMode: 'attenuate' | 'boost' | 'gate' | 'sidechain-mask' | 'replace';
   gainDb: number;
   featherTime: number;
@@ -169,9 +318,38 @@ export interface TrackAudioState {
   meterMode: 'peak' | 'rms' | 'lufs';
 }
 
+export interface AudioMeterSnapshot {
+  peakLinear: number;
+  rmsLinear: number;
+  peakDb: number;
+  rmsDb: number;
+  clipping: boolean;
+  updatedAt: number;
+}
+
+export interface RuntimeAudioMeterState {
+  trackMeters: Record<string, AudioMeterSnapshot>;
+  master?: AudioMeterSnapshot;
+}
+
 export interface AudioExportPreflightState {
   lastCheckedAt?: number;
   warnings?: AudioAnalysisWarning[];
+  measurement?: AudioExportPreflightMeasurement;
+}
+
+export interface AudioExportPreflightMeasurement {
+  mode: 'rendered-export';
+  duration: number;
+  sampleRate: number;
+  channelCount: number;
+  integratedLufs?: number;
+  truePeakDbtp?: number;
+  samplePeakDbfs?: number;
+  rmsDbfs?: number;
+  targetLufs?: number;
+  loudnessDelta?: number;
+  truePeakCeilingDb?: number;
 }
 
 export interface MasterAudioState {
@@ -185,6 +363,7 @@ export interface MasterAudioState {
 
 export interface ProjectAudioState {
   schemaVersion: 1;
+  analysisArtifactIds?: string[];
   analysisArtifacts?: AudioAnalysisArtifact[];
   derivedAssets?: AudioDerivedAssetRef[];
   masterAudioState?: MasterAudioState;

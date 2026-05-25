@@ -1,6 +1,7 @@
 import type { AudioArtifactRef, AudioChannelLayout } from './audioArtifactTypes';
 
 export const SPECTROGRAM_TILE_SET_MANIFEST_VERSION = 1 as const;
+export const SPECTROGRAM_TILE_PAYLOAD_VERSION = 1 as const;
 
 export type SpectrogramFftSize = 1024 | 2048 | 4096 | 8192;
 export type SpectrogramWindowFunction = 'hann';
@@ -35,6 +36,25 @@ export interface SpectrogramTileSetManifest {
   tiles: SpectrogramTileRef[];
 }
 
+export interface SpectrogramTilePayloadHeader {
+  schemaVersion: typeof SPECTROGRAM_TILE_PAYLOAD_VERSION;
+  tileIndex: number;
+  channelIndex: number;
+  frameStart: number;
+  frameCount: number;
+  frequencyBinStart: number;
+  frequencyBinCount: number;
+  minDb: number;
+  maxDb: number;
+  valueLayout: 'time-major';
+  valueEncoding: 'normalized-db';
+}
+
+export interface SpectrogramTilePayload {
+  header: SpectrogramTilePayloadHeader;
+  values: Float32Array;
+}
+
 export interface CreateSpectrogramTileSetManifestInput extends Omit<
   SpectrogramTileSetManifest,
   'schemaVersion'
@@ -65,6 +85,9 @@ function assertPositiveInteger(value: number, label: string): void {
     throw new Error(`${label} must be a positive integer.`);
   }
 }
+
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
 
 export function createSpectrogramTileSetManifest(
   input: CreateSpectrogramTileSetManifestInput,
@@ -115,4 +138,66 @@ export function createSpectrogramTileSetManifest(
     tileHeightBins: input.tileHeightBins,
     tiles,
   };
+}
+
+export function encodeSpectrogramTilePayload(payload: SpectrogramTilePayload): ArrayBuffer {
+  const expectedValues = payload.header.frameCount * payload.header.frequencyBinCount;
+  if (payload.values.length !== expectedValues) {
+    throw new Error('Spectrogram tile values length must match frameCount * frequencyBinCount.');
+  }
+  if (payload.header.minDb >= payload.header.maxDb) {
+    throw new Error('Spectrogram tile minDb must be lower than maxDb.');
+  }
+
+  const headerBytes = textEncoder.encode(JSON.stringify(payload.header));
+  const output = new ArrayBuffer(4 + headerBytes.byteLength + payload.values.byteLength);
+  const view = new DataView(output);
+  view.setUint32(0, headerBytes.byteLength, true);
+  new Uint8Array(output, 4, headerBytes.byteLength).set(headerBytes);
+  new Uint8Array(output, 4 + headerBytes.byteLength).set(
+    new Uint8Array(payload.values.buffer, payload.values.byteOffset, payload.values.byteLength),
+  );
+
+  return output;
+}
+
+export function decodeSpectrogramTilePayload(input: ArrayBuffer): SpectrogramTilePayload {
+  const view = new DataView(input);
+  const headerLength = view.getUint32(0, true);
+  const headerStart = 4;
+  const headerEnd = headerStart + headerLength;
+
+  if (headerEnd > input.byteLength) {
+    throw new Error('Spectrogram tile header exceeds buffer length.');
+  }
+
+  const header = JSON.parse(
+    textDecoder.decode(new Uint8Array(input, headerStart, headerLength)),
+  ) as SpectrogramTilePayloadHeader;
+
+  if (header.schemaVersion !== SPECTROGRAM_TILE_PAYLOAD_VERSION) {
+    throw new Error(`Unsupported spectrogram tile payload schema version: ${header.schemaVersion}`);
+  }
+  if (header.valueLayout !== 'time-major') {
+    throw new Error(`Unsupported spectrogram tile value layout: ${header.valueLayout}`);
+  }
+  if (header.valueEncoding !== 'normalized-db') {
+    throw new Error(`Unsupported spectrogram tile value encoding: ${header.valueEncoding}`);
+  }
+
+  const valuesByteLength = input.byteLength - headerEnd;
+  if (valuesByteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
+    throw new Error('Spectrogram tile values must be Float32 aligned.');
+  }
+
+  const valuesBytes = new Uint8Array(input, headerEnd, valuesByteLength);
+  const valuesBuffer = new ArrayBuffer(valuesByteLength);
+  new Uint8Array(valuesBuffer).set(valuesBytes);
+  const values = new Float32Array(valuesBuffer);
+  const expectedValues = header.frameCount * header.frequencyBinCount;
+  if (values.length !== expectedValues) {
+    throw new Error('Spectrogram tile value count does not match decoded header.');
+  }
+
+  return { header, values };
 }

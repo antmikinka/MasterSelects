@@ -640,7 +640,7 @@ export function DockTabPane({ group }: DockTabPaneProps) {
         style={{ '--panel-zoom': panelZoom } as React.CSSProperties}
         onMouseEnter={handlePaneMouseEnter}
       >
-        <div className="dock-panel-content-inner">
+        <div className={`dock-panel-content-inner ${activePanel ? `dock-panel-content-inner--${activePanel.type}` : ''}`}>
           {activePanel && <DockPanelContent panel={activePanel} />}
         </div>
         {/* Zoom indicator */}

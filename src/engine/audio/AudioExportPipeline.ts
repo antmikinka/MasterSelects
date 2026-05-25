@@ -13,14 +13,22 @@
 
 import { Logger } from '../../services/logger';
 import { AudioExtractor, audioExtractor } from './AudioExtractor';
-
-const log = Logger.create('AudioExportPipeline');
 import { AudioEncoderWrapper, type EncodedAudioResult } from './AudioEncoder';
 import { AudioMixer, type AudioTrackData } from './AudioMixer';
+import { renderAudioGraph } from './AudioGraphRenderer';
+import type { AudioGraphRenderPlan } from './AudioGraphTypes';
+import { AudioEffectRenderer } from './AudioEffectRenderer';
+import { dbToLinearGain } from './audioMath';
 import { ClipAudioRenderService, type ClipAudioRenderProgress } from '../../services/audio/ClipAudioRenderService';
+import {
+  audioGraphPlanStepsToEffectInstances,
+} from '../../services/audio/audioGraphRouteSettings';
+import { analyzeAudioBufferLoudnessSummary } from '../../services/audio/LoudnessEnvelopeGenerator';
 import { useTimelineStore } from '../../stores/timeline';
 import { useMediaStore } from '../../stores/mediaStore';
 import type { TimelineClip, TimelineTrack, Keyframe } from '../../types';
+
+const log = Logger.create('AudioExportPipeline');
 
 export interface AudioExportSettings {
   sampleRate: number;       // 44100 or 48000
@@ -42,6 +50,7 @@ export class AudioExportPipeline {
   private encoder: AudioEncoderWrapper | null = null;
   private mixer: AudioMixer;
   private clipAudioRenderer: ClipAudioRenderService;
+  private graphEffectRenderer: AudioEffectRenderer;
   private settings: AudioExportSettings;
   private cancelled = false;
 
@@ -60,6 +69,7 @@ export class AudioExportPipeline {
     this.clipAudioRenderer = new ClipAudioRenderService({
       extractor: this.extractor,
     });
+    this.graphEffectRenderer = new AudioEffectRenderer();
   }
 
   /**
@@ -76,7 +86,7 @@ export class AudioExportPipeline {
   ): Promise<EncodedAudioResult | null> {
     this.cancelled = false;
 
-    const { clips, tracks, clipKeyframes } = useTimelineStore.getState();
+    const { clips, tracks, clipKeyframes, masterAudioState } = useTimelineStore.getState();
     const duration = endTime - startTime;
 
     log.info(`Starting export: ${startTime.toFixed(2)}s - ${endTime.toFixed(2)}s (${duration.toFixed(2)}s)`);
@@ -90,6 +100,12 @@ export class AudioExportPipeline {
     }
 
     log.info(`Found ${audioClips.length} clips with audio`);
+    const audioGraphPlan = renderAudioGraph({
+      clips: audioClips,
+      tracks,
+      masterAudioState,
+      mode: 'export',
+    });
 
     try {
       // 2. Extract audio from all clips
@@ -104,6 +120,7 @@ export class AudioExportPipeline {
         audioClips,
         extractedBuffers,
         clipKeyframes,
+        audioGraphPlan,
         onProgress
       );
 
@@ -111,14 +128,20 @@ export class AudioExportPipeline {
 
       // 4. Mix all tracks
       onProgress?.({ phase: 'mixing', percent: 0, message: 'Mixing tracks...' });
-      const trackData = this.prepareTrackData(audioClips, effectBuffers, tracks, startTime);
+      const trackData = this.prepareTrackData(audioClips, effectBuffers, tracks, startTime, audioGraphPlan);
+      this.mixer.updateSettings({
+        normalize: false,
+        masterVolumeDb: 0,
+        masterLimiterEnabled: false,
+      });
       const mixedBuffer = await this.mixer.mixTracks(trackData, duration);
+      const masteredBuffer = await this.renderMasterBusAudio(mixedBuffer, audioGraphPlan, onProgress);
 
       if (this.cancelled) return null;
 
       // 5. Encode to AAC
       onProgress?.({ phase: 'encoding', percent: 0, message: 'Encoding audio...' });
-      const result = await this.encodeAudio(mixedBuffer, onProgress);
+      const result = await this.encodeAudio(masteredBuffer, onProgress);
 
       // 6. Cleanup
       this.extractor.clearCache();
@@ -149,7 +172,7 @@ export class AudioExportPipeline {
   ): Promise<AudioBuffer | null> {
     this.cancelled = false;
 
-    const { clips, tracks, clipKeyframes } = useTimelineStore.getState();
+    const { clips, tracks, clipKeyframes, masterAudioState } = useTimelineStore.getState();
     const duration = endTime - startTime;
 
     log.info(`Starting raw audio export: ${startTime.toFixed(2)}s - ${endTime.toFixed(2)}s`);
@@ -163,6 +186,12 @@ export class AudioExportPipeline {
     }
 
     log.info(`Found ${audioClips.length} clips with audio`);
+    const audioGraphPlan = renderAudioGraph({
+      clips: audioClips,
+      tracks,
+      masterAudioState,
+      mode: 'export',
+    });
 
     try {
       // 2. Extract audio from all clips
@@ -177,6 +206,7 @@ export class AudioExportPipeline {
         audioClips,
         extractedBuffers,
         clipKeyframes,
+        audioGraphPlan,
         onProgress
       );
 
@@ -184,16 +214,22 @@ export class AudioExportPipeline {
 
       // 4. Mix all tracks
       onProgress?.({ phase: 'mixing', percent: 0, message: 'Mixing tracks...' });
-      const trackData = this.prepareTrackData(audioClips, effectBuffers, tracks, startTime);
+      const trackData = this.prepareTrackData(audioClips, effectBuffers, tracks, startTime, audioGraphPlan);
+      this.mixer.updateSettings({
+        normalize: false,
+        masterVolumeDb: 0,
+        masterLimiterEnabled: false,
+      });
       const mixedBuffer = await this.mixer.mixTracks(trackData, duration);
+      const masteredBuffer = await this.renderMasterBusAudio(mixedBuffer, audioGraphPlan, onProgress);
 
       // 5. Cleanup
       this.extractor.clearCache();
 
       onProgress?.({ phase: 'complete', percent: 100, message: 'Audio mixing complete' });
 
-      log.info(`Raw audio export complete: ${mixedBuffer.duration.toFixed(2)}s, ${mixedBuffer.numberOfChannels}ch`);
-      return mixedBuffer;
+      log.info(`Raw audio export complete: ${masteredBuffer.duration.toFixed(2)}s, ${masteredBuffer.numberOfChannels}ch`);
+      return masteredBuffer;
 
     } catch (error) {
       log.error('Raw audio export failed:', error);
@@ -231,10 +267,9 @@ export class AudioExportPipeline {
     startTime: number,
     endTime: number
   ): TimelineClip[] {
-    const hasSoloAudioTrack = tracks.some(t => t.type === 'audio' && t.solo);
     const mediaFiles = useMediaStore.getState().files;
 
-    return clips.filter(clip => {
+    const candidates = clips.filter(clip => {
       // Check if clip is in range
       const clipEnd = clip.startTime + clip.duration;
       if (clipEnd <= startTime || clip.startTime >= endTime) {
@@ -243,9 +278,6 @@ export class AudioExportPipeline {
 
       // Nested composition with mixdown audio
       if (clip.isComposition && clip.mixdownBuffer && clip.hasMixdownAudio) {
-        // Check track is not muted (nested comps are on video tracks)
-        const track = tracks.find(t => t.id === clip.trackId);
-        if (track && !track.visible) return false;
         return true;
       }
 
@@ -267,10 +299,6 @@ export class AudioExportPipeline {
           return false;
         }
 
-        // Check track is not muted
-        const track = tracks.find(t => t.id === clip.trackId);
-        if (track?.muted) return false;
-        if (hasSoloAudioTrack && !track?.solo) return false;
         return true;
       }
 
@@ -278,6 +306,20 @@ export class AudioExportPipeline {
       // (audio is in separate linked clips)
       return false;
     });
+
+    if (candidates.length === 0) {
+      return [];
+    }
+
+    const plan = renderAudioGraph({ clips: candidates, tracks, mode: 'export' });
+    const activeTrackIds = new Set(plan.tracks.filter(track => track.active).map(track => track.trackId));
+    const activeClipIds = new Set(
+      plan.clips
+        .filter(clip => clip.active && activeTrackIds.has(clip.trackId))
+        .map(clip => clip.clipId)
+    );
+
+    return candidates.filter(clip => activeClipIds.has(clip.id));
   }
 
   /**
@@ -341,9 +383,11 @@ export class AudioExportPipeline {
     clips: TimelineClip[],
     buffers: Map<string, AudioBuffer>,
     clipKeyframes: Map<string, Keyframe[]>,
+    audioGraphPlan: AudioGraphRenderPlan,
     onProgress?: AudioExportProgressCallback
   ): Promise<Map<string, AudioBuffer>> {
     const processed = new Map<string, AudioBuffer>();
+    const trackPlanById = new Map(audioGraphPlan.tracks.map(track => [track.trackId, track]));
 
     for (let i = 0; i < clips.length; i++) {
       const clip = clips[i];
@@ -367,10 +411,91 @@ export class AudioExportPipeline {
         onProgress: progress => this.emitClipRenderProgress(clip, i, clips.length, progress, onProgress),
       });
 
-      processed.set(clip.id, rendered.buffer);
+      const trackPlan = trackPlanById.get(clip.trackId);
+      const trackEffects = audioGraphPlanStepsToEffectInstances(trackPlan?.effectChain);
+      const trackRenderedBuffer = trackEffects.length > 0
+        ? await this.graphEffectRenderer.renderEffectInstances(
+          rendered.buffer,
+          trackEffects,
+          [],
+          rendered.buffer.duration
+        )
+        : rendered.buffer;
+
+      processed.set(clip.id, trackRenderedBuffer);
     }
 
     return processed;
+  }
+
+  private async renderMasterBusAudio(
+    mixedBuffer: AudioBuffer,
+    audioGraphPlan: AudioGraphRenderPlan,
+    onProgress?: AudioExportProgressCallback
+  ): Promise<AudioBuffer> {
+    if (this.cancelled) return mixedBuffer;
+
+    const masterEffects = audioGraphPlanStepsToEffectInstances(audioGraphPlan.master.effectChain);
+    let masteredBuffer = mixedBuffer;
+
+    if (masterEffects.length > 0) {
+      onProgress?.({ phase: 'effects', percent: 95, message: 'Rendering master audio effects...' });
+      masteredBuffer = await this.graphEffectRenderer.renderEffectInstances(
+        mixedBuffer,
+        masterEffects,
+        [],
+        mixedBuffer.duration
+      );
+    }
+
+    this.mixer.processMasterBuffer(masteredBuffer, {
+      normalize: false,
+      masterVolumeDb: audioGraphPlan.master.volumeDb,
+      masterLimiterEnabled: false,
+    });
+
+    const targetGainDb = this.applyTargetLoudness(masteredBuffer, audioGraphPlan.master.targetLufs);
+    if (targetGainDb !== null) {
+      onProgress?.({
+        phase: 'effects',
+        percent: 97,
+        message: `Applying target loudness: ${targetGainDb >= 0 ? '+' : ''}${targetGainDb.toFixed(2)} dB`,
+      });
+    }
+
+    return this.mixer.processMasterBuffer(masteredBuffer, {
+      normalize: this.settings.normalize,
+      masterVolumeDb: 0,
+      masterLimiterEnabled: audioGraphPlan.master.limiterEnabled,
+      masterTruePeakCeilingDb: audioGraphPlan.master.truePeakCeilingDb,
+    });
+  }
+
+  private applyTargetLoudness(buffer: AudioBuffer, targetLufs: number | undefined): number | null {
+    if (typeof targetLufs !== 'number' || !Number.isFinite(targetLufs)) {
+      return null;
+    }
+
+    const summary = analyzeAudioBufferLoudnessSummary(buffer);
+    const integratedLufs = summary.integratedLufs;
+    if (typeof integratedLufs !== 'number' || !Number.isFinite(integratedLufs) || integratedLufs <= -90) {
+      return null;
+    }
+
+    const gainDb = Math.max(-24, Math.min(24, targetLufs - integratedLufs));
+    if (Math.abs(gainDb) <= 0.05) {
+      return null;
+    }
+
+    const gain = dbToLinearGain(gainDb);
+    for (let channelIndex = 0; channelIndex < buffer.numberOfChannels; channelIndex += 1) {
+      const data = buffer.getChannelData(channelIndex);
+      for (let sampleIndex = 0; sampleIndex < data.length; sampleIndex += 1) {
+        data[sampleIndex] *= gain;
+      }
+    }
+
+    return gainDb;
   }
 
   private emitClipRenderProgress(
@@ -396,12 +521,13 @@ export class AudioExportPipeline {
     clips: TimelineClip[],
     buffers: Map<string, AudioBuffer>,
     tracks: TimelineTrack[],
-    exportStartTime: number
+    exportStartTime: number,
+    audioGraphPlan?: AudioGraphRenderPlan
   ): AudioTrackData[] {
     const trackData: AudioTrackData[] = [];
-
-    // Check for soloed tracks
-    const hasSolo = tracks.some(t => t.type === 'audio' && t.solo);
+    const plan = audioGraphPlan ?? renderAudioGraph({ clips, tracks, mode: 'export' });
+    const clipPlanById = new Map(plan.clips.map(clip => [clip.clipId, clip]));
+    const trackPlanById = new Map(plan.tracks.map(track => [track.trackId, track]));
 
     for (const clip of clips) {
       const buffer = buffers.get(clip.id);
@@ -410,17 +536,37 @@ export class AudioExportPipeline {
       const track = tracks.find(t => t.id === clip.trackId);
       if (!track) continue;
 
-      // Skip if track is muted, or if solo mode is active and this track isn't soloed
-      if (track.muted || (hasSolo && !track.solo)) continue;
+      const clipPlan = clipPlanById.get(clip.id);
+      const trackPlan = trackPlanById.get(clip.trackId);
+      if (!clipPlan?.active || !trackPlan?.active) continue;
 
-      trackData.push({
+      const baseTrackData: AudioTrackData = {
         clipId: clip.id,
         buffer,
         startTime: clip.startTime - exportStartTime, // Adjust for export range
         trackId: clip.trackId,
-        trackMuted: track.muted,
-        trackSolo: track.solo,
-      });
+        trackMuted: trackPlan.muted || !trackPlan.active,
+        trackSolo: trackPlan.solo,
+        mixRole: 'main',
+        trackVolumeDb: trackPlan.volumeDb,
+        trackPan: trackPlan.pan,
+      };
+
+      trackData.push(baseTrackData);
+
+      for (const send of trackPlan.sends) {
+        if (send.enabled === false) continue;
+
+        trackData.push({
+          ...baseTrackData,
+          clipId: `${clip.id}:send:${send.id}`,
+          mixRole: 'send',
+          sendId: send.id,
+          sendTargetBusId: send.targetBusId,
+          sendPreFader: send.preFader,
+          trackVolumeDb: send.gainDb + (send.preFader ? 0 : trackPlan.volumeDb),
+        });
+      }
     }
 
     return trackData;

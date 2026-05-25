@@ -15,6 +15,11 @@ import {
 } from '../../src/services/nodeGraph';
 import { DEFAULT_TEXT_PROPERTIES, DEFAULT_TRANSFORM } from '../../src/stores/timeline/constants';
 import { createDefaultColorCorrectionState, type ClipMask, type Effect, type TimelineClip, type TimelineTrack } from '../../src/types';
+import { primeTimelineLoudnessEnvelopeCache } from '../../src/services/audio/timelineLoudnessEnvelopeCache';
+import {
+  primeTimelineFrequencySummaryCache,
+  primeTimelinePhaseCorrelationCache,
+} from '../../src/services/audio/timelineFrequencyPhaseCache';
 
 function createClip(overrides: Partial<TimelineClip> = {}): TimelineClip {
   return {
@@ -84,6 +89,14 @@ describe('buildClipNodeGraph', () => {
       'time',
       'metadata',
       'audio',
+      'waveform',
+      'spectrum',
+      'loudness',
+      'beats',
+      'onsets',
+      'phase-correlation',
+      'transcript-timing',
+      'frequency-summary',
     ]);
     expect(graph.edges).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -241,6 +254,55 @@ describe('buildClipNodeGraph', () => {
       ['source', 'audio', 'effect-volume', 'input'],
       ['effect-volume', 'output', 'effect-eq', 'input'],
       ['effect-eq', 'output', 'audio-output', 'input'],
+    ]);
+  });
+
+  it('projects registry audio effect stacks before legacy audio effects', () => {
+    const audioVolume: Effect = {
+      id: 'volume',
+      name: 'Volume',
+      type: 'audio-volume',
+      enabled: true,
+      params: { volume: 0.8 },
+    };
+    const graph = buildClipNodeGraph(createClip({
+      source: { type: 'audio', mediaFileId: 'media-a' },
+      audioState: {
+        effectStack: [{
+          id: 'hp',
+          descriptorId: 'audio-high-pass',
+          enabled: true,
+          params: { frequencyHz: 120, q: 0.7 },
+          automationMode: 'clip',
+        }],
+      },
+      effects: [audioVolume],
+    }), createTrack({ type: 'audio' }));
+
+    expect(graph.nodes.map((node) => node.id)).toEqual([
+      'source',
+      'output',
+      'audio-effect-hp',
+      'effect-volume',
+      'audio-output',
+    ]);
+    expect(graph.nodes.find((node) => node.id === 'audio-effect-hp')).toMatchObject({
+      kind: 'effect',
+      label: 'High Pass Filter',
+      params: {
+        enabled: true,
+        descriptorId: 'audio-high-pass',
+        automationMode: 'clip',
+      },
+    });
+    expect(graph.edges.filter((edge) => edge.type === 'audio' && edge.toPortId === 'input').map((edge) => [
+      edge.fromNodeId,
+      edge.toNodeId,
+    ])).toEqual([
+      ['source', 'output'],
+      ['source', 'audio-effect-hp'],
+      ['audio-effect-hp', 'effect-volume'],
+      ['effect-volume', 'audio-output'],
     ]);
   });
 
@@ -545,16 +607,102 @@ describe('buildClipNodeGraph', () => {
           processedWaveformPyramidId: 'processed-waveform-artifact',
           spectrogramTileSetIds: ['processed-spectrum-artifact'],
           loudnessEnvelopeId: 'processed-loudness-artifact',
+          frequencySummaryId: 'processed-frequency-artifact',
+          phaseCorrelationId: 'processed-phase-artifact',
         },
       },
     });
-    const track = createTrack({ type: 'audio' });
+    primeTimelineLoudnessEnvelopeCache(['processed-loudness-artifact'], {
+      sampleRate: 48_000,
+      duration: 5,
+      curves: [],
+      summary: {
+        integratedLufs: -31,
+        truePeakDbtp: -0.2,
+        samplePeakDbfs: -0.4,
+        rmsDbfs: -28,
+      },
+    });
+    primeTimelineFrequencySummaryCache(['processed-frequency-artifact'], {
+      sampleRate: 48_000,
+      duration: 5,
+      fftSize: 2048,
+      hopSize: 512,
+      summary: {
+        spectralCentroidHz: 240,
+        lowEnergyShare: 0.62,
+        midEnergyShare: 0.32,
+        highEnergyShare: 0.06,
+        dominantBandId: 'mains',
+      },
+      bands: [{
+        bandId: 'mains',
+        label: '50 Hz',
+        minFrequency: 45,
+        maxFrequency: 55,
+        rmsDb: -21,
+        peakDb: -12,
+        energyShare: 0.24,
+        centroidHz: 50,
+      }],
+    });
+    primeTimelinePhaseCorrelationCache(['processed-phase-artifact'], {
+      sampleRate: 48_000,
+      duration: 5,
+      windowDuration: 0.4,
+      hopDuration: 0.1,
+      points: [],
+      summary: {
+        averageCorrelation: 0.12,
+        minimumCorrelation: -0.58,
+        maximumCorrelation: 0.8,
+        negativeCorrelationPercent: 22,
+        averageMidSideRatioDb: 5,
+        stereoWidth: 1.5,
+        monoCompatible: false,
+      },
+    });
+    const track = createTrack({
+      type: 'audio',
+      audioState: {
+        volumeDb: -3,
+        pan: 0.25,
+        muted: false,
+        solo: false,
+        recordArm: false,
+        inputMonitor: false,
+        meterMode: 'lufs',
+        effectStack: [{
+          id: 'track-comp',
+          descriptorId: 'audio-compressor',
+          enabled: true,
+          params: { thresholdDb: -18, ratio: 3 },
+          automationMode: 'track',
+        }],
+      },
+    });
     const definition = createClipAICustomNodeDefinition('custom-ai', clip, 'AI Node');
     const nodeGraph = addClipCustomNodeDefinition(clip, definition, track);
     const context = buildAINodeAuthoringContext(
       { ...clip, nodeGraph },
       definition,
-      { clips: [{ ...clip, nodeGraph }], tracks: [track] },
+      {
+        clips: [{ ...clip, nodeGraph }],
+        tracks: [track],
+        masterAudioState: {
+          volumeDb: -1,
+          limiterEnabled: true,
+          truePeakCeilingDb: -1,
+          targetLufs: -14,
+          effectStack: [{
+            id: 'master-limit',
+            descriptorId: 'audio-limiter',
+            enabled: true,
+            params: { ceilingDb: -1, inputGainDb: 0 },
+            automationMode: 'track',
+          }],
+        },
+      },
     );
 
     expect(context).toContain('Audio source:');
@@ -562,6 +710,13 @@ describe('buildClipNodeGraph', () => {
     expect(context).toContain('sourceAnalysisRefs=waveform=source-waveform-artifact spectrograms=source-spectrum-artifact loudness=source-loudness-artifact');
     expect(context).toContain('processedAnalysisRefs=processedWaveform=processed-waveform-artifact spectrograms=processed-spectrum-artifact loudness=processed-loudness-artifact');
     expect(context).toContain('effectiveAnalysisRefs=waveform=processed-waveform-artifact processedWaveform=processed-waveform-artifact spectrograms=processed-spectrum-artifact loudness=processed-loudness-artifact');
+    expect(context).toContain('trackAudio=id=video-1 name="Video 1" muted=false solo=false volumeDb=-3 pan=0.25 meter=lufs sends=0');
+    expect(context).toContain('trackEffectStack=1:track-comp name="Compressor" descriptor=audio-compressor enabled=true automation=track params=[thresholdDb=-18,ratio=3]');
+    expect(context).toContain('masterAudio=volumeDb=-1 limiter=true truePeakCeilingDb=-1 targetLufs=-14');
+    expect(context).toContain('masterEffectStack=1:master-limit name="Limiter" descriptor=audio-limiter enabled=true automation=track params=[ceilingDb=-1,inputGainDb=0]');
+    expect(context).toContain('effectiveRepairSuggestions=');
+    expect(context).toContain('hum-notch severity=warning');
+    expect(context).toContain('mono-compatibility severity=warning');
     expect(context).toContain('waveform:metadata semantic=waveform available=true stale=false provenance=processed artifact=processed-waveform-artifact action=processed-waveform-pyramid');
     expect(context).toContain('spectrum:metadata semantic=spectrum available=true stale=false provenance=processed artifact=processed-spectrum-artifact action=spectrogram-tiles');
     expect(context).not.toContain('0.25,1');

@@ -10,6 +10,10 @@ import {
 const log = Logger.create('ProxyFrameCache');
 import { fileSystemService } from './fileSystemService';
 import { useMediaStore } from '../stores/mediaStore';
+import { clampAudioPan, dbToLinearGain, finiteNumber } from '../engine/audio/audioMath';
+import type { LiveAudioRouteProcessor } from './audio/audioGraphRouteSettings';
+import type { AudioMeterSnapshot } from '../types';
+import { calculateAudioMeterSnapshot } from './audio/audioMetering';
 
 // Cache settings - tuned for fast scrubbing
 const MAX_CACHE_SIZE = 900; // 30 seconds at 30fps - larger cache for scrubbing
@@ -35,6 +39,49 @@ export interface ProxyCachedFrame {
 interface ScrubAudioOptions {
   volume?: number;
   eqGains?: number[];
+  pan?: number;
+  processors?: LiveAudioRouteProcessor[];
+}
+
+interface ScrubProcessorNode {
+  type: LiveAudioRouteProcessor['type'];
+  nodes: AudioNode[];
+  filter?: BiquadFilterNode;
+  compressor?: DynamicsCompressorNode;
+  makeupGain?: GainNode;
+}
+
+function clampScrubFrequency(ctx: BaseAudioContext, value: number): number {
+  const nyquist = Math.max(20, ctx.sampleRate / 2 - 1);
+  return Math.max(10, Math.min(nyquist, finiteNumber(value, 1000)));
+}
+
+function scrubProcessorSignature(processors: readonly LiveAudioRouteProcessor[] = []): string {
+  return processors.map(processor => `${processor.id}:${processor.type}`).join('|');
+}
+
+function updateScrubProcessorNode(
+  ctx: BaseAudioContext,
+  node: ScrubProcessorNode,
+  processor: LiveAudioRouteProcessor,
+): void {
+  if ((processor.type === 'high-pass' || processor.type === 'low-pass') && node.filter) {
+    node.filter.type = processor.type === 'high-pass' ? 'highpass' : 'lowpass';
+    node.filter.frequency.value = clampScrubFrequency(ctx, processor.frequencyHz);
+    node.filter.Q.value = Math.max(0.0001, Math.min(30, finiteNumber(processor.q, 0.707)));
+    return;
+  }
+
+  if (processor.type === 'compressor' && node.compressor) {
+    node.compressor.threshold.value = Math.max(-100, Math.min(0, finiteNumber(processor.thresholdDb, 0)));
+    node.compressor.ratio.value = Math.max(1, Math.min(20, finiteNumber(processor.ratio, 1)));
+    node.compressor.knee.value = Math.max(0, Math.min(40, finiteNumber(processor.kneeDb, 0)));
+    node.compressor.attack.value = Math.max(0, Math.min(1, finiteNumber(processor.attackMs, 10) / 1000));
+    node.compressor.release.value = Math.max(0.001, Math.min(1, finiteNumber(processor.releaseMs, 120) / 1000));
+    if (node.makeupGain) {
+      node.makeupGain.gain.value = Math.max(0, Math.min(4, dbToLinearGain(processor.makeupGainDb)));
+    }
+  }
 }
 
 class ProxyFrameCache {
@@ -52,6 +99,8 @@ class ProxyFrameCache {
   private audioBufferFailed: Set<string> = new Set(); // Track files with no audio
   private audioContext: AudioContext | null = null;
   private scrubGain: GainNode | null = null;
+  private scrubAnalyser: AnalyserNode | null = null;
+  private scrubMeterBuffer: Float32Array<ArrayBuffer> | null = null;
 
   // Get cache key
   private getKey(mediaFileId: string, frameIndex: number): string {
@@ -465,7 +514,10 @@ class ProxyFrameCache {
   // Varispeed scrubbing state
   private scrubSource: AudioBufferSourceNode | null = null;
   private scrubSourceGain: GainNode | null = null;
+  private scrubPanNode: StereoPannerNode | null = null;
   private scrubEqFilters: BiquadFilterNode[] = [];
+  private scrubProcessorNodes: ScrubProcessorNode[] = [];
+  private scrubProcessorSignature = '';
   private scrubStartTime = 0; // AudioContext time when scrub started
   private scrubStartPosition = 0; // Audio position when scrub started
   private scrubCurrentMediaId: string | null = null;
@@ -480,6 +532,11 @@ class ProxyFrameCache {
     if (!this.audioContext) {
       this.audioContext = new AudioContext();
       this.scrubGain = this.audioContext.createGain();
+      this.scrubAnalyser = this.audioContext.createAnalyser();
+      this.scrubAnalyser.fftSize = 1024;
+      this.scrubAnalyser.smoothingTimeConstant = 0.2;
+      this.scrubMeterBuffer = new Float32Array(this.scrubAnalyser.fftSize);
+      this.scrubAnalyser.connect(this.scrubGain);
       this.scrubGain.connect(this.audioContext.destination);
       this.scrubGain.gain.value = 1;
       log.debug(`AudioContext created, state: ${this.audioContext.state}`);
@@ -707,6 +764,9 @@ class ProxyFrameCache {
 
     const scrubVolume = Math.max(0, Math.min(4, options?.volume ?? 1));
     const scrubEqGains = options?.eqGains ?? [];
+    const scrubPan = clampAudioPan(options?.pan);
+    const scrubProcessors = options?.processors ?? [];
+    const processorSignature = scrubProcessorSignature(scrubProcessors);
     const now = performance.now();
     const clampedTarget = Math.max(0, Math.min(targetTime, buffer.duration - 0.1));
 
@@ -720,7 +780,8 @@ class ProxyFrameCache {
     const needNewSource =
       !this.scrubIsActive ||
       this.scrubCurrentMediaId !== mediaFileId ||
-      !this.scrubSource;
+      !this.scrubSource ||
+      this.scrubProcessorSignature !== processorSignature;
 
     if (needNewSource) {
       // Stop existing source
@@ -729,7 +790,8 @@ class ProxyFrameCache {
       this.scrubSource = ctx.createBufferSource();
       this.scrubSource.buffer = buffer;
       this.scrubSource.playbackRate.value = 1.0;
-      this.attachScrubEffectChain(ctx, this.scrubSource, scrubVolume, scrubEqGains);
+      this.attachScrubEffectChain(ctx, this.scrubSource, scrubVolume, scrubEqGains, scrubPan, scrubProcessors);
+      this.scrubProcessorSignature = processorSignature;
 
       // Start playing from target position
       this.scrubSource.start(0, clampedTarget);
@@ -748,7 +810,7 @@ class ProxyFrameCache {
         }
       };
     } else if (this.scrubSource && timeDelta > 0.001) {
-      this.updateScrubEffects(scrubVolume, scrubEqGains);
+      this.updateScrubEffects(scrubVolume, scrubEqGains, scrubPan, scrubProcessors);
 
       // Calculate where audio SHOULD be vs where it IS
       const elapsedAudioTime = (ctx.currentTime - this.scrubStartTime) * this.scrubSource.playbackRate.value;
@@ -780,7 +842,7 @@ class ProxyFrameCache {
       const smoothedRate = currentRate + (targetRate - currentRate) * 0.3;
       this.scrubSource.playbackRate.value = Math.max(0.25, Math.min(4.0, smoothedRate));
     } else {
-      this.updateScrubEffects(scrubVolume, scrubEqGains);
+      this.updateScrubEffects(scrubVolume, scrubEqGains, scrubPan, scrubProcessors);
     }
   }
 
@@ -802,17 +864,38 @@ class ProxyFrameCache {
       } catch { /* ignore */ }
       this.scrubSourceGain = null;
     }
+    if (this.scrubPanNode) {
+      try {
+        this.scrubPanNode.disconnect();
+      } catch { /* ignore */ }
+      this.scrubPanNode = null;
+    }
+    for (const processor of this.scrubProcessorNodes) {
+      for (const node of processor.nodes) {
+        try {
+          node.disconnect();
+        } catch { /* ignore */ }
+      }
+    }
     for (const filter of this.scrubEqFilters) {
       try {
         filter.disconnect();
       } catch { /* ignore */ }
     }
+    this.scrubProcessorNodes = [];
+    this.scrubProcessorSignature = '';
     this.scrubEqFilters = [];
     this.scrubIsActive = false;
     this.scrubCurrentMediaId = null;
 
     // Also reset frame scrub tracking state
     this.resetScrubState();
+  }
+
+  getScrubMeterSnapshot(updatedAt = performance.now()): AudioMeterSnapshot | null {
+    if (!this.scrubAnalyser || !this.scrubMeterBuffer || !this.scrubIsActive) return null;
+    this.scrubAnalyser.getFloatTimeDomainData(this.scrubMeterBuffer);
+    return calculateAudioMeterSnapshot(this.scrubMeterBuffer, updatedAt);
   }
 
   /**
@@ -826,10 +909,15 @@ class ProxyFrameCache {
     ctx: AudioContext,
     source: AudioBufferSourceNode,
     volume: number,
-    eqGains: number[]
+    eqGains: number[],
+    pan: number,
+    processors: readonly LiveAudioRouteProcessor[]
   ): void {
     this.scrubSourceGain = ctx.createGain();
     this.scrubSourceGain.gain.value = volume;
+    this.scrubPanNode = ctx.createStereoPanner();
+    this.scrubPanNode.pan.value = pan;
+    this.scrubProcessorNodes = processors.map(processor => this.createScrubProcessorNode(ctx, processor));
 
     this.scrubEqFilters = EQ_FREQUENCIES.map((frequency, index) => {
       const filter = ctx.createBiquadFilter();
@@ -841,21 +929,71 @@ class ProxyFrameCache {
     });
 
     source.connect(this.scrubSourceGain);
-    this.scrubSourceGain.connect(this.scrubEqFilters[0]);
+    let tail: AudioNode = this.scrubSourceGain;
+    for (const processor of this.scrubProcessorNodes) {
+      for (const node of processor.nodes) {
+        tail.connect(node);
+        tail = node;
+      }
+    }
+    tail.connect(this.scrubEqFilters[0]);
     for (let i = 0; i < this.scrubEqFilters.length - 1; i++) {
       this.scrubEqFilters[i].connect(this.scrubEqFilters[i + 1]);
     }
-    this.scrubEqFilters[this.scrubEqFilters.length - 1].connect(this.scrubGain!);
+    this.scrubEqFilters[this.scrubEqFilters.length - 1].connect(this.scrubPanNode);
+    this.scrubPanNode.connect(this.scrubAnalyser!);
   }
 
-  private updateScrubEffects(volume: number, eqGains: number[]): void {
+  private updateScrubEffects(
+    volume: number,
+    eqGains: number[],
+    pan: number,
+    processors: readonly LiveAudioRouteProcessor[],
+  ): void {
     if (this.scrubSourceGain) {
       this.scrubSourceGain.gain.value = Math.max(0, Math.min(4, volume));
+    }
+    if (this.scrubPanNode) {
+      this.scrubPanNode.pan.value = clampAudioPan(pan);
     }
 
     for (let i = 0; i < this.scrubEqFilters.length; i++) {
       this.scrubEqFilters[i].gain.value = eqGains[i] ?? 0;
     }
+
+    const ctx = this.audioContext;
+    if (!ctx) return;
+    processors.forEach((processor, index) => {
+      const node = this.scrubProcessorNodes[index];
+      if (node) updateScrubProcessorNode(ctx, node, processor);
+    });
+  }
+
+  private createScrubProcessorNode(
+    ctx: BaseAudioContext,
+    processor: LiveAudioRouteProcessor,
+  ): ScrubProcessorNode {
+    if (processor.type === 'high-pass' || processor.type === 'low-pass') {
+      const filter = ctx.createBiquadFilter();
+      const node: ScrubProcessorNode = {
+        type: processor.type,
+        nodes: [filter],
+        filter,
+      };
+      updateScrubProcessorNode(ctx, node, processor);
+      return node;
+    }
+
+    const compressor = ctx.createDynamicsCompressor();
+    const makeupGain = ctx.createGain();
+    const node: ScrubProcessorNode = {
+      type: 'compressor',
+      nodes: [compressor, makeupGain],
+      compressor,
+      makeupGain,
+    };
+    updateScrubProcessorNode(ctx, node, processor);
+    return node;
   }
 
   // Clear cache for a specific media file
@@ -912,6 +1050,8 @@ class ProxyFrameCache {
     }
     this.audioContext = null;
     this.scrubGain = null;
+    this.scrubAnalyser = null;
+    this.scrubMeterBuffer = null;
 
     // Clear audio buffer cache (buffers are tied to the old context)
     this.audioBufferCache.clear();

@@ -12,6 +12,11 @@ export const AUDIO_ANALYSIS_REF_KINDS = [
   'processed-waveform-pyramid',
   'spectrogram-tiles',
   'loudness-envelope',
+  'beat-grid',
+  'onset-map',
+  'phase-correlation',
+  'transcript-timing',
+  'frequency-summary',
 ] as const satisfies readonly AudioAnalysisArtifactKind[];
 
 export type AudioAnalysisRefKind = typeof AUDIO_ANALYSIS_REF_KINDS[number];
@@ -45,6 +50,11 @@ export interface AudioAnalysisRefsManifest {
   processedWaveformPyramid?: AudioAnalysisManifestRef;
   spectrogramTileSets?: AudioAnalysisManifestRef[];
   loudnessEnvelope?: AudioAnalysisManifestRef;
+  beatGrid?: AudioAnalysisManifestRef;
+  onsetMap?: AudioAnalysisManifestRef;
+  phaseCorrelation?: AudioAnalysisManifestRef;
+  transcriptTiming?: AudioAnalysisManifestRef;
+  frequencySummary?: AudioAnalysisManifestRef;
 }
 
 export interface LegacyAudioAnalysisRefs {
@@ -52,6 +62,11 @@ export interface LegacyAudioAnalysisRefs {
   processedWaveformPyramidId?: string;
   spectrogramTileSetIds?: string[];
   loudnessEnvelopeId?: string;
+  beatGridId?: string;
+  onsetMapId?: string;
+  phaseCorrelationId?: string;
+  transcriptTimingId?: string;
+  frequencySummaryId?: string;
 }
 
 export type AudioAnalysisRefsLike = AudioAnalysisRefsManifest | LegacyAudioAnalysisRefs | null | undefined;
@@ -76,7 +91,15 @@ export interface AudioAnalysisRefFreshness {
 
 type RefFieldName = keyof Pick<
   AudioAnalysisRefsManifest,
-  'waveformPyramid' | 'processedWaveformPyramid' | 'spectrogramTileSets' | 'loudnessEnvelope'
+  | 'waveformPyramid'
+  | 'processedWaveformPyramid'
+  | 'spectrogramTileSets'
+  | 'loudnessEnvelope'
+  | 'beatGrid'
+  | 'onsetMap'
+  | 'phaseCorrelation'
+  | 'transcriptTiming'
+  | 'frequencySummary'
 >;
 
 type LegacyRefFieldName = keyof LegacyAudioAnalysisRefs;
@@ -86,6 +109,11 @@ const KIND_TO_REF_FIELD: Record<AudioAnalysisRefKind, RefFieldName> = {
   'processed-waveform-pyramid': 'processedWaveformPyramid',
   'spectrogram-tiles': 'spectrogramTileSets',
   'loudness-envelope': 'loudnessEnvelope',
+  'beat-grid': 'beatGrid',
+  'onset-map': 'onsetMap',
+  'phase-correlation': 'phaseCorrelation',
+  'transcript-timing': 'transcriptTiming',
+  'frequency-summary': 'frequencySummary',
 };
 
 const KIND_TO_LEGACY_REF_FIELD: Record<AudioAnalysisRefKind, LegacyRefFieldName> = {
@@ -93,6 +121,11 @@ const KIND_TO_LEGACY_REF_FIELD: Record<AudioAnalysisRefKind, LegacyRefFieldName>
   'processed-waveform-pyramid': 'processedWaveformPyramidId',
   'spectrogram-tiles': 'spectrogramTileSetIds',
   'loudness-envelope': 'loudnessEnvelopeId',
+  'beat-grid': 'beatGridId',
+  'onset-map': 'onsetMapId',
+  'phase-correlation': 'phaseCorrelationId',
+  'transcript-timing': 'transcriptTimingId',
+  'frequency-summary': 'frequencySummaryId',
 };
 
 export function isAudioAnalysisRefKind(value: unknown): value is AudioAnalysisRefKind {
@@ -278,6 +311,16 @@ export function addAudioAnalysisManifestRef(
     }
     case 'loudness-envelope':
       return { ...manifest, loudnessEnvelope: ref };
+    case 'beat-grid':
+      return { ...manifest, beatGrid: ref };
+    case 'onset-map':
+      return { ...manifest, onsetMap: ref };
+    case 'phase-correlation':
+      return { ...manifest, phaseCorrelation: ref };
+    case 'transcript-timing':
+      return { ...manifest, transcriptTiming: ref };
+    case 'frequency-summary':
+      return { ...manifest, frequencySummary: ref };
   }
 }
 

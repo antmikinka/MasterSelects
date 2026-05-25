@@ -28,6 +28,7 @@ import {
 
 export {
   clipRequiresProcessedWaveformPyramid,
+  collectProcessedAnalysisClipAudioEffectInstances,
   collectRenderableClipAudioEditOperations,
   collectRenderableClipAudioEffectInstances,
   createProcessedClipAudioIdentityInput,
@@ -44,6 +45,7 @@ export type ProcessedWaveformGenerationPhase =
   | 'preparing'
   | 'trimming'
   | 'edit-stack'
+  | 'spectral-layers'
   | 'reversing'
   | 'muting'
   | 'speed'
@@ -162,6 +164,7 @@ export class ProcessedWaveformPyramidService {
     } = request;
     const mediaFileId = request.mediaFileId ?? clip.mediaFileId ?? clip.source?.mediaFileId ?? clip.id;
     const clipAudioStateHash = createProcessedClipAudioStateHash(clip, {
+      keyframes,
       trackGraphIdentity,
       masterGraphIdentity,
     });
@@ -176,6 +179,7 @@ export class ProcessedWaveformPyramidService {
       clip,
       sourceBuffer,
       keyframes,
+      effectMode: 'analysis-shape',
       onProgress: progress => this.emitClipAudioProgress(onProgress, progress),
     });
     const processedBuffer = processedAudio.buffer;
