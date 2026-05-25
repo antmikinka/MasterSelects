@@ -320,6 +320,70 @@ describe('timeline audio edit slice', () => {
     ]);
   });
 
+  it('applies cached repair suggestions as whole-clip non-destructive edit operations', () => {
+    const clip = createMockClip({
+      id: 'audio-clip',
+      trackId: 'audio-1',
+      file: new File([], 'dialog.wav', { type: 'audio/wav' }),
+      source: { type: 'audio', naturalDuration: 12 },
+      startTime: 5,
+      duration: 6,
+      inPoint: 2,
+      outPoint: 8,
+      audioState: {
+        sourceAnalysisRefs: { waveformPyramidId: 'source-waveform' },
+        processedAnalysisRefs: { loudnessEnvelopeId: 'processed-loudness' },
+      },
+    });
+    const store = createTestTimelineStore({ clips: [clip] });
+
+    const operationId = store.getState().applyAudioRepairSuggestion('audio-clip', {
+      id: 'audio-repair:hum-notch',
+      kind: 'hum-notch',
+      label: '50 Hz hum notch',
+      severity: 'warning',
+      confidence: 0.84,
+      reason: '50 Hz carries concentrated low-frequency energy.',
+      operation: {
+        editType: 'repair',
+        params: {
+          repairType: 'hum-notch',
+          baseFrequencyHz: 50,
+          harmonicCount: 6,
+          q: 35,
+        },
+      },
+      evidence: {
+        energyShare: 0.24,
+        peakDb: -12,
+      },
+    });
+
+    const updated = store.getState().clips[0];
+    expect(operationId).toBeTruthy();
+    expect(updated.audioState?.sourceAnalysisRefs?.waveformPyramidId).toBe('source-waveform');
+    expect(updated.audioState?.processedAnalysisRefs).toBeUndefined();
+    expect(updated.audioState?.editStack).toEqual([
+      expect.objectContaining({
+        id: operationId,
+        type: 'repair',
+        enabled: true,
+        timeRange: { start: 2, end: 8 },
+        params: expect.objectContaining({
+          label: '50 Hz hum notch',
+          timelineStart: 5,
+          timelineEnd: 11,
+          repairType: 'hum-notch',
+          repairSuggestionId: 'audio-repair:hum-notch',
+          repairSuggestionKind: 'hum-notch',
+          repairSuggestionSeverity: 'warning',
+          repairSuggestionConfidence: 0.84,
+          repairSuggestionEvidence: JSON.stringify({ energyShare: 0.24, peakDb: -12 }),
+        }),
+      }),
+    ]);
+  });
+
   it('does not edit audio clips on locked tracks', () => {
     const store = createTestTimelineStore({
       tracks: [

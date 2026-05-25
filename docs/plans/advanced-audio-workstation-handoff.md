@@ -20,6 +20,7 @@ Recent fixes in this handoff pass:
 - Added `frequencyBands` and `audioMetadata` aliases to AI node runtime signals so generated nodes can read compact analysis tables and source/routing metadata without raw audio buffers.
 - Added a visible `Audio Analysis` graph node for audio-capable clips so artifact-backed analysis signals are not only hidden on the source node.
 - Made Node Workspace audio analysis `Refresh` actions force-regenerate matching artifacts instead of returning early when refs already exist.
+- Surfaced cached repair suggestions in the Audio Edit Stack panel and made Apply create non-destructive whole-clip `repair` or `mono-sum` operations with suggestion/evidence metadata.
 
 ## Verification Run In This Pass
 
@@ -30,6 +31,7 @@ Passed:
 - `npm run test -- tests\unit\audio\audioRepairSuggestions.test.ts tests\unit\aiNodeRuntime.test.ts tests\unit\nodeGraphProjection.test.ts`
 - `npm run test -- tests\unit\nodeGraphProjection.test.ts tests\unit\aiNodeRuntime.test.ts`
 - `npm run test -- tests\unit\nodeGraphProjection.test.ts tests\unit\aiNodeRuntime.test.ts tests\stores\timeline\clipSlice.test.ts`
+- `npm run test -- tests\stores\timeline\audioEditSlice.test.ts tests\unit\audio\audioRepairSuggestions.test.ts`
 - Focused ESLint on the edited audio/node/runtime/timeline files
 - Dev bridge hard reload showed no fresh `TimelineClipComponent` or `getSnapshot` errors
 
@@ -59,7 +61,7 @@ Before committing, run the full required checks:
    - Add cancellable audio operation previews for repair/bake paths.
    - Add amplitude/loudness-based silence range analysis and true timeline-compacting silence removal.
    - Add room-tone generation/loop DSP.
-   - Surface repair suggestions in a reviewed UI flow, not only in AI/Node context.
+   - Add per-suggestion preview/audition before applying or baking repair operations.
 
 5. Performance:
    - Continue profiling deep zoom responsiveness after the processed-analysis request-key fix.

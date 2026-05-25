@@ -335,6 +335,105 @@
   flex: 0 0 auto;
 }
 
+.audio-repair-suggestion-section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.audio-repair-suggestion-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.audio-repair-suggestion-header h4 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.audio-repair-suggestion-header span,
+.audio-repair-suggestion-empty {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.audio-repair-suggestion-list {
+  display: grid;
+  gap: 6px;
+}
+
+.audio-repair-suggestion-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid rgba(120, 132, 150, 0.32);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+}
+
+.audio-repair-suggestion-card.severity-warning {
+  border-color: rgba(250, 180, 60, 0.38);
+}
+
+.audio-repair-suggestion-card.severity-critical {
+  border-color: rgba(255, 92, 92, 0.42);
+}
+
+.audio-repair-suggestion-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.audio-repair-suggestion-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.audio-repair-suggestion-title strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-repair-suggestion-title span,
+.audio-repair-suggestion-evidence {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.audio-repair-suggestion-card p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.audio-repair-suggestion-evidence {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .audio-edit-stack-layout {
   display: grid;
   grid-template-columns: minmax(150px, 0.9fr) minmax(180px, 1.1fr);

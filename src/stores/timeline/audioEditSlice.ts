@@ -2,7 +2,13 @@ import type { ClipAudioEditOperation, SpectralImageLayer } from '../../types';
 import { encodeAudioBufferToWavBlob } from '../../engine/audio/AudioFileEncoder';
 import { AudioExtractor, audioExtractor } from '../../engine/audio/AudioExtractor';
 import { Logger } from '../../services/logger';
-import type { AudioEditActions, SliceCreator, TimelineAudioRegionEditType, TimelineClip } from './types';
+import type {
+  ApplyAudioRepairSuggestionInput,
+  AudioEditActions,
+  SliceCreator,
+  TimelineAudioRegionEditType,
+  TimelineClip,
+} from './types';
 import { generateClipId } from './helpers/idGenerator';
 import { clearProcessedAudioAnalysisRefs } from './helpers/audioAnalysisStateHelpers';
 import { ClipAudioRenderService } from '../../services/audio/ClipAudioRenderService';
@@ -99,6 +105,25 @@ function normalizeSpectralLayer(layer: SpectralImageLayer): SpectralImageLayer {
     featherFrequency: Math.max(0, layer.featherFrequency),
     ...(keyframes.length > 0 ? { keyframes } : {}),
   };
+}
+
+function clipSourceRange(clip: TimelineClip): { start: number; end: number } {
+  const sourceStart = clip.inPoint ?? 0;
+  const sourceEnd = Math.max(sourceStart + 0.001, clip.outPoint ?? sourceStart + clip.duration);
+  return {
+    start: Math.min(sourceStart, sourceEnd),
+    end: Math.max(sourceStart, sourceEnd),
+  };
+}
+
+function serializeRepairSuggestionEvidence(
+  evidence: ApplyAudioRepairSuggestionInput['evidence'],
+): string | undefined {
+  if (!evidence || Object.keys(evidence).length === 0) {
+    return undefined;
+  }
+
+  return JSON.stringify(evidence);
 }
 
 function getClipMediaFileId(clip: TimelineClip): string | undefined {
@@ -198,6 +223,69 @@ export const createAudioEditSlice: SliceCreator<AudioEditActions> = (set, get) =
         });
       }),
       ...(options.keepSelection ? {} : { audioRegionSelection: null }),
+    });
+    get().invalidateCache();
+    return operation.id;
+  },
+
+  applyAudioRepairSuggestion: (clipId, suggestion) => {
+    const { clips, tracks } = get();
+    const clip = clips.find(c => c.id === clipId);
+    if (!clip || !isAudioClip(clip)) {
+      log.warn('Cannot apply repair suggestion to missing or non-audio clip', { clipId });
+      return null;
+    }
+
+    const track = tracks.find(t => t.id === clip.trackId);
+    if (track?.locked) {
+      log.warn('Cannot apply repair suggestion on locked track', { clipId, trackId: clip.trackId });
+      return null;
+    }
+
+    const sourceRange = clipSourceRange(clip);
+    if (sourceRange.end - sourceRange.start <= 0.0005) {
+      log.warn('Cannot apply repair suggestion to an empty clip range', { clipId });
+      return null;
+    }
+
+    const evidence = serializeRepairSuggestionEvidence(suggestion.evidence);
+    const operation: ClipAudioEditOperation = {
+      id: createAudioEditOperationId(),
+      type: suggestion.operation.editType,
+      enabled: true,
+      params: {
+        ...(suggestion.operation.params ?? {}),
+        label: suggestion.operation.params?.label ?? suggestion.label,
+        timelineStart: clip.startTime,
+        timelineEnd: clip.startTime + clip.duration,
+        preserveClipDuration: true,
+        repairSuggestionId: suggestion.id,
+        repairSuggestionKind: suggestion.kind,
+        ...(suggestion.severity ? { repairSuggestionSeverity: suggestion.severity } : {}),
+        ...(typeof suggestion.confidence === 'number' ? { repairSuggestionConfidence: suggestion.confidence } : {}),
+        ...(suggestion.reason ? { repairSuggestionReason: suggestion.reason } : {}),
+        ...(evidence ? { repairSuggestionEvidence: evidence } : {}),
+      },
+      timeRange: sourceRange,
+      createdAt: Date.now(),
+    };
+
+    captureSnapshot(`Apply ${suggestion.label}`);
+    set({
+      clips: clips.map(currentClip => {
+        if (currentClip.id !== clipId) return currentClip;
+        const audioState = currentClip.audioState ?? {};
+        return clearProcessedAudioAnalysisRefs({
+          ...currentClip,
+          audioState: {
+            ...audioState,
+            editStack: [
+              ...(audioState.editStack ?? []),
+              operation,
+            ],
+          },
+        });
+      }),
     });
     get().invalidateCache();
     return operation.id;

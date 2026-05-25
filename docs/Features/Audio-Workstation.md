@@ -22,6 +22,7 @@ Audio Focus mode keeps the timeline as the detailed editor. It expands audio lan
 - Spectral Audio mode renders real spectrogram tile artifacts inline.
 - Audio region selections create non-destructive edit-stack operations for silence, insert/delete silence, reverse, polarity, channel operations, and repairs.
 - Spectral selections create time/frequency edit operations and image-in-spectrum layers.
+- The Audio Edit Stack panel surfaces cached rule-based repair suggestions from loudness, frequency, and phase analysis. Applying a suggestion creates a non-destructive whole-clip repair or mono-sum operation with evidence metadata; it does not mutate the source file.
 - Bake/render creates derived media while preserving the original source file.
 
 ## Mixer Surface
@@ -63,6 +64,7 @@ Current focused checks cover:
 - Track/master routing, sends, export preflight, and audio export paths.
 - Node Workspace audio projection and AI runtime context for semantic audio ports, `frequencyBands`, `audioMetadata`, repair suggestions, and artifact-only bounded summaries.
 - Node Workspace `Generate`/`Refresh` actions for audio analysis ports. Refresh forces regeneration instead of returning early when a matching artifact ref already exists.
+- Rule-based repair suggestions applied from the Audio Edit Stack as non-destructive edit operations with processed-analysis invalidation.
 
 ## Sources
 

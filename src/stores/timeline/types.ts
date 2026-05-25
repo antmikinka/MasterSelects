@@ -538,6 +538,20 @@ export interface ApplyAudioRegionEditOptions {
   params?: ClipAudioEditOperation['params'];
 }
 
+export interface ApplyAudioRepairSuggestionInput {
+  id: string;
+  kind: string;
+  label: string;
+  severity?: string;
+  confidence?: number;
+  reason?: string;
+  operation: {
+    editType: Extract<ClipAudioEditOperation['type'], 'repair' | 'mono-sum'>;
+    params?: ClipAudioEditOperation['params'];
+  };
+  evidence?: ClipAudioEditOperation['params'];
+}
+
 export interface ApplySpectralRegionEditOptions {
   channelMask?: number[];
   keepSelection?: boolean;
@@ -550,6 +564,7 @@ export type AddClipSpectralImageLayerInput = Omit<SpectralImageLayer, 'id'> & {
 
 export interface AudioEditActions {
   applyAudioRegionEdit: (type: TimelineAudioRegionEditType, options?: ApplyAudioRegionEditOptions) => string | null;
+  applyAudioRepairSuggestion: (clipId: string, suggestion: ApplyAudioRepairSuggestionInput) => string | null;
   copySelectedAudioRegion: () => boolean;
   pasteAudioRegionToSelection: () => string | null;
   setClipAudioEditOperationEnabled: (clipId: string, operationId: string, enabled: boolean) => void;

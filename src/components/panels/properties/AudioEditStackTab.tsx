@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTimelineStore } from '../../../stores/timeline';
 import { useMediaStore } from '../../../stores/mediaStore';
-import type { ClipAudioEditOperation, SpectralImageLayer, SpectralImageLayerKeyframe, TimelineClip } from '../../../types';
+import type {
+  ClipAudioEditOperation,
+  MediaFileAudioAnalysisRefs,
+  SpectralImageLayer,
+  SpectralImageLayerKeyframe,
+  TimelineClip,
+} from '../../../types';
+import { buildAudioRepairSuggestionsFromRefs } from '../../../services/audio/audioRepairSuggestions';
+import type { AudioRepairSuggestion } from '../../../services/audio/audioRepairSuggestions';
 
 const OPERATION_LABELS: Record<ClipAudioEditOperation['type'], string> = {
   trim: 'Trim',
@@ -52,6 +60,32 @@ function getTimelineRange(operation: ClipAudioEditOperation): string {
   const end = operation.params?.timelineEnd;
   if (typeof start !== 'number' || typeof end !== 'number') return '-';
   return `${formatSeconds(start)} - ${formatSeconds(end)}`;
+}
+
+function firstNonEmptyRefs<T>(preferred: T[] | undefined, fallback: T[] | undefined): T[] | undefined {
+  return preferred && preferred.length > 0 ? preferred : fallback;
+}
+
+function getEffectiveAudioAnalysisRefs(clip: TimelineClip | undefined): MediaFileAudioAnalysisRefs | undefined {
+  const source = clip?.audioState?.sourceAnalysisRefs;
+  const processed = clip?.audioState?.processedAnalysisRefs;
+  if (!source && !processed) {
+    return undefined;
+  }
+
+  return {
+    waveformPyramidId: processed?.processedWaveformPyramidId ??
+      processed?.waveformPyramidId ??
+      source?.waveformPyramidId,
+    processedWaveformPyramidId: processed?.processedWaveformPyramidId ?? source?.processedWaveformPyramidId,
+    spectrogramTileSetIds: firstNonEmptyRefs(processed?.spectrogramTileSetIds, source?.spectrogramTileSetIds),
+    loudnessEnvelopeId: processed?.loudnessEnvelopeId ?? source?.loudnessEnvelopeId,
+    beatGridId: processed?.beatGridId ?? source?.beatGridId,
+    onsetMapId: processed?.onsetMapId ?? source?.onsetMapId,
+    phaseCorrelationId: processed?.phaseCorrelationId ?? source?.phaseCorrelationId,
+    transcriptTimingId: processed?.transcriptTimingId ?? source?.transcriptTimingId,
+    frequencySummaryId: processed?.frequencySummaryId ?? source?.frequencySummaryId,
+  };
 }
 
 function formatFrequency(value: number | undefined): string {
@@ -113,6 +147,20 @@ function replaceSpectralLayerKeyframe(
     .toSorted((a, b) => a.time - b.time);
 }
 
+function formatSuggestionEvidence(suggestion: AudioRepairSuggestion): string {
+  return Object.entries(suggestion.evidence)
+    .slice(0, 4)
+    .map(([key, value]) => `${key}: ${formatValue(value)}`)
+    .join(' | ');
+}
+
+function isSuggestionApplied(editStack: ClipAudioEditOperation[], suggestion: AudioRepairSuggestion): boolean {
+  return editStack.some(operation =>
+    operation.enabled !== false &&
+    operation.params?.repairSuggestionId === suggestion.id
+  );
+}
+
 interface AudioEditStackTabProps {
   clipId: string;
 }
@@ -122,6 +170,7 @@ export function AudioEditStackTab({ clipId }: AudioEditStackTabProps) {
   const setClipAudioEditOperationEnabled = useTimelineStore(state => state.setClipAudioEditOperationEnabled);
   const removeClipAudioEditOperation = useTimelineStore(state => state.removeClipAudioEditOperation);
   const clearClipAudioEditStack = useTimelineStore(state => state.clearClipAudioEditStack);
+  const applyAudioRepairSuggestion = useTimelineStore(state => state.applyAudioRepairSuggestion);
   const bakeClipAudioEditStack = useTimelineStore(state => state.bakeClipAudioEditStack);
   const updateClipSpectralImageLayer = useTimelineStore(state => state.updateClipSpectralImageLayer);
   const removeClipSpectralImageLayer = useTimelineStore(state => state.removeClipSpectralImageLayer);
@@ -136,6 +185,11 @@ export function AudioEditStackTab({ clipId }: AudioEditStackTabProps) {
   const [baking, setBaking] = useState(false);
 
   const editStack = useMemo(() => clip?.audioState?.editStack ?? [], [clip?.audioState?.editStack]);
+  const effectiveAudioAnalysisRefs = useMemo(() => getEffectiveAudioAnalysisRefs(clip), [clip]);
+  const repairSuggestions = useMemo(
+    () => buildAudioRepairSuggestionsFromRefs(effectiveAudioAnalysisRefs),
+    [effectiveAudioAnalysisRefs],
+  );
   const spectralLayers = clip?.audioState?.spectralLayers ?? [];
   const bakeHistory = clip?.audioState?.bakeHistory ?? [];
   const activeOperationCount = editStack.filter(operation => operation.enabled !== false).length;
@@ -207,6 +261,48 @@ export function AudioEditStackTab({ clipId }: AudioEditStackTabProps) {
             Clear
           </button>
         </div>
+      </div>
+
+      <div className="audio-repair-suggestion-section">
+        <div className="audio-repair-suggestion-header">
+          <div>
+            <h4>Repair Suggestions</h4>
+            <span>{repairSuggestions.length ? `${repairSuggestions.length} available` : 'Run loudness, frequency, and phase analysis to populate suggestions'}</span>
+          </div>
+        </div>
+        {repairSuggestions.length > 0 ? (
+          <div className="audio-repair-suggestion-list">
+            {repairSuggestions.map((suggestion) => {
+              const applied = isSuggestionApplied(editStack, suggestion);
+              return (
+                <div key={suggestion.id} className={`audio-repair-suggestion-card severity-${suggestion.severity}`}>
+                  <div className="audio-repair-suggestion-main">
+                    <div className="audio-repair-suggestion-title">
+                      <strong>{suggestion.label}</strong>
+                      <span>{suggestion.severity} | {Math.round(suggestion.confidence * 100)}%</span>
+                    </div>
+                    <p>{suggestion.reason}</p>
+                    {formatSuggestionEvidence(suggestion) && (
+                      <span className="audio-repair-suggestion-evidence">{formatSuggestionEvidence(suggestion)}</span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={applied}
+                    onClick={() => applyAudioRepairSuggestion(clip.id, suggestion)}
+                  >
+                    {applied ? 'Applied' : 'Apply'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="audio-repair-suggestion-empty">
+            No repair suggestions from the current cached analysis.
+          </div>
+        )}
       </div>
 
       {editStack.length === 0 ? (
