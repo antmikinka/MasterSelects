@@ -16,7 +16,7 @@ Model-based audio editing is intentionally excluded for now because it requires 
 - A durable audio schema covering source assets, analysis artifacts, edit stacks, track audio state, master bus state, job state, and derived media provenance.
 - High-resolution multi-channel waveform pyramids with min/max/RMS/peak, source and processed variants, cache identity, and timeline LOD rendering.
 - Offline/on-demand analysis for waveform, loudness, spectrogram, mel spectrogram, phase/correlation, beats, onsets, silence, clipping, and frequency summaries.
-- A Spectral Canvas with tiled STFT rendering, time/frequency selection, spectral brush tools, image-driven masks, and DSP-based image-to-spectrum resynthesis.
+- Timeline-embedded spectral editing with tiled STFT rendering, time/frequency selection, spectral brush tools, image-driven masks, and DSP-based image-to-spectrum resynthesis.
 - A first-class `AudioEffectRegistry` that replaces hardcoded `audio-volume` and `audio-eq` handling and defines live/offline/export behavior for every processor.
 - Clip, track, send, and master bus processing with meters, limiter, LUFS/true-peak monitoring, track FX, record arm, and input monitoring.
 - Recording through `AudioWorklet` where available, with project persistence, waveform generation, punch-in/punch-out, and recording recovery behavior.
@@ -54,8 +54,8 @@ Key current limitations:
 - Clip waveforms are embedded as `number[]` on clips, generated from the first channel, normalized, capped, and often saved in project JSON.
 - Current waveform generation can decode full files on the main thread through `file.arrayBuffer()` and `AudioContext.decodeAudioData()`.
 - `CacheService.saveWaveform()` stores a single raw `Float32Array` without schema, version, channel layout, or fingerprint metadata.
-- No dedicated sample/region audio editor.
-- No spectral view, spectral selection, or image-based spectral editing.
+- No expanded timeline sample/region audio editor.
+- No inline spectral view, spectral selection, or image-based spectral editing.
 - No compressor, limiter, gate, de-esser, reverb, delay, LUFS normalization, de-click, hum removal, or basic non-neural noise reduction as registry-backed effects.
 - No track-level pan/volume/effects/metering bus model.
 - No native recording workflow in the main timeline.
@@ -68,7 +68,7 @@ Key current limitations:
 3. Audio analysis must produce reusable project artifacts, not temporary UI-only arrays.
 4. Waveform, spectrogram, loudness, transcript, beat, and onset data are signals that can feed UI, effects, node graphs, future assistants, and visual rendering.
 5. Heavy decode, analysis, repair, and spectral work runs through cancellable worker, WASM, WebCodecs, FFmpeg, or Native Helper jobs. Browser Web Audio full-file decode is only a bounded fallback.
-6. Timeline clips remain the user-facing editing surface, but audio state must have its own durable schema rather than being hidden inside generic clip effects.
+6. Timeline clips remain the primary editing surface. Detailed audio editing happens inline through expanded audio lanes and Audio Focus Mode, while audio state still has its own durable schema rather than being hidden inside generic clip effects.
 7. The feature should feel like part of a media compositor, not a separate DAW bolted onto the side.
 
 ## Locked Decisions
@@ -129,9 +129,11 @@ Node Workspace
 | `AudioEffectRegistry` | Single source of truth for audio effect descriptors, params, UI metadata, live processors, offline processors, latency, tails, bypass, and automation. |
 | `AudioGraphRenderer` | Shared graph builder for clip, track, send, master, live playback, offline render, waveform processing, and export. |
 | `AudioAssetDerivationService` | Creates explicit derived media assets from bake/render, recording, repair, spectral edits, and export-cache operations. |
-| `SpectralCanvas` | Waveform/spectrogram/mel/phase editor surface with spectral selections, image layers, brush tools, and resynthesis preview/export. |
-| `AudioEditorPanel` | Region editor for sample-level operations, edit stack inspection, markers, zero-cross tools, and bake/render controls. |
-| `AudioMixerPanel` | Track, send, master, meter, limiter, LUFS, record-arm, and input-monitor UI. |
+| `TimelineAudioDetailMode` | Expands audio clips/tracks inside the timeline for waveform, region, automation, markers, edit-stack, and bake/render work. |
+| `AudioFocusMode` | Timeline layout mode that makes audio lanes large and precise while compacting/dimming video layers for context. |
+| `InlineSpectralCanvas` | Timeline-embedded waveform/spectrogram/mel/phase surface with spectral selections, image layers, brush tools, and resynthesis preview/export. |
+| `AudioInspectorPanel` | Docked side inspector for selected clip/track/master params, analysis status, artifact refs, and explicit actions. It is not the main editor surface. |
+| `AudioMixerPanel` | Docked track, send, master, meter, limiter, LUFS, record-arm, and input-monitor UI for bus-level work. |
 | `AudioRecordingService` | AudioWorklet-based recording into project media with recovery, waveform generation, punch-in/out, and timeline clip creation. |
 | `NodeAudioSignalAdapter` | Projects audio analysis artifacts and audio graph outputs into NodeGraph/Signal IR ports and bounded AI/custom-node context. |
 
@@ -354,9 +356,9 @@ Required levels:
 - During interaction, the timeline may show a fast approximate processed waveform and then swap to a precise artifact when the background job completes.
 - Processed waveform artifacts are invalidated by edit stack, effect stack, speed, pitch, clip source revision, track state, and relevant bus/master processors.
 
-## Spectral Canvas
+## Inline Spectral Canvas
 
-The Spectral Canvas is the audio view where sound becomes an image-like signal. It supports inspection, selection, editing, image layers, and export-parity rendering.
+The Inline Spectral Canvas is the expanded timeline view where sound becomes an image-like signal. It supports inspection, selection, editing, image layers, and export-parity rendering without switching into a separate editor window.
 
 ### Views
 
@@ -397,7 +399,7 @@ Implementation requirements:
 
 ### Image-In-Spectrum Workflows
 
-Users can drop an image onto the Spectral Canvas. The image becomes a time/frequency layer.
+Users can drop an image onto an expanded audio clip's spectral lane. The image becomes a time/frequency layer inside the timeline.
 
 ```ts
 interface SpectralImageLayer {
@@ -435,9 +437,17 @@ Audio analysis should also create visual signals:
 - Allow audio-reactive visuals to sample waveform, frequency bands, beats, onsets, and loudness.
 - Let the Node Workspace expose `audio -> spectrogramTexture`, `audio -> beatEvents`, and `audio -> frequencyBands`.
 
-## Audio Editor Panel
+## Timeline Audio Detail Mode
 
-Add `Open in Audio Editor` for audio clips and linked audio clips.
+Audio clips and linked audio sections should expand directly inside the timeline. The expanded state behaves like a detailed editor surface, but it keeps the user in the same timeline, with the same playhead, snapping, selection, and track context.
+
+### Timeline Display Modes
+
+- **Normal Timeline Mode:** compact video/audio editing with upgraded waveform thumbnails.
+- **Expanded Audio Lane:** a clip or track expands vertically to show precise waveform, stereo lanes, region selections, markers, automation, and edit-stack controls.
+- **Audio Focus Mode:** video tracks remain visible as context but become compact and visually subdued; audio tracks get more height, denser rulers, and detailed waveforms/spectrograms.
+- **Inline Spectral Mode:** the expanded audio lane switches from waveform to spectrogram, mel spectrogram, loudness, phase/correlation, or frequency-band views.
+- **Inspector/Mixer Dock:** selected parameters and bus controls can appear in docked panels, but the primary editing gestures stay on the timeline.
 
 ### Editing Tools
 
@@ -447,7 +457,7 @@ Add `Open in Audio Editor` for audio clips and linked audio clips.
 - Seamless loop tool with crossfade preview.
 - Region markers and named analysis markers.
 - Per-channel selection.
-- Spectral selection handoff to Spectral Canvas.
+- Spectral selection directly in the inline spectral lane.
 - Edit stack inspector with enable/bypass, reorder, duplicate, delete, and bake/render.
 
 ### Non-Destructive Asset Flow
@@ -530,7 +540,7 @@ Clip Processing Stack
   -> Output
 ```
 
-Timeline track headers should expose compact controls for volume, pan, mute, solo, record arm, input monitor, and meters. A dedicated Mixer panel should expose full track FX stacks, sends, master controls, limiter, LUFS meter, true-peak warnings, and export preflight.
+Timeline track headers should expose compact controls for volume, pan, mute, solo, record arm, input monitor, and meters. Full bus work should be available in a docked Mixer view and in expanded timeline track controls, so users can stay timeline-first while still getting track FX stacks, sends, master controls, limiter, LUFS meter, true-peak warnings, and export preflight.
 
 Recording requirements:
 
@@ -678,16 +688,17 @@ These tracks are not MVP phases. They are the dependency order for integrating t
 - Add stereo/multi-channel rendering, fades, automation, clipping/silence diagnostics, and stale indicators.
 - Validate long files, repeated clips, deep zoom, and hundreds of visible clips.
 
-### Track E: Audio Editor Panel
+### Track E: Timeline Audio Detail Mode
 
-- Build the waveform editor surface.
+- Build expanded audio clip/track surfaces inside the timeline.
+- Add Audio Focus Mode that compacts/dims video context and gives audio lanes precise editing height.
 - Add region selection, zero-cross snap, cut/copy/paste/trim/silence/reverse/invert/channel tools.
 - Add edit stack inspector, bypass/reorder, markers, and explicit bake/render.
 - Integrate undo/redo, save/load, and export parity.
 
-### Track F: Spectral Canvas And Image-In-Spectrum
+### Track F: Inline Spectral Canvas And Image-In-Spectrum
 
-- Generate and render tiled spectrogram/mel/phase artifacts.
+- Generate and render tiled spectrogram/mel/phase artifacts inside expanded timeline lanes.
 - Add time/frequency selection, spectral brush, and layer editing.
 - Add image layers with attenuate, boost, gate, sidechain-mask, and replace/resynthesis modes.
 - Add keyframes for spectral image layers.
@@ -696,7 +707,7 @@ These tracks are not MVP phases. They are the dependency order for integrating t
 ### Track G: Mixer, Bus, And Recording
 
 - Add `TrackAudioState`, send buses, and `MasterAudioState` to timeline/project state.
-- Add compact track controls and dedicated Mixer panel.
+- Add compact track controls, expanded timeline track controls, and docked Mixer view.
 - Add meters, limiter, LUFS/true-peak monitoring, record arm, input monitor, and track/master FX stacks.
 - Add `AudioRecordingService`, recording recovery, punch-in/out, and waveform generation.
 
@@ -718,7 +729,7 @@ These tracks are not MVP phases. They are the dependency order for integrating t
 
 ### Track J: Documentation, Feature Flags, And Verification
 
-- Add feature flags for `advancedAudio`, `spectralCanvas`, `waveformPyramid`, `audioEffectRegistry`, and `audioMixer`.
+- Add feature flags for `advancedAudio`, `timelineAudioDetailMode`, `inlineSpectralCanvas`, `audioFocusMode`, `waveformPyramid`, `audioEffectRegistry`, and `audioMixer`.
 - Update `docs/Features/Audio.md`, `Timeline.md`, `Project-Persistence.md`, `Node-Workspace.md`, and `Signal-IR.md`.
 - Add a dedicated `docs/Features/Audio-Workstation.md` after implementation starts.
 - Keep old project compatibility documented.
@@ -733,8 +744,8 @@ These tracks are not MVP phases. They are the dependency order for integrating t
 | Decode runtime | Small audio, large audio, long video-with-audio, unsupported codec fallback, cancellation, progress, and memory ceilings. |
 | Waveform pyramid | Unit tests for min/max/RMS/peak, multi-channel data, cache invalidation, long-file LOD choice, binary manifests, and processed/source variants. |
 | Clip waveform UI | Screenshot checks at zoom levels, stereo clips, fades, automation, diagnostics, repeated clips, and hundreds of visible clips. |
-| Audio effects | Live/offline/export equivalence, automation, bypass, latency/tail, old EQ/volume migration, and panel default behavior without dirtying history. |
-| Audio editor | Region operations, zero-cross snap, edit stack reorder/bypass, bake/render, undo/redo, project reload, and original file immutability. |
+| Audio effects | Live/offline/export equivalence, automation, bypass, latency/tail, old EQ/volume migration, and inspector/default behavior without dirtying history. |
+| Timeline audio detail mode | Expanded-lane region operations, zero-cross snap, edit stack reorder/bypass, bake/render, undo/redo, project reload, focus mode, and original file immutability. |
 | Spectrogram | Deterministic tile generation, zoom/pan rendering, coordinate accuracy, storage budget, cancellation, and stale indicators. |
 | Spectral image layers | Mask placement, keyframes, blend modes, replace/resynthesis, preview/export parity, invalid image handling, and undo/bypass. |
 | Mixer/recording | Track volume/pan/mute/solo, sends, master limiter, meters, no input device, permission failure, stop/cancel, recovery, and waveform generation. |
@@ -744,9 +755,10 @@ These tracks are not MVP phases. They are the dependency order for integrating t
 
 ## Resolved Planning Choices
 
-- Main timeline gets compact audio controls. A dedicated Mixer panel owns full bus, send, meter, limiter, and track FX workflows.
+- The main timeline is the primary audio editing surface. Compact controls live in normal timeline mode; expanded audio lanes and Audio Focus Mode provide detailed editing without opening a separate editor window.
+- A docked Mixer/Inspector view supports full bus, send, meter, limiter, and track FX workflows, but it does not replace timeline-based editing.
 - Analysis payloads should use artifact manifests and binary chunks. Raw JSON arrays are only legacy compatibility.
 - Spectral image masks and replace/resynthesis should be keyframable in the full target.
-- Source waveform/loudness can auto-generate when safe. Heavy spectrogram, beat/onset, and processed waveform jobs are on-demand or triggered by workflows, with background prefetch when a clip/editor/node needs them.
+- Source waveform/loudness can auto-generate when safe. Heavy spectrogram, beat/onset, and processed waveform jobs are on-demand or triggered by workflows, with background prefetch when an expanded timeline lane, inspector, mixer, or node needs them.
 - Processed waveform display uses immediate approximation plus precise background artifacts.
-- Node integration is not a late add-on. Schema and port metadata are designed up front so waveform/spectral artifacts are usable by the timeline, editor, export, and Node Workspace from the same contract.
+- Node integration is not a late add-on. Schema and port metadata are designed up front so waveform/spectral artifacts are usable by the timeline, inline spectral lanes, export, and Node Workspace from the same contract.
