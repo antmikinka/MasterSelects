@@ -179,6 +179,10 @@ async function executeContinuousSave(): Promise<void> {
  */
 function flushContinuousSave(): void {
   if (!projectFileService.isProjectOpen()) return;
+  if (isProjectStoreSyncInProgress()) {
+    log.warn('Continuous save flush skipped while project stores are being synchronized');
+    return;
+  }
 
   clearScheduledContinuousSave();
 

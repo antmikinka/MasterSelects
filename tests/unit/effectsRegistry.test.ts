@@ -156,7 +156,7 @@ describe('Expected effects per category', () => {
   ];
 
   const expectedStylizeEffects = [
-    'vignette', 'grain', 'sharpen', 'posterize', 'glow', 'edge-detect', 'scanlines', 'threshold', 'acuarela', 'rom1',
+    'vignette', 'grain', 'sharpen', 'posterize', 'glow', 'edge-detect', 'scanlines', 'threshold', 'acuarela', 'rom1', 'voxel-relief',
   ];
 
   it('should register all color effects', () => {
@@ -237,6 +237,10 @@ describe('Expected effects per category', () => {
   it('marks Rom1 as feedback-driven and continuous', () => {
     expect(getEffect('rom1')?.usesFeedback).toBe(true);
     expect(getEffect('rom1')?.requiresContinuousRender).toBe(true);
+  });
+
+  it('marks Voxel Relief as feedback-driven for temporal smoothing', () => {
+    expect(getEffect('voxel-relief')?.usesFeedback).toBe(true);
   });
 });
 
@@ -901,6 +905,11 @@ describe('Specific effect definitions', () => {
   it('glow uniformSize should be 32 bytes', () => {
     const glow = getEffect('glow')!;
     expect(glow.uniformSize).toBe(32);
+  });
+
+  it('voxel-relief uniformSize should be 80 bytes', () => {
+    const voxelRelief = getEffect('voxel-relief')!;
+    expect(voxelRelief.uniformSize).toBe(80);
   });
 
   it('levels uniformSize should be 32 bytes', () => {

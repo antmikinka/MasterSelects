@@ -11,6 +11,10 @@ import {
   isProxyFrameIndexSetComplete,
 } from '../../stores/mediaStore/helpers/proxyCompleteness';
 import { updateTimelineClips } from '../../stores/mediaStore/slices/fileManageSlice';
+import {
+  createSignalAssetItem,
+  mergeSignalArtifacts,
+} from '../../stores/mediaStore/helpers/signalItems';
 import { useTimelineStore } from '../../stores/timeline';
 import { useYouTubeStore } from '../../stores/youtubeStore';
 import { useDockStore } from '../../stores/dockStore';
@@ -632,6 +636,9 @@ function convertProjectCompositionToStore(
         trackId: c.trackId,
         name: c.name || '',
         mediaFileId: c.mediaId,  // Map mediaId -> mediaFileId for loadState
+        signalAssetId: c.signalAssetId,
+        signalRefId: c.signalRefId,
+        signalRenderAdapterId: c.signalRenderAdapterId,
         sourceType: c.sourceType || 'video',
         naturalDuration: c.naturalDuration,
         thumbnails: c.thumbnails,
@@ -1000,6 +1007,25 @@ export async function loadProjectToStores(): Promise<void> {
   const splatEffectorItems = normalizeItemFolderParents(projectData.splatEffectorItems || [], validFolderIds, 'splat effector items');
   const mathSceneItems = normalizeItemFolderParents(projectData.mathSceneItems || [], validFolderIds, 'math scene items');
   const motionShapeItems = normalizeItemFolderParents(projectData.motionShapeItems || [], validFolderIds, 'motion shape items');
+  const signalItemMetadata = new Map(
+    (projectData.signals?.assetItems ?? []).map((item) => [item.id, item]),
+  );
+  const signalAssets = normalizeItemFolderParents(
+    (projectData.signals?.assets ?? []).map((asset) => {
+      const metadata = signalItemMetadata.get(asset.id);
+      return createSignalAssetItem(asset, {
+        parentId: metadata?.parentId ?? null,
+        createdAt: metadata?.createdAt,
+        labelColor: metadata?.labelColor,
+      });
+    }),
+    validFolderIds,
+    'signal assets',
+  );
+  const signalArtifacts = signalAssets.reduce(
+    (artifacts, item) => mergeSignalArtifacts(artifacts, item.artifacts),
+    projectData.signals?.artifacts ?? [],
+  );
 
   // Update media store
   useMediaStore.setState({
@@ -1024,6 +1050,10 @@ export async function loadProjectToStores(): Promise<void> {
     splatEffectorItems,
     mathSceneItems,
     motionShapeItems,
+    signalAssets,
+    signalArtifacts,
+    signalGraphs: projectData.signals?.graphs ?? [],
+    signalOperators: projectData.signals?.operators ?? [],
     activeCompositionId: projectData.activeCompositionId,
     openCompositionIds: projectData.openCompositionIds || [],
     expandedFolderIds: projectData.expandedFolderIds || [],

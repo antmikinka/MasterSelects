@@ -10,3 +10,4 @@ export { scanlines } from './scanlines';
 export { threshold } from './threshold';
 export { acuarela } from './acuarela';
 export { rom1 } from './rom1';
+export { voxelRelief } from './voxel-relief';

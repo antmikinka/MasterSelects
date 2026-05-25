@@ -4,6 +4,7 @@
 
 import { useTimelineStore } from '../timeline';
 import { fileSystemService } from '../../services/fileSystemService';
+import { isProjectStoreSyncInProgress } from '../../services/project/projectSave';
 import type { Composition, MediaFile, MediaState } from './types';
 import { Logger } from '../../services/logger';
 import { audioManager } from '../../services/audioManager';
@@ -46,6 +47,11 @@ const getMediaStore = (): MediaStore | null => {
  * Save current timeline to active composition.
  */
 function saveTimelineToActiveComposition(): void {
+  if (isProjectStoreSyncInProgress()) {
+    log.debug('Skipped timeline-to-composition save during project store sync');
+    return;
+  }
+
   const useMediaStore = getMediaStore();
   if (!useMediaStore) return; // Store not ready yet
   const { activeCompositionId } = useMediaStore.getState();
