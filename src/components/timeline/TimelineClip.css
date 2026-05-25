@@ -1275,6 +1275,48 @@
   opacity: 0.95;
 }
 
+.waveform-canvas-source {
+  filter: saturate(1.04);
+}
+
+.waveform-canvas-processed {
+  filter: saturate(1.18) contrast(1.06);
+}
+
+.timeline-clip.waveform-processed-loading .clip-waveform::after,
+.timeline-clip.waveform-processed-missing .clip-waveform::after,
+.timeline-clip.waveform-processed-error .clip-waveform::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.08),
+    transparent
+  );
+  opacity: 0.7;
+}
+
+.timeline-clip.waveform-processed-loading .clip-waveform::after {
+  animation: waveform-processed-pending 1.4s ease-in-out infinite;
+}
+
+.timeline-clip.waveform-processed-missing .clip-waveform::after,
+.timeline-clip.waveform-processed-error .clip-waveform::after {
+  opacity: 0.3;
+}
+
+@keyframes waveform-processed-pending {
+  0% {
+    transform: translateX(-70%);
+  }
+  100% {
+    transform: translateX(70%);
+  }
+}
+
 .waveform-canvas-spectral {
   mix-blend-mode: screen;
 }

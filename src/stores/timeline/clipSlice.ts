@@ -78,6 +78,10 @@ import {
 } from './helpers/idGenerator';
 import { blobUrlManager } from './helpers/blobUrlManager';
 import { updateClipById } from './helpers/clipStateHelpers';
+import {
+  applyClipUpdatesWithAudioAnalysisInvalidation,
+  clearProcessedAudioAnalysisRefs,
+} from './helpers/audioAnalysisStateHelpers';
 import { readLottieMetadata } from '../../services/vectorAnimation/lottieMetadata';
 import { readRiveMetadata } from '../../services/vectorAnimation/riveMetadata';
 import { vectorAnimationRuntimeManager } from '../../services/vectorAnimation/VectorAnimationRuntimeManager';
@@ -669,7 +673,7 @@ export const createClipSlice: SliceCreator<CoreClipActions> = (set, get) => ({
     set({
       clips: clips.map(c => {
         if (c.id !== id) return c;
-        return { ...c, inPoint, outPoint, duration: outPoint - inPoint };
+        return clearProcessedAudioAnalysisRefs({ ...c, inPoint, outPoint, duration: outPoint - inPoint });
       }),
     });
     updateDuration();
@@ -840,7 +844,7 @@ export const createClipSlice: SliceCreator<CoreClipActions> = (set, get) => ({
       log.warn('Cannot update clip on locked track', { id });
       return;
     }
-    set({ clips: clips.map(c => c.id === id ? { ...c, ...updates } : c) });
+    set({ clips: clips.map(c => c.id === id ? applyClipUpdatesWithAudioAnalysisInvalidation(c, updates) : c) });
     updateDuration();
   },
 
@@ -878,7 +882,7 @@ export const createClipSlice: SliceCreator<CoreClipActions> = (set, get) => ({
       clips: clips.map(c => {
         if (c.id !== id) return c;
         return {
-          ...c,
+          ...clearProcessedAudioAnalysisRefs(c),
           reversed: !c.reversed,
         };
       }),
@@ -998,7 +1002,12 @@ export const createClipSlice: SliceCreator<CoreClipActions> = (set, get) => ({
       log.warn('Cannot update clip pitch on locked track', { clipId });
       return;
     }
-    set({ clips: updateClipById(get().clips, clipId, { preservesPitch }) });
+    set({
+      clips: get().clips.map(c => {
+        if (c.id !== clipId) return c;
+        return clearProcessedAudioAnalysisRefs({ ...c, preservesPitch });
+      }),
+    });
   },
 
   // Refresh nested clips when source composition changes

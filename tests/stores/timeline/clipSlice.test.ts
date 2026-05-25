@@ -5,6 +5,18 @@ import { createMockClip, createMockTrack, createMockTransform, resetIdCounter } 
 describe('clipSlice', () => {
   let store: ReturnType<typeof createTestTimelineStore>;
 
+  const audioStateWithAnalysisRefs = () => ({
+    sourceAudioRevisionId: 'rev-1',
+    sourceAnalysisRefs: {
+      waveformPyramidId: 'source-waveform',
+      spectrogramTileSetIds: ['source-spectrogram'],
+    },
+    processedAnalysisRefs: {
+      processedWaveformPyramidId: 'processed-waveform',
+      loudnessEnvelopeId: 'processed-loudness',
+    },
+  });
+
   beforeEach(() => {
     resetIdCounter();
     store = createTestTimelineStore();
@@ -26,6 +38,48 @@ describe('clipSlice', () => {
       // Original fields remain unchanged
       expect(updated!.duration).toBe(5);
       expect(updated!.trackId).toBe('video-1');
+    });
+
+    it('invalidates processed audio analysis refs for audio-relevant updates while preserving source refs', () => {
+      const audioState = audioStateWithAnalysisRefs();
+      const clip = createMockClip({ id: 'clip-1', audioState });
+      store = createTestTimelineStore({ clips: [clip] });
+
+      store.getState().updateClip('clip-1', { speed: 1.25 });
+      const updated = store.getState().clips.find(c => c.id === 'clip-1')!;
+
+      expect(updated.speed).toBe(1.25);
+      expect(updated.audioState).not.toBe(audioState);
+      expect(updated.audioState?.sourceAnalysisRefs).toEqual(audioState.sourceAnalysisRefs);
+      expect(updated.audioState?.processedAnalysisRefs).toBeUndefined();
+      expect(clip.audioState?.processedAnalysisRefs).toEqual(audioState.processedAnalysisRefs);
+    });
+
+    it('preserves processed audio analysis refs for unrelated visual updates', () => {
+      const audioState = audioStateWithAnalysisRefs();
+      const clip = createMockClip({ id: 'clip-1', audioState });
+      store = createTestTimelineStore({ clips: [clip] });
+
+      store.getState().updateClip('clip-1', { name: 'Visual Rename' });
+      const updated = store.getState().clips.find(c => c.id === 'clip-1')!;
+
+      expect(updated.name).toBe('Visual Rename');
+      expect(updated.audioState).toBe(audioState);
+      expect(updated.audioState?.sourceAnalysisRefs).toEqual(audioState.sourceAnalysisRefs);
+      expect(updated.audioState?.processedAnalysisRefs).toEqual(audioState.processedAnalysisRefs);
+    });
+
+    it('invalidates processed audio analysis refs when patching audioState and keeps source refs', () => {
+      const audioState = audioStateWithAnalysisRefs();
+      const clip = createMockClip({ id: 'clip-1', audioState });
+      store = createTestTimelineStore({ clips: [clip] });
+
+      store.getState().updateClip('clip-1', { audioState: { muted: true } });
+      const updated = store.getState().clips.find(c => c.id === 'clip-1')!;
+
+      expect(updated.audioState?.muted).toBe(true);
+      expect(updated.audioState?.sourceAnalysisRefs).toEqual(audioState.sourceAnalysisRefs);
+      expect(updated.audioState?.processedAnalysisRefs).toBeUndefined();
     });
 
     it('does nothing when clip id does not exist', () => {
@@ -123,6 +177,18 @@ describe('clipSlice', () => {
 
       expect(trimmed.name).toBe('My Clip');
       expect(trimmed.startTime).toBe(5);
+    });
+
+    it('invalidates processed audio analysis refs while preserving source refs', () => {
+      const audioState = audioStateWithAnalysisRefs();
+      const clip = createMockClip({ id: 'clip-1', audioState, duration: 10, inPoint: 0, outPoint: 10 });
+      store = createTestTimelineStore({ clips: [clip] });
+
+      store.getState().trimClip('clip-1', 2, 8);
+      const trimmed = store.getState().clips.find(c => c.id === 'clip-1')!;
+
+      expect(trimmed.audioState?.sourceAnalysisRefs).toEqual(audioState.sourceAnalysisRefs);
+      expect(trimmed.audioState?.processedAnalysisRefs).toBeUndefined();
     });
   });
 
@@ -644,6 +710,19 @@ describe('clipSlice', () => {
         'thumb-a', 'thumb-b', 'thumb-c',
       ]);
     });
+
+    it('invalidates processed audio analysis refs while preserving source refs', () => {
+      const audioState = audioStateWithAnalysisRefs();
+      const clip = createMockClip({ id: 'clip-1', trackId: 'video-1', audioState });
+      store = createTestTimelineStore({ clips: [clip] });
+
+      store.getState().toggleClipReverse('clip-1');
+      const updated = store.getState().clips.find(c => c.id === 'clip-1')!;
+
+      expect(updated.reversed).toBe(true);
+      expect(updated.audioState?.sourceAnalysisRefs).toEqual(audioState.sourceAnalysisRefs);
+      expect(updated.audioState?.processedAnalysisRefs).toBeUndefined();
+    });
   });
 
   // ========== Effect operations ==========
@@ -876,6 +955,19 @@ describe('clipSlice', () => {
 
       store.getState().setClipPreservesPitch('clip-1', false);
       expect(store.getState().clips.find(c => c.id === 'clip-1')!.preservesPitch).toBe(false);
+    });
+
+    it('invalidates processed audio analysis refs while preserving source refs', () => {
+      const audioState = audioStateWithAnalysisRefs();
+      const clip = createMockClip({ id: 'clip-1', trackId: 'video-1', audioState });
+      store = createTestTimelineStore({ clips: [clip] });
+
+      store.getState().setClipPreservesPitch('clip-1', true);
+      const updated = store.getState().clips.find(c => c.id === 'clip-1')!;
+
+      expect(updated.preservesPitch).toBe(true);
+      expect(updated.audioState?.sourceAnalysisRefs).toEqual(audioState.sourceAnalysisRefs);
+      expect(updated.audioState?.processedAnalysisRefs).toBeUndefined();
     });
   });
 

@@ -5,14 +5,32 @@ import {
   loadTimelineWaveformPyramid,
 } from '../../../services/audio/timelineWaveformPyramidCache';
 
-export function useTimelineWaveformPyramid(
-  refId: string | undefined,
-): TimelineWaveformPyramid | null {
+export type TimelineWaveformPyramidLoadStatus = 'idle' | 'loading' | 'ready' | 'missing' | 'error';
+
+export interface TimelineWaveformPyramidLoadState {
+  refId: string | undefined;
+  pyramid: TimelineWaveformPyramid | null;
+  status: TimelineWaveformPyramidLoadStatus;
+}
+
+function createInitialState(refId: string | undefined): TimelineWaveformPyramidLoadState {
   const cached = getCachedTimelineWaveformPyramid(refId);
-  const [loaded, setLoaded] = useState<{
-    refId: string | undefined;
-    pyramid: TimelineWaveformPyramid | null;
-  }>(() => ({ refId, pyramid: cached }));
+  if (cached) {
+    return { refId, pyramid: cached, status: 'ready' };
+  }
+
+  return {
+    refId,
+    pyramid: null,
+    status: refId ? 'loading' : 'idle',
+  };
+}
+
+export function useTimelineWaveformPyramidState(
+  refId: string | undefined,
+): TimelineWaveformPyramidLoadState {
+  const cached = getCachedTimelineWaveformPyramid(refId);
+  const [loaded, setLoaded] = useState<TimelineWaveformPyramidLoadState>(() => createInitialState(refId));
 
   useEffect(() => {
     let cancelled = false;
@@ -26,12 +44,12 @@ export function useTimelineWaveformPyramid(
     loadTimelineWaveformPyramid(refId)
       .then((loaded) => {
         if (!cancelled) {
-          setLoaded({ refId, pyramid: loaded });
+          setLoaded({ refId, pyramid: loaded, status: loaded ? 'ready' : 'missing' });
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setLoaded({ refId, pyramid: null });
+          setLoaded({ refId, pyramid: null, status: 'error' });
         }
       });
 
@@ -40,5 +58,15 @@ export function useTimelineWaveformPyramid(
     };
   }, [cached, refId]);
 
-  return cached ?? (loaded.refId === refId ? loaded.pyramid : null);
+  if (cached) {
+    return { refId, pyramid: cached, status: 'ready' };
+  }
+
+  return loaded.refId === refId ? loaded : createInitialState(refId);
+}
+
+export function useTimelineWaveformPyramid(
+  refId: string | undefined,
+): TimelineWaveformPyramid | null {
+  return useTimelineWaveformPyramidState(refId).pyramid;
 }

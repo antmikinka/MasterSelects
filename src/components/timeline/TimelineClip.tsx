@@ -17,7 +17,7 @@ import { ClipWaveform } from './components/ClipWaveform';
 import { ClipAnalysisOverlay } from './components/ClipAnalysisOverlay';
 import { FadeCurve } from './components/FadeCurve';
 import { useThumbnailCache } from '../../hooks/useThumbnailCache';
-import { useTimelineWaveformPyramid } from './hooks/useTimelineWaveformPyramid';
+import { useTimelineWaveformPyramidState } from './hooks/useTimelineWaveformPyramid';
 
 const log = Logger.create('TimelineClip');
 const KEYFRAME_TICK_SNAP_THRESHOLD_PX = 10;
@@ -158,9 +158,19 @@ function TimelineClipComponent({
   const thumbnailsEnabled = useTimelineStore(s => s.thumbnailsEnabled);
   const waveformsEnabled = useTimelineStore(s => s.waveformsEnabled);
   const audioDisplayMode = useTimelineStore(s => s.audioDisplayMode);
-  const waveformPyramidRef = clip.audioState?.processedAnalysisRefs?.processedWaveformPyramidId
-    ?? clip.audioState?.sourceAnalysisRefs?.waveformPyramidId;
-  const waveformPyramid = useTimelineWaveformPyramid(waveformPyramidRef);
+  const processedWaveformPyramidRef = clip.audioState?.processedAnalysisRefs?.processedWaveformPyramidId;
+  const sourceWaveformPyramidRef = clip.audioState?.sourceAnalysisRefs?.waveformPyramidId;
+  const processedWaveformState = useTimelineWaveformPyramidState(processedWaveformPyramidRef);
+  const sourceWaveformState = useTimelineWaveformPyramidState(sourceWaveformPyramidRef);
+  const waveformPyramid = processedWaveformState.pyramid ?? sourceWaveformState.pyramid;
+  const waveformVariant = processedWaveformState.pyramid
+    ? 'processed'
+    : sourceWaveformState.pyramid
+      ? 'source'
+      : 'legacy';
+  const waveformProcessingState = processedWaveformPyramidRef && !processedWaveformState.pyramid
+    ? `waveform-processed-${processedWaveformState.status}`
+    : '';
 
   // Subscribe to playhead position only when cut tool is active (avoids re-renders during playback)
   const playheadPosition = useTimelineStore((state) =>
@@ -437,7 +447,7 @@ function TimelineClipComponent({
   );
 
   useEffect(() => {
-    if (!waveformsEnabled || !isAudioClip || waveformPyramidRef || clip.waveformGenerating || !clip.file) {
+    if (!waveformsEnabled || !isAudioClip || sourceWaveformPyramidRef || clip.waveformGenerating || !clip.file) {
       return;
     }
 
@@ -464,8 +474,7 @@ function TimelineClipComponent({
       if (
         !currentClip ||
         currentClip.waveformGenerating ||
-        currentClip.audioState?.sourceAnalysisRefs?.waveformPyramidId ||
-        currentClip.audioState?.processedAnalysisRefs?.processedWaveformPyramidId
+        currentClip.audioState?.sourceAnalysisRefs?.waveformPyramidId
       ) {
         return;
       }
@@ -480,7 +489,7 @@ function TimelineClipComponent({
     clip.id,
     clip.waveformGenerating,
     isAudioClip,
-    waveformPyramidRef,
+    sourceWaveformPyramidRef,
     waveformsEnabled,
     width,
     zoom,
@@ -635,6 +644,7 @@ function TimelineClipComponent({
     clip.reversed ? 'reversed' : '',
     clip.transcriptStatus === 'ready' ? 'has-transcript' : '',
     clip.waveformGenerating ? 'generating-waveform' : '',
+    waveformProcessingState,
     clip.parentClipId ? 'has-parent' : '',
     clip.isPendingDownload ? 'pending-download' : '',
     clip.downloadError ? 'download-error' : '',
@@ -902,6 +912,7 @@ function TimelineClipComponent({
             displayMode={audioDisplayMode}
             pixelsPerSecond={zoom}
             pyramid={waveformPyramid}
+            waveformVariant={waveformVariant}
             renderStartPx={waveformRenderWindow.startPx}
             renderWidth={waveformRenderWindow.width}
           />

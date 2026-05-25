@@ -8,6 +8,7 @@ import {
 import type { AudioArtifactStore } from './AudioArtifactStore';
 import type {
   AudioAnalysisArtifact,
+  AudioAnalysisArtifactKind,
   AudioAnalysisWarning,
   AudioArtifactRef,
   AudioChannelLayout,
@@ -66,6 +67,7 @@ export interface WaveformPyramidGeneratorOptions {
 
 export interface WaveformPyramidGenerateRequest {
   jobId?: string;
+  kind?: Extract<AudioAnalysisArtifactKind, 'waveform-pyramid' | 'processed-waveform-pyramid'>;
   mediaFileId: string;
   sourceFingerprint: string;
   buffer: AudioBuffer;
@@ -398,6 +400,7 @@ export class WaveformPyramidGenerator {
         });
       }
       const analyzerVersion = createWaveformPyramidAnalyzerVersion(bucketSizes, this.baseAnalyzerVersion);
+      const analysisKind = request.kind ?? 'waveform-pyramid';
       const channelLayout = validateChannelLayout(
         request.channelLayout ?? describeChannelLayout(request.buffer.numberOfChannels),
         request.buffer,
@@ -406,7 +409,7 @@ export class WaveformPyramidGenerator {
       const cacheKey = createAudioAnalysisCacheKey({
         mediaFileId: request.mediaFileId,
         sourceFingerprint: request.sourceFingerprint,
-        kind: 'waveform-pyramid',
+        kind: analysisKind,
         analyzerVersion,
         channelLayout,
         sampleRate: request.buffer.sampleRate,
@@ -448,7 +451,7 @@ export class WaveformPyramidGenerator {
         duration: request.buffer.duration,
         levels: stored.levels,
       });
-      const artifactId = await deterministicHashId('audio:waveform-pyramid', cacheKey);
+      const artifactId = await deterministicHashId(`audio:${analysisKind}`, cacheKey);
 
       this.emitProgress(context, {
         phase: 'storing-manifest',
@@ -460,7 +463,7 @@ export class WaveformPyramidGenerator {
 
       const artifactResult = await this.artifactStore.putAnalysisArtifact({
         id: artifactId,
-        kind: 'waveform-pyramid',
+        kind: analysisKind,
         mediaFileId: request.mediaFileId,
         sourceFingerprint: request.sourceFingerprint,
         clipAudioStateHash: request.clipAudioStateHash,
@@ -476,6 +479,7 @@ export class WaveformPyramidGenerator {
         warnings: stored.warnings.length > 0 ? stored.warnings : undefined,
         metadata: {
           ...(request.metadata ?? {}),
+          analysisKind,
           cacheKey,
           waveformManifest: manifest as unknown as JsonValue,
         },
@@ -626,7 +630,7 @@ export class WaveformPyramidGenerator {
             values: readStatisticValues(channelStats, statistic),
           }), {
             mediaFileId: input.request.mediaFileId,
-            kind: 'waveform-pyramid',
+            kind: input.request.kind ?? 'waveform-pyramid',
             sourceFingerprint: input.request.sourceFingerprint,
             clipAudioStateHash: input.request.clipAudioStateHash,
             mimeType: WAVEFORM_STAT_PAYLOAD_MIME_TYPE,

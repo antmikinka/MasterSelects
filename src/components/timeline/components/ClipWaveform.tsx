@@ -242,6 +242,7 @@ export const ClipWaveform = memo(function ClipWaveform({
   displayMode = 'detailed',
   pixelsPerSecond,
   pyramid,
+  waveformVariant = 'legacy',
   renderStartPx = 0,
   renderWidth,
 }: {
@@ -254,6 +255,7 @@ export const ClipWaveform = memo(function ClipWaveform({
   displayMode?: TimelineAudioDisplayMode;
   pixelsPerSecond?: number;
   pyramid?: TimelineWaveformPyramid | null;
+  waveformVariant?: 'legacy' | 'source' | 'processed';
   renderStartPx?: number;
   renderWidth?: number;
 }) {
@@ -337,7 +339,8 @@ export const ClipWaveform = memo(function ClipWaveform({
   return (
     <canvas
       ref={canvasRef}
-      className={`waveform-canvas waveform-canvas-${displayMode}`}
+      className={`waveform-canvas waveform-canvas-${displayMode} waveform-canvas-${waveformVariant}`}
+      data-waveform-variant={waveformVariant}
       style={{ left: canvasLeft, width: canvasWidth, height }}
     />
   );

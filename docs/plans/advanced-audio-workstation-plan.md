@@ -832,6 +832,14 @@ Current checkpoint:
 - Add stereo/multi-channel rendering, fades, automation, clipping/silence diagnostics, and stale indicators.
 - Validate long files, repeated clips, deep zoom, and hundreds of visible clips.
 
+Current checkpoint:
+
+- `audioAnalysisIdentity` creates deterministic processed-audio state hashes from clip timing/playback, source revision, enabled edit/effect/spectral stacks, and optional track/master graph identities while excluding payload-shaped fields.
+- `WaveformPyramidGenerator` can now persist both source `waveform-pyramid` and processed `processed-waveform-pyramid` artifacts with distinct cache keys and compact project refs.
+- Timeline clip edits that affect audio output clear only `audioState.processedAnalysisRefs`; `sourceAnalysisRefs` stay reusable for fallback display and future regeneration.
+- `TimelineClip` now loads source and processed waveform pyramids independently, prefers a loaded processed artifact, and falls back to the source pyramid while processed artifacts are loading, missing, or stale.
+- `ClipWaveform` remains a pure renderer and receives a `waveformVariant` hint for source/processed/legacy styling.
+
 ### Track E: Timeline Audio Detail Mode
 
 - Build expanded audio clip/track surfaces inside the timeline.

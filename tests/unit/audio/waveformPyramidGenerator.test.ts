@@ -169,6 +169,44 @@ describe('WaveformPyramidGenerator', () => {
     expect(manifestJson).not.toContain('0.707106');
   });
 
+  it('stores processed waveform pyramids with processed artifact identity', async () => {
+    const store = createStore();
+    const generator = new WaveformPyramidGenerator({
+      artifactStore: store,
+      bucketSizes: [2],
+      now: () => FIXED_TIME,
+      createJobId: () => 'waveform-job-processed',
+    });
+    const buffer = createMockAudioBuffer([[0, 0.25, -0.75, 1]], 8);
+
+    const result = await generator.generate({
+      kind: 'processed-waveform-pyramid',
+      mediaFileId: 'media-a',
+      sourceFingerprint: 'sha256:source-a',
+      clipAudioStateHash: 'audio-state:v1:processed:123',
+      buffer,
+      decoderId: 'processed-graph',
+      decoderVersion: '1.0.0',
+    });
+
+    expect(result.cacheKey).toContain('processed-waveform-pyramid');
+    expect(result.artifact).toMatchObject({
+      kind: 'processed-waveform-pyramid',
+      clipAudioStateHash: 'audio-state:v1:processed:123',
+      decoderId: 'processed-graph',
+    });
+    expect(result.artifact.id).toContain('audio:processed-waveform-pyramid:');
+    expect(result.analysisRef).toMatchObject({
+      kind: 'processed-waveform-pyramid',
+      artifactId: result.artifact.id,
+      cacheKey: result.cacheKey,
+    });
+    expect(result.payloadRefs.every((ref) => (
+      ref.metadata?.cacheKey === result.cacheKey
+      && ref.metadata?.statistic
+    ))).toBe(true);
+  });
+
   it('supports progress hooks and cancellation before payload storage', async () => {
     const store = createStore();
     const generator = new WaveformPyramidGenerator({
