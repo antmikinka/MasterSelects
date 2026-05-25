@@ -3,6 +3,7 @@ import type {
   RuntimeJobHandlerRegistration,
 } from './types';
 import { createRuntimeTransferList } from './transferables';
+import { toArrayBufferCopy, toUint8ArrayCopy } from '../../utils/bufferSource';
 
 export interface RuntimeHashJobInput {
   bytes: ArrayBuffer | ArrayBufferView;
@@ -39,17 +40,7 @@ function assertNotAborted(signal: AbortSignal): void {
 }
 
 function bytesToArrayBuffer(bytes: ArrayBuffer | ArrayBufferView): ArrayBuffer {
-  if (bytes instanceof ArrayBuffer) {
-    return bytes;
-  }
-
-  if (bytes.buffer instanceof ArrayBuffer) {
-    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-  }
-
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
-  return copy.buffer;
+  return toArrayBufferCopy(bytes);
 }
 
 function bytesToText(bytes: ArrayBuffer | ArrayBufferView): string {
@@ -133,7 +124,7 @@ export const runtimeSha256Handler: RuntimeJobHandler<RuntimeHashJobInput, Runtim
 
   const bytes = bytesToArrayBuffer(input.bytes);
   context.progress({ value: 0.5, stage: 'hash', message: 'Hashing bytes' });
-  const digest = await crypto.subtle.digest(input.algorithm ?? 'SHA-256', bytes);
+  const digest = await crypto.subtle.digest(input.algorithm ?? 'SHA-256', toUint8ArrayCopy(bytes));
 
   assertNotAborted(context.signal);
   const output = {

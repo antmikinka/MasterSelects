@@ -1,5 +1,6 @@
 import type { ExtensionProviderManifest } from '../../../extensions';
 import type { SignalKind, SignalMetadata } from '../../../signals';
+import { toUint8ArrayCopy } from '../../../utils/bufferSource';
 import type { WasmImportRequest, WasmImportResult, WasmSignalRef } from '../types';
 
 const CSV_MIME_TYPES = new Set(['text/csv', 'application/csv', 'text/plain']);
@@ -167,12 +168,6 @@ function isCsvRequest(fileName: string, mimeType: string, header: Uint8Array): b
   return false;
 }
 
-function arrayBufferFor(bytes: Uint8Array): ArrayBuffer {
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  return copy.buffer;
-}
-
 function fallbackHash(bytes: Uint8Array): string {
   let hash = 0x811c9dc5;
   for (const byte of bytes) {
@@ -188,7 +183,7 @@ async function hashBytes(bytes: Uint8Array): Promise<string> {
     return fallbackHash(bytes);
   }
 
-  const digest = await subtle.digest('SHA-256', arrayBufferFor(bytes));
+  const digest = await subtle.digest('SHA-256', toUint8ArrayCopy(bytes));
   const hex = Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');

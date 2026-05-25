@@ -1,4 +1,5 @@
 import { ARTIFACT_HASH_ALGORITHM, type ArtifactInput } from './types';
+import { toUint8ArrayCopy } from '../utils/bufferSource';
 
 function toHex(bytes: ArrayBuffer): string {
   return [...new Uint8Array(bytes)]
@@ -42,7 +43,7 @@ export async function sha256ArrayBuffer(buffer: ArrayBuffer): Promise<string> {
     throw new Error('Web Crypto SHA-256 is not available in this runtime');
   }
 
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', buffer);
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', toUint8ArrayCopy(buffer));
   return toHex(digest);
 }
 
