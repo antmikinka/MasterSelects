@@ -1,6 +1,6 @@
 // App version
 // Format: MAJOR.MINOR.PATCH
-export const APP_VERSION = '1.8.4';
+export const APP_VERSION = '1.8.5';
 
 export interface ChangelogNotice {
   type: 'info' | 'warning' | 'success' | 'danger';
@@ -36,8 +36,8 @@ export const FEATURED_VIDEO: {
 // Build/Platform notice shown at top of changelog (set to null to hide)
 export const BUILD_NOTICE: ChangelogNotice | null = {
   type: 'success',
-  title: 'Wasm/WIT + Signal IR',
-  message: 'Signal assets now persist content-addressed artifacts and can materialize to text, model, or gaussian-splat timeline clips through renderer adapters.',
+  title: 'Advanced Audio Workstation',
+  message: 'Timeline audio layers, mixer routing, metering, export tails, and bridge diagnostics have been tightened for the new audio workstation flow.',
   animated: true,
 };
 
