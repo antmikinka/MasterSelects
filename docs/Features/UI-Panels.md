@@ -118,7 +118,7 @@ MasterSelects currently exposes 17 dockable panel types, plus the Slot Grid over
 | **Export** | `export` | Render and export controls |
 | **MIDI Mapping** | `midi-mapping` | Editable list of assigned MIDI notes and trigger previews |
 | **AI Chat** | `ai-chat` | Editing assistant chat |
-| **AI Video** | `ai-video` | Classic generator plus FlashBoard workspace |
+| **AI Generative** | `ai-video` | Classic video generator plus FlashBoard video/image/audio workspace |
 | **AI Segment** | `ai-segment` | Local SAM2 segmentation tools |
 | **AI Scene Description** | `scene-description` | Scene list with playback sync |
 | **Downloads** | `download` | URL search/download surface |
@@ -212,15 +212,15 @@ MasterSelects currently exposes 17 dockable panel types, plus the Slot Grid over
 - Click-to-seek scene segments
 - Playback-synced highlighting
 
-### AI Video Panel
+### AI Generative Panel
 
 - Dual-mode surface:
   - Classic mode keeps the older prompt and history generator UI
-  - Board mode embeds FlashBoard
+  - Board mode embeds FlashBoard for video, image, and ElevenLabs audio generation
 - Service and provider selection reflect the active backend
 - Generate and History tabs remain available at the top level
-- Access overlay appears when no AI video credentials or cloud access are available
-- Current generation backends are Kie.ai and MasterSelects Cloud; PiAPI remains primarily as legacy compatibility/catalog metadata rather than the main runtime description for the current panel
+- Access overlay appears when no Kie.ai, ElevenLabs, or hosted cloud access is available
+- Current generation backends are Kie.ai, MasterSelects Cloud, and ElevenLabs; PiAPI remains primarily as legacy compatibility/catalog metadata rather than the main runtime description for the current panel
 
 #### FlashBoard Workspace
 
@@ -228,9 +228,9 @@ MasterSelects currently exposes 17 dockable panel types, plus the Slot Grid over
 - `+ New Draft` action for creating draft nodes on the active board
 - Canvas with pan, zoom, selection, drag/drop, resize handles, and a context menu
 - Reference tray for start and end image slots
-- Composer panel for prompt, duration, aspect ratio, mode, and multi-shot authoring
+- Composer panel for prompt/text-to-speech input, output/model selection, duration, aspect ratio, mode, multi-shot authoring, and audio voice settings
 - Inspector-style node details for status, cost, references, progress, and retry/delete actions
-- Completed generations are imported back into the media store and can be sent to the timeline
+- Completed generations are imported back into the media store and can be sent to the timeline; ElevenLabs audio imports under `AI Gen / Audio`
 - Load failures fall back to classic mode via the error boundary
 
 ### Downloads Panel
@@ -384,7 +384,7 @@ The unified Properties panel adapts its tabs to the selected clip type and to sl
 
 The built-in desktop layout is a three-column dock:
 
-- Left column: Media, AI Chat, AI Video, Downloads
+- Left column: Media, AI Chat, AI Generative, Downloads
 - Center: Preview
 - Right column: Export, Properties, Waveform, Histogram, Vectorscope
 - Bottom: Timeline
@@ -488,13 +488,14 @@ Edit menu -> Settings
 | **Transcription** | Provider selection and pricing |
 | **Output** | Default resolution and frame rate for new compositions |
 | **Performance** | GPU power preference, Native Helper, and decode settings |
-| **API Keys** | OpenAI, AssemblyAI, Deepgram, Kie.ai, PiAPI (legacy/compat), and YouTube |
+| **API Keys** | OpenAI, AssemblyAI, Deepgram, Kie.ai, PiAPI (legacy/compat), ElevenLabs, and YouTube |
 
 ### API Keys
 
-The current AI Video-relevant keys are:
+The current AI Generative-relevant keys are:
 
 - `Kie.ai` for the current local-provider classic and board-backed generation flow
+- `ElevenLabs` for FlashBoard text-to-speech audio generation
 - `PiAPI` for legacy compatibility and older catalog/pricing paths
 
 Hosted cloud access is account/session based and does not depend on a user-entered API key in this dialog.

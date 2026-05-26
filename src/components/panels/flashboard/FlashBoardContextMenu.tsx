@@ -4,6 +4,7 @@ import type { FlashBoardNode } from '../../../stores/flashboardStore/types';
 import { flashBoardMediaBridge } from '../../../services/flashboard/FlashBoardMediaBridge';
 import { getCatalogEntry } from '../../../services/flashboard/FlashBoardModelCatalog';
 import { Logger } from '../../../services/logger';
+import { useMediaStore } from '../../../stores/mediaStore';
 
 const log = Logger.create('FlashBoardContextMenu');
 
@@ -50,6 +51,9 @@ export function FlashBoardContextMenu({ x, y, node, boardId, canvasPosition, onC
   const updateComposer = useFlashBoardStore((s) => s.updateComposer);
   const updateNodeRequest = useFlashBoardStore((s) => s.updateNodeRequest);
   const clearSelection = useFlashBoardStore((s) => s.clearSelection);
+  const nodeMediaFile = useMediaStore((s) => (
+    node?.result?.mediaFileId ? s.files.find((file) => file.id === node.result?.mediaFileId) : undefined
+  ));
   const menuRef = useRef<HTMLDivElement>(null);
   const [isAddingCurrentFrame, setIsAddingCurrentFrame] = useState(false);
 
@@ -149,8 +153,10 @@ export function FlashBoardContextMenu({ x, y, node, boardId, canvasPosition, onC
   const videoReferenceSupportsEndFrame = selectedVideoTarget
     ? !selectedVideoTargetMultiShots
     : !composerVideoTargetMultiShots;
-  const canAssignVideoReference = Boolean(node?.result?.mediaFileId && activeVideoReferenceTarget);
-  const canAssignImageReference = Boolean(node?.result?.mediaFileId && activeImageReferenceTarget) && !isImageReferenceLimitReached;
+  const nodeMediaType = nodeMediaFile?.type ?? node?.result?.mediaType;
+  const canUseAsVisualReference = nodeMediaType === 'image' || nodeMediaType === 'video';
+  const canAssignVideoReference = Boolean(node?.result?.mediaFileId && activeVideoReferenceTarget && canUseAsVisualReference);
+  const canAssignImageReference = Boolean(node?.result?.mediaFileId && activeImageReferenceTarget && canUseAsVisualReference) && !isImageReferenceLimitReached;
   const canSendBackward = targetNodeIds.length > 0 && boardNodes.length > 1;
   const canBringForward = targetNodeIds.length > 0 && boardNodes.length > 1;
 
@@ -306,7 +312,7 @@ export function FlashBoardContextMenu({ x, y, node, boardId, canvasPosition, onC
       )}
       {node && (
         <>
-          {node.result?.mediaFileId && (
+          {node.result?.mediaFileId && canUseAsVisualReference && (
             <>
               {activeVideoReferenceTarget && (
                 <>

@@ -55,12 +55,13 @@ export type GPUPowerPreference = 'high-performance' | 'low-power';
 
 export type AIProvider = 'openai' | 'lemonade';
 
-interface APIKeys {
+export interface APIKeys {
   openai: string;
   assemblyai: string;
   deepgram: string;
   piapi: string;  // PiAPI key for AI video generation (Kling, Luma, etc.)
   kieai: string;  // Kie.ai key for Kling 3.0 and Nano Banana 2
+  elevenlabs: string; // ElevenLabs key for AI audio generation
   youtube: string; // YouTube Data API v3 key (optional, Invidious works without)
   // Legacy Kling keys (deprecated, use piapi instead)
   klingAccessKey: string;
@@ -224,6 +225,7 @@ export const useSettingsStore = create<SettingsState>()(
         deepgram: '',
         piapi: '',
         kieai: '',
+        elevenlabs: '',
         youtube: '',
         klingAccessKey: '',
         klingSecretKey: '',

@@ -5,6 +5,7 @@ import { useFlashBoardStore } from '../../stores/flashboardStore';
 import { captureCurrentPreviewFrameFile } from '../previewFrameCapture';
 import type {
   FlashBoardGenerationMetadata,
+  FlashBoardMediaType,
   FlashBoardResult,
   FlashBoardNode,
 } from '../../stores/flashboardStore/types';
@@ -99,6 +100,29 @@ class FlashBoardMediaBridge {
     return imageFolder.id;
   }
 
+  /**
+   * Get or create the "AI Gen / Audio" subfolder.
+   */
+  getOrCreateAudioSubfolder(): string {
+    const parentId = this.getOrCreateAIGenFolder();
+    const { folders, createFolder } = useMediaStore.getState();
+    let audioFolder = folders.find(f => f.name === 'Audio' && f.parentId === parentId);
+    if (!audioFolder) {
+      audioFolder = createFolder('Audio', parentId);
+    }
+    return audioFolder.id;
+  }
+
+  private getOrCreateMediaSubfolder(mediaType: FlashBoardMediaType): string {
+    if (mediaType === 'audio') {
+      return this.getOrCreateAudioSubfolder();
+    }
+    if (mediaType === 'image') {
+      return this.getOrCreateImageSubfolder();
+    }
+    return this.getOrCreateVideoSubfolder();
+  }
+
   // ---------------------------------------------------------------------------
   // Download
   // ---------------------------------------------------------------------------
@@ -129,10 +153,86 @@ class FlashBoardMediaBridge {
    *
    * @returns The FlashBoardResult with mediaFileId and dimensions.
    */
+  private buildMetadata(
+    mediaFileId: string,
+    node: FlashBoardNode | undefined,
+    mediaType: FlashBoardMediaType,
+  ): FlashBoardGenerationMetadata | null {
+    if (!node?.request) {
+      return null;
+    }
+
+    return {
+      mediaFileId,
+      service: node.request.service,
+      providerId: node.request.providerId,
+      version: node.request.version,
+      outputType: node.request.outputType,
+      mediaType,
+      prompt: node.request.prompt,
+      negativePrompt: node.request.negativePrompt,
+      duration: node.request.duration,
+      aspectRatio: node.request.aspectRatio,
+      imageSize: node.request.imageSize,
+      generateAudio: node.request.generateAudio,
+      multiShots: node.request.multiShots,
+      multiPrompt: node.request.multiPrompt,
+      voiceId: node.request.voiceId,
+      voiceName: node.request.voiceName,
+      languageOverride: node.request.languageOverride,
+      languageCode: node.request.languageCode,
+      outputFormat: node.request.outputFormat,
+      voiceSettings: node.request.voiceSettings,
+      startMediaFileId: node.request.startMediaFileId,
+      endMediaFileId: node.request.endMediaFileId,
+      referenceMediaFileIds: node.request.referenceMediaFileIds ?? [],
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  async importGeneratedFile(
+    nodeId: string,
+    file: File,
+    mediaType: FlashBoardMediaType,
+  ): Promise<FlashBoardResult> {
+    const node = findNodeById(nodeId);
+    const folderId = this.getOrCreateMediaSubfolder(mediaType);
+
+    const mediaFile = requireMediaFileImportResult(
+      await useMediaStore.getState().importFile(file, folderId, {
+        // Generated files must remain project-local even when global imports use references.
+        forceCopyToProject: true,
+      }),
+      'FlashBoard media import',
+    );
+
+    if (!mediaFile) {
+      throw new Error('Failed to import media file into Media Pool');
+    }
+
+    const result: FlashBoardResult = {
+      mediaFileId: mediaFile.id,
+      mediaType,
+      duration: mediaFile.duration,
+      width: mediaFile.width,
+      height: mediaFile.height,
+    };
+
+    const metadata = this.buildMetadata(mediaFile.id, node, mediaType);
+    if (metadata) {
+      this.generationMetadata.set(mediaFile.id, metadata);
+    }
+
+    useFlashBoardStore.getState().completeNode(nodeId, result);
+
+    log.info(`Imported AI ${mediaType}: ${file.name} -> ${mediaFile.id}`);
+    return result;
+  }
+
   async importGeneratedMedia(
     nodeId: string,
     videoUrl: string,
-    mediaType: 'video' | 'image' = 'video'
+    mediaType: FlashBoardMediaType = 'video'
   ): Promise<FlashBoardResult> {
     // Look up the node to get prompt/request info
     const node = findNodeById(nodeId);
@@ -140,7 +240,7 @@ class FlashBoardMediaBridge {
 
     // Build a human-readable filename
     const timestamp = Date.now();
-    const ext = mediaType === 'video' ? 'mp4' : 'png';
+    const ext = mediaType === 'video' ? 'mp4' : mediaType === 'image' ? 'png' : 'mp3';
     const shortPrompt = sanitizeForFilename(prompt, 30);
     const filename = `ai_${shortPrompt}_${timestamp}.${ext}`;
 
@@ -154,58 +254,7 @@ class FlashBoardMediaBridge {
       throw err;
     }
 
-    // Import into the correct subfolder
-    const folderId = mediaType === 'video'
-      ? this.getOrCreateVideoSubfolder()
-      : this.getOrCreateImageSubfolder();
-
-    const mediaFile = requireMediaFileImportResult(
-      await useMediaStore.getState().importFile(file, folderId, {
-        // Generated URLs expire, so project-local persistence should not depend on the global import setting.
-        forceCopyToProject: true,
-      }),
-      'FlashBoard media import',
-    );
-
-    if (!mediaFile) {
-      throw new Error('Failed to import media file into Media Pool');
-    }
-
-    // Build the result
-    const result: FlashBoardResult = {
-      mediaFileId: mediaFile.id,
-      mediaType,
-      duration: mediaFile.duration,
-      width: mediaFile.width,
-      height: mediaFile.height,
-    };
-
-    // Store generation metadata keyed by mediaFileId
-    if (node?.request) {
-      const metadata: FlashBoardGenerationMetadata = {
-        mediaFileId: mediaFile.id,
-        providerId: node.request.providerId,
-        version: node.request.version,
-        prompt: node.request.prompt,
-        negativePrompt: node.request.negativePrompt,
-        duration: node.request.duration,
-        aspectRatio: node.request.aspectRatio,
-        generateAudio: node.request.generateAudio,
-        multiShots: node.request.multiShots,
-        multiPrompt: node.request.multiPrompt,
-        startMediaFileId: node.request.startMediaFileId,
-        endMediaFileId: node.request.endMediaFileId,
-        referenceMediaFileIds: node.request.referenceMediaFileIds ?? [],
-        createdAt: new Date().toISOString(),
-      };
-      this.generationMetadata.set(mediaFile.id, metadata);
-    }
-
-    // Update the FlashBoard node with the result
-    useFlashBoardStore.getState().completeNode(nodeId, result);
-
-    log.info(`Imported AI media: ${filename} -> ${mediaFile.id}`);
-    return result;
+    return this.importGeneratedFile(nodeId, file, mediaType);
   }
 
   async importCurrentFrame(): Promise<MediaFile> {

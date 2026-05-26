@@ -11,6 +11,7 @@ live playback sync for timeline editing, and offline audio processing for export
 
 - Video imports can create linked audio clips when audio is detected.
 - Audio-only files are added as audio clips on audio tracks.
+- ElevenLabs speech generated from FlashBoard imports as normal project-local audio under `AI Gen / Audio`.
 - Default timeline tracks include two video tracks and one audio track.
 - Live playback uses HTMLMediaElement timing plus drift correction, not a separate audio master clock.
 

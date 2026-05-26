@@ -3,14 +3,31 @@ import { piApiService } from '../piApiService';
 import { kieAiService } from '../kieAiService';
 import { cloudAiService } from '../cloudAiService';
 import type { TextToVideoParams, ImageToVideoParams } from '../piApiService';
-import type { FlashBoardGenerationRequest } from '../../stores/flashboardStore/types';
+import type { FlashBoardGenerationRequest, FlashBoardMediaType } from '../../stores/flashboardStore/types';
 import type { SubmitNodeJobInput, SubmitNodeJobResult } from './types';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useMediaStore } from '../../stores/mediaStore';
 import { createThumbnail } from '../../stores/mediaStore/helpers/thumbnailHelpers';
 import { getCatalogEntry } from './FlashBoardModelCatalog';
+import {
+  DEFAULT_ELEVENLABS_SPEECH_OUTPUT_FORMAT,
+  ELEVENLABS_MP3_MIME_TYPE,
+  elevenLabsService,
+  isElevenLabsMp3OutputFormat,
+} from '../elevenLabsService';
 
 const log = Logger.create('FlashBoardJob');
+
+function sanitizeForFilename(value: string, maxLen = 32): string {
+  return value
+    .replace(/[^a-zA-Z0-9 -]/g, '')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, maxLen)
+    .replace(/_$/, '')
+    .toLowerCase() || 'untitled';
+}
 
 interface QueueEntry {
   nodeId: string;
@@ -20,7 +37,7 @@ interface QueueEntry {
 
 interface RunningJob {
   nodeId: string;
-  remoteTaskId: string;
+  remoteTaskId?: string;
   service: FlashBoardGenerationRequest['service'];
   abortController: AbortController;
 }
@@ -31,7 +48,8 @@ type JobUpdateCallback = (nodeId: string, update: {
   progress?: number;
   error?: string;
   assetUrl?: string;
-  mediaType?: 'video' | 'image';
+  assetFile?: File;
+  mediaType?: FlashBoardMediaType;
 }) => void;
 
 class FlashBoardJobService {
@@ -39,6 +57,7 @@ class FlashBoardJobService {
   private running: RunningJob[] = [];
   private maxConcurrent = 3;
   private maxConcurrentKieAi = 1;
+  private maxConcurrentElevenLabs = 2;
   private onUpdate: JobUpdateCallback | null = null;
 
   setUpdateCallback(cb: JobUpdateCallback | null): void {
@@ -90,6 +109,10 @@ class FlashBoardJobService {
     if (service === 'kieai') {
       const kieaiRunning = this.running.filter(r => r.service === 'kieai').length;
       if (kieaiRunning >= this.maxConcurrentKieAi) return false;
+    }
+    if (service === 'elevenlabs') {
+      const elevenLabsRunning = this.running.filter(r => r.service === 'elevenlabs').length;
+      if (elevenLabsRunning >= this.maxConcurrentElevenLabs) return false;
     }
     return true;
   }
@@ -147,12 +170,67 @@ class FlashBoardJobService {
     try {
       this.onUpdate?.(nodeId, { status: 'processing' });
 
-      const { piapi, kieai } = useSettingsStore.getState().apiKeys;
+      const { piapi, kieai, elevenlabs } = useSettingsStore.getState().apiKeys;
       if (request.service === 'piapi') {
         piApiService.setApiKey(piapi);
       }
       if (request.service === 'kieai') {
         kieAiService.setApiKey(kieai);
+      }
+      if (request.service === 'elevenlabs') {
+        elevenLabsService.setApiKey(elevenlabs);
+      }
+
+      if (request.outputType === 'audio' || request.service === 'elevenlabs') {
+        if (request.service !== 'elevenlabs') {
+          throw new Error('Audio generation is currently only supported through ElevenLabs');
+        }
+        if (!request.voiceId?.trim()) {
+          throw new Error('Choose an ElevenLabs voice before generating speech.');
+        }
+        if (!request.prompt.trim()) {
+          throw new Error('Enter text to generate speech.');
+        }
+
+        const remoteTaskId = `elevenlabs-${nodeId}`;
+        this.running.push({
+          nodeId,
+          remoteTaskId,
+          service: request.service,
+          abortController,
+        });
+        this.onUpdate?.(nodeId, { status: 'processing', progress: 0.1, remoteTaskId });
+
+        const outputFormat = request.outputFormat && isElevenLabsMp3OutputFormat(request.outputFormat)
+          ? request.outputFormat
+          : DEFAULT_ELEVENLABS_SPEECH_OUTPUT_FORMAT;
+        const speech = await elevenLabsService.createSpeech({
+          voiceId: request.voiceId,
+          text: request.prompt,
+          modelId: request.version,
+          languageCode: request.languageOverride ? request.languageCode : undefined,
+          outputFormat,
+          voiceSettings: request.voiceSettings,
+        }, abortController.signal);
+        const voiceSlug = sanitizeForFilename(request.voiceName || request.voiceId, 24);
+        const promptSlug = sanitizeForFilename(request.prompt, 32);
+        const timestamp = Date.now();
+        const file = new File(
+          [speech.audio],
+          `ai_voice_${voiceSlug}_${promptSlug}_${timestamp}.${speech.extension}`,
+          { type: speech.mimeType || ELEVENLABS_MP3_MIME_TYPE },
+        );
+
+        this.running = this.running.filter(r => r.nodeId !== nodeId);
+        this.onUpdate?.(nodeId, {
+          status: 'completed',
+          progress: 1,
+          remoteTaskId,
+          assetFile: file,
+          mediaType: 'audio',
+        });
+        this.processQueue();
+        return;
       }
 
       if (request.outputType === 'image' || request.providerId === 'nano-banana-2') {

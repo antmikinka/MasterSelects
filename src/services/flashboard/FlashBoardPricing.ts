@@ -121,6 +121,10 @@ function buildPiApiEstimate(input: FlashBoardPricingInput): FlashBoardPriceEstim
 }
 
 export function getFlashBoardPriceEstimate(input: FlashBoardPricingInput): FlashBoardPriceEstimate | null {
+  if (input.service === 'elevenlabs' || input.outputType === 'audio') {
+    return null;
+  }
+
   if (input.service === 'cloud') {
     if (input.outputType === 'image' || input.providerId === 'nano-banana-2') {
       return buildHostedImageEstimate(input);

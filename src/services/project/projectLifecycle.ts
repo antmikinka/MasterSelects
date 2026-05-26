@@ -8,6 +8,7 @@ import { useYouTubeStore } from '../../stores/youtubeStore';
 import { useDockStore } from '../../stores/dockStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useFlashBoardStore } from '../../stores/flashboardStore';
+import { createDefaultFlashBoardComposer } from '../../stores/flashboardStore/defaults';
 import { useExportStore } from '../../stores/exportStore';
 import { useMIDIStore } from '../../stores/midiStore';
 import { projectFileService } from '../projectFileService';
@@ -242,14 +243,7 @@ export function closeCurrentProject(): void {
     activeBoardId: null,
     boards: [],
     selectedNodeIds: [],
-    composer: {
-      draftNodeId: null,
-      isOpen: false,
-      generateAudio: false,
-      multiShots: false,
-      multiPrompt: [],
-      referenceMediaFileIds: [],
-    },
+    composer: createDefaultFlashBoardComposer(),
   });
   useExportStore.getState().reset();
   useMediaStore.getState().newProject();

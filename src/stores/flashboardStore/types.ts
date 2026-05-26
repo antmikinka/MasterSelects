@@ -7,6 +7,18 @@ export interface FlashBoardStoreState {
   hoveredComposerReference: FlashBoardHoveredComposerReference | null;
 }
 
+export type FlashBoardService = 'piapi' | 'kieai' | 'cloud' | 'elevenlabs';
+export type FlashBoardOutputType = 'video' | 'image' | 'audio';
+export type FlashBoardMediaType = 'video' | 'image' | 'audio';
+
+export interface FlashBoardVoiceSettings {
+  speed?: number;
+  stability?: number;
+  similarityBoost?: number;
+  style?: number;
+  useSpeakerBoost?: boolean;
+}
+
 export interface FlashBoardMultiShotPrompt {
   index: number;
   prompt: string;
@@ -19,10 +31,16 @@ export interface FlashBoardComposerState {
   generateAudio: boolean;
   multiShots: boolean;
   multiPrompt: FlashBoardMultiShotPrompt[];
-  service?: 'piapi' | 'kieai' | 'cloud';
+  service?: FlashBoardService;
   providerId?: string;
   version?: string;
-  outputType?: 'video' | 'image';
+  outputType?: FlashBoardOutputType;
+  voiceId?: string;
+  voiceName?: string;
+  languageOverride?: boolean;
+  languageCode?: string;
+  outputFormat?: string;
+  voiceSettings?: FlashBoardVoiceSettings;
   startMediaFileId?: string;
   endMediaFileId?: string;
   referenceMediaFileIds: string[];
@@ -57,10 +75,10 @@ export interface FlashBoardNode {
 }
 
 export interface FlashBoardGenerationRequest {
-  service: 'piapi' | 'kieai' | 'cloud';
+  service: FlashBoardService;
   providerId: string;
   version: string;
-  outputType?: 'video' | 'image';
+  outputType?: FlashBoardOutputType;
   mode?: string;
   prompt: string;
   negativePrompt?: string;
@@ -70,6 +88,12 @@ export interface FlashBoardGenerationRequest {
   generateAudio?: boolean;
   multiShots?: boolean;
   multiPrompt?: FlashBoardMultiShotPrompt[];
+  voiceId?: string;
+  voiceName?: string;
+  languageOverride?: boolean;
+  languageCode?: string;
+  outputFormat?: string;
+  voiceSettings?: FlashBoardVoiceSettings;
   startMediaFileId?: string;
   endMediaFileId?: string;
   referenceMediaFileIds: string[];
@@ -86,7 +110,7 @@ export interface FlashBoardJobState {
 
 export interface FlashBoardResult {
   mediaFileId: string;
-  mediaType: 'video' | 'image';
+  mediaType: FlashBoardMediaType;
   duration?: number;
   width?: number;
   height?: number;
@@ -124,8 +148,11 @@ export interface ProjectFlashBoardNode {
 
 export interface FlashBoardGenerationMetadata {
   mediaFileId: string;
+  service?: FlashBoardService;
   providerId: string;
   version: string;
+  outputType?: FlashBoardOutputType;
+  mediaType?: FlashBoardMediaType;
   prompt: string;
   negativePrompt?: string;
   duration?: number;
@@ -134,6 +161,12 @@ export interface FlashBoardGenerationMetadata {
   generateAudio?: boolean;
   multiShots?: boolean;
   multiPrompt?: FlashBoardMultiShotPrompt[];
+  voiceId?: string;
+  voiceName?: string;
+  languageOverride?: boolean;
+  languageCode?: string;
+  outputFormat?: string;
+  voiceSettings?: FlashBoardVoiceSettings;
   startMediaFileId?: string;
   endMediaFileId?: string;
   referenceMediaFileIds: string[];

@@ -48,6 +48,7 @@ export function ApiKeysSettings({ localKeys, onKeyChange }: ApiKeysSettingsProps
     deepgram: false,
     piapi: false,
     kieai: false,
+    elevenlabs: false,
     youtube: false,
   });
 
@@ -130,6 +131,21 @@ export function ApiKeysSettings({ localKeys, onKeyChange }: ApiKeysSettingsProps
           show={showKeys.kieai}
           onToggle={() => toggleShowKey('kieai')}
           onChange={(v) => onKeyChange('kieai', v)}
+        />
+      </div>
+      <div className="settings-group">
+        <div className="settings-group-title">AI Audio Generation</div>
+
+        <ApiKeyRow
+          label="ElevenLabs API Key"
+          provider="elevenlabs"
+          value={getKey('elevenlabs')}
+          placeholder="Enter ElevenLabs API key..."
+          linkUrl="https://elevenlabs.io/app/settings/api-keys"
+          linkText="Get API Key"
+          show={showKeys.elevenlabs}
+          onToggle={() => toggleShowKey('elevenlabs')}
+          onChange={(v) => onKeyChange('elevenlabs', v)}
         />
       </div>
       <div className="settings-group">

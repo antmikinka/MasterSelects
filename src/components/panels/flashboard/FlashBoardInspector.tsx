@@ -3,6 +3,7 @@ import { useFlashBoardStore } from '../../../stores/flashboardStore';
 import { selectSelectedNodes } from '../../../stores/flashboardStore/selectors';
 import { getFlashBoardPriceEstimate } from '../../../services/flashboard/FlashBoardPricing';
 import { useMediaStore } from '../../../stores/mediaStore';
+import { flashBoardMediaBridge } from '../../../services/flashboard/FlashBoardMediaBridge';
 
 export function FlashBoardInspector() {
   const selectedNodes = useFlashBoardStore(selectSelectedNodes);
@@ -67,6 +68,11 @@ export function FlashBoardInspector() {
     clearSelection();
   }, [nodeId, removeNode, clearSelection]);
 
+  const handleAddToTimeline = useCallback(() => {
+    if (!node?.result?.mediaFileId) return;
+    void flashBoardMediaBridge.addToTimeline(node.result.mediaFileId);
+  }, [node]);
+
   if (!node || composerOpen) return null;
 
   return (
@@ -113,6 +119,29 @@ export function FlashBoardInspector() {
               {node.request.mode && ` / ${node.request.mode}`}
               {node.request.generateAudio && ' / sound'}
               {node.request.multiShots && ' / multi-shot'}
+            </p>
+          </div>
+        )}
+
+        {node.request?.outputType === 'audio' && (
+          <div className="flashboard-inspector-section">
+            <h4>Audio</h4>
+            <p>
+              {node.request.voiceName && `Voice: ${node.request.voiceName}`}
+              {node.request.voiceName && <br />}
+              Model: {node.request.version}
+              {node.request.outputFormat && (
+                <>
+                  <br />
+                  Format: {node.request.outputFormat}
+                </>
+              )}
+              {node.request.languageCode && (
+                <>
+                  <br />
+                  Language: {node.request.languageCode}
+                </>
+              )}
             </p>
           </div>
         )}
@@ -177,7 +206,11 @@ export function FlashBoardInspector() {
             </button>
           )}
           {status === 'completed' && (
-            <button className="flashboard-inspector-btn primary">
+            <button
+              className="flashboard-inspector-btn primary"
+              disabled={!node.result?.mediaFileId}
+              onClick={handleAddToTimeline}
+            >
               Add to Timeline
             </button>
           )}
