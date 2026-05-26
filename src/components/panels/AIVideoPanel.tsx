@@ -1,5 +1,5 @@
-// AI Video Panel - AI video generation via Kie.ai or MasterSelects Cloud
-// Supports text-to-video and image-to-video generation with timeline integration
+// AI Generative panel - AI generation via Kie.ai, MasterSelects Cloud, and ElevenLabs.
+// Classic mode supports video. Board mode is the shared video/image/audio workspace.
 
 import { Component, type ReactNode, useState, useCallback, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
 import { Logger } from '../../services/logger';
@@ -27,6 +27,7 @@ import {
   getKieAiProvider,
 } from '../../services/kieAiService';
 import { getFlashBoardPriceEstimate } from '../../services/flashboard/FlashBoardPricing';
+import { DEFAULT_ELEVENLABS_MODEL_ID } from '../../stores/flashboardStore/defaults';
 import { captureCurrentPreviewFrameDataUrl } from '../../services/previewFrameCapture';
 import { ImageCropper, type CropData } from './ImageCropper';
 import { exportCroppedImage } from './imageCropperUtils';
@@ -34,6 +35,7 @@ import './AIVideoPanel.css';
 
 type GenerationType = 'text-to-video' | 'image-to-video';
 type PanelTab = 'generate' | 'history';
+const AI_GENERATIVE_BOARD_SERVICES: Array<'kieai' | 'cloud' | 'elevenlabs'> = ['kieai', 'cloud', 'elevenlabs'];
 
 interface FlashBoardErrorBoundaryProps {
   children: ReactNode;
@@ -201,9 +203,19 @@ export function AIVideoPanel() {
 
   // Get current provider config
   const currentProvider = getKieAiProvider(selectedProvider) || providers[0];
-  const boardService = !apiKeys.kieai && hasHostedCloudAccess ? 'cloud' : 'kieai';
-  const boardProviderId = boardService === 'cloud' ? 'cloud-kling' : selectedProvider;
-  const boardVersion = boardService === 'cloud' ? 'latest' : selectedVersion;
+  const boardService = apiKeys.kieai ? 'kieai' : hasHostedCloudAccess ? 'cloud' : apiKeys.elevenlabs ? 'elevenlabs' : 'kieai';
+  const boardProviderId =
+    boardService === 'cloud'
+      ? 'cloud-kling'
+      : boardService === 'elevenlabs'
+        ? 'elevenlabs-tts'
+        : selectedProvider;
+  const boardVersion =
+    boardService === 'cloud'
+      ? 'latest'
+      : boardService === 'elevenlabs'
+        ? DEFAULT_ELEVENLABS_MODEL_ID
+        : selectedVersion;
 
   // Generation type (default to image-to-video)
   const [generationType, setGenerationType] = useState<GenerationType>('image-to-video');
@@ -242,7 +254,8 @@ export function AIVideoPanel() {
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
 
   // Check if API credentials are available for the selected service
-  const hasGenerationAccess = Boolean(apiKeys.kieai || hasHostedCloudAccess);
+  const hasClassicGenerationAccess = Boolean(apiKeys.kieai || hasHostedCloudAccess);
+  const hasGenerationAccess = Boolean(apiKeys.kieai || apiKeys.elevenlabs || hasHostedCloudAccess);
 
   // Fetch account balance
   const fetchAccountBalance = useCallback(async () => {
@@ -637,7 +650,7 @@ export function AIVideoPanel() {
   const currentPriceEstimate = getFlashBoardPriceEstimate({
     service: boardService,
     providerId: boardProviderId,
-    outputType: 'video',
+    outputType: boardService === 'elevenlabs' ? 'audio' : 'video',
     mode,
     duration,
     generateAudio,
@@ -650,9 +663,9 @@ export function AIVideoPanel() {
         <div className="ai-video-overlay">
           <div className="ai-video-overlay-content">
             <span className="no-key-icon">🎬</span>
-            <p>Sign in to use MasterSelects Cloud credits</p>
+            <p>Sign in or add an API key to use AI Generative</p>
             <span className="no-key-hint">
-              If you prefer, you can still use your own Kie.ai key in Settings.
+              Board mode supports Kie.ai, MasterSelects Cloud, and ElevenLabs audio generation.
             </span>
             <div className="no-key-actions">
               <button className="btn-settings" onClick={openAuthDialog}>
@@ -672,7 +685,7 @@ export function AIVideoPanel() {
             className={`panel-tab ${activeTab === 'generate' ? 'active' : ''}`}
             onClick={() => setActiveTab('generate')}
           >
-            AI Video
+            AI Generative
           </button>
           <button
             className={`panel-tab ${activeTab === 'history' ? 'active' : ''}`}
@@ -681,18 +694,20 @@ export function AIVideoPanel() {
             History ({history.length})
           </button>
         </div>
-        <div className="service-provider-selects">
-          <select
-            className="provider-select"
-            value={selectedProvider}
-            onChange={(e) => setSelectedProvider(e.target.value)}
-            disabled={isGenerating}
-          >
-            {providers.map(p => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-        </div>
+        {workspaceMode === 'classic' && (
+          <div className="service-provider-selects">
+            <select
+              className="provider-select"
+              value={selectedProvider}
+              onChange={(e) => setSelectedProvider(e.target.value)}
+              disabled={isGenerating}
+            >
+              {providers.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="ai-video-mode-toggle">
           <button
             className={`ai-video-mode-btn ${workspaceMode === 'classic' ? 'active' : ''}`}
@@ -734,7 +749,7 @@ export function AIVideoPanel() {
               initialProviderId={boardProviderId}
               initialService={boardService}
               initialVersion={boardVersion}
-              serviceScope={boardService}
+              allowedServices={AI_GENERATIVE_BOARD_SERVICES}
             />
           </Suspense>
         </FlashBoardErrorBoundary>
@@ -808,7 +823,7 @@ export function AIVideoPanel() {
       )}
 
       {/* Balance bar + Generate button - always visible at top */}
-      {hasGenerationAccess && (
+      {workspaceMode === 'classic' && hasClassicGenerationAccess && (
         <div className="balance-bar">
           <div className="credit-balance">
             {accountInfo ? (

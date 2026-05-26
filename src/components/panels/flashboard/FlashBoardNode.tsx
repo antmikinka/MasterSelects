@@ -1,4 +1,4 @@
-import { memo, type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFlashBoardStore } from '../../../stores/flashboardStore';
 import { selectActiveBoard, type FlashBoardMediaReferenceUsage } from '../../../stores/flashboardStore/selectors';
 import type {
@@ -7,6 +7,7 @@ import type {
 } from '../../../stores/flashboardStore/types';
 import { useMediaStore } from '../../../stores/mediaStore';
 import { getFlashBoardPriceEstimate } from '../../../services/flashboard/FlashBoardPricing';
+import { flashBoardMediaBridge } from '../../../services/flashboard/FlashBoardMediaBridge';
 import { clampNodeWidth, resolveFlashBoardNodeDisplaySize } from './nodeSizing';
 
 interface FlashBoardNodeProps {
@@ -67,6 +68,15 @@ interface DragSession {
   }>;
 }
 
+interface AudioPreviewState {
+  mediaId: string | null;
+  currentTime: number;
+  duration: number;
+  isMuted: boolean;
+  isPlaying: boolean;
+  volume: number;
+}
+
 const RESIZE_HANDLES: ResizeDirection[] = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'];
 const NODE_DRAG_THRESHOLD = 4;
 const NODE_DRAG_AUTO_PAN_COVERAGE = 0.74;
@@ -105,6 +115,55 @@ function formatPreviewTime(seconds: number): string {
   const remainingSeconds = totalSeconds % 60;
 
   return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+}
+
+function formatAudioDate(timestamp: number | undefined): string {
+  if (!timestamp || !Number.isFinite(timestamp)) {
+    return '--';
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  }).format(new Date(timestamp));
+}
+
+function getAudioCardStatusLabel(status: NonNullable<FlashBoardNodeType['job']>['status'] | 'draft'): string {
+  switch (status) {
+    case 'completed':
+      return 'Complete';
+    case 'processing':
+      return 'Generating';
+    case 'queued':
+    case 'draft':
+      return 'Pending';
+    case 'failed':
+      return 'Failed';
+    case 'canceled':
+      return 'Canceled';
+    default:
+      return 'Pending';
+  }
+}
+
+function buildAudioWaveformBars(seed: string, count = 86): number[] {
+  let hash = 2166136261;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash ^= seed.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return Array.from({ length: count }, (_, index) => {
+    hash ^= index + 0x9e3779b9;
+    hash = Math.imul(hash, 2246822507);
+    const random = ((hash >>> 0) % 1000) / 1000;
+    const center = 1 - Math.abs((index / Math.max(1, count - 1)) - 0.5) * 1.45;
+    const pulse = Math.sin(index * 0.43) * 0.22 + Math.sin(index * 0.17 + 1.8) * 0.18;
+    const height = 0.18 + Math.max(0, center) * 0.4 + Math.abs(pulse) + random * 0.28;
+
+    return Math.min(1, Math.max(0.12, height));
+  });
 }
 
 function getNodeDragAutoPanScale(zoom: number): number {
@@ -199,6 +258,7 @@ function FlashBoardNodeComponent({
   const resizeRef = useRef<ResizeSession | null>(null);
   const suppressContextMenuRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const lastVideoPreviewTimeRef = useRef(0);
   const [isHovered, setIsHovered] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -207,6 +267,14 @@ function FlashBoardNodeComponent({
     currentTime: 0,
     duration: node.result?.duration ?? 0,
     isPlaying: false,
+  }));
+  const [audioPreviewState, setAudioPreviewState] = useState<AudioPreviewState>(() => ({
+    mediaId: node.result?.mediaFileId ?? null,
+    currentTime: 0,
+    duration: node.result?.duration ?? 0,
+    isMuted: false,
+    isPlaying: false,
+    volume: 1,
   }));
 
   const status = node.job?.status ?? (node.kind === 'reference' ? 'completed' : 'draft');
@@ -218,6 +286,10 @@ function FlashBoardNodeComponent({
   const aspectRatioLabel = node.request?.aspectRatio ?? null;
   const soundLabel = node.request?.generateAudio ? 'Sound' : null;
   const multiShotLabel = node.request?.multiShots ? 'Multi-shot' : null;
+  const audioTypeLabel = node.request?.outputType === 'audio' || node.result?.mediaType === 'audio' ? 'Audio' : null;
+  const voiceLabel = node.request?.voiceName ?? null;
+  const audioModelLabel = node.request?.outputType === 'audio' ? node.request.version : null;
+  const outputFormatLabel = node.request?.outputFormat ?? null;
   const startReferenceLabel = node.request?.startMediaFileId ? 'Start ref' : null;
   const endReferenceLabel = node.request?.endMediaFileId ? 'End ref' : null;
   const referenceFrameLabel = node.request?.referenceMediaFileIds?.length ? 'Reference frame' : null;
@@ -240,6 +312,10 @@ function FlashBoardNodeComponent({
     aspectRatioLabel,
     soundLabel,
     multiShotLabel,
+    audioTypeLabel,
+    voiceLabel,
+    audioModelLabel,
+    outputFormatLabel,
     startReferenceLabel,
     endReferenceLabel,
     referenceFrameLabel,
@@ -286,11 +362,13 @@ function FlashBoardNodeComponent({
   const refreshFileUrls = useMediaStore((s) => s.refreshFileUrls);
   const mediaType = mediaFile?.type ?? node.result?.mediaType;
   const isVideoPreview = mediaType === 'video' && Boolean(mediaFile?.url);
+  const isAudioPreview = mediaType === 'audio' && Boolean(mediaFile?.url);
   const videoUrl = isVideoPreview ? mediaFile?.url : undefined;
-  const thumbnailUrl = !isVideoPreview ? (mediaFile?.thumbnailUrl || mediaFile?.url) : mediaFile?.thumbnailUrl;
+  const audioUrl = isAudioPreview ? mediaFile?.url : undefined;
+  const thumbnailUrl = !isVideoPreview && !isAudioPreview ? (mediaFile?.thumbnailUrl || mediaFile?.url) : mediaFile?.thumbnailUrl;
   const mediaName = mediaFile?.name;
   const isReference = node.kind === 'reference';
-  const hasPreview = Boolean(videoUrl || thumbnailUrl);
+  const hasPreview = Boolean(videoUrl || audioUrl || thumbnailUrl);
   const previewTitle = isReference ? mediaName || 'Reference asset' : prompt || 'No prompt yet';
   const showMeta = Boolean(provider || detailTokens.length > 0 || startedAt || status === 'failed');
   const referenceRoles = [
@@ -311,6 +389,24 @@ function FlashBoardNodeComponent({
     ? videoPreviewState.duration
     : (mediaFile?.duration ?? node.result?.duration ?? 0);
   const resolvedIsVideoPlaying = videoStateMatchesMedia ? videoPreviewState.isPlaying : false;
+  const audioStateMatchesMedia = audioPreviewState.mediaId === mediaFileId;
+  const resolvedAudioCurrentTime = audioStateMatchesMedia ? audioPreviewState.currentTime : 0;
+  const resolvedAudioDuration = audioStateMatchesMedia
+    ? audioPreviewState.duration
+    : (mediaFile?.duration ?? node.result?.duration ?? 0);
+  const resolvedIsAudioPlaying = audioStateMatchesMedia ? audioPreviewState.isPlaying : false;
+  const resolvedIsAudioMuted = audioStateMatchesMedia ? audioPreviewState.isMuted : false;
+  const audioProgress = resolvedAudioDuration > 0
+    ? Math.min(1, Math.max(0, resolvedAudioCurrentTime / resolvedAudioDuration))
+    : 0;
+  const audioGeneratedAtLabel = formatAudioDate(node.job?.completedAt ?? node.job?.startedAt ?? node.createdAt);
+  const audioCardStatusLabel = getAudioCardStatusLabel(status);
+  const audioBadgeLabel = isReference ? 'Reference' : 'Generated';
+  const audioWaveformBars = useMemo(
+    () => buildAudioWaveformBars(`${mediaFileId ?? node.id}:${previewTitle}:${resolvedAudioDuration}`),
+    [mediaFileId, node.id, previewTitle, resolvedAudioDuration],
+  );
+  const audioDownloadName = mediaName ?? 'generated-audio.mp3';
   const handleThumbnailError = useCallback(() => {
     if (!mediaFileId) {
       return;
@@ -353,6 +449,19 @@ function FlashBoardNodeComponent({
   useEffect(() => {
     lastVideoPreviewTimeRef.current = videoStateMatchesMedia ? videoPreviewState.currentTime : 0;
   }, [videoStateMatchesMedia, videoPreviewState.currentTime]);
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      setAudioPreviewState((prev) => ({
+        mediaId: mediaFileId ?? null,
+        currentTime: prev.mediaId === mediaFileId ? prev.currentTime : 0,
+        duration: mediaFile?.duration ?? node.result?.duration ?? 0,
+        isMuted: prev.mediaId === mediaFileId ? prev.isMuted : false,
+        isPlaying: false,
+        volume: prev.mediaId === mediaFileId ? prev.volume : 1,
+      }));
+    });
+  }, [audioUrl, mediaFile?.duration, mediaFileId, node.result?.duration]);
 
   const getBoardPointer = useCallback((clientX: number, clientY: number, canvasLeft: number, canvasTop: number) => ({
     x: (clientX - canvasLeft - panX) / zoom,
@@ -789,9 +898,12 @@ function FlashBoardNodeComponent({
       return;
     }
     e.stopPropagation();
-    e.dataTransfer.setData('application/x-media-file-id', mediaFileId);
-    e.dataTransfer.effectAllowed = 'copy';
+    flashBoardMediaBridge.startDragToTimeline(e.nativeEvent, mediaFileId);
   }, [mediaFileId]);
+
+  const handleDragEnd = useCallback(() => {
+    flashBoardMediaBridge.endDrag();
+  }, []);
 
   const handleNodeDragStart = useCallback((e: React.DragEvent) => {
     const target = e.target as HTMLElement | null;
@@ -843,6 +955,94 @@ function FlashBoardNodeComponent({
     video.currentTime = nextTime;
   };
 
+  const syncAudioState = useCallback((audio: HTMLAudioElement, overrides?: Partial<AudioPreviewState>) => {
+    setAudioPreviewState((prev) => ({
+      mediaId: mediaFileId ?? null,
+      currentTime: audio.currentTime || 0,
+      duration: audio.duration || mediaFile?.duration || node.result?.duration || prev.duration || 0,
+      isMuted: audio.muted,
+      isPlaying: !audio.paused && !audio.ended,
+      volume: audio.volume,
+      ...overrides,
+    }));
+  }, [mediaFile?.duration, mediaFileId, node.result?.duration]);
+
+  const toggleAudioPlayback = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || !isAudioPreview) {
+      return;
+    }
+
+    if (audio.paused) {
+      void audio.play().catch(() => {
+        setAudioPreviewState((prev) => ({
+          ...prev,
+          mediaId: mediaFileId ?? null,
+          isPlaying: false,
+        }));
+      });
+      return;
+    }
+
+    audio.pause();
+  }, [isAudioPreview, mediaFileId]);
+
+  const toggleAudioMute = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    audio.muted = !audio.muted;
+    syncAudioState(audio, { isMuted: audio.muted });
+  }, [syncAudioState]);
+
+  const handleAudioSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const audio = audioRef.current;
+    const nextTime = Number(e.target.value);
+    if (!Number.isFinite(nextTime)) {
+      return;
+    }
+
+    setAudioPreviewState((prev) => ({
+      ...prev,
+      mediaId: mediaFileId ?? null,
+      currentTime: nextTime,
+      duration: prev.mediaId === mediaFileId ? prev.duration : (mediaFile?.duration ?? node.result?.duration ?? 0),
+    }));
+
+    if (audio) {
+      audio.currentTime = nextTime;
+    }
+  }, [mediaFile?.duration, mediaFileId, node.result?.duration]);
+
+  const handleAudioLoadedMetadata = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+    syncAudioState(audio);
+  }, [syncAudioState]);
+
+  const handleAudioTimeUpdate = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+    syncAudioState(audio);
+  }, [syncAudioState]);
+
+  const handleAudioEnded = useCallback(() => {
+    const audio = audioRef.current;
+    setAudioPreviewState((prev) => ({
+      ...prev,
+      mediaId: mediaFileId ?? null,
+      currentTime: audio?.duration || prev.duration || 0,
+      duration: audio?.duration || prev.duration || 0,
+      isPlaying: false,
+    }));
+  }, [mediaFileId]);
+
   useEffect(() => {
     if (Math.abs(node.size.width - displayWidth) < 0.01 && Math.abs(node.size.height - displayHeight) < 0.01) {
       return;
@@ -856,7 +1056,7 @@ function FlashBoardNodeComponent({
 
   return (
     <div
-      className={`flashboard-node ${status} ${isSelected ? 'selected' : ''} ${isReference ? 'reference' : ''} ${hasPreview ? 'has-preview' : ''} ${isVideoPreview ? 'has-video-preview' : ''} ${isOverlapOutlined ? 'overlap-outlined' : ''} ${hasReferenceRole ? 'has-reference-role' : ''} ${isComposerReferenceHovered ? 'composer-reference-hovered' : ''}`}
+      className={`flashboard-node ${status} ${isSelected ? 'selected' : ''} ${isReference ? 'reference' : ''} ${hasPreview ? 'has-preview' : ''} ${isVideoPreview ? 'has-video-preview' : ''} ${isAudioPreview ? 'has-audio-preview' : ''} ${isOverlapOutlined ? 'overlap-outlined' : ''} ${hasReferenceRole ? 'has-reference-role' : ''} ${isComposerReferenceHovered ? 'composer-reference-hovered' : ''}`}
       data-flashboard-node-id={node.id}
       style={nodeStyle}
       onMouseDown={handleMouseDown}
@@ -888,6 +1088,120 @@ function FlashBoardNodeComponent({
                   playsInline
                 />
               </div>
+            ) : audioUrl ? (
+              <div className="flashboard-node-preview flashboard-node-audio-preview">
+                <div className="flashboard-node-audio-card">
+                  <audio
+                    ref={audioRef}
+                    className="flashboard-node-audio-hidden"
+                    src={audioUrl}
+                    preload="metadata"
+                    onLoadedMetadata={handleAudioLoadedMetadata}
+                    onTimeUpdate={handleAudioTimeUpdate}
+                    onPlay={handleAudioTimeUpdate}
+                    onPause={handleAudioTimeUpdate}
+                    onEnded={handleAudioEnded}
+                    onVolumeChange={handleAudioTimeUpdate}
+                  />
+                  <div className="flashboard-node-audio-header">
+                    <span className="flashboard-node-audio-pill">Audio</span>
+                    <span className="flashboard-node-audio-status-badge">{audioBadgeLabel}</span>
+                  </div>
+                  <div className="flashboard-node-audio-title">{previewTitle}</div>
+                  <div className="flashboard-node-audio-meta-row">
+                    <span><span>Duration:</span> {formatPreviewTime(resolvedAudioDuration)}</span>
+                    <span><span>Date:</span> {audioGeneratedAtLabel}</span>
+                    <span><span>Status:</span> {audioCardStatusLabel}</span>
+                  </div>
+                  <div
+                    className="flashboard-node-audio-waveform"
+                    aria-label="Audio seek"
+                    onMouseDown={stopNodeInteraction}
+                    onClick={stopNodeInteraction}
+                    onDoubleClick={stopNodeInteraction}
+                  >
+                    {audioWaveformBars.map((height, index) => {
+                      const isActiveBar = index / Math.max(1, audioWaveformBars.length - 1) <= audioProgress;
+                      return (
+                        <span
+                          key={`${mediaFileId ?? node.id}-wave-${index}`}
+                          className={`flashboard-node-audio-wave-bar ${isActiveBar ? 'active' : ''}`}
+                          style={{ '--wave-height': height } as CSSProperties}
+                        />
+                      );
+                    })}
+                    <input
+                      className="flashboard-node-audio-seek"
+                      type="range"
+                      min={0}
+                      max={resolvedAudioDuration || 0}
+                      step={Math.max((resolvedAudioDuration || 0) / 240, 0.01)}
+                      value={Math.min(resolvedAudioCurrentTime, resolvedAudioDuration || resolvedAudioCurrentTime)}
+                      onChange={handleAudioSeek}
+                      disabled={resolvedAudioDuration <= 0}
+                      aria-label="Seek audio"
+                    />
+                  </div>
+                  <div
+                    className="flashboard-node-audio-controls"
+                    onMouseDown={stopNodeInteraction}
+                    onClick={stopNodeInteraction}
+                    onDoubleClick={stopNodeInteraction}
+                  >
+                    <button
+                      className="flashboard-node-audio-play"
+                      type="button"
+                      onClick={toggleAudioPlayback}
+                      title={resolvedIsAudioPlaying ? 'Pause' : 'Play'}
+                    >
+                      {resolvedIsAudioPlaying ? (
+                        <span className="flashboard-node-audio-pause-icon" aria-hidden="true" />
+                      ) : (
+                        <span className="flashboard-node-audio-play-icon" aria-hidden="true" />
+                      )}
+                    </button>
+                    <span className="flashboard-node-audio-time">
+                      {formatPreviewTime(resolvedAudioCurrentTime)} / {formatPreviewTime(resolvedAudioDuration)}
+                    </span>
+                    <div className="flashboard-node-audio-actions">
+                      <button
+                        className={`flashboard-node-audio-icon-button ${resolvedIsAudioMuted ? 'muted' : ''}`}
+                        type="button"
+                        onClick={toggleAudioMute}
+                        title={resolvedIsAudioMuted ? 'Unmute' : 'Mute'}
+                        aria-label={resolvedIsAudioMuted ? 'Unmute audio' : 'Mute audio'}
+                      >
+                        <span className="flashboard-node-audio-volume-icon" aria-hidden="true" />
+                      </button>
+                      <a
+                        className="flashboard-node-audio-icon-button"
+                        href={audioUrl}
+                        download={audioDownloadName}
+                        onMouseDown={stopNodeInteraction}
+                        onClick={stopNodeInteraction}
+                        title="Download audio"
+                        aria-label="Download audio"
+                      >
+                        <span className="flashboard-node-audio-download-icon" aria-hidden="true" />
+                      </a>
+                      <button
+                        className="flashboard-node-audio-more"
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          handleRightClick(e);
+                        }}
+                        title="More"
+                        aria-label="More audio actions"
+                      >
+                        <span />
+                        <span />
+                        <span />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             ) : thumbnailUrl ? (
               <div className="flashboard-node-preview">
                 <img
@@ -906,6 +1220,7 @@ function FlashBoardNodeComponent({
                 title="Drag to timeline"
                 draggable
                 onDragStart={handleDragStart}
+                onDragEnd={handleDragEnd}
                 onMouseDown={(e) => e.stopPropagation()}
               >
                 +
@@ -982,6 +1297,7 @@ function FlashBoardNodeComponent({
                 title="Drag to timeline"
                 draggable
                 onDragStart={handleDragStart}
+                onDragEnd={handleDragEnd}
                 onMouseDown={(e) => e.stopPropagation()}
               >
                 +
@@ -999,6 +1315,7 @@ function FlashBoardNodeComponent({
                 title="Drag to timeline"
                 draggable
                 onDragStart={handleDragStart}
+                onDragEnd={handleDragEnd}
                 onMouseDown={(e) => e.stopPropagation()}
               >
                 +

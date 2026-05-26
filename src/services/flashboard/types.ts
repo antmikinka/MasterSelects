@@ -1,4 +1,9 @@
-import type { FlashBoardGenerationRequest } from '../../stores/flashboardStore/types';
+import type {
+  FlashBoardGenerationRequest,
+  FlashBoardMediaType,
+  FlashBoardOutputType,
+  FlashBoardService,
+} from '../../stores/flashboardStore/types';
 
 export interface SubmitNodeJobInput {
   nodeId: string;
@@ -7,23 +12,33 @@ export interface SubmitNodeJobInput {
 
 export interface SubmitNodeJobResult {
   nodeId: string;
-  remoteTaskId: string;
+  remoteTaskId?: string;
 }
 
 export interface ImportGeneratedMediaInput {
   nodeId: string;
   file: File;
-  mediaType: 'video' | 'image';
+  mediaType: FlashBoardMediaType;
   metadata: {
+    service?: FlashBoardService;
     providerId: string;
     version: string;
+    outputType?: FlashBoardOutputType;
+    mediaType?: FlashBoardMediaType;
     prompt: string;
     negativePrompt?: string;
     duration?: number;
     aspectRatio?: string;
+    imageSize?: string;
     generateAudio?: boolean;
     multiShots?: boolean;
     multiPrompt?: FlashBoardGenerationRequest['multiPrompt'];
+    voiceId?: string;
+    voiceName?: string;
+    languageOverride?: boolean;
+    languageCode?: string;
+    outputFormat?: string;
+    voiceSettings?: FlashBoardGenerationRequest['voiceSettings'];
     startMediaFileId?: string;
     endMediaFileId?: string;
     referenceMediaFileIds: string[];
@@ -35,7 +50,7 @@ export interface ImportGeneratedMediaResult {
 }
 
 export interface CatalogEntry {
-  service: 'piapi' | 'kieai' | 'cloud';
+  service: FlashBoardService;
   providerId: string;
   name: string;
   description: string;
@@ -46,9 +61,10 @@ export interface CatalogEntry {
   supportsTextToVideo: boolean;
   supportsImageToVideo: boolean;
   supportsTextToImage?: boolean;
+  supportsTextToAudio?: boolean;
   supportsGenerateAudio?: boolean;
   supportsMultiShot?: boolean;
   imageSizes?: string[];
   maxReferenceImages?: number;
-  outputType?: 'video' | 'image';
+  outputType?: FlashBoardOutputType;
 }

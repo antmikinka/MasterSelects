@@ -11,7 +11,7 @@ GPT-powered editing with 79 exported tools across 15 exported definition groups,
 - [AI Chat Panel](#ai-chat-panel)
 - [Chat Providers](#chat-providers)
 - [Lemonade Local Setup](#lemonade-local-setup)
-- [AI Video Panel](#ai-video-panel)
+- [AI Generative Panel](#ai-generative-panel)
 - [AI Segmentation and MatAnyone2](#ai-segmentation-and-matanyone2)
 - [AI Editor Tools](#ai-editor-tools)
 - [AI Visual Feedback System](#ai-visual-feedback-system)
@@ -122,18 +122,18 @@ That console surface is dev-only. The Vite dev bridge and the Native Helper HTTP
 
 ---
 
-## AI Video Panel
+## AI Generative Panel
 
 ### Location
 - Tab next to AI Chat in dock panels
-- View menu -> AI Video
+- View menu -> AI Generative
 
 ### Panel Tabs
-- **AI Video**: Generation interface
+- **AI Generative**: Generation interface
 - **History**: List of generated videos
 
 ### Board Mode
-- Board workspace for arranging prompts, reference frames, and generated results on a canvas
+- Board workspace for arranging video, image, and audio generation prompts, reference frames, and generated results on a canvas
 - Right-click empty space to create a draft or add the current preview frame as a reference node
 - Left-drag pans the canvas everywhere, including over nodes
 - Right-drag node moves with smooth edge auto-pan
@@ -146,23 +146,27 @@ That console surface is dev-only. The Vite dev bridge and the Native Helper HTTP
 
 ### Current Backends
 
-The current AI Video stack is no longer best described as "PiAPI as one unified gateway". The active UI routes are:
+The current AI Generative stack is no longer best described as "PiAPI as one unified gateway". The active UI routes are:
 
 | Backend | Where it is used | Notes |
 |---------|------------------|-------|
 | `Kie.ai` | Classic generator and FlashBoard | Current provider list comes from `getKieAiProviders()`; user-supplied key in Settings |
 | `MasterSelects Cloud` | Classic generator and FlashBoard when hosted access is available | Hosted credits/account flow; board mode resolves to hosted Kling when no local Kie key is present |
+| `ElevenLabs` | FlashBoard audio generation | User-supplied key in Settings; text-to-speech output imports as durable audio media |
 | `PiAPI` | Legacy compatibility and some catalog/pricing metadata | Still present in older history/key migration paths and FlashBoard pricing/catalog helpers, but not the primary runtime path the current panel describes |
 
 The practical rule for the current branch is:
 - Classic mode uses Kie.ai or hosted cloud, depending on available credentials.
-- Board mode uses Kie.ai by default, and falls back to hosted cloud when the user is signed in but has no local Kie.ai key.
+- Board mode can select Kie.ai, hosted cloud, and ElevenLabs from the same FlashBoard composer.
+- ElevenLabs-only access opens the board on the audio text-to-speech target.
 - Service/provider labels in the panel reflect that active backend instead of a permanent PiAPI abstraction layer.
+- ElevenLabs keys are stored through the same encrypted local API-key path as the other provider keys and are not persisted in Zustand localStorage.
 
 ### Timeline Integration
 - Add to Timeline is enabled by default
-- Generated clips auto-import to the `AI Video` folder
-- Clips are placed on an empty or new video track at the playhead
+- Classic generated clips auto-import to the `AI Video` folder
+- FlashBoard generated media imports under `AI Gen / Video`, `AI Gen / Images`, or `AI Gen / Audio`
+- Video/image clips are placed on video tracks; generated ElevenLabs speech behaves like normal imported audio and routes to an audio track
 
 ---
 
@@ -178,7 +182,7 @@ The panel combines two different mask sources:
 SAM 2 inference runs locally in the browser using ONNX Runtime with WebGPU acceleration. No API keys or cloud services are involved.
 
 ### Location
-- Tab in dock panels alongside AI Chat and AI Video
+- Tab in dock panels alongside AI Chat and AI Generative
 - View menu -> AI Segment
 
 ### One-Time Model Download

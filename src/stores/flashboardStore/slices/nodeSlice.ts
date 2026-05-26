@@ -2,6 +2,8 @@ import type { FlashBoard, FlashBoardNode, FlashBoardGenerationRequest, FlashBoar
 import { flashBoardJobService } from '../../../services/flashboard/FlashBoardJobService';
 import { useMediaStore } from '../../mediaStore';
 
+const AUDIO_REFERENCE_ASPECT_RATIO = 2.8 / 1;
+
 type Set = (partial: Partial<FlashBoardStoreState> | ((state: FlashBoardStoreState) => Partial<FlashBoardStoreState>)) => void;
 type Get = () => FlashBoardStoreState;
 
@@ -87,7 +89,12 @@ export const createNodeSlice = (set: Set, get: Get): NodeSliceActions => ({
     const mediaFile = useMediaStore.getState().files.find((file) => file.id === mediaFileId);
     const width = mediaFile?.width && mediaFile.width > 0 ? mediaFile.width : undefined;
     const height = mediaFile?.height && mediaFile.height > 0 ? mediaFile.height : undefined;
-    const aspectRatio = width && height ? width / height : 16 / 9;
+    const mediaType = mediaFile?.type === 'image' ? 'image' : mediaFile?.type === 'audio' ? 'audio' : 'video';
+    const aspectRatio = width && height
+      ? width / height
+      : mediaType === 'audio'
+        ? AUDIO_REFERENCE_ASPECT_RATIO
+        : 16 / 9;
     const baseWidth = 200;
     const node: FlashBoardNode = {
       id: crypto.randomUUID(),
@@ -98,7 +105,7 @@ export const createNodeSlice = (set: Set, get: Get): NodeSliceActions => ({
       size: { width: baseWidth, height: baseWidth / aspectRatio },
       result: {
         mediaFileId,
-        mediaType: mediaFile?.type === 'image' ? 'image' : 'video',
+        mediaType,
         width,
         height,
       },

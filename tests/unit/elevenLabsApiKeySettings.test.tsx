@@ -1,0 +1,38 @@
+import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+
+import { useSettingsStore } from '../../src/stores/settingsStore';
+import { ApiKeysSettings } from '../../src/components/common/settings/ApiKeysSettings';
+
+const mockedUseSettingsStore = useSettingsStore as unknown as Mock;
+
+describe('ElevenLabs API key settings UI', () => {
+  beforeEach(() => {
+    mockedUseSettingsStore.mockImplementation((selector: (state: { apiKeys: Record<string, string> }) => unknown) => selector({
+      apiKeys: {
+        openai: '',
+        assemblyai: '',
+        deepgram: '',
+        piapi: '',
+        kieai: '',
+        elevenlabs: '',
+        youtube: '',
+        klingAccessKey: '',
+        klingSecretKey: '',
+      },
+    }));
+  });
+
+  it('renders an ElevenLabs row and reports changes through the settings save path', () => {
+    const onKeyChange = vi.fn();
+
+    render(<ApiKeysSettings localKeys={{ elevenlabs: '' }} onKeyChange={onKeyChange} />);
+
+    expect(screen.getByText('AI Audio Generation')).toBeInTheDocument();
+    const input = screen.getByPlaceholderText('Enter ElevenLabs API key...');
+
+    fireEvent.change(input, { target: { value: 'el-api-key' } });
+
+    expect(onKeyChange).toHaveBeenCalledWith('elevenlabs', 'el-api-key');
+  });
+});

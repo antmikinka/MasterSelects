@@ -35,6 +35,9 @@ const LEGACY_PANEL_TYPE_ALIASES: Partial<Record<PanelType, PanelType>> = {
   youtube: 'download',
 };
 const COLLAPSED_LEGACY_ALIAS_TYPES = new Set<PanelType>(['download']);
+const LEGACY_PANEL_TITLES: Partial<Record<PanelType, Set<string>>> = {
+  'ai-video': new Set(['AI Video']),
+};
 
 interface NormalizedDockPanel {
   panel: DockPanel;
@@ -55,13 +58,18 @@ function normalizeDockPanel(panel: DockPanel): NormalizedDockPanel | null {
   if (!VALID_PANEL_TYPES.has(normalizedType)) {
     return null;
   }
+  const configTitle = PANEL_CONFIGS[normalizedType].title;
+  const legacyTitles = LEGACY_PANEL_TITLES[normalizedType];
+  const title = normalizedType === panel.type && !legacyTitles?.has(panel.title)
+    ? panel.title
+    : configTitle;
 
   return {
     sourceType: panel.type,
     panel: {
       ...panel,
       type: normalizedType,
-      title: normalizedType === panel.type ? panel.title : PANEL_CONFIGS[normalizedType].title,
+      title,
     },
   };
 }
@@ -205,7 +213,7 @@ const DEFAULT_LAYOUT: DockLayout = {
             panels: [
               { id: 'media', type: 'media', title: 'Media' },
               { id: 'ai-chat', type: 'ai-chat', title: 'AI Chat' },
-              { id: 'ai-video', type: 'ai-video', title: 'AI Video' },
+              { id: 'ai-video', type: 'ai-video', title: 'AI Generative' },
               { id: 'download', type: 'download', title: 'Downloads' },
             ],
             activeIndex: 0, // Media active

@@ -297,7 +297,7 @@ export function MediaBoardView({
           <button
             className="btn btn-sm"
             onClick={onOpenAI}
-            title="Open AI Video panel"
+            title="Open AI Generative panel"
           >
             AI
           </button>

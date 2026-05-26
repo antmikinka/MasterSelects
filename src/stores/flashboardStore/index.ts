@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 
 import type { FlashBoardStoreState } from './types';
+import { createDefaultFlashBoardComposer } from './defaults';
 import { createBoardSlice, type BoardSliceActions } from './slices/boardSlice';
 import { createNodeSlice, type NodeSliceActions } from './slices/nodeSlice';
 import { createUiSlice, type UiSliceActions } from './slices/uiSlice';
@@ -14,14 +15,7 @@ export const useFlashBoardStore = create<FlashBoardStore>()(
     boards: [],
     selectedNodeIds: [],
     viewMode: 'board' as const,
-    composer: {
-      draftNodeId: null,
-      isOpen: false,
-      generateAudio: false,
-      multiShots: false,
-      multiPrompt: [],
-      referenceMediaFileIds: [],
-    },
+    composer: createDefaultFlashBoardComposer(),
     hoveredComposerReference: null,
 
     ...createBoardSlice(set, get),
@@ -32,3 +26,4 @@ export const useFlashBoardStore = create<FlashBoardStore>()(
 
 export * from './types';
 export * from './selectors';
+export * from './defaults';

@@ -20,14 +20,20 @@ import { useYouTubeStore } from '../../stores/youtubeStore';
 import { useDockStore } from '../../stores/dockStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useFlashBoardStore } from '../../stores/flashboardStore';
+import { createDefaultFlashBoardComposer } from '../../stores/flashboardStore/defaults';
 import { useExportStore } from '../../stores/exportStore';
 import { useMIDIStore } from '../../stores/midiStore';
 import { flashBoardMediaBridge } from '../flashboard/FlashBoardMediaBridge';
 import { cloneClipNodeGraph } from '../nodeGraph';
 import type {
   FlashBoard,
+  FlashBoardGenerationRequest,
   FlashBoardJobState,
+  FlashBoardMediaType,
   FlashBoardNode,
+  FlashBoardOutputType,
+  FlashBoardResult,
+  FlashBoardService,
   ProjectFlashBoardState,
 } from '../../stores/flashboardStore/types';
 import {
@@ -866,6 +872,65 @@ function normalizeItemFolderParents<T extends StoreItemWithParent>(
   return repairedCount > 0 ? normalized : items;
 }
 
+const FLASHBOARD_SERVICES = new Set<FlashBoardService>(['piapi', 'kieai', 'cloud', 'elevenlabs']);
+const FLASHBOARD_OUTPUT_TYPES = new Set<FlashBoardOutputType>(['video', 'image', 'audio']);
+const FLASHBOARD_MEDIA_TYPES = new Set<FlashBoardMediaType>(['video', 'image', 'audio']);
+
+function normalizeFlashBoardService(value: unknown): FlashBoardService {
+  return typeof value === 'string' && FLASHBOARD_SERVICES.has(value as FlashBoardService)
+    ? value as FlashBoardService
+    : 'kieai';
+}
+
+function normalizeFlashBoardOutputType(
+  value: unknown,
+  service: FlashBoardService,
+): FlashBoardOutputType | undefined {
+  if (typeof value === 'string' && FLASHBOARD_OUTPUT_TYPES.has(value as FlashBoardOutputType)) {
+    return value as FlashBoardOutputType;
+  }
+
+  return service === 'elevenlabs' ? 'audio' : undefined;
+}
+
+function normalizeFlashBoardMediaType(value: unknown): FlashBoardMediaType {
+  return typeof value === 'string' && FLASHBOARD_MEDIA_TYPES.has(value as FlashBoardMediaType)
+    ? value as FlashBoardMediaType
+    : 'video';
+}
+
+function normalizeFlashBoardRequest(
+  request: FlashBoardGenerationRequest | undefined,
+): FlashBoardGenerationRequest | undefined {
+  if (!request) {
+    return undefined;
+  }
+
+  const service = normalizeFlashBoardService(request.service);
+
+  return {
+    ...request,
+    service,
+    outputType: normalizeFlashBoardOutputType(request.outputType, service),
+    referenceMediaFileIds: Array.isArray(request.referenceMediaFileIds)
+      ? request.referenceMediaFileIds.filter((id): id is string => typeof id === 'string')
+      : [],
+  };
+}
+
+function normalizeFlashBoardResult(
+  result: FlashBoardResult | undefined,
+): FlashBoardResult | undefined {
+  if (!result) {
+    return undefined;
+  }
+
+  return {
+    ...result,
+    mediaType: normalizeFlashBoardMediaType(result.mediaType),
+  };
+}
+
 function hydrateFlashBoardFromProject(data: ProjectFlashBoardState): void {
   const boards: FlashBoard[] = data.boards.map((board) => {
     const nodes: FlashBoardNode[] = board.nodes.map((node) => {
@@ -886,9 +951,9 @@ function hydrateFlashBoardFromProject(data: ProjectFlashBoardState): void {
         updatedAt: new Date(node.updatedAt).getTime(),
         position: node.position,
         size: node.size,
-        request: node.request,
+        request: normalizeFlashBoardRequest(node.request),
         job,
-        result: node.result,
+        result: normalizeFlashBoardResult(node.result),
       };
     });
 
@@ -906,14 +971,7 @@ function hydrateFlashBoardFromProject(data: ProjectFlashBoardState): void {
     activeBoardId: data.activeBoardId,
     boards,
     selectedNodeIds: [],
-    composer: {
-      draftNodeId: null,
-      isOpen: false,
-      generateAudio: false,
-      multiShots: false,
-      multiPrompt: [],
-      referenceMediaFileIds: [],
-    },
+    composer: createDefaultFlashBoardComposer(),
   });
 }
 
@@ -1102,14 +1160,7 @@ export async function loadProjectToStores(): Promise<void> {
       activeBoardId: null,
       boards: [],
       selectedNodeIds: [],
-      composer: {
-        draftNodeId: null,
-        isOpen: false,
-        generateAudio: false,
-        multiShots: false,
-        multiPrompt: [],
-        referenceMediaFileIds: [],
-      },
+      composer: createDefaultFlashBoardComposer(),
     });
     flashBoardMediaBridge.hydrateMetadata({});
   }
