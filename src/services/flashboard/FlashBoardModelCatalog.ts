@@ -1,6 +1,7 @@
 import { getVideoProviders } from '../piApiService';
 import { getKieAiProviders } from '../kieAiService';
 import type { CatalogEntry } from './types';
+import { DEFAULT_ELEVENLABS_MODEL_ID } from '../../stores/flashboardStore/defaults';
 
 export function getCatalogEntries(): CatalogEntry[] {
   const entries: CatalogEntry[] = [];
@@ -58,6 +59,24 @@ export function getCatalogEntries(): CatalogEntry[] {
     imageSizes: ['1K', '2K', '4K'],
     maxReferenceImages: 14,
     outputType: 'image',
+  });
+
+  entries.push({
+    service: 'elevenlabs',
+    providerId: 'elevenlabs-tts',
+    name: 'ElevenLabs',
+    description: 'Text-to-speech voice generation',
+    versions: [DEFAULT_ELEVENLABS_MODEL_ID],
+    modes: [],
+    durations: [],
+    aspectRatios: [],
+    supportsTextToVideo: false,
+    supportsImageToVideo: false,
+    supportsTextToImage: false,
+    supportsTextToAudio: true,
+    supportsGenerateAudio: false,
+    supportsMultiShot: false,
+    outputType: 'audio',
   });
 
   entries.push({

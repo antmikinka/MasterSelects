@@ -1,0 +1,95 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useSettingsStore } from '../../src/stores/settingsStore';
+import { flashBoardJobService } from '../../src/services/flashboard/FlashBoardJobService';
+
+const elevenLabsMock = vi.hoisted(() => ({
+  setApiKey: vi.fn(),
+  createSpeech: vi.fn(),
+}));
+
+vi.mock('../../src/services/elevenLabsService', () => ({
+  DEFAULT_ELEVENLABS_SPEECH_OUTPUT_FORMAT: 'mp3_44100_128',
+  ELEVENLABS_MP3_MIME_TYPE: 'audio/mpeg',
+  elevenLabsService: elevenLabsMock,
+  isElevenLabsMp3OutputFormat: (value: string) => (
+    ['mp3_44100_128', 'mp3_44100_192', 'mp3_22050_32'].includes(value)
+  ),
+}));
+
+describe('FlashBoardJobService ElevenLabs audio jobs', () => {
+  beforeEach(() => {
+    flashBoardJobService.setUpdateCallback(null);
+    vi.mocked(useSettingsStore.getState).mockReturnValue({
+      apiKeys: {
+        openai: '',
+        assemblyai: '',
+        deepgram: '',
+        piapi: '',
+        kieai: '',
+        elevenlabs: 'eleven-key',
+        youtube: '',
+        klingAccessKey: '',
+        klingSecretKey: '',
+      },
+    } as ReturnType<typeof useSettingsStore.getState>);
+    elevenLabsMock.setApiKey.mockClear();
+    elevenLabsMock.createSpeech.mockReset();
+  });
+
+  it('returns a durable audio File completion for ElevenLabs speech', async () => {
+    elevenLabsMock.createSpeech.mockResolvedValue({
+      audio: new Blob(['mp3-bytes'], { type: 'audio/mpeg' }),
+      mimeType: 'audio/mpeg',
+      extension: 'mp3',
+      outputFormat: 'mp3_44100_128',
+      size: 9,
+    });
+
+    const completed = new Promise<Parameters<Parameters<typeof flashBoardJobService.setUpdateCallback>[0]>[1]>((resolve, reject) => {
+      flashBoardJobService.setUpdateCallback((_nodeId, update) => {
+        if (update.status === 'completed') {
+          resolve(update);
+        }
+        if (update.status === 'failed') {
+          reject(new Error(update.error));
+        }
+      });
+    });
+
+    flashBoardJobService.submit({
+      nodeId: 'node-audio',
+      request: {
+        service: 'elevenlabs',
+        providerId: 'elevenlabs-tts',
+        version: 'eleven_multilingual_v2',
+        outputType: 'audio',
+        prompt: 'Hello from the board',
+        voiceId: 'voice-1',
+        voiceName: 'Narrator',
+        outputFormat: 'mp3_44100_128',
+        voiceSettings: {
+          speed: 1,
+          stability: 0.5,
+          similarityBoost: 0.75,
+          style: 0,
+          useSpeakerBoost: true,
+        },
+        referenceMediaFileIds: [],
+      },
+    });
+
+    const update = await completed;
+
+    expect(elevenLabsMock.setApiKey).toHaveBeenCalledWith('eleven-key');
+    expect(elevenLabsMock.createSpeech).toHaveBeenCalledWith(expect.objectContaining({
+      voiceId: 'voice-1',
+      text: 'Hello from the board',
+      modelId: 'eleven_multilingual_v2',
+      outputFormat: 'mp3_44100_128',
+    }), expect.any(AbortSignal));
+    expect(update.mediaType).toBe('audio');
+    expect(update.assetFile).toBeInstanceOf(File);
+    expect(update.assetFile?.type).toBe('audio/mpeg');
+    expect(update.assetFile?.name).toMatch(/^ai_voice_narrator_hello_from_the_board_\d+\.mp3$/);
+  });
+});

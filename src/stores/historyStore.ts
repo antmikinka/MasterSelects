@@ -24,6 +24,7 @@ import type {
   FlashBoardComposerState,
   FlashBoardGenerationMetadata,
 } from './flashboardStore/types';
+import { createDefaultFlashBoardComposer } from './flashboardStore/defaults';
 import type { ExportStoreData } from './exportStore';
 import { createDefaultExportStoreData, getExportStoreData } from './exportStore';
 
@@ -242,17 +243,6 @@ function deepClone<T>(obj: T, seen?: WeakSet<object>): T {
     }
   }
   return cloned;
-}
-
-function createDefaultFlashBoardComposer(): FlashBoardComposerState {
-  return {
-    draftNodeId: null,
-    isOpen: false,
-    generateAudio: false,
-    multiShots: false,
-    multiPrompt: [],
-    referenceMediaFileIds: [],
-  };
 }
 
 // Create snapshot from current state

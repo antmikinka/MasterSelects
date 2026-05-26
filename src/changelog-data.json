@@ -1,5 +1,13 @@
 [
   {
+    "date": "2026-05-26",
+    "type": "new",
+    "title": "ElevenLabs Audio Generation",
+    "description": "FlashBoard now supports ElevenLabs text-to-speech generation with encrypted API-key settings, compact voice/model/output controls, generated audio cards, media-board and timeline routing, project persistence, history support, pricing metadata, and focused test coverage.",
+    "section": "AI / Audio",
+    "commits": ["5ffc1774", "a731f5fb"]
+  },
+  {
     "date": "2026-05-25",
     "type": "new",
     "title": "Wasm/WIT Signal Runtime Foundation",

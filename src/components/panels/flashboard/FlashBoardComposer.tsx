@@ -3,14 +3,40 @@ import { useFlashBoardStore } from '../../../stores/flashboardStore';
 import type {
   FlashBoardComposerReferenceRole,
   FlashBoardMultiShotPrompt,
+  FlashBoardVoiceSettings,
 } from '../../../stores/flashboardStore';
+import {
+  DEFAULT_ELEVENLABS_MODEL_ID,
+  DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
+  DEFAULT_ELEVENLABS_VOICE_SETTINGS,
+} from '../../../stores/flashboardStore/defaults';
 import { selectActiveBoard } from '../../../stores/flashboardStore/selectors';
 import { useMediaStore } from '../../../stores/mediaStore';
+import { useSettingsStore } from '../../../stores/settingsStore';
+import {
+  ELEVENLABS_MP3_OUTPUT_FORMATS,
+  elevenLabsService,
+  isElevenLabsMp3OutputFormat,
+  type ElevenLabsModel,
+  type ElevenLabsMp3OutputFormat,
+  type ElevenLabsVoice,
+} from '../../../services/elevenLabsService';
 import { getCatalogEntries } from '../../../services/flashboard/FlashBoardModelCatalog';
 import { getCatalogEntryPriceEstimate, getFlashBoardPriceEstimate } from '../../../services/flashboard/FlashBoardPricing';
 import type { CatalogEntry } from '../../../services/flashboard/types';
 
-type PopoverType = 'model' | 'aspect' | 'duration' | 'mode' | 'imageSize' | null;
+type PopoverType =
+  | 'model'
+  | 'aspect'
+  | 'duration'
+  | 'mode'
+  | 'imageSize'
+  | 'audioModel'
+  | 'voice'
+  | 'audioOutput'
+  | 'voiceSettings'
+  | null;
+type NumberVoiceSettingKey = 'speed' | 'stability' | 'similarityBoost' | 'style';
 
 interface ComposerReferenceBadge {
   key: string;
@@ -24,10 +50,32 @@ interface FlashBoardComposerProps {
   initialProviderId?: string;
   initialService?: CatalogEntry['service'];
   initialVersion?: string;
+  allowedServices?: CatalogEntry['service'][];
   serviceScope?: CatalogEntry['service'];
 }
 
 const MAX_MULTI_SHOTS = 5;
+
+const ELEVENLABS_OUTPUT_FORMAT_LABELS: Record<ElevenLabsMp3OutputFormat, string> = {
+  mp3_44100_128: 'MP3 44.1 kHz / 128 kbps',
+  mp3_44100_192: 'MP3 44.1 kHz / 192 kbps',
+  mp3_22050_32: 'MP3 22.05 kHz / 32 kbps',
+};
+
+const ELEVENLABS_OUTPUT_FORMAT_COMPACT_LABELS: Record<ElevenLabsMp3OutputFormat, string> = {
+  mp3_44100_128: 'MP3 128k',
+  mp3_44100_192: 'MP3 192k',
+  mp3_22050_32: 'MP3 32k',
+};
+
+interface ElevenLabsModelOption {
+  modelId: string;
+  name: string;
+  description?: string;
+  maximumTextLengthPerRequest?: number;
+  maxCharactersRequestFreeUser?: number;
+  maxCharactersRequestSubscribedUser?: number;
+}
 
 function getServiceLabel(service: CatalogEntry['service']): string {
   switch (service) {
@@ -37,9 +85,75 @@ function getServiceLabel(service: CatalogEntry['service']): string {
       return 'PiAPI';
     case 'cloud':
       return 'Cloud';
+    case 'elevenlabs':
+      return 'Audio';
     default:
       return service;
   }
+}
+
+function getProviderDisplayName(entry: CatalogEntry): string {
+  if (entry.service === 'elevenlabs') {
+    return 'ElevenLabs Speech';
+  }
+
+  return entry.name.replace(' (Kie.ai)', '');
+}
+
+function normalizeVoiceSettings(settings: FlashBoardVoiceSettings | undefined): Required<FlashBoardVoiceSettings> {
+  return {
+    ...DEFAULT_ELEVENLABS_VOICE_SETTINGS,
+    ...settings,
+  };
+}
+
+function areVoiceSettingsEqual(
+  left: FlashBoardVoiceSettings | undefined,
+  right: FlashBoardVoiceSettings | undefined,
+): boolean {
+  const normalizedLeft = normalizeVoiceSettings(left);
+  const normalizedRight = normalizeVoiceSettings(right);
+
+  return normalizedLeft.speed === normalizedRight.speed
+    && normalizedLeft.stability === normalizedRight.stability
+    && normalizedLeft.similarityBoost === normalizedRight.similarityBoost
+    && normalizedLeft.style === normalizedRight.style
+    && normalizedLeft.useSpeakerBoost === normalizedRight.useSpeakerBoost;
+}
+
+function normalizeElevenLabsOutputFormat(value: string | undefined): ElevenLabsMp3OutputFormat {
+  return value && isElevenLabsMp3OutputFormat(value)
+    ? value
+    : DEFAULT_ELEVENLABS_OUTPUT_FORMAT;
+}
+
+function buildElevenLabsModelOptions(models: ElevenLabsModel[]): ElevenLabsModelOption[] {
+  if (models.length === 0) {
+    return [{
+      modelId: DEFAULT_ELEVENLABS_MODEL_ID,
+      name: 'Eleven Multilingual v2',
+    }];
+  }
+
+  return models.map((model) => ({
+    modelId: model.modelId,
+    name: model.name,
+    description: model.description,
+    maximumTextLengthPerRequest: model.maximumTextLengthPerRequest,
+    maxCharactersRequestFreeUser: model.maxCharactersRequestFreeUser,
+    maxCharactersRequestSubscribedUser: model.maxCharactersRequestSubscribedUser,
+  }));
+}
+
+function getModelCharacterLimit(model: ElevenLabsModelOption | undefined): number | null {
+  if (!model) {
+    return null;
+  }
+
+  return model.maximumTextLengthPerRequest
+    ?? model.maxCharactersRequestSubscribedUser
+    ?? model.maxCharactersRequestFreeUser
+    ?? null;
 }
 
 function areMultiPromptsEqual(
@@ -190,6 +304,7 @@ export function FlashBoardComposer({
   initialProviderId,
   initialService,
   initialVersion,
+  allowedServices,
   serviceScope,
 }: FlashBoardComposerProps) {
   const board = useFlashBoardStore(selectActiveBoard);
@@ -200,18 +315,45 @@ export function FlashBoardComposer({
   const queueNode = useFlashBoardStore((s) => s.queueNode);
   const setHoveredComposerReference = useFlashBoardStore((s) => s.setHoveredComposerReference);
   const mediaFiles = useMediaStore((s) => s.files);
+  const elevenLabsApiKey = useSettingsStore((s) => s.apiKeys.elevenlabs);
+  const hasElevenLabsKey = elevenLabsApiKey.trim().length > 0;
 
   const catalog = useMemo(() => getCatalogEntries(), []);
   const visibleCatalog = useMemo(
-    () => (serviceScope ? catalog.filter((entry) => entry.service === serviceScope) : catalog),
-    [catalog, serviceScope]
+    () => catalog.filter((entry) => {
+      if (serviceScope && entry.service !== serviceScope) {
+        return false;
+      }
+      if (allowedServices?.length && !allowedServices.includes(entry.service)) {
+        return false;
+      }
+      return true;
+    }),
+    [allowedServices, catalog, serviceScope],
   );
+  const serviceOptions = useMemo(
+    () => Array.from(new Set(visibleCatalog.map((entry) => entry.service))),
+    [visibleCatalog],
+  );
+  const initialEntry = useMemo(
+    () => (
+      visibleCatalog.find((entry) => {
+        const serviceMatches = (serviceScope ?? initialService ?? entry.service) === entry.service;
+        const providerMatches = !initialProviderId || entry.providerId === initialProviderId;
+        return serviceMatches && providerMatches;
+      }) ?? visibleCatalog[0]
+    ),
+    [initialProviderId, initialService, serviceScope, visibleCatalog],
+  );
+
   const [popover, setPopover] = useState<PopoverType>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
-  const [service, setService] = useState<CatalogEntry['service']>(serviceScope ?? initialService ?? 'kieai');
-  const [providerId, setProviderId] = useState(initialProviderId ?? visibleCatalog[0]?.providerId ?? '');
-  const [version, setVersion] = useState(initialVersion ?? visibleCatalog[0]?.versions[0] ?? '');
+  const [service, setService] = useState<CatalogEntry['service']>(
+    initialEntry?.service ?? serviceScope ?? initialService ?? 'kieai',
+  );
+  const [providerId, setProviderId] = useState(initialProviderId ?? initialEntry?.providerId ?? '');
+  const [version, setVersion] = useState(initialVersion ?? initialEntry?.versions[0] ?? DEFAULT_ELEVENLABS_MODEL_ID);
   const [mode, setMode] = useState('std');
   const [prompt, setPrompt] = useState('');
   const [duration, setDuration] = useState(5);
@@ -220,18 +362,50 @@ export function FlashBoardComposer({
   const [generateAudio, setGenerateAudio] = useState(false);
   const [multiShots, setMultiShots] = useState(false);
   const [multiPrompt, setMultiPrompt] = useState<FlashBoardMultiShotPrompt[]>([]);
+  const [voiceId, setVoiceId] = useState(composer.voiceId ?? '');
+  const [voiceName, setVoiceName] = useState(composer.voiceName ?? '');
+  const [languageOverride, setLanguageOverride] = useState(composer.languageOverride ?? false);
+  const [languageCode, setLanguageCode] = useState(composer.languageCode ?? '');
+  const [outputFormat, setOutputFormat] = useState<ElevenLabsMp3OutputFormat>(
+    normalizeElevenLabsOutputFormat(composer.outputFormat),
+  );
+  const [voiceSettings, setVoiceSettings] = useState<Required<FlashBoardVoiceSettings>>(
+    () => normalizeVoiceSettings(composer.voiceSettings),
+  );
+  const [elevenLabsModels, setElevenLabsModels] = useState<ElevenLabsModel[]>([]);
+  const [isLoadingElevenLabsModels, setIsLoadingElevenLabsModels] = useState(false);
+  const [elevenLabsModelsError, setElevenLabsModelsError] = useState<string | null>(null);
+  const [voiceSearch, setVoiceSearch] = useState('');
+  const [elevenLabsVoices, setElevenLabsVoices] = useState<ElevenLabsVoice[]>([]);
+  const [isLoadingElevenLabsVoices, setIsLoadingElevenLabsVoices] = useState(false);
+  const [elevenLabsVoicesError, setElevenLabsVoicesError] = useState<string | null>(null);
+  const [voiceRefreshNonce, setVoiceRefreshNonce] = useState(0);
 
   const selectedEntry = useMemo(
-    () => catalog.find((e) => e.service === service && e.providerId === providerId),
-    [catalog, service, providerId]
+    () => visibleCatalog.find((e) => e.service === service && e.providerId === providerId),
+    [providerId, service, visibleCatalog],
   );
-  const supportsAudio = selectedEntry?.supportsGenerateAudio === true;
-  const supportsMultiShot = selectedEntry?.supportsMultiShot === true;
+  const isAudioMode = selectedEntry?.outputType === 'audio' || service === 'elevenlabs';
+  const elevenLabsModelOptions = useMemo(
+    () => buildElevenLabsModelOptions(elevenLabsModels),
+    [elevenLabsModels],
+  );
+  const selectedElevenLabsModel = useMemo(
+    () => elevenLabsModelOptions.find((model) => model.modelId === version) ?? elevenLabsModelOptions[0],
+    [elevenLabsModelOptions, version],
+  );
+  const selectedElevenLabsCharacterLimit = getModelCharacterLimit(selectedElevenLabsModel);
+  const audioModelButtonLabel = (selectedElevenLabsModel?.name ?? version).replace(/^Eleven\s+/i, '');
+  const audioVoiceButtonLabel = voiceName.trim() || voiceId.trim() || 'Voice';
+  const audioOutputButtonLabel = ELEVENLABS_OUTPUT_FORMAT_COMPACT_LABELS[outputFormat];
+  const voiceSettingsChanged = !areVoiceSettingsEqual(voiceSettings, DEFAULT_ELEVENLABS_VOICE_SETTINGS);
+  const supportsAudio = !isAudioMode && selectedEntry?.supportsGenerateAudio === true;
+  const supportsMultiShot = !isAudioMode && selectedEntry?.supportsMultiShot === true;
   const normalizedMultiPrompt = useMemo(
     () => multiShots ? rebalanceMultiPrompts(multiPrompt, duration) : [],
-    [duration, multiPrompt, multiShots]
+    [duration, multiPrompt, multiShots],
   );
-  const effectiveGenerateAudio = supportsAudio && (generateAudio || multiShots);
+  const effectiveGenerateAudio = !isAudioMode && supportsAudio && (generateAudio || multiShots);
   const effectivePrompt = useMemo(() => {
     const trimmedPrompt = prompt.trim();
 
@@ -247,7 +421,7 @@ export function FlashBoardComposer({
   }, [multiShots, normalizedMultiPrompt, prompt]);
   const multiShotDurationTotal = useMemo(
     () => normalizedMultiPrompt.reduce((sum, shot) => sum + shot.duration, 0),
-    [normalizedMultiPrompt]
+    [normalizedMultiPrompt],
   );
   const multiShotValidationError = useMemo(() => {
     if (!multiShots) {
@@ -279,6 +453,45 @@ export function FlashBoardComposer({
 
     return null;
   }, [duration, multiShotDurationTotal, multiShots, normalizedMultiPrompt, supportsMultiShot]);
+  const audioValidationError = useMemo(() => {
+    if (!isAudioMode) {
+      return null;
+    }
+
+    if (!hasElevenLabsKey) {
+      return 'Add an ElevenLabs API key in Settings to generate speech.';
+    }
+
+    if (!voiceId.trim()) {
+      return 'Add an ElevenLabs voice ID.';
+    }
+
+    if (!version.trim()) {
+      return 'Choose an ElevenLabs model.';
+    }
+
+    if (languageOverride && !languageCode.trim()) {
+      return 'Add a language code or turn language override off.';
+    }
+
+    if (
+      selectedElevenLabsCharacterLimit !== null
+      && effectivePrompt.length > selectedElevenLabsCharacterLimit
+    ) {
+      return `Text exceeds the selected model limit of ${selectedElevenLabsCharacterLimit.toLocaleString()} characters.`;
+    }
+
+    return null;
+  }, [
+    effectivePrompt.length,
+    hasElevenLabsKey,
+    isAudioMode,
+    languageCode,
+    languageOverride,
+    selectedElevenLabsCharacterLimit,
+    version,
+    voiceId,
+  ]);
   const currentPrice = useMemo(() => (
     selectedEntry
       ? getFlashBoardPriceEstimate({
@@ -292,17 +505,21 @@ export function FlashBoardComposer({
         multiShots,
       })
       : null
-  ), [selectedEntry, service, providerId, mode, duration, imageSize, effectiveGenerateAudio, multiShots]);
-  const maxReferenceImages = selectedEntry?.supportsTextToImage ? selectedEntry.maxReferenceImages : undefined;
+  ), [duration, effectiveGenerateAudio, imageSize, mode, multiShots, providerId, selectedEntry, service]);
+  const maxReferenceImages = !isAudioMode && selectedEntry?.supportsTextToImage
+    ? selectedEntry.maxReferenceImages
+    : undefined;
   const effectiveReferenceMediaFileIds = useMemo(
     () => clampReferenceMediaFileIds(composer.referenceMediaFileIds ?? [], maxReferenceImages),
-    [composer.referenceMediaFileIds, maxReferenceImages]
+    [composer.referenceMediaFileIds, maxReferenceImages],
   );
-  const canGenerate = Boolean(board && effectivePrompt) && !multiShotValidationError;
+  const canGenerate = Boolean(board && selectedEntry && effectivePrompt)
+    && !multiShotValidationError
+    && !audioValidationError;
   const canAddShot = multiShots && normalizedMultiPrompt.length < Math.min(MAX_MULTI_SHOTS, Math.max(1, duration));
   const mediaFileNamesById = useMemo(
     () => new Map(mediaFiles.map((file) => [file.id, file.name])),
-    [mediaFiles]
+    [mediaFiles],
   );
   const composerReferenceBadges = useMemo<ComposerReferenceBadge[]>(() => {
     const badges: ComposerReferenceBadge[] = [];
@@ -341,44 +558,37 @@ export function FlashBoardComposer({
   }, [composer.endMediaFileId, composer.startMediaFileId, effectiveReferenceMediaFileIds, mediaFileNamesById]);
 
   useEffect(() => {
-    if (visibleCatalog.length === 0) {
+    if (!initialEntry) {
       return;
     }
-
-    const preferredEntry =
-      visibleCatalog.find((entry) => {
-        const serviceMatches = (serviceScope ?? initialService ?? service) === entry.service;
-        const providerMatches = !initialProviderId || entry.providerId === initialProviderId;
-        return serviceMatches && providerMatches;
-      }) ?? visibleCatalog[0];
 
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
 
-      setService(preferredEntry.service);
-      setProviderId(preferredEntry.providerId);
+      setService(initialEntry.service);
+      setProviderId(initialEntry.providerId);
 
       const nextVersion =
-        initialVersion && preferredEntry.versions.includes(initialVersion)
+        initialVersion && initialEntry.versions.includes(initialVersion)
           ? initialVersion
-          : preferredEntry.versions[0] ?? '';
+          : initialEntry.versions[0] ?? '';
       setVersion(nextVersion);
 
-      if (!preferredEntry.modes.includes(mode)) {
-        setMode(preferredEntry.modes[0] ?? 'std');
+      if (!initialEntry.modes.includes(mode)) {
+        setMode(initialEntry.modes[0] ?? 'std');
       }
-      if (!preferredEntry.durations.includes(duration)) {
-        setDuration(preferredEntry.durations[0] ?? 5);
+      if (!initialEntry.durations.includes(duration) && initialEntry.durations.length > 0) {
+        setDuration(initialEntry.durations[0] ?? 5);
       }
-      if (!preferredEntry.aspectRatios.includes(aspectRatio)) {
-        setAspectRatio(preferredEntry.aspectRatios[0] ?? '16:9');
+      if (!initialEntry.aspectRatios.includes(aspectRatio) && initialEntry.aspectRatios.length > 0) {
+        setAspectRatio(initialEntry.aspectRatios[0] ?? '16:9');
       }
-      if (preferredEntry.imageSizes?.length) {
+      if (initialEntry.imageSizes?.length) {
         setImageSize((current) => (
-          preferredEntry.imageSizes?.includes(current)
+          initialEntry.imageSizes?.includes(current)
             ? current
-            : preferredEntry.imageSizes?.[0] ?? '1K'
+            : initialEntry.imageSizes?.[0] ?? '1K'
         ));
       }
     });
@@ -386,7 +596,7 @@ export function FlashBoardComposer({
     return () => {
       cancelled = true;
     };
-  }, [aspectRatio, duration, initialProviderId, initialService, initialVersion, mode, service, serviceScope, visibleCatalog]);
+  }, [aspectRatio, duration, initialEntry, initialVersion, mode]);
 
   useEffect(() => {
     if (!selectedEntry) {
@@ -397,11 +607,11 @@ export function FlashBoardComposer({
     queueMicrotask(() => {
       if (cancelled) return;
 
-      if ((!supportsAudio || selectedEntry.outputType === 'image') && generateAudio) {
+      if ((isAudioMode || !supportsAudio || selectedEntry.outputType === 'image') && generateAudio) {
         setGenerateAudio(false);
       }
 
-      if ((!supportsMultiShot || selectedEntry.outputType === 'image') && multiShots) {
+      if ((isAudioMode || !supportsMultiShot || selectedEntry.outputType === 'image') && multiShots) {
         setMultiShots(false);
         setMultiPrompt([]);
       }
@@ -410,7 +620,7 @@ export function FlashBoardComposer({
     return () => {
       cancelled = true;
     };
-  }, [generateAudio, multiShots, selectedEntry, supportsAudio, supportsMultiShot]);
+  }, [generateAudio, isAudioMode, multiShots, selectedEntry, supportsAudio, supportsMultiShot]);
 
   useEffect(() => {
     if (!multiShots) {
@@ -456,21 +666,39 @@ export function FlashBoardComposer({
       nextPatch.multiPrompt = nextComposerMultiPrompt;
     }
 
-    if (!selectedEntry.supportsImageToVideo) {
+    if (isAudioMode) {
+      const trimmedVoiceId = voiceId.trim();
+      const trimmedVoiceName = voiceName.trim();
+      const trimmedLanguageCode = languageCode.trim();
+      if (composer.voiceId !== trimmedVoiceId) nextPatch.voiceId = trimmedVoiceId;
+      if (composer.voiceName !== trimmedVoiceName) nextPatch.voiceName = trimmedVoiceName;
+      if (composer.languageOverride !== languageOverride) nextPatch.languageOverride = languageOverride;
+      if (composer.languageCode !== trimmedLanguageCode) nextPatch.languageCode = trimmedLanguageCode;
+      if (composer.outputFormat !== outputFormat) nextPatch.outputFormat = outputFormat;
+      if (!areVoiceSettingsEqual(composer.voiceSettings, voiceSettings)) {
+        nextPatch.voiceSettings = { ...voiceSettings };
+      }
+      if (composer.startMediaFileId !== undefined) nextPatch.startMediaFileId = undefined;
+      if (composer.endMediaFileId !== undefined) nextPatch.endMediaFileId = undefined;
+      if (composer.referenceMediaFileIds.length > 0) nextPatch.referenceMediaFileIds = [];
+    }
+
+    if (!isAudioMode && !selectedEntry.supportsImageToVideo) {
       if (composer.startMediaFileId !== undefined) nextPatch.startMediaFileId = undefined;
       if (composer.endMediaFileId !== undefined) nextPatch.endMediaFileId = undefined;
     }
 
-    if (multiShots && composer.endMediaFileId !== undefined) {
+    if (!isAudioMode && multiShots && composer.endMediaFileId !== undefined) {
       nextPatch.endMediaFileId = undefined;
     }
 
-    if (!selectedEntry.supportsTextToImage && composer.referenceMediaFileIds.length > 0) {
+    if (!isAudioMode && !selectedEntry.supportsTextToImage && composer.referenceMediaFileIds.length > 0) {
       nextPatch.referenceMediaFileIds = [];
     }
 
     if (
-      selectedEntry.supportsTextToImage
+      !isAudioMode
+      && selectedEntry.supportsTextToImage
       && composer.referenceMediaFileIds !== effectiveReferenceMediaFileIds
     ) {
       nextPatch.referenceMediaFileIds = effectiveReferenceMediaFileIds;
@@ -482,24 +710,129 @@ export function FlashBoardComposer({
   }, [
     composer.endMediaFileId,
     composer.generateAudio,
+    composer.languageCode,
+    composer.languageOverride,
     composer.multiPrompt,
     composer.multiShots,
+    composer.outputFormat,
     composer.outputType,
     composer.providerId,
     composer.referenceMediaFileIds,
     composer.service,
     composer.startMediaFileId,
     composer.version,
-    effectiveReferenceMediaFileIds,
+    composer.voiceId,
+    composer.voiceName,
+    composer.voiceSettings,
     effectiveGenerateAudio,
+    effectiveReferenceMediaFileIds,
+    isAudioMode,
+    languageCode,
+    languageOverride,
     multiShots,
     normalizedMultiPrompt,
+    outputFormat,
     providerId,
     selectedEntry,
     service,
     updateComposer,
     version,
+    voiceId,
+    voiceName,
+    voiceSettings,
   ]);
+
+  useEffect(() => {
+    if (!isAudioMode || !hasElevenLabsKey) {
+      queueMicrotask(() => {
+        setElevenLabsModels([]);
+        setElevenLabsModelsError(null);
+      });
+      return;
+    }
+
+    const controller = new AbortController();
+    let cancelled = false;
+    elevenLabsService.setApiKey(elevenLabsApiKey);
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setIsLoadingElevenLabsModels(true);
+      setElevenLabsModelsError(null);
+    });
+
+    void elevenLabsService.listModels(controller.signal)
+      .then((models) => {
+        if (cancelled) return;
+
+        const textToSpeechModels = models.filter((model) => model.canDoTextToSpeech);
+        setElevenLabsModels(textToSpeechModels);
+        setVersion((current) => (
+          textToSpeechModels.some((model) => model.modelId === current)
+            ? current
+            : textToSpeechModels[0]?.modelId ?? DEFAULT_ELEVENLABS_MODEL_ID
+        ));
+      })
+      .catch((error: unknown) => {
+        if (cancelled || controller.signal.aborted) return;
+        const message = error instanceof Error ? error.message : 'Failed to load ElevenLabs models.';
+        setElevenLabsModelsError(message);
+        setElevenLabsModels([]);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingElevenLabsModels(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [elevenLabsApiKey, hasElevenLabsKey, isAudioMode]);
+
+  useEffect(() => {
+    if (!isAudioMode || !hasElevenLabsKey) {
+      queueMicrotask(() => {
+        setElevenLabsVoices([]);
+        setElevenLabsVoicesError(null);
+      });
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      elevenLabsService.setApiKey(elevenLabsApiKey);
+      setIsLoadingElevenLabsVoices(true);
+      setElevenLabsVoicesError(null);
+
+      void elevenLabsService.listVoices({
+        pageSize: 20,
+        search: voiceSearch.trim() || undefined,
+        sort: 'name',
+        sortDirection: 'asc',
+      }, controller.signal)
+        .then((result) => {
+          if (controller.signal.aborted) return;
+          setElevenLabsVoices(result.voices);
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          const message = error instanceof Error ? error.message : 'Failed to load ElevenLabs voices.';
+          setElevenLabsVoicesError(message);
+          setElevenLabsVoices([]);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setIsLoadingElevenLabsVoices(false);
+          }
+        });
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [elevenLabsApiKey, hasElevenLabsKey, isAudioMode, voiceRefreshNonce, voiceSearch]);
 
   useEffect(() => {
     if (!popover) return;
@@ -515,12 +848,15 @@ export function FlashBoardComposer({
   const handleProviderChange = useCallback((newService: CatalogEntry['service'], newId: string) => {
     setService(newService);
     setProviderId(newId);
-    const entry = catalog.find((e) => e.service === newService && e.providerId === newId);
+    const entry = visibleCatalog.find((e) => e.service === newService && e.providerId === newId);
     if (entry) {
-      setVersion(entry.versions[0] ?? '');
+      const nextVersion = entry.versions[0] ?? '';
+      const nextIsAudio = entry.outputType === 'audio' || entry.service === 'elevenlabs';
+
+      setVersion(nextVersion);
       if (!entry.modes.includes(mode)) setMode(entry.modes[0] ?? 'std');
-      if (!entry.durations.includes(duration)) setDuration(entry.durations[0] ?? 5);
-      if (!entry.aspectRatios.includes(aspectRatio)) setAspectRatio(entry.aspectRatios[0] ?? '16:9');
+      if (entry.durations.length > 0 && !entry.durations.includes(duration)) setDuration(entry.durations[0] ?? 5);
+      if (entry.aspectRatios.length > 0 && !entry.aspectRatios.includes(aspectRatio)) setAspectRatio(entry.aspectRatios[0] ?? '16:9');
       if (entry.imageSizes?.length && !entry.imageSizes.includes(imageSize)) {
         setImageSize(entry.imageSizes[0] ?? '1K');
       }
@@ -528,62 +864,103 @@ export function FlashBoardComposer({
       updateComposer({
         service: newService,
         providerId: newId,
-        version: entry.versions[0] ?? '',
+        version: nextVersion,
         outputType: entry.outputType ?? 'video',
-        startMediaFileId: entry.supportsImageToVideo ? composer.startMediaFileId : undefined,
-        endMediaFileId: entry.supportsImageToVideo && !multiShots ? composer.endMediaFileId : undefined,
-        referenceMediaFileIds: entry.supportsTextToImage
+        generateAudio: nextIsAudio ? false : effectiveGenerateAudio,
+        multiShots: nextIsAudio ? false : multiShots,
+        multiPrompt: nextIsAudio ? [] : normalizedMultiPrompt,
+        startMediaFileId: !nextIsAudio && entry.supportsImageToVideo ? composer.startMediaFileId : undefined,
+        endMediaFileId: !nextIsAudio && entry.supportsImageToVideo && !multiShots ? composer.endMediaFileId : undefined,
+        referenceMediaFileIds: !nextIsAudio && entry.supportsTextToImage
           ? clampReferenceMediaFileIds(composer.referenceMediaFileIds, entry.maxReferenceImages)
           : [],
+        voiceId: nextIsAudio ? voiceId.trim() : undefined,
+        voiceName: nextIsAudio ? voiceName.trim() : undefined,
+        languageOverride: nextIsAudio ? languageOverride : undefined,
+        languageCode: nextIsAudio ? languageCode.trim() : undefined,
+        outputFormat: nextIsAudio ? outputFormat : undefined,
+        voiceSettings: nextIsAudio ? { ...voiceSettings } : undefined,
       });
     }
     setPopover(null);
-  }, [catalog, mode, duration, aspectRatio, imageSize, composer.endMediaFileId, composer.referenceMediaFileIds, composer.startMediaFileId, multiShots, updateComposer]);
+  }, [
+    aspectRatio,
+    composer.endMediaFileId,
+    composer.referenceMediaFileIds,
+    composer.startMediaFileId,
+    duration,
+    effectiveGenerateAudio,
+    imageSize,
+    languageCode,
+    languageOverride,
+    mode,
+    multiShots,
+    normalizedMultiPrompt,
+    outputFormat,
+    updateComposer,
+    visibleCatalog,
+    voiceId,
+    voiceName,
+    voiceSettings,
+  ]);
 
   const handleGenerate = useCallback(() => {
     if (!board || !canGenerate || !selectedEntry) return;
 
     const node = createDraftNode(board.id);
+    const requestIsAudio = selectedEntry.outputType === 'audio' || service === 'elevenlabs';
     updateNodeRequest(node.id, {
       service,
       providerId,
       version,
       outputType: selectedEntry.outputType ?? 'video',
-      mode,
+      mode: requestIsAudio ? undefined : mode,
       prompt: effectivePrompt,
-      duration,
-      aspectRatio,
-      imageSize: selectedEntry.supportsTextToImage ? imageSize : undefined,
-      generateAudio: effectiveGenerateAudio,
-      multiShots,
-      multiPrompt: multiShots ? normalizedMultiPrompt : undefined,
-      startMediaFileId: selectedEntry.supportsImageToVideo ? composer.startMediaFileId : undefined,
-      endMediaFileId: selectedEntry.supportsImageToVideo && !multiShots ? composer.endMediaFileId : undefined,
-      referenceMediaFileIds: selectedEntry.supportsTextToImage ? effectiveReferenceMediaFileIds : [],
+      duration: requestIsAudio ? undefined : duration,
+      aspectRatio: requestIsAudio ? undefined : aspectRatio,
+      imageSize: !requestIsAudio && selectedEntry.supportsTextToImage ? imageSize : undefined,
+      generateAudio: requestIsAudio ? false : effectiveGenerateAudio,
+      multiShots: requestIsAudio ? false : multiShots,
+      multiPrompt: !requestIsAudio && multiShots ? normalizedMultiPrompt : undefined,
+      voiceId: requestIsAudio ? voiceId.trim() : undefined,
+      voiceName: requestIsAudio ? voiceName.trim() || undefined : undefined,
+      languageOverride: requestIsAudio ? languageOverride : undefined,
+      languageCode: requestIsAudio && languageOverride ? languageCode.trim() : undefined,
+      outputFormat: requestIsAudio ? outputFormat : undefined,
+      voiceSettings: requestIsAudio ? { ...voiceSettings } : undefined,
+      startMediaFileId: !requestIsAudio && selectedEntry.supportsImageToVideo ? composer.startMediaFileId : undefined,
+      endMediaFileId: !requestIsAudio && selectedEntry.supportsImageToVideo && !multiShots ? composer.endMediaFileId : undefined,
+      referenceMediaFileIds: !requestIsAudio && selectedEntry.supportsTextToImage ? effectiveReferenceMediaFileIds : [],
     });
     queueNode(node.id);
     setPrompt('');
   }, [
+    aspectRatio,
     board,
     canGenerate,
     composer.endMediaFileId,
     composer.startMediaFileId,
     createDraftNode,
     duration,
-    aspectRatio,
     effectiveGenerateAudio,
     effectivePrompt,
     effectiveReferenceMediaFileIds,
     imageSize,
+    languageCode,
+    languageOverride,
     mode,
     multiShots,
     normalizedMultiPrompt,
+    outputFormat,
     providerId,
     queueNode,
     selectedEntry,
     service,
     updateNodeRequest,
     version,
+    voiceId,
+    voiceName,
+    voiceSettings,
   ]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -668,6 +1045,37 @@ export function FlashBoardComposer({
     });
   }, [effectiveReferenceMediaFileIds, setHoveredComposerReference, updateComposer]);
 
+  const handleSelectVoice = useCallback((voice: ElevenLabsVoice) => {
+    setVoiceId(voice.voiceId);
+    setVoiceName(voice.name);
+  }, []);
+
+  const handlePreviewVoice = useCallback((previewUrl: string | undefined) => {
+    if (!previewUrl) {
+      return;
+    }
+
+    const audio = new Audio(previewUrl);
+    audio.preload = 'none';
+    void audio.play().catch(() => undefined);
+  }, []);
+
+  const handleVoiceSettingNumberChange = useCallback((key: NumberVoiceSettingKey, value: string) => {
+    const nextValue = Number(value);
+    if (!Number.isFinite(nextValue)) {
+      return;
+    }
+
+    setVoiceSettings((current) => ({
+      ...current,
+      [key]: nextValue,
+    }));
+  }, []);
+
+  const resetVoiceSettings = useCallback(() => {
+    setVoiceSettings({ ...DEFAULT_ELEVENLABS_VOICE_SETTINGS });
+  }, []);
+
   if (!board) return null;
 
   return (
@@ -677,13 +1085,19 @@ export function FlashBoardComposer({
           className="fb-bubble-input"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder={multiShots ? 'Overall scene or style (optional when using multishot)...' : 'Describe what to generate...'}
-          rows={multiShots ? 3 : 2}
+          placeholder={
+            isAudioMode
+              ? 'Text to speak...'
+              : multiShots
+                ? 'Overall scene or style (optional when using multishot)...'
+                : 'Describe what to generate...'
+          }
+          rows={isAudioMode ? 2 : multiShots ? 3 : 2}
         />
         <button className="fb-bubble-close" onClick={() => setPrompt('')} title="Clear">&times;</button>
       </div>
 
-      {composerReferenceBadges.length > 0 && (
+      {!isAudioMode && composerReferenceBadges.length > 0 && (
         <>
           <div className="fb-bubble-reference-badges">
             {composerReferenceBadges.map((badge) => (
@@ -700,7 +1114,7 @@ export function FlashBoardComposer({
                   className="fb-bubble-reference-close"
                   type="button"
                   onClick={() => handleRemoveComposerReference(badge)}
-                  title={`${badge.roleLabel} entfernen`}
+                  title={`Remove ${badge.roleLabel}`}
                 >
                   &times;
                 </button>
@@ -716,7 +1130,7 @@ export function FlashBoardComposer({
         </>
       )}
 
-      {multiShots && (
+      {!isAudioMode && multiShots && (
         <div className="fb-multishot-panel">
           <div className="fb-multishot-header">
             <span>Shots</span>
@@ -780,25 +1194,63 @@ export function FlashBoardComposer({
         </div>
       )}
 
+      {isAudioMode && audioValidationError && (
+        <div className="fb-audio-warning compact">{audioValidationError}</div>
+      )}
+
       <div className="fb-bubble-bar">
         <div className="fb-pill-group" ref={popoverRef}>
           <button className="fb-pill" onClick={() => togglePopover('model')} title="Model">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
           </button>
-          <button className={`fb-pill ${popover === 'aspect' ? 'active' : ''}`} onClick={() => togglePopover('aspect')}>
-            {aspectRatio}
-          </button>
-          {selectedEntry && selectedEntry.durations.length > 0 && (
+          {isAudioMode && (
+            <>
+              <button
+                className={`fb-pill ${popover === 'audioModel' ? 'active' : ''}`}
+                onClick={() => togglePopover('audioModel')}
+                title="ElevenLabs text-to-speech model"
+              >
+                {audioModelButtonLabel}
+              </button>
+              <button
+                className={`fb-pill ${popover === 'voice' ? 'active' : ''}`}
+                onClick={() => togglePopover('voice')}
+                title="Voice"
+              >
+                {audioVoiceButtonLabel}
+              </button>
+              <button
+                className={`fb-pill ${popover === 'audioOutput' ? 'active' : ''}`}
+                onClick={() => togglePopover('audioOutput')}
+                title="Output"
+              >
+                {audioOutputButtonLabel}
+              </button>
+              <button
+                className={`fb-pill ${popover === 'voiceSettings' || voiceSettingsChanged ? 'active' : ''}`}
+                onClick={() => togglePopover('voiceSettings')}
+                title="Voice settings"
+              >
+                Settings
+              </button>
+            </>
+          )}
+          {!isAudioMode && selectedEntry && selectedEntry.aspectRatios.length > 0 && (
+            <button className={`fb-pill ${popover === 'aspect' ? 'active' : ''}`} onClick={() => togglePopover('aspect')}>
+              {aspectRatio}
+            </button>
+          )}
+          {!isAudioMode && selectedEntry && selectedEntry.durations.length > 0 && (
             <button className={`fb-pill ${popover === 'duration' ? 'active' : ''}`} onClick={() => togglePopover('duration')}>
               {duration}s
             </button>
           )}
-          {selectedEntry?.supportsTextToImage && selectedEntry.imageSizes?.length ? (
+          {!isAudioMode && selectedEntry?.supportsTextToImage && selectedEntry.imageSizes?.length ? (
             <button className={`fb-pill ${popover === 'imageSize' ? 'active' : ''}`} onClick={() => togglePopover('imageSize')}>
               {imageSize}
             </button>
           ) : null}
-          {selectedEntry && selectedEntry.modes.length > 1 && (
+          {!isAudioMode && selectedEntry && selectedEntry.modes.length > 1 && (
             <button className={`fb-pill ${popover === 'mode' ? 'active' : ''}`} onClick={() => togglePopover('mode')}>
               {mode}
             </button>
@@ -817,14 +1269,13 @@ export function FlashBoardComposer({
           {popover === 'model' && (
             <div className="fb-popover fb-popover-model">
               <div className="fb-popover-title">Model</div>
-              {(serviceScope ? [serviceScope] : ['kieai', 'cloud']).map((svc) => {
+              {serviceOptions.map((svc) => {
                 const providers = visibleCatalog.filter((e) => e.service === svc);
                 if (providers.length === 0) return null;
                 return (
                   <div key={svc} className="fb-popover-group">
-                    {!serviceScope && <div className="fb-popover-label">{getServiceLabel(svc as CatalogEntry['service'])}</div>}
-                    {serviceScope && providers.length > 1 && (
-                      <div className="fb-popover-label">{getServiceLabel(svc as CatalogEntry['service'])}</div>
+                    {(serviceOptions.length > 1 || providers.length > 1) && (
+                      <div className="fb-popover-label">{getServiceLabel(svc)}</div>
                     )}
                     <div className="fb-popover-pills">
                       {providers.map((p) => {
@@ -838,11 +1289,11 @@ export function FlashBoardComposer({
 
                         return (
                           <button
-                            key={p.providerId}
+                            key={`${p.service}-${p.providerId}`}
                             className={`fb-popover-pill ${service === svc && providerId === p.providerId ? 'active' : ''}`}
-                            onClick={() => handleProviderChange(svc as CatalogEntry['service'], p.providerId)}
+                            onClick={() => handleProviderChange(svc, p.providerId)}
                           >
-                            <span className="fb-popover-pill-label">{p.name.replace(' (Kie.ai)', '')}</span>
+                            <span className="fb-popover-pill-label">{getProviderDisplayName(p)}</span>
                             {estimate && <span className="fb-popover-pill-meta">{estimate.compactLabel}</span>}
                           </button>
                         );
@@ -851,6 +1302,215 @@ export function FlashBoardComposer({
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {popover === 'audioModel' && isAudioMode && (
+            <div className="fb-popover fb-popover-audio">
+              <div className="fb-popover-title">ElevenLabs Model</div>
+              <label className="fb-audio-popover-field">
+                <span>Text-to-speech model</span>
+                <select
+                  className="fb-pill-select"
+                  value={version}
+                  onChange={(e) => setVersion(e.target.value)}
+                >
+                  {elevenLabsModelOptions.map((model) => (
+                    <option key={model.modelId} value={model.modelId}>
+                      {model.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="fb-audio-model-meta">
+                {isLoadingElevenLabsModels
+                  ? 'Loading models...'
+                  : elevenLabsModelsError
+                    ? elevenLabsModelsError
+                    : selectedElevenLabsModel?.description ?? selectedElevenLabsModel?.modelId}
+              </div>
+            </div>
+          )}
+
+          {popover === 'voice' && isAudioMode && (
+            <div className="fb-popover fb-popover-voice">
+              <div className="fb-voice-picker">
+                <div className="fb-voice-picker-header">
+                  <span>Voice</span>
+                  <button className="fb-pill" type="button" onClick={() => setVoiceRefreshNonce((current) => current + 1)}>
+                    Refresh
+                  </button>
+                </div>
+                <input
+                  className="fb-pill-input fb-voice-search"
+                  value={voiceSearch}
+                  onChange={(e) => setVoiceSearch(e.target.value)}
+                  placeholder="Search voices"
+                />
+                <div className="fb-voice-list">
+                  {isLoadingElevenLabsVoices && (
+                    <div className="fb-voice-empty">Loading voices...</div>
+                  )}
+                  {!isLoadingElevenLabsVoices && elevenLabsVoicesError && (
+                    <div className="fb-voice-empty">{elevenLabsVoicesError}</div>
+                  )}
+                  {!isLoadingElevenLabsVoices && !elevenLabsVoicesError && elevenLabsVoices.length === 0 && (
+                    <div className="fb-voice-empty">
+                      {hasElevenLabsKey ? 'No voices found.' : 'Configure ElevenLabs key.'}
+                    </div>
+                  )}
+                  {!isLoadingElevenLabsVoices && !elevenLabsVoicesError && elevenLabsVoices.map((voice) => (
+                    <div
+                      key={voice.voiceId}
+                      className={`fb-voice-item ${voice.voiceId === voiceId ? 'active' : ''}`}
+                    >
+                      <button
+                        className="fb-voice-main"
+                        type="button"
+                        onClick={() => handleSelectVoice(voice)}
+                      >
+                        <span className="fb-voice-name">{voice.name}</span>
+                        <span className="fb-voice-meta">
+                          {voice.category ?? voice.labels.gender ?? voice.labels.accent ?? voice.voiceId}
+                        </span>
+                      </button>
+                      {voice.previewUrl && (
+                        <button
+                          className="fb-pill"
+                          type="button"
+                          onClick={() => handlePreviewVoice(voice.previewUrl)}
+                        >
+                          Preview
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="fb-audio-popover-grid">
+                <label className="fb-audio-popover-field">
+                  <span>Voice ID</span>
+                  <input
+                    className="fb-pill-input"
+                    value={voiceId}
+                    onChange={(e) => setVoiceId(e.target.value)}
+                    placeholder="ElevenLabs voice_id"
+                  />
+                </label>
+                <label className="fb-audio-popover-field">
+                  <span>Voice name</span>
+                  <input
+                    className="fb-pill-input"
+                    value={voiceName}
+                    onChange={(e) => setVoiceName(e.target.value)}
+                    placeholder="Optional label"
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+
+          {popover === 'audioOutput' && isAudioMode && (
+            <div className="fb-popover fb-popover-audio">
+              <div className="fb-popover-title">Output</div>
+              <div className="fb-audio-popover-grid">
+                <label className="fb-audio-popover-field">
+                  <span>Format</span>
+                  <select
+                    className="fb-pill-select"
+                    value={outputFormat}
+                    onChange={(e) => setOutputFormat(normalizeElevenLabsOutputFormat(e.target.value))}
+                  >
+                    {ELEVENLABS_MP3_OUTPUT_FORMATS.map((format) => (
+                      <option key={format} value={format}>
+                        {ELEVENLABS_OUTPUT_FORMAT_LABELS[format]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="fb-audio-popover-field fb-audio-language">
+                  <input
+                    type="checkbox"
+                    checked={languageOverride}
+                    onChange={(e) => setLanguageOverride(e.target.checked)}
+                  />
+                  <span>Language override</span>
+                  <input
+                    value={languageCode}
+                    onChange={(e) => setLanguageCode(e.target.value)}
+                    placeholder="en"
+                    disabled={!languageOverride}
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+
+          {popover === 'voiceSettings' && isAudioMode && (
+            <div className="fb-popover fb-popover-audio">
+              <div className="fb-popover-title">Voice Settings</div>
+              <div className="fb-audio-popover-grid">
+                <label className="fb-audio-popover-field">
+                  <span>Speed {voiceSettings.speed.toFixed(2)}</span>
+                  <input
+                    type="range"
+                    min={0.7}
+                    max={1.2}
+                    step={0.01}
+                    value={voiceSettings.speed}
+                    onChange={(e) => handleVoiceSettingNumberChange('speed', e.target.value)}
+                  />
+                </label>
+                <label className="fb-audio-popover-field">
+                  <span>Stability {voiceSettings.stability.toFixed(2)}</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={voiceSettings.stability}
+                    onChange={(e) => handleVoiceSettingNumberChange('stability', e.target.value)}
+                  />
+                </label>
+                <label className="fb-audio-popover-field">
+                  <span>Similarity {voiceSettings.similarityBoost.toFixed(2)}</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={voiceSettings.similarityBoost}
+                    onChange={(e) => handleVoiceSettingNumberChange('similarityBoost', e.target.value)}
+                  />
+                </label>
+                <label className="fb-audio-popover-field">
+                  <span>Style {voiceSettings.style.toFixed(2)}</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={voiceSettings.style}
+                    onChange={(e) => handleVoiceSettingNumberChange('style', e.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="fb-audio-actions">
+                <label className="fb-pill-check">
+                  <input
+                    type="checkbox"
+                    checked={voiceSettings.useSpeakerBoost}
+                    onChange={(e) => setVoiceSettings((current) => ({
+                      ...current,
+                      useSpeakerBoost: e.target.checked,
+                    }))}
+                  />
+                  <span>Speaker boost</span>
+                </label>
+                <button className="fb-pill" type="button" onClick={resetVoiceSettings}>
+                  Reset voice
+                </button>
+              </div>
             </div>
           )}
 
@@ -971,7 +1631,7 @@ export function FlashBoardComposer({
           onClick={handleGenerate}
           title={currentPrice ? `${currentPrice.fullLabel} (Ctrl+Enter)` : 'Generate (Ctrl+Enter)'}
         >
-          {currentPrice ? `\u25B6 Generate \u00B7 ${currentPrice.compactLabel}` : '\u25B6 Generate'}
+          {currentPrice ? `\u25B6 Generate \u00B7 ${currentPrice.compactLabel}` : isAudioMode ? '\u25B6 Speak' : '\u25B6 Generate'}
         </button>
       </div>
     </div>

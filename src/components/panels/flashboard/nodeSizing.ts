@@ -2,7 +2,9 @@ import type { FlashBoardNode } from '../../../stores/flashboardStore/types';
 import type { MediaFile } from '../../../stores/mediaStore';
 
 export const DEFAULT_NODE_ASPECT_RATIO = 16 / 9;
+export const DEFAULT_AUDIO_NODE_ASPECT_RATIO = 2.45 / 1;
 export const MIN_NODE_WIDTH = 120;
+export const MIN_AUDIO_NODE_WIDTH = 560;
 export const MAX_NODE_WIDTH = 1400;
 
 export function parseAspectRatio(value?: string): number | null {
@@ -26,6 +28,10 @@ export function clampNodeWidth(width: number): number {
 }
 
 export function resolveFlashBoardNodeAspectRatio(node: FlashBoardNode, mediaFile?: MediaFile): number {
+  const isAudioNode =
+    mediaFile?.type === 'audio' ||
+    node.result?.mediaType === 'audio' ||
+    node.request?.outputType === 'audio';
   const mediaAspectRatio =
     mediaFile?.width && mediaFile?.height && mediaFile.width > 0 && mediaFile.height > 0
       ? mediaFile.width / mediaFile.height
@@ -44,6 +50,7 @@ export function resolveFlashBoardNodeAspectRatio(node: FlashBoardNode, mediaFile
     mediaAspectRatio ??
     resultAspectRatio ??
     requestAspectRatio ??
+    (isAudioNode ? DEFAULT_AUDIO_NODE_ASPECT_RATIO : null) ??
     currentAspectRatio ??
     DEFAULT_NODE_ASPECT_RATIO
   );
@@ -55,7 +62,11 @@ export function resolveFlashBoardNodeDisplaySize(node: FlashBoardNode, mediaFile
   height: number;
 } {
   const aspectRatio = resolveFlashBoardNodeAspectRatio(node, mediaFile);
-  const width = clampNodeWidth(node.size.width);
+  const isAudioNode =
+    mediaFile?.type === 'audio' ||
+    node.result?.mediaType === 'audio' ||
+    node.request?.outputType === 'audio';
+  const width = clampNodeWidth(isAudioNode ? Math.max(node.size.width, MIN_AUDIO_NODE_WIDTH) : node.size.width);
 
   return {
     aspectRatio,

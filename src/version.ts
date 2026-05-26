@@ -1,6 +1,6 @@
 // App version
 // Format: MAJOR.MINOR.PATCH
-export const APP_VERSION = '1.8.4';
+export const APP_VERSION = '1.8.5';
 
 export interface ChangelogNotice {
   type: 'info' | 'warning' | 'success' | 'danger';
@@ -27,8 +27,8 @@ export const FEATURED_VIDEO: {
   title: 'MasterSelects Demo',
   banner: {
     type: 'success',
-    title: 'Signal IR Runtime',
-    message: 'Universal SignalAssets, capability-gated runtimes, Wasm/WIT importer contracts, and signal timeline render adapters are now in place.',
+    title: 'ElevenLabs Audio Generation',
+    message: 'FlashBoard can now generate, preview, persist, and route ElevenLabs audio with encrypted API-key settings and compact audio controls.',
     animated: true,
   },
 };
@@ -36,8 +36,8 @@ export const FEATURED_VIDEO: {
 // Build/Platform notice shown at top of changelog (set to null to hide)
 export const BUILD_NOTICE: ChangelogNotice | null = {
   type: 'success',
-  title: 'Wasm/WIT + Signal IR',
-  message: 'Signal assets now persist content-addressed artifacts and can materialize to text, model, or gaussian-splat timeline clips through renderer adapters.',
+  title: 'AI Audio Workflow',
+  message: 'ElevenLabs text-to-speech generation is integrated with FlashBoard cards, media-board routing, project persistence, history, pricing metadata, and settings.',
   animated: true,
 };
 

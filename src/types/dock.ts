@@ -211,7 +211,7 @@ export const PANEL_CONFIGS: Record<PanelType, PanelConfig> = {
   },
   'ai-video': {
     type: 'ai-video',
-    title: 'AI Video',
+    title: 'AI Generative',
     minWidth: 300,
     minHeight: 400,
     closable: false,

@@ -13,6 +13,7 @@ interface FlashBoardWorkspaceProps {
   initialProviderId?: string;
   initialService?: CatalogEntry['service'];
   initialVersion?: string;
+  allowedServices?: CatalogEntry['service'][];
   serviceScope?: CatalogEntry['service'];
 }
 
@@ -20,6 +21,7 @@ export function FlashBoardWorkspace({
   initialProviderId,
   initialService,
   initialVersion,
+  allowedServices,
   serviceScope,
 }: FlashBoardWorkspaceProps) {
   const board = useFlashBoardStore(selectActiveBoard);
@@ -43,12 +45,16 @@ export function FlashBoardWorkspace({
   useEffect(() => {
     flashBoardJobService.setUpdateCallback((nodeId, update) => {
       if (update.status === 'completed') {
-        if (!update.assetUrl || !update.mediaType) {
+        if (!update.mediaType || (!update.assetUrl && !update.assetFile)) {
           failNode(nodeId, 'Generation finished without importable media.');
           return;
         }
 
-        void flashBoardMediaBridge.importGeneratedMedia(nodeId, update.assetUrl, update.mediaType).catch((error) => {
+        const importPromise = update.assetFile
+          ? flashBoardMediaBridge.importGeneratedFile(nodeId, update.assetFile, update.mediaType)
+          : flashBoardMediaBridge.importGeneratedMedia(nodeId, update.assetUrl as string, update.mediaType);
+
+        void importPromise.catch((error) => {
           const message = error instanceof Error ? error.message : 'Failed to import generated media';
           failNode(nodeId, message);
         });
@@ -101,6 +107,7 @@ export function FlashBoardWorkspace({
           initialProviderId={initialProviderId}
           initialService={initialService}
           initialVersion={initialVersion}
+          allowedServices={allowedServices}
           serviceScope={serviceScope}
         />
       </div>
