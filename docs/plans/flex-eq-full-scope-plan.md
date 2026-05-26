@@ -150,6 +150,12 @@ Update:
 
 ### Canonical EQ State
 
+The EQ state must separate audible processor state from display/editor state.
+Only the audible state is allowed to affect rendered audio, export, processed
+analysis identity, and cache invalidation. Selection, analyzer display mode,
+piano labels, hover state, sketch UI metadata, and visual preferences must not
+change processed audio identity.
+
 ```ts
 export type AudioEqPhaseMode = 'zero-latency' | 'natural' | 'linear';
 export type AudioEqCharacterMode = 'clean' | 'subtle' | 'warm';
@@ -213,8 +219,7 @@ export interface AudioEqBand {
   spectralDynamics?: AudioEqBandSpectralDynamics;
 }
 
-export interface AudioEqParamsV2 {
-  schemaVersion: 2;
+export interface AudioEqAudibleStateV2 {
   presetKind:
     | '3-band'
     | '10-band-graphic'
@@ -224,15 +229,83 @@ export interface AudioEqParamsV2 {
     | 'custom';
   phaseMode: AudioEqPhaseMode;
   characterMode: AudioEqCharacterMode;
+  bands: AudioEqBand[];
+}
+
+export interface AudioEqDisplayStateV2 {
   analyzerMode: AudioEqAnalyzerMode;
   analyzerRangeDb: 3 | 6 | 12 | 30;
   pianoDisplay: boolean;
-  bands: AudioEqBand[];
+  graphRangeDb: 3 | 6 | 12 | 30;
+  showPhaseCurve?: boolean;
+  showGainReduction?: boolean;
   selectedBandIds?: string[];
-  match?: AudioEqMatchState;
-  sketch?: AudioEqSketchState;
+}
+
+export interface AudioEqParamsV2 {
+  schemaVersion: 2;
+  audible: AudioEqAudibleStateV2;
+  display: AudioEqDisplayStateV2;
+  provenance?: {
+    match?: AudioEqMatchState;
+    sketch?: AudioEqSketchState;
+  };
 }
 ```
+
+Rules:
+
+- `audible` is the only state compiled into DSP nodes, worklets, export plans,
+  processed preview identity, and waveform/spectrogram invalidation.
+- `display` is persisted editor state. It can change without invalidating
+  processed audio analysis.
+- `provenance` records how bands were generated or fitted. Generated bands are
+  normal audible bands; provenance itself should not be required for playback.
+- Stable band IDs are mandatory. Automation, undo/redo, copy/paste, sketch,
+  match, reorder, and instance-list operations must never rely on array index as
+  identity.
+- Add an explicit `getAudioEqAudibleStateForIdentity()` helper so cache identity
+  and export parity use the same canonical projection.
+
+### EQ Graph View Model
+
+The visual graph should not read raw effect params directly. It should render a
+deterministic view model produced from the canonical EQ state, analyzer snapshot,
+selection state, and graph dimensions.
+
+```ts
+export interface AudioEqGraphViewModel {
+  width: number;
+  height: number;
+  devicePixelRatio: number;
+  minFrequencyHz: number;
+  maxFrequencyHz: number;
+  rangeDb: 3 | 6 | 12 | 30;
+  xFrequenciesHz: Float32Array;
+  bandResponses: AudioEqBandResponseView[];
+  summedResponseDb: Float32Array;
+  analyzer?: AudioEqAnalyzerView;
+  selectedBandIds: string[];
+  hoveredBandId?: string;
+}
+
+export interface AudioEqBandResponseView {
+  bandId: string;
+  color: string;
+  enabled: boolean;
+  responseDb: Float32Array;
+  handle: {
+    x: number;
+    y: number;
+    frequencyHz: number;
+    gainDb: number;
+  };
+}
+```
+
+This view model is part of the foundation work, not a late UI detail. It is the
+contract that lets the DSP response code, Canvas renderer, DOM/SVG interaction
+overlay, screenshot tests, and future WebGPU renderer agree on the same data.
 
 ### Match And Sketch State
 
@@ -264,6 +337,8 @@ Create `src/engine/audio/eq/`:
 - `AudioEqResponse.ts`: response curve math for UI and tests.
 - `AudioEqCompiler.ts`: convert canonical bands to live/offline/export plans.
 - `AudioEqBiquad.ts`: coefficient/frequency-response utilities.
+- `AudioEqIdentity.ts`: audible-state projection and cache identity helpers.
+- `AudioEqGraphViewModel.ts`: deterministic graph sampling/view-model builder.
 - `AudioEqLinearPhase.ts`: FIR/FFT plan generation for linear phase.
 - `AudioEqDynamics.ts`: per-band dynamic processor primitives.
 - `AudioEqSpectralDynamics.ts`: STFT spectral processor primitives.
@@ -275,6 +350,8 @@ Create UI modules under `src/components/panels/properties/eq/`:
 
 - `AudioEqualizerPanel.tsx`
 - `AudioEqualizerGraph.tsx`
+- `AudioEqualizerGraphCanvas.tsx`
+- `AudioEqualizerInteractionOverlay.tsx`
 - `AudioEqualizerBandControls.tsx`
 - `AudioEqualizerAnalyzerCanvas.tsx`
 - `AudioEqualizerPresetBrowser.tsx`
@@ -412,8 +489,10 @@ type LiveAudioRouteProcessor =
 - `audio-eq` uses `normalizeAudioEqParams()`.
 - Unknown/payload-shaped fields are still rejected, but nested JSON-safe EQ fields
   are retained.
-- Graph keys must canonicalize nested arrays by stable band order and stable band
-  IDs.
+- Graph keys must canonicalize nested audible arrays by stable band order and
+  stable band IDs.
+- Display/provenance state must survive persistence but stay outside audio graph
+  execution identity unless a field is explicitly promoted to audible behavior.
 
 Diagnostics:
 
@@ -471,14 +550,14 @@ Rules:
 New paths:
 
 ```text
-effect.<effectId>.eq.bands.<bandId>.frequencyHz
-effect.<effectId>.eq.bands.<bandId>.gainDb
-effect.<effectId>.eq.bands.<bandId>.q
-effect.<effectId>.eq.bands.<bandId>.slopeDbPerOct
-effect.<effectId>.eq.bands.<bandId>.dynamic.thresholdDb
-effect.<effectId>.eq.bands.<bandId>.dynamic.rangeDb
-effect.<effectId>.eq.characterMode
-effect.<effectId>.eq.phaseMode
+effect.<effectId>.eq.audible.bands.<bandId>.frequencyHz
+effect.<effectId>.eq.audible.bands.<bandId>.gainDb
+effect.<effectId>.eq.audible.bands.<bandId>.q
+effect.<effectId>.eq.audible.bands.<bandId>.slopeDbPerOct
+effect.<effectId>.eq.audible.bands.<bandId>.dynamic.thresholdDb
+effect.<effectId>.eq.audible.bands.<bandId>.dynamic.rangeDb
+effect.<effectId>.eq.audible.characterMode
+effect.<effectId>.eq.audible.phaseMode
 ```
 
 Required changes:
@@ -487,8 +566,11 @@ Required changes:
 - `setPropertyValue()` must route nested EQ writes to a dedicated EQ update helper.
 - `EffectKeyframeToggle` needs a generic property prop, not only `effectId` and
   `paramName`.
+- Automation should target audible paths by default. Display-only paths such as
+  selection, hover, analyzer mode, and graph range are editor preferences unless
+  a specific future workflow defines otherwise.
 - Old paths like `effect.eq1.band1k` must map to
-  `effect.eq1.eq.bands.band1k.gainDb` during legacy normalization.
+  `effect.eq1.eq.audible.bands.band1k.gainDb` during legacy normalization.
 - Band reorder must not affect automation because band IDs are stable.
 - Deleting a band must either remove its automation or mark it orphaned for undo.
 
@@ -499,12 +581,23 @@ Create `AudioSpectrumService`.
 Responsibilities:
 
 - Register live analyzer taps by owner scope, owner ID, effect ID, and tap type.
-- Produce smoothed log-frequency bins for UI.
+- Produce smoothed log-frequency bins for UI with deterministic aggregation.
 - Support analyzer ranges: 3, 6, 12, and 30 dB.
 - Support `pre`, `post`, and `pre-post` overlays.
 - Support static fallback from `frequency-summary` artifacts.
 - Support peak hold and average curves.
 - Expose spectrum snapshots without embedding raw full-length audio data.
+
+Analyzer rendering contract:
+
+- Define FFT size, window function, hop/update cadence, smoothing, decay, peak
+  hold, dB floor, and dB ceiling explicitly.
+- Convert linear FFT bins to log-frequency graph bins before the UI layer.
+- Align analyzer timestamps with the live route or processed preview source so
+  spectrum motion does not visibly lag parameter changes.
+- Keep pre/post spectrum alpha and color rules stable so the neutral grey
+  analyzer never dominates the summed EQ curve.
+- Provide synthetic analyzer snapshots for visual tests and fixture screenshots.
 
 Snapshot shape:
 
@@ -529,8 +622,10 @@ analysis artifact refs and user display preferences.
 
 Replace `GraphicalEqualizerControl` with a real EQ graph:
 
-- Canvas or WebGL for spectrum, grid, heat/peak layers, response fills.
-- SVG/HTML overlay for selected points, labels, handles, context menus.
+- Layered Canvas 2D for spectrum, grid, heat/peak layers, response fills, band
+  response strokes, and the summed response curve.
+- SVG/HTML overlay for selected points, labels, handles, focus states, tooltips,
+  knobs, parameter fields, and context menus.
 - Log-frequency X axis from 20 Hz to 20 kHz.
 - dB Y axis with separate mastering/mixing ranges.
 - Piano Display optional frequency labels as notes.
@@ -560,6 +655,30 @@ Controls:
 - Phase mode and Character mode per instance.
 - Analyzer pre/post mode and range selector.
 - A/B, copy, paste, reset, preset browser.
+
+### Rendering Backend Decision
+
+The default graph renderer should be layered Canvas 2D, not WebGPU.
+
+Reasons:
+
+- The EQ surface is primarily a 2D data-visualization problem with modest draw
+  counts: grid lines, sampled response paths, translucent fills, spectrum traces,
+  handles, and labels.
+- Canvas 2D is fast enough for 24 bands, DPR-aware fine lines, realtime analyzer
+  traces, and one-frame interaction when rendering is driven by
+  `requestAnimationFrame`.
+- Canvas output is simpler to make deterministic for screenshot iteration and
+  visual regression tests.
+- Canvas avoids introducing another WebGPU lifecycle into property panels while
+  the main preview/render engine already has its own GPU device concerns.
+- DOM/SVG overlays remain better for hit targets, keyboard focus, tooltips,
+  accessible labels, and form controls.
+
+Add WebGPU only behind the same graph renderer interface if profiling proves a
+real need, such as many simultaneous live instance spectra, expensive spectral
+heat maps, or future 3D/animated analysis layers. WebGPU must be an optional
+backend, not the first contract the UI depends on.
 
 ## Visual Reference And Art Direction
 
@@ -621,7 +740,8 @@ Color rules:
 
 Graph rendering implementation:
 
-- Use Canvas or WebGL for the dense spectrum, grid, soft fills, and gradients.
+- Use layered Canvas 2D for the dense spectrum, grid, soft fills, strokes, and
+  gradients.
 - Use SVG or HTML overlay for interactive handles, tooltips, focus rings, and
   accessible controls.
 - Device-pixel-ratio scaling is required for crisp fine lines.
@@ -629,6 +749,8 @@ Graph rendering implementation:
   compared across iterations.
 - Keep graph rendering decoupled from audio parameter mutation to avoid UI stalls
   during drags.
+- Keep a renderer interface boundary so a future WebGPU backend can be added
+  without changing EQ params, response math, interaction state, or tests.
 
 ## Visual QA Iteration Workflow
 
@@ -652,6 +774,19 @@ Workflow for each visual pass:
    label placement.
 6. Repeat until the graph reads as a professional analyzer/EQ surface, not a
    chart widget.
+
+Required implementation artifacts:
+
+- A deterministic EQ graph fixture route, story, or test mount that does not
+  depend on random project state.
+- Synthetic analyzer snapshots for flat, noisy, vocal-like, bass-heavy, and
+  pre/post comparison cases.
+- Seeded EQ states for 3-band, 10-band graphic, 12-16 band mastering, selected
+  narrow notch, steep cut, shelf, and 24-band stress cases.
+- Playwright or equivalent browser screenshot tests with pixel nonblank checks,
+  stable viewport sizes, and visual-diff thresholds once the design stabilizes.
+- A documented screenshot command so future agents can repeat the same visual
+  pass without guessing how the EQ surface was staged.
 
 Required screenshot set:
 
@@ -880,6 +1015,10 @@ Targets:
 
 Implementation rules:
 
+- Maintain local transient graph state during pointer drags and render it via
+  `requestAnimationFrame`.
+- Throttle persisted Zustand/audio-state commits during drag and write one
+  grouped undo transaction on drag end.
 - Debounce heavy processed-analysis invalidation during drag, but keep audible live
   feedback immediate.
 - Use approximate response during drag if needed, then refine.
@@ -950,50 +1089,81 @@ order and stable band IDs.
 
 ## Implementation Order
 
-### Phase 1: Schema And Normalization
+### Phase 1: Contract Foundation
 
 - Add JSON-safe audio effect param type.
 - Add `AudioEqParamsV2` types and defaults.
+- Split `audible`, `display`, and `provenance` state.
 - Add `normalizeAudioEqParams()`.
+- Add `getAudioEqAudibleStateForIdentity()`.
 - Add legacy mapping for current 10-band and single parametric EQ.
 - Update audio graph param normalization for structured EQ params.
-- Update processed-analysis identity for nested params.
+- Update processed-analysis identity for nested audible params only.
+- Add project persistence tests for nested EQ params.
 
 Exit criteria:
 
 - Existing tests pass.
 - Old 10-band EQ state normalizes to canonical v2.
 - No old projects are rewritten just by loading.
+- Display-only changes do not invalidate processed audio identity.
 
-### Phase 2: Response Math
+### Phase 2: Nested Automation And History
 
-- Implement filter response math.
-- Implement summed response generation.
-- Implement per-band fill/curve samples.
-- Add golden response tests.
-- Replace UI point-connection curve with true response data.
+- Add variable-depth effect property parsing.
+- Add generic nested effect param update helpers.
+- Add EQ-specific band add/remove/reorder/update helpers.
+- Add keyframe toggles for nested audible band fields.
+- Add legacy keyframe path mapping.
+- Define orphan automation behavior for deleted bands.
+- Add undo/redo grouping for drag, sketch, match, preset, A/B, and copy/paste
+  operations.
+- Add live interpolation support for registry-backed audio effect stacks.
 
 Exit criteria:
 
-- Graph displays true band lobes and summed curve.
-- Current 10-band EQ visually resembles real filter response.
+- Band frequency/gain/Q automation can be addressed by stable band ID.
+- Legacy band keyframes still load.
+- A graph drag can commit as one undo operation.
 
-### Phase 3: Offline Renderer
+### Phase 3: Static DSP, Compiler, And Response View Model
+
+- Implement deterministic biquad/coefficient utilities.
+- Define supported slope topology, fractional-slope approximation tolerances, and
+  diagnostics before exposing advanced slopes.
+- Compile canonical static EQ bands to a shared plan.
+- Implement filter response math and summed response generation.
+- Implement per-band fill/curve samples.
+- Implement `AudioEqGraphViewModel` builder.
+- Add seeded graph fixture data and synthetic analyzer snapshots.
+- Add golden response tests and legacy 10-band parity tests.
+
+Exit criteria:
+
+- Graph data represents true band lobes and summed curve.
+- Current 10-band EQ visually resembles real filter response.
+- Unsupported slope/channel/phase combinations produce diagnostics instead of
+  silent wrong output.
+
+### Phase 4: Offline And Export Renderer
 
 - Compile canonical EQ to offline render plan.
 - Replace fixed `createEQChain()` and single `createParametricEQNode()` paths.
-- Preserve old render behavior within tolerance.
+- Preserve old render behavior within documented tolerance.
 - Add phase mode and latency groundwork.
+- Ensure track/master export uses the same canonical EQ plan.
 
 Exit criteria:
 
 - Offline tests prove legacy parity.
 - Export can render canonical EQ params.
+- Processed-analysis cache identity matches audible EQ behavior.
 
-### Phase 4: Live Routing
+### Phase 5: Live Routing And Analyzer Taps
 
 - Replace fixed `eqGains` with compiled EQ processors.
 - Rebuild/reuse dynamic Web Audio filter chains.
+- Implement channel topology for stereo, left, right, mid, and side.
 - Add pre/post analyzer taps.
 - Keep existing meters stable.
 
@@ -1001,31 +1171,27 @@ Exit criteria:
 
 - Live playback matches offline within tolerance for static EQ.
 - Analyzer snapshots are available for selected scope.
+- Mid/side and channel-targeted bands either render correctly or emit explicit
+  unsupported diagnostics.
 
-### Phase 5: Full Graph UI
+### Phase 6: Full Graph UI And Visual QA
 
 - Create `AudioEqualizerGraph`.
+- Implement layered Canvas 2D renderer.
+- Implement DOM/SVG interaction overlay.
 - Render spectrum, grid, band fills, summed response, handles.
 - Add band selection, add/remove, type, frequency, gain, Q, slope controls.
+- Add local transient drag state, throttled commits, audio smoothing, and grouped
+  undo on drag end.
 - Integrate in `VolumeTab`, `AudioEffectStackControl`, mixer track FX, and master
   FX surfaces.
+- Add deterministic screenshot harness and required screenshot set.
 
 Exit criteria:
 
 - One UI handles 3-band, 10-band, parametric, and custom EQ.
 - Current legacy Volume tab no longer has a separate special EQ implementation.
-
-### Phase 6: Automation And History
-
-- Add nested EQ property parsing.
-- Add generic nested effect param update helpers.
-- Add keyframe toggles for band fields.
-- Ensure undo/redo grouping for graph operations.
-
-Exit criteria:
-
-- Band frequency/gain/Q automation works.
-- Legacy band keyframes still load.
+- Screenshots pass nonblank, overlap, visual hierarchy, and responsive checks.
 
 ### Phase 7: Presets, A/B, Copy/Paste
 
@@ -1076,6 +1242,14 @@ Exit criteria:
 
 ## Risks And Decisions To Keep Explicit
 
+- Do not build the final graph UI on top of primitive/shallow params.
+- `audible`, `display`, and `provenance` state must stay separated in code,
+  identity, undo, and export.
+- The graph renderer contract is layered Canvas 2D first. WebGPU is reserved for
+  a later optional backend only if profiling shows a real need.
+- Nested automation and grouped history must land before serious graph editing.
+- Export, live playback, processed previews, and response rendering must compile
+  from the same canonical EQ plan.
 - Linear-phase mode requires latency compensation and can be expensive.
 - Spectral Dynamics requires STFT infrastructure and should not block static EQ.
 - Surround/Atmos targeting should be represented in schema now, but can render as
@@ -1098,5 +1272,8 @@ The Flex EQ is complete when:
 - Old projects with `audio-eq`, `audio-parametric-eq`, `audio-high-pass`, and
   `audio-low-pass` remain loadable and render correctly.
 - The graph shows true filter response and spectrum, not decorative approximations.
+- The graph renderer uses deterministic view-model data and passes the agreed
+  screenshot set against the visual reference workflow.
+- Display-only EQ changes do not invalidate processed audio analysis.
 - Automation, undo/redo, A/B, presets, copy/paste, sketch, grab, match, and
   instance management work without special-case drift.

@@ -248,7 +248,17 @@ describe('AudioGraphRenderer', () => {
         id: 'legacy-eq',
         descriptorId: 'audio-eq',
         status: 'active',
-        params: expect.objectContaining({ band1k: 3 }),
+        params: {
+          eq: expect.objectContaining({
+            schemaVersion: 2,
+            audible: expect.objectContaining({
+              presetKind: '10-band-graphic',
+              bands: expect.arrayContaining([
+                expect.objectContaining({ id: 'band1k', gainDb: 3 }),
+              ]),
+            }),
+          }),
+        },
       },
       {
         id: 'legacy-volume',

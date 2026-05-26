@@ -1,7 +1,10 @@
-export type AudioEffectParamValue = number | boolean | string;
+import type { AudioEffectParamValue } from '../../types/audio';
+
+export type { AudioEffectParamValue };
 export type AudioEffectId =
   | 'audio-volume'
   | 'audio-pan'
+  | 'audio-normalize'
   | 'audio-eq'
   | 'audio-parametric-eq'
   | 'audio-high-pass'
@@ -9,6 +12,7 @@ export type AudioEffectId =
   | 'audio-hum-notch'
   | 'audio-de-click'
   | 'audio-noise-reduction'
+  | 'audio-spectral-gate'
   | 'audio-compressor'
   | 'audio-de-esser'
   | 'audio-limiter'
@@ -25,6 +29,7 @@ export type AudioEffectId =
 export interface AudioEffectParamDescriptor {
   name: string;
   default: AudioEffectParamValue;
+  options?: readonly string[];
 }
 
 export interface AudioEffectDescriptor {
@@ -53,13 +58,18 @@ export const AUDIO_EQ_BAND_PARAMS = Object.freeze([
 ]);
 
 function createParamDescriptors(
-  defaults: Record<string, AudioEffectParamValue>
+  defaults: Record<string, AudioEffectParamValue>,
+  options: Partial<Record<string, readonly string[]>> = {},
 ): Readonly<Record<string, AudioEffectParamDescriptor>> {
   return Object.freeze(
     Object.fromEntries(
       Object.entries(defaults).map(([name, defaultValue]) => [
         name,
-        Object.freeze({ name, default: defaultValue }),
+        Object.freeze({
+          name,
+          default: defaultValue,
+          ...(options[name] ? { options: Object.freeze([...(options[name] ?? [])]) } : {}),
+        }),
       ])
     )
   );
@@ -71,6 +81,17 @@ const AUDIO_VOLUME_DEFAULTS = {
 
 const AUDIO_PAN_DEFAULTS = {
   pan: 0,
+} as const;
+
+const AUDIO_NORMALIZE_MODE_OPTIONS = ['peak', 'rms', 'lufs'] as const;
+const AUDIO_NORMALIZE_DEFAULTS = {
+  mode: 'peak',
+  targetPeakDb: -1,
+  targetRmsDb: -18,
+  targetLufs: -23,
+  truePeakCeilingDb: -1,
+  maxGainDb: 24,
+  allowBoost: true,
 } as const;
 
 const AUDIO_EQ_DEFAULTS: Record<string, 0> = Object.fromEntries(
@@ -113,6 +134,16 @@ const AUDIO_NOISE_REDUCTION_DEFAULTS = {
   attackMs: 5,
   releaseMs: 160,
   mix: 0,
+} as const;
+
+const AUDIO_SPECTRAL_GATE_DEFAULTS = {
+  thresholdDb: -60,
+  reductionDb: 0,
+  lowFrequencyHz: 250,
+  highFrequencyHz: 5000,
+  attackMs: 8,
+  releaseMs: 180,
+  mix: 1,
 } as const;
 
 const AUDIO_COMPRESSOR_DEFAULTS = {
@@ -206,6 +237,19 @@ const AUDIO_EFFECT_DESCRIPTORS = [
     params: createParamDescriptors(AUDIO_PAN_DEFAULTS),
   }),
   Object.freeze({
+    id: 'audio-normalize',
+    name: 'Normalize',
+    category: 'gain',
+    automation: 'none',
+    latencySamples: 0,
+    tailSeconds: 0,
+    defaultAudible: true,
+    paramNames: Object.freeze(Object.keys(AUDIO_NORMALIZE_DEFAULTS)),
+    params: createParamDescriptors(AUDIO_NORMALIZE_DEFAULTS, {
+      mode: AUDIO_NORMALIZE_MODE_OPTIONS,
+    }),
+  }),
+  Object.freeze({
     id: 'audio-eq',
     name: 'EQ',
     category: 'eq',
@@ -276,6 +320,16 @@ const AUDIO_EFFECT_DESCRIPTORS = [
     tailSeconds: 0,
     paramNames: Object.freeze(Object.keys(AUDIO_NOISE_REDUCTION_DEFAULTS)),
     params: createParamDescriptors(AUDIO_NOISE_REDUCTION_DEFAULTS),
+  }),
+  Object.freeze({
+    id: 'audio-spectral-gate',
+    name: 'Spectral Gate',
+    category: 'spectral',
+    automation: 'clip',
+    latencySamples: 0,
+    tailSeconds: 0,
+    paramNames: Object.freeze(Object.keys(AUDIO_SPECTRAL_GATE_DEFAULTS)),
+    params: createParamDescriptors(AUDIO_SPECTRAL_GATE_DEFAULTS),
   }),
   Object.freeze({
     id: 'audio-compressor',

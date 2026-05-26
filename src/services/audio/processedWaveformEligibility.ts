@@ -10,6 +10,7 @@ import {
   getAudioEffectDefaultParams,
   hasAudioEffect,
 } from '../../engine/audio/AudioEffectRegistry';
+import { isAudioEqAudibleStateDefault } from '../../engine/audio/eq/AudioEqIdentity';
 import {
   createClipAudioStateHash,
   type ClipAudioAnalysisIdentityInput,
@@ -34,9 +35,16 @@ function effectAutomationPropertyPrefix(effectId: string): string {
 export function hasAudioEffectAutomationKeyframes(
   effectId: string,
   keyframes: readonly Keyframe[] = [],
+  descriptorId?: string,
 ): boolean {
   const prefix = effectAutomationPropertyPrefix(effectId);
-  return keyframes.some(keyframe => keyframe.property.startsWith(prefix));
+  return keyframes.some(keyframe => {
+    if (!keyframe.property.startsWith(prefix)) {
+      return false;
+    }
+
+    return descriptorId !== 'audio-eq' || !keyframe.property.startsWith(`${prefix}eq.display.`);
+  });
 }
 
 function numericParamDiffers(
@@ -56,6 +64,10 @@ function audioEffectParamDiffersFromDefault(
 ): boolean {
   const descriptor = getAudioEffect(descriptorId);
   if (!descriptor) return false;
+
+  if (descriptorId === 'audio-eq') {
+    return !isAudioEqAudibleStateDefault(params);
+  }
 
   const defaults = getAudioEffectDefaultParams(descriptorId);
   const epsilon = descriptorId === 'audio-eq' ? EQ_AUDIO_PARAM_EPSILON : DEFAULT_AUDIO_PARAM_EPSILON;
@@ -80,7 +92,7 @@ export function legacyAudioEffectRequiresProcessedAnalysis(
   if (!effect || effect.enabled === false || !hasAudioEffect(effect.type)) return false;
   if (effect.type === 'audio-volume') return false;
   if (getAudioEffect(effect.type)?.defaultAudible === true) return true;
-  if (hasAudioEffectAutomationKeyframes(effect.id, keyframes)) return true;
+  if (hasAudioEffectAutomationKeyframes(effect.id, keyframes, effect.type)) return true;
   return audioEffectParamDiffersFromDefault(effect.type, effect.params);
 }
 
@@ -99,7 +111,7 @@ export function audioEffectInstanceRequiresProcessedAnalysis(
   }
   if (effect.descriptorId === 'audio-volume') return false;
   if (getAudioEffect(effect.descriptorId)?.defaultAudible === true) return true;
-  if (hasAudioEffectAutomationKeyframes(effect.id, keyframes)) return true;
+  if (hasAudioEffectAutomationKeyframes(effect.id, keyframes, effect.descriptorId)) return true;
   return audioEffectParamDiffersFromDefault(effect.descriptorId, effect.params);
 }
 

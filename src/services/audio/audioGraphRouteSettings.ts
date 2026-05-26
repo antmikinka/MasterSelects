@@ -1,5 +1,7 @@
 import { AUDIO_EQ_BAND_PARAMS, hasAudioEffect } from '../../engine/audio/AudioEffectRegistry';
 import { clampAudioPan, dbToLinearGain, finiteNumber } from '../../engine/audio/audioMath';
+import { AUDIO_EQ_DEFAULT_Q, AUDIO_EQ_LEGACY_BANDS } from '../../engine/audio/eq/AudioEqDefaults';
+import { normalizeAudioEqParams } from '../../engine/audio/eq/AudioEqLegacy';
 import type {
   AudioEffectInstance,
   Effect,
@@ -8,6 +10,7 @@ import type {
   TimelineTrack,
 } from '../../types';
 import type { AudioGraphEffectPlanStep } from '../../engine/audio/AudioGraphTypes';
+import type { AudioEqBand } from '../../engine/audio/eq/AudioEqTypes';
 
 export interface AudioRouteEffectSettings {
   volume: number;
@@ -18,7 +21,18 @@ export interface AudioRouteEffectSettings {
 export interface LiveAudioRouteSettings extends AudioRouteEffectSettings {
   muted: boolean;
   pan: number;
+  master: AudioRouteEffectSettings;
 }
+
+export type LiveAudioBiquadFilterType =
+  | 'lowpass'
+  | 'highpass'
+  | 'bandpass'
+  | 'lowshelf'
+  | 'highshelf'
+  | 'peaking'
+  | 'notch'
+  | 'allpass';
 
 export type LiveAudioRouteProcessor =
   | {
@@ -41,6 +55,19 @@ export type LiveAudioRouteProcessor =
     }
   | {
       id: string;
+      type: 'biquad-filter';
+      filterType: LiveAudioBiquadFilterType;
+      frequencyHz: number;
+      q: number;
+      gainDb: number;
+    }
+  | {
+      id: string;
+      type: 'dynamic-eq-band';
+      band: AudioEqBand;
+    }
+  | {
+      id: string;
       type: 'hum-notch';
       frequencyHz: number;
       q: number;
@@ -60,6 +87,17 @@ export type LiveAudioRouteProcessor =
       thresholdDb: number;
       reductionDb: number;
       sensitivity: number;
+      attackMs: number;
+      releaseMs: number;
+      mix: number;
+    }
+  | {
+      id: string;
+      type: 'spectral-gate';
+      thresholdDb: number;
+      reductionDb: number;
+      lowFrequencyHz: number;
+      highFrequencyHz: number;
       attackMs: number;
       releaseMs: number;
       mix: number;
@@ -151,6 +189,9 @@ type AudioEffectInstanceWithRuntimeFlags = AudioEffectInstance & {
   disabled?: boolean;
 };
 
+const AUDIO_EQ_GAIN_EPSILON_DB = 0.0001;
+const AUDIO_EQ_PARAM_EPSILON = 0.001;
+
 function createNeutralEffectSettings(): AudioRouteEffectSettings {
   return {
     volume: 1,
@@ -168,6 +209,155 @@ function mergeEffectSettings(
     target.eqGains[index] += source.eqGains[index] ?? 0;
   }
   target.processors.push(...source.processors);
+}
+
+function getExactLegacyGraphicBandIndex(band: AudioEqBand): number {
+  if (
+    band.enabled === false ||
+    band.dynamic?.enabled === true ||
+    band.spectralDynamics?.enabled === true ||
+    band.type !== 'bell' ||
+    band.stereoMode !== 'stereo' ||
+    Math.abs(band.q - AUDIO_EQ_DEFAULT_Q) > AUDIO_EQ_PARAM_EPSILON
+  ) {
+    return -1;
+  }
+
+  return AUDIO_EQ_LEGACY_BANDS.findIndex(legacyBand => (
+    legacyBand.id === band.id &&
+    Math.abs(legacyBand.frequencyHz - band.frequencyHz) <= AUDIO_EQ_PARAM_EPSILON
+  ));
+}
+
+function isDynamicAudioEqGainBand(band: AudioEqBand): boolean {
+  return band.dynamic?.enabled === true && (
+    band.type === 'bell' ||
+    band.type === 'low-shelf' ||
+    band.type === 'high-shelf' ||
+    band.type === 'tilt-shelf'
+  );
+}
+
+function audioEqSlopeStageCount(band: AudioEqBand): number {
+  if (band.brickwall === true && (band.type === 'low-cut' || band.type === 'high-cut')) {
+    return 8;
+  }
+  const slope = Number.isFinite(band.slopeDbPerOct) ? Math.abs(band.slopeDbPerOct ?? 12) : 12;
+  if (
+    band.type === 'low-cut' ||
+    band.type === 'high-cut' ||
+    band.type === 'low-shelf' ||
+    band.type === 'high-shelf'
+  ) {
+    return Math.max(1, Math.min(8, Math.round(slope / 12)));
+  }
+  return 1;
+}
+
+function cascadeLiveProcessor(
+  processor: LiveAudioRouteProcessor,
+  band: AudioEqBand,
+): LiveAudioRouteProcessor[] {
+  if (processor.type !== 'biquad-filter') return [processor];
+  const stages = audioEqSlopeStageCount(band);
+  if (stages <= 1) return [processor];
+  return Array.from({ length: stages }, (_, index) => ({
+    ...processor,
+    id: `${processor.id}:stage-${index + 1}`,
+    gainDb: (band.type === 'low-shelf' || band.type === 'high-shelf' || band.type === 'tilt-shelf')
+      ? processor.gainDb / stages
+      : processor.gainDb,
+    q: Math.max(0.025, Math.min(100, processor.q * (1 + index * 0.06))),
+  }));
+}
+
+function audioEqBandToLiveProcessors(band: AudioEqBand): LiveAudioRouteProcessor[] {
+  if (band.enabled === false || band.stereoMode !== 'stereo') {
+    return [];
+  }
+
+  if (isDynamicAudioEqGainBand(band)) {
+    return [{
+      id: `band:${band.id}`,
+      type: 'dynamic-eq-band',
+      band,
+    }];
+  }
+
+  const base = {
+    id: `band:${band.id}`,
+    frequencyHz: band.frequencyHz,
+    q: band.q,
+    gainDb: band.gainDb,
+  };
+
+  if (band.type === 'bell') {
+    if (Math.abs(band.gainDb) <= AUDIO_EQ_GAIN_EPSILON_DB) return [];
+    return cascadeLiveProcessor({ ...base, type: 'biquad-filter', filterType: 'peaking' }, band);
+  }
+
+  if (band.type === 'low-shelf') {
+    if (Math.abs(band.gainDb) <= AUDIO_EQ_GAIN_EPSILON_DB) return [];
+    return cascadeLiveProcessor({ ...base, type: 'biquad-filter', filterType: 'lowshelf' }, band);
+  }
+
+  if (band.type === 'high-shelf') {
+    if (Math.abs(band.gainDb) <= AUDIO_EQ_GAIN_EPSILON_DB) return [];
+    return cascadeLiveProcessor({ ...base, type: 'biquad-filter', filterType: 'highshelf' }, band);
+  }
+
+  if (band.type === 'tilt-shelf') {
+    if (Math.abs(band.gainDb) <= AUDIO_EQ_GAIN_EPSILON_DB) return [];
+    return cascadeLiveProcessor({
+      ...base,
+      type: 'biquad-filter',
+      filterType: band.gainDb >= 0 ? 'highshelf' : 'lowshelf',
+    }, band);
+  }
+
+  if (band.type === 'low-cut') {
+    return cascadeLiveProcessor({ ...base, type: 'biquad-filter', filterType: 'highpass', gainDb: 0 }, band);
+  }
+
+  if (band.type === 'high-cut') {
+    return cascadeLiveProcessor({ ...base, type: 'biquad-filter', filterType: 'lowpass', gainDb: 0 }, band);
+  }
+
+  if (band.type === 'notch') {
+    return [{ ...base, type: 'biquad-filter', filterType: 'notch', gainDb: 0 }];
+  }
+
+  if (band.type === 'band-pass') {
+    return [{ ...base, type: 'biquad-filter', filterType: 'bandpass', gainDb: 0 }];
+  }
+
+  if (band.type === 'all-pass') {
+    return [{ ...base, type: 'biquad-filter', filterType: 'allpass', gainDb: 0 }];
+  }
+
+  return [];
+}
+
+function readAudioEqRouteSettings(params: Record<string, unknown> | undefined): AudioRouteEffectSettings {
+  const settings = createNeutralEffectSettings();
+  const eq = normalizeAudioEqParams(params);
+  const soloBandIds = new Set(eq.display.soloBandIds ?? []);
+  const soloBands = soloBandIds.size > 0
+    ? eq.audible.bands.filter(band => soloBandIds.has(band.id))
+    : [];
+  const liveBands = soloBands.length > 0 ? soloBands : eq.audible.bands;
+
+  for (const band of liveBands) {
+    const legacyIndex = getExactLegacyGraphicBandIndex(band);
+    if (legacyIndex >= 0) {
+      settings.eqGains[legacyIndex] += band.gainDb;
+      continue;
+    }
+
+    settings.processors.push(...audioEqBandToLiveProcessors(band));
+  }
+
+  return settings;
 }
 
 function readAudioEffectParams(
@@ -194,10 +384,7 @@ function readAudioEffectParams(
   }
 
   if (descriptorId === 'audio-eq') {
-    AUDIO_EQ_BAND_PARAMS.forEach((paramName, index) => {
-      settings.eqGains[index] += finiteNumber(params?.[paramName], 0);
-    });
-    return settings;
+    return readAudioEqRouteSettings(params);
   }
 
   if (descriptorId === 'audio-parametric-eq') {
@@ -272,6 +459,25 @@ function readAudioEffectParams(
         sensitivity: finiteNumber(params?.sensitivity, 1),
         attackMs: finiteNumber(params?.attackMs, 5),
         releaseMs: finiteNumber(params?.releaseMs, 160),
+        mix,
+      });
+    }
+    return settings;
+  }
+
+  if (descriptorId === 'audio-spectral-gate') {
+    const reductionDb = finiteNumber(params?.reductionDb, 0);
+    const mix = finiteNumber(params?.mix, 1);
+    if (reductionDb > 0.0001 && mix > 0.0001) {
+      settings.processors.push({
+        id: descriptorId,
+        type: 'spectral-gate',
+        thresholdDb: finiteNumber(params?.thresholdDb, -60),
+        reductionDb,
+        lowFrequencyHz: finiteNumber(params?.lowFrequencyHz, 250),
+        highFrequencyHz: finiteNumber(params?.highFrequencyHz, 5000),
+        attackMs: finiteNumber(params?.attackMs, 8),
+        releaseMs: finiteNumber(params?.releaseMs, 180),
         mix,
       });
     }
@@ -441,6 +647,17 @@ function getTrackSendReturnGain(track: TimelineTrack, trackVolume: number): numb
   }, 0);
 }
 
+function assignProcessorOwnerId(
+  processor: LiveAudioRouteProcessor,
+  ownerId: string,
+  descriptorId: string,
+): LiveAudioRouteProcessor {
+  return {
+    ...processor,
+    id: processor.id === descriptorId ? ownerId : `${ownerId}:${processor.id}`,
+  };
+}
+
 export function collectLegacyAudioEffectRouteSettings(
   effects: readonly Effect[] | undefined,
   excludedIds: ReadonlySet<string> = new Set(),
@@ -451,10 +668,9 @@ export function collectLegacyAudioEffectRouteSettings(
     if (excludedIds.has(effect.id)) continue;
     if (effect.enabled === false || !hasAudioEffect(effect.type)) continue;
     const effectSettings = readAudioEffectParams(effect.type, effect.params);
-    effectSettings.processors = effectSettings.processors.map(processor => ({
-      ...processor,
-      id: effect.id,
-    }));
+    effectSettings.processors = effectSettings.processors.map(processor => (
+      assignProcessorOwnerId(processor, effect.id, effect.type)
+    ));
     mergeEffectSettings(settings, effectSettings);
   }
 
@@ -477,10 +693,9 @@ export function collectAudioEffectInstanceRouteSettings(
       continue;
     }
     const effectSettings = readAudioEffectParams(runtimeEffect.descriptorId, runtimeEffect.params);
-    effectSettings.processors = effectSettings.processors.map(processor => ({
-      ...processor,
-      id: runtimeEffect.id,
-    }));
+    effectSettings.processors = effectSettings.processors.map(processor => (
+      assignProcessorOwnerId(processor, runtimeEffect.id, runtimeEffect.descriptorId)
+    ));
     mergeEffectSettings(settings, effectSettings);
   }
 
@@ -495,9 +710,7 @@ export function audioGraphPlanStepsToEffectInstances(
     .map(step => {
       const params: AudioEffectInstance['params'] = {};
       for (const [paramName, value] of Object.entries(step.params)) {
-        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-          params[paramName] = value;
-        }
+        params[paramName] = value;
       }
 
       return {
@@ -526,16 +739,17 @@ export function createLiveAudioRouteSettings(input: {
   mergeEffectSettings(route, clipAudioSettings);
   mergeEffectSettings(route, legacyClipSettings);
   mergeEffectSettings(route, trackEffectSettings);
-  mergeEffectSettings(route, masterEffectSettings);
 
   const trackVolume = input.track ? dbToLinearGain(getTrackVolumeDb(input.track)) : 1;
   const sendReturnGain = input.track ? getTrackSendReturnGain(input.track, trackVolume) : 0;
   const masterVolume = dbToLinearGain(input.masterAudioState?.volumeDb);
 
-  route.volume *= (trackVolume + sendReturnGain) * masterVolume;
+  route.volume *= trackVolume + sendReturnGain;
+  masterEffectSettings.volume *= masterVolume;
 
   return {
     ...route,
+    master: masterEffectSettings,
     muted: input.clip.audioState?.muted === true || (input.track ? getTrackAudioMuted(input.track) : false),
     pan: input.track ? getTrackPan(input.track) : 0,
   };

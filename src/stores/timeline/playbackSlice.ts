@@ -339,11 +339,21 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
   },
 
   setAudioFocusMode: (enabled) => {
-    set({ audioFocusMode: enabled });
+    set({ audioFocusMode: enabled, trackFocusMode: enabled ? 'audio' : 'balanced' });
   },
 
   toggleAudioFocusMode: () => {
-    set((state) => ({ audioFocusMode: !state.audioFocusMode }));
+    set((state) => {
+      const nextEnabled = !state.audioFocusMode;
+      return {
+        audioFocusMode: nextEnabled,
+        trackFocusMode: nextEnabled ? 'audio' : 'balanced',
+      };
+    });
+  },
+
+  setTrackFocusMode: (mode) => {
+    set({ trackFocusMode: mode, audioFocusMode: mode === 'audio' });
   },
 
   setAudioRegionSelection: (selection) => {

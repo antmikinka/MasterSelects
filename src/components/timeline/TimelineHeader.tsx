@@ -1,8 +1,8 @@
 // TimelineHeader component - Track headers (left side)
 
-import { memo, useCallback, useMemo, useState, useRef, useEffect } from 'react';
+import { memo, type MouseEvent as ReactMouseEvent, useCallback, useMemo, useState, useRef, useEffect } from 'react';
 import type { TimelineHeaderProps } from './types';
-import type { AnimatableProperty, AudioSendState, ClipMask, ClipTransform, ColorCorrectionState, Keyframe, TimelineClip } from '../../types';
+import type { AnimatableProperty, AudioEffectParamValue, AudioSendState, ClipMask, ClipTransform, ColorCorrectionState, Keyframe, TimelineClip } from '../../types';
 import {
   PRIMARY_COLOR_PARAM_DEFS,
   ensureColorCorrectionState,
@@ -35,10 +35,18 @@ import {
   formatAudioTrackVolumeDb,
   getAudioTrackHeaderDensity,
 } from './utils/audioTrackHeaderDensity';
+import { getAudioPanSliderStyle } from './utils/audioPanSliderStyle';
 import {
   getCameraLookRotationAxis,
   resolveCameraLookAtFixedEyeUpdates,
 } from '../../engine/scene/CameraClipControlUtils';
+import {
+  AUDIO_EQ_DEFAULT_BAND_DYNAMICS,
+  AUDIO_EQ_DEFAULT_BAND_SPECTRAL_DYNAMICS,
+  AUDIO_EQ_LEGACY_BANDS,
+} from '../../engine/audio/eq/AudioEqDefaults';
+import { normalizeAudioEqParams } from '../../engine/audio/eq/AudioEqLegacy';
+import { getAudioEffectParamPathValue } from '../../utils/audioEffectParamPath';
 
 type KeyframeTrackClip = {
   id: string;
@@ -46,7 +54,7 @@ type KeyframeTrackClip = {
   duration: number;
   is3D?: boolean;
   mediaFileId?: string;
-  effects?: Array<{ id: string; name: string; params: Record<string, unknown> }>;
+  effects?: Array<{ id: string; type?: string; name: string; params: Record<string, unknown> }>;
   colorCorrection?: ColorCorrectionState;
   masks?: ClipMask[];
   source?: {
@@ -116,6 +124,111 @@ function prettifyParamName(paramName: string): string {
   return paramName
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .replace(/^./, (char) => char.toUpperCase());
+}
+
+type ParsedTimelineEffectProperty = {
+  effectId: string;
+  paramName: string;
+  paramPath: string[];
+};
+
+type AudioEqPropertyMeta = {
+  effectId: string;
+  bandId: string;
+  paramName: string;
+  frequencyHz: number;
+  label: string;
+  paramOrder: number;
+};
+
+const LEGACY_EQ_FREQUENCY_BY_ID = new Map(AUDIO_EQ_LEGACY_BANDS.map(band => [band.id, band.frequencyHz]));
+const AUDIO_EQ_PARAM_ORDER: Record<string, number> = {
+  frequencyHz: 0,
+  gainDb: 1,
+  q: 2,
+  slopeDbPerOct: 3,
+  thresholdDb: 4,
+  rangeDb: 5,
+  ratio: 6,
+  attackMs: 7,
+  releaseMs: 8,
+};
+
+function parseTimelineEffectProperty(prop: string): ParsedTimelineEffectProperty | null {
+  const parts = prop.split('.');
+  if (parts.length < 3 || parts[0] !== 'effect') return null;
+  return {
+    effectId: parts[1],
+    paramName: parts.slice(2).join('.'),
+    paramPath: parts.slice(2),
+  };
+}
+
+function formatEqFrequencyLabel(frequencyHz: number, fallback: string): string {
+  if (!Number.isFinite(frequencyHz) || frequencyHz <= 0) {
+    return fallback;
+  }
+  if (frequencyHz >= 1000) {
+    const khz = frequencyHz / 1000;
+    return `${Number.isInteger(khz) ? khz.toFixed(0) : khz.toFixed(1)}kHz`;
+  }
+  return `${Math.round(frequencyHz)}Hz`;
+}
+
+function getEqParamLabel(paramName: string): string {
+  const lastSegment = paramName.split('.').pop() ?? paramName;
+  if (lastSegment === 'frequencyHz') return 'Freq';
+  if (lastSegment === 'gainDb') return 'Gain';
+  if (lastSegment === 'q') return 'Q';
+  if (lastSegment === 'thresholdDb') return 'Threshold';
+  if (lastSegment === 'rangeDb') return 'Range';
+  if (lastSegment === 'ratio') return 'Ratio';
+  if (lastSegment === 'attackMs') return 'Attack';
+  if (lastSegment === 'releaseMs') return 'Release';
+  if (lastSegment === 'slopeDbPerOct') return 'Slope';
+  return prettifyParamName(lastSegment);
+}
+
+function getDefaultAudioEqTimelineValue(paramName: string, fallbackFrequencyHz: number): number {
+  if (paramName.endsWith('frequencyHz')) return fallbackFrequencyHz || 1000;
+  if (paramName.endsWith('gainDb')) return 0;
+  if (paramName.endsWith('q')) return 1;
+  if (paramName.endsWith('dynamic.thresholdDb')) return AUDIO_EQ_DEFAULT_BAND_DYNAMICS.thresholdDb;
+  if (paramName.endsWith('dynamic.rangeDb')) return AUDIO_EQ_DEFAULT_BAND_DYNAMICS.rangeDb;
+  if (paramName.endsWith('dynamic.ratio')) return AUDIO_EQ_DEFAULT_BAND_DYNAMICS.ratio;
+  if (paramName.endsWith('dynamic.attackMs')) return AUDIO_EQ_DEFAULT_BAND_DYNAMICS.attackMs;
+  if (paramName.endsWith('dynamic.releaseMs')) return AUDIO_EQ_DEFAULT_BAND_DYNAMICS.releaseMs;
+  if (paramName.endsWith('spectralDynamics.thresholdDb')) return AUDIO_EQ_DEFAULT_BAND_SPECTRAL_DYNAMICS.thresholdDb;
+  if (paramName.endsWith('spectralDynamics.rangeDb')) return AUDIO_EQ_DEFAULT_BAND_SPECTRAL_DYNAMICS.rangeDb;
+  if (paramName.endsWith('spectralDynamics.ratio')) return AUDIO_EQ_DEFAULT_BAND_SPECTRAL_DYNAMICS.ratio;
+  if (paramName.endsWith('spectralDynamics.attackMs')) return AUDIO_EQ_DEFAULT_BAND_SPECTRAL_DYNAMICS.attackMs;
+  if (paramName.endsWith('spectralDynamics.releaseMs')) return AUDIO_EQ_DEFAULT_BAND_SPECTRAL_DYNAMICS.releaseMs;
+  return 0;
+}
+
+function getAudioEqPropertyMeta(prop: string, clip?: KeyframeTrackClip | null): AudioEqPropertyMeta | null {
+  const effectProperty = parseTimelineEffectProperty(prop);
+  if (!effectProperty) return null;
+  const [root, audible, bands, bandId, ...paramPath] = effectProperty.paramPath;
+  if (root !== 'eq' || audible !== 'audible' || bands !== 'bands' || !bandId || paramPath.length === 0) {
+    return null;
+  }
+
+  const effect = clip?.effects?.find(candidate => candidate.id === effectProperty.effectId);
+  const normalized = effect ? normalizeAudioEqParams(effect.params) : null;
+  const band = normalized?.audible.bands.find(candidate => candidate.id === bandId);
+  const frequencyHz = band?.frequencyHz ?? LEGACY_EQ_FREQUENCY_BY_ID.get(bandId) ?? 0;
+  const paramName = paramPath.join('.');
+  const label = `${formatEqFrequencyLabel(frequencyHz, bandId)} ${getEqParamLabel(paramName)}`;
+
+  return {
+    effectId: effectProperty.effectId,
+    bandId,
+    paramName,
+    frequencyHz,
+    label,
+    paramOrder: AUDIO_EQ_PARAM_ORDER[paramPath[paramPath.length - 1] ?? paramName] ?? 100,
+  };
 }
 
 function getColorPropertyMeta(prop: string, clip?: KeyframeTrackClip | null) {
@@ -200,6 +313,9 @@ const getPropertyLabel = (prop: string, clip?: KeyframeTrackClip | null): string
   };
   if (labels[prop]) return labels[prop];
   if (prop.startsWith('effect.')) {
+    const eqMeta = getAudioEqPropertyMeta(prop, clip);
+    if (eqMeta) return eqMeta.label;
+
     const parts = prop.split('.');
     const paramName = parts[parts.length - 1];
     // Audio effect friendly names
@@ -347,6 +463,15 @@ const formatValue = (value: number, prop: string, clip?: KeyframeTrackClip | nul
   if (prop.startsWith('rotation')) return value.toFixed(1) + '°';
   if (prop.startsWith('scale')) return (value * 100).toFixed(0) + '%';
   // Audio effect formatting
+  const eqMeta = getAudioEqPropertyMeta(prop, clip);
+  if (eqMeta) {
+    if (eqMeta.paramName.endsWith('frequencyHz')) return formatEqFrequencyLabel(value, `${value.toFixed(0)}Hz`);
+    if (eqMeta.paramName.endsWith('gainDb') || eqMeta.paramName.endsWith('thresholdDb') || eqMeta.paramName.endsWith('rangeDb')) {
+      return (value > 0 ? '+' : '') + value.toFixed(1) + 'dB';
+    }
+    if (eqMeta.paramName.endsWith('q')) return value.toFixed(2);
+    if (eqMeta.paramName.endsWith('attackMs') || eqMeta.paramName.endsWith('releaseMs')) return `${value.toFixed(0)}ms`;
+  }
   if (prop.includes('.volume')) return (value * 100).toFixed(0) + '%';
   if (prop.includes('.band')) return (value > 0 ? '+' : '') + value.toFixed(1) + 'dB';
   const lottieState = parseVectorAnimationStateProperty(prop);
@@ -366,17 +491,40 @@ const getValueFromEffects = (
   effects: Array<{ id: string; type: string; name: string; params: Record<string, unknown> }>,
   prop: string
 ): number => {
-  // Effect properties are formatted as "effect.{effectId}.{paramName}"
-  const parts = prop.split('.');
-  if (parts.length !== 3 || parts[0] !== 'effect') return 0;
+  const effectProperty = parseTimelineEffectProperty(prop);
+  if (!effectProperty) return 0;
 
-  const effectId = parts[1];
-  const paramName = parts[2];
-
-  const effect = effects.find(e => e.id === effectId);
+  const effect = effects.find(e => e.id === effectProperty.effectId);
   if (!effect) return 0;
 
-  const value = effect.params[paramName];
+  if (effectProperty.paramPath.length > 1) {
+    const directValue = getAudioEffectParamPathValue(
+      effect.params as unknown as AudioEffectParamValue,
+      effectProperty.paramPath,
+    );
+    if (typeof directValue === 'number') return directValue;
+
+    if (effectProperty.paramPath[0] === 'eq') {
+      const normalized = normalizeAudioEqParams(effect.params);
+      const normalizedValue = getAudioEffectParamPathValue(
+        normalized as unknown as AudioEffectParamValue,
+        effectProperty.paramPath.slice(1),
+      );
+      if (typeof normalizedValue === 'number') return normalizedValue;
+
+      const eqMeta = getAudioEqPropertyMeta(prop, {
+        id: '',
+        startTime: 0,
+        duration: 0,
+        effects,
+      });
+      return eqMeta ? getDefaultAudioEqTimelineValue(eqMeta.paramName, eqMeta.frequencyHz) : 0;
+    }
+
+    return 0;
+  }
+
+  const value = effect.params[effectProperty.paramName];
   return typeof value === 'number' ? value : 0;
 };
 
@@ -570,6 +718,14 @@ function PropertyRow({
     const colorMeta = getColorPropertyMeta(prop, clip);
     if (colorMeta) return colorMeta.step * 8;
     // Audio effect properties
+    const eqMeta = getAudioEqPropertyMeta(prop, clip);
+    if (eqMeta?.paramName.endsWith('frequencyHz')) return Math.max(1, eqMeta.frequencyHz * 0.01);
+    if (eqMeta?.paramName.endsWith('gainDb')) return 0.1;
+    if (eqMeta?.paramName.endsWith('q')) return 0.04;
+    if (eqMeta?.paramName.endsWith('thresholdDb') || eqMeta?.paramName.endsWith('rangeDb')) return 0.1;
+    if (eqMeta?.paramName.endsWith('ratio')) return 0.08;
+    if (eqMeta?.paramName.endsWith('attackMs')) return 0.2;
+    if (eqMeta?.paramName.endsWith('releaseMs')) return 2;
     if (prop.includes('.volume')) return 0.005; // 0-1 range
     if (prop.includes('.band')) return 0.1; // dB range (-12 to 12)
     if (parseVectorAnimationInputProperty(prop) || parseVectorAnimationDataBindingProperty(prop)) return 0.02;
@@ -597,6 +753,8 @@ function PropertyRow({
     const colorMeta = getColorPropertyMeta(prop, clip);
     if (colorMeta) return colorMeta.defaultValue;
     // Audio effect properties
+    const eqMeta = getAudioEqPropertyMeta(prop, clip);
+    if (eqMeta) return getDefaultAudioEqTimelineValue(eqMeta.paramName, eqMeta.frequencyHz);
     if (prop.includes('.volume')) return 1; // 100%
     if (prop.includes('.band')) return 0; // 0 dB (no boost/cut)
     if (parseVectorAnimationInputProperty(prop) || parseVectorAnimationDataBindingProperty(prop)) return 0;
@@ -915,6 +1073,16 @@ function TrackPropertyLabels({
 
     // For effect properties, extract the param name and sort
     if (a.startsWith('effect.') && b.startsWith('effect.')) {
+      const aEqMeta = getAudioEqPropertyMeta(a, selectedClip);
+      const bEqMeta = getAudioEqPropertyMeta(b, selectedClip);
+      if (aEqMeta && bEqMeta) {
+        const frequencyDelta = aEqMeta.frequencyHz - bEqMeta.frequencyHz;
+        if (Math.abs(frequencyDelta) > 0.001) return frequencyDelta;
+        return aEqMeta.paramOrder - bEqMeta.paramOrder;
+      }
+      if (aEqMeta) return -1;
+      if (bEqMeta) return 1;
+
       const aParam = a.split('.').pop() || '';
       const bParam = b.split('.').pop() || '';
       const aAudioIdx = audioParamOrder.indexOf(aParam);
@@ -1065,6 +1233,7 @@ function TimelineHeaderComponent({
   onToggleCurveExpanded,
   hoveredKeyframeRow,
   onKeyframeRowHover,
+  showCollapsedAudioSummaryMeter = false,
 }: TimelineHeaderProps) {
   // Get the first selected clip in this track
   const trackClips = clips.filter((c) => c.trackId === track.id);
@@ -1084,6 +1253,9 @@ function TimelineHeaderComponent({
     : null;
   const audioMeter = useTimelineStore(state => track.type === 'audio'
     ? state.runtimeAudioMeters.trackMeters[track.id]
+    : undefined);
+  const collapsedAudioSummaryMeter = useTimelineStore(state => showCollapsedAudioSummaryMeter
+    ? state.runtimeAudioMeters.master
     : undefined);
   const [audioFxOpen, setAudioFxOpen] = useState(false);
   const [audioSendsOpen, setAudioSendsOpen] = useState(false);
@@ -1179,8 +1351,20 @@ function TimelineHeaderComponent({
     useTimelineStore.getState().setTrackAudioVolumeDb(track.id, Number(event.currentTarget.value));
   }, [track.id]);
 
+  const handleTrackVolumeReset = useCallback((event: ReactMouseEvent<HTMLInputElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    useTimelineStore.getState().setTrackAudioVolumeDb(track.id, 0);
+  }, [track.id]);
+
   const handleTrackPanChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     useTimelineStore.getState().setTrackAudioPan(track.id, Number(event.currentTarget.value));
+  }, [track.id]);
+
+  const handleTrackPanReset = useCallback((event: ReactMouseEvent<HTMLInputElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    useTimelineStore.getState().setTrackAudioPan(track.id, 0);
   }, [track.id]);
 
   return (
@@ -1189,7 +1373,9 @@ function TimelineHeaderComponent({
         isExpanded ? 'expanded' : ''
       } ${track.locked ? 'locked' : ''} ${
         audioHeaderDensity ? `audio-strip-${audioHeaderDensity}` : ''
-      } ${audioFxOpen || audioSendsOpen ? 'popover-open' : ''}`}
+      } ${audioFxOpen || audioSendsOpen ? 'popover-open' : ''} ${
+        showCollapsedAudioSummaryMeter ? 'audio-summary-meter-visible' : ''
+      }`}
       style={{ height: dynamicHeight }}
       onWheel={onWheel}
       onContextMenu={onContextMenu}
@@ -1199,6 +1385,13 @@ function TimelineHeaderComponent({
         style={{ height: baseHeight, cursor: (track.type === 'video' || track.type === 'audio') ? 'pointer' : 'default' }}
         onClick={handleHeaderClick}
       >
+        {showCollapsedAudioSummaryMeter && (
+          <AudioLevelMeter
+            meter={collapsedAudioSummaryMeter}
+            label="Summed audio level"
+            className="audio-summary-background-meter"
+          />
+        )}
         <div className="track-header-main">
           {/* Video and audio tracks always get expand arrow */}
           {(track.type === 'video' || track.type === 'audio') && (
@@ -1259,8 +1452,10 @@ function TimelineHeaderComponent({
                 step="0.01"
                 value={trackPan}
                 aria-label={`${track.name} pan`}
-                title={`Pan ${trackPanLabel}`}
+                title={`Pan ${trackPanLabel}. Double-click to center.`}
+                style={getAudioPanSliderStyle(trackPan)}
                 onChange={handleTrackPanChange}
+                onDoubleClick={handleTrackPanReset}
               />
               <span className="audio-track-pan-label" aria-hidden="true">R</span>
               <span className="audio-track-pan-value" aria-hidden="true">{trackPanLabel}</span>
@@ -1269,72 +1464,114 @@ function TimelineHeaderComponent({
         </div>
         <div className={`track-controls ${track.type === 'audio' ? 'audio-strip-controls' : ''}`}>
           {track.type === 'audio' ? (
-            <>
-              <button
-                className={`btn-icon ${effectiveSolo ? 'solo-active' : ''}`}
-                onClick={(e) => { e.stopPropagation(); onToggleSolo(); }}
-                title={effectiveSolo ? 'Solo On' : 'Solo Off'}
-              >
-                S
-              </button>
-              <button
-                className={`btn-icon ${effectiveMuted ? 'muted' : ''}`}
-                onClick={(e) => { e.stopPropagation(); onToggleMuted(); }}
-                title={effectiveMuted ? 'Unmute' : 'Mute'}
-              >
-                M
-              </button>
-              <button
-                className={`btn-icon ${trackInputMonitor ? 'btn-active' : ''}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  useTimelineStore.getState().updateTrackAudioState(track.id, { inputMonitor: !trackInputMonitor });
-                }}
-                title={trackInputMonitor ? 'Input monitor on' : 'Input monitor off'}
-              >
-                <TrackHeaderIcon name="speaker" />
-              </button>
-              <button
-                className={`btn-icon ${trackRecordArm ? 'record-active' : ''}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  useTimelineStore.getState().updateTrackAudioState(track.id, { recordArm: !trackRecordArm });
-                }}
-                title={trackRecordArm ? 'Record armed' : 'Record arm'}
-              >
-                R
-              </button>
-              <button
-                className={`btn-icon ${(audioSendsOpen || (track.audioState?.sends?.length ?? 0) > 0) ? 'btn-active' : ''}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setAudioFxOpen(false);
-                  setAudioSendsOpen(open => !open);
-                }}
-                title="Track sends"
-              >
-                <span className="audio-button-label-wide">Aux</span>
-                <span className="audio-button-label-short">A</span>
-              </button>
-              <button
-                className={`btn-icon ${track.locked ? 'locked-active' : ''}`}
-                onClick={(e) => { e.stopPropagation(); onToggleLocked?.(); }}
-                title={track.locked ? 'Unlock Track' : 'Lock Track'}
-              >
-                <TrackHeaderIcon name={track.locked ? 'lock' : 'unlock'} />
-              </button>
-              <button
-                className={`btn-icon ${audioFxOpen || (track.audioState?.effectStack?.length ?? 0) > 0 ? 'btn-active' : ''}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setAudioSendsOpen(false);
-                  setAudioFxOpen(open => !open);
-                }}
-                title="Track audio FX"
-              >
-                FX
-              </button>
-            </>
+            showCollapsedAudioSummaryMeter ? (
+              <>
+                <button
+                  className={`btn-icon ${effectiveMuted ? 'muted' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); onToggleMuted(); }}
+                  title={effectiveMuted ? 'Unmute' : 'Mute'}
+                >
+                  M
+                </button>
+                <button
+                  className={`btn-icon ${track.locked ? 'locked-active' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); onToggleLocked?.(); }}
+                  title={track.locked ? 'Unlock Track' : 'Lock Track'}
+                >
+                  <TrackHeaderIcon name={track.locked ? 'lock' : 'unlock'} />
+                </button>
+                <button
+                  className={`btn-icon ${audioFxOpen || (track.audioState?.effectStack?.length ?? 0) > 0 ? 'btn-active' : ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setAudioSendsOpen(false);
+                    setAudioFxOpen(open => !open);
+                  }}
+                  title="Track audio FX"
+                >
+                  FX
+                </button>
+                <button
+                  className={`btn-icon ${(audioSendsOpen || (track.audioState?.sends?.length ?? 0) > 0) ? 'btn-active' : ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setAudioFxOpen(false);
+                    setAudioSendsOpen(open => !open);
+                  }}
+                  title="Track sends"
+                >
+                  <span className="audio-button-label-wide">Aux</span>
+                  <span className="audio-button-label-short">A</span>
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className={`btn-icon ${effectiveSolo ? 'solo-active' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); onToggleSolo(); }}
+                  title={effectiveSolo ? 'Solo On' : 'Solo Off'}
+                >
+                  S
+                </button>
+                <button
+                  className={`btn-icon ${effectiveMuted ? 'muted' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); onToggleMuted(); }}
+                  title={effectiveMuted ? 'Unmute' : 'Mute'}
+                >
+                  M
+                </button>
+                <button
+                  className={`btn-icon ${trackInputMonitor ? 'btn-active' : ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    useTimelineStore.getState().updateTrackAudioState(track.id, { inputMonitor: !trackInputMonitor });
+                  }}
+                  title={trackInputMonitor ? 'Input monitor on' : 'Input monitor off'}
+                >
+                  <TrackHeaderIcon name="speaker" />
+                </button>
+                <button
+                  className={`btn-icon ${trackRecordArm ? 'record-active' : ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    useTimelineStore.getState().updateTrackAudioState(track.id, { recordArm: !trackRecordArm });
+                  }}
+                  title={trackRecordArm ? 'Record armed' : 'Record arm'}
+                >
+                  R
+                </button>
+                <button
+                  className={`btn-icon ${(audioSendsOpen || (track.audioState?.sends?.length ?? 0) > 0) ? 'btn-active' : ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setAudioFxOpen(false);
+                    setAudioSendsOpen(open => !open);
+                  }}
+                  title="Track sends"
+                >
+                  <span className="audio-button-label-wide">Aux</span>
+                  <span className="audio-button-label-short">A</span>
+                </button>
+                <button
+                  className={`btn-icon ${track.locked ? 'locked-active' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); onToggleLocked?.(); }}
+                  title={track.locked ? 'Unlock Track' : 'Lock Track'}
+                >
+                  <TrackHeaderIcon name={track.locked ? 'lock' : 'unlock'} />
+                </button>
+                <button
+                  className={`btn-icon ${audioFxOpen || (track.audioState?.effectStack?.length ?? 0) > 0 ? 'btn-active' : ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setAudioSendsOpen(false);
+                    setAudioFxOpen(open => !open);
+                  }}
+                  title="Track audio FX"
+                >
+                  FX
+                </button>
+              </>
+            )
           ) : (
             <>
               <button
@@ -1367,7 +1604,12 @@ function TimelineHeaderComponent({
             onClick={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
           >
-            <AudioLevelMeter meter={audioMeter} label={`${track.name} level`} orientation="vertical" />
+            <AudioLevelMeter
+              meter={audioMeter}
+              label={`${track.name} level`}
+              orientation="vertical"
+              display="auto"
+            />
             <div className="audio-track-fader-column">
               <input
                 className="audio-track-fader"
@@ -1377,8 +1619,9 @@ function TimelineHeaderComponent({
                 step="0.5"
                 value={trackVolumeDb}
                 aria-label={`${track.name} volume`}
-                title={`Volume ${trackVolumeLabel} dB`}
+                title={`Volume ${trackVolumeLabel} dB. Double-click to reset.`}
                 onChange={handleTrackVolumeChange}
+                onDoubleClick={handleTrackVolumeReset}
               />
               <span className="audio-track-fader-value" aria-hidden="true">{trackVolumeLabel}</span>
             </div>

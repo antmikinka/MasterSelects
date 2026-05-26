@@ -13,7 +13,7 @@ import type {
 import type { ProjectAudioState } from '../../../types/audio';
 import type { ProjectFlashBoardState } from '../../../stores/flashboardStore/types';
 import type { ExportStoreData } from '../../../stores/exportStore';
-import type { TimelineAudioDisplayMode } from '../../../stores/timeline/types';
+import type { TimelineAudioDisplayMode, TimelineTrackFocusMode } from '../../../stores/timeline/types';
 import type {
   CameraItem,
   LabelColor,
@@ -118,6 +118,7 @@ export interface ProjectUIState {
   waveformsEnabled?: boolean;
   audioDisplayMode?: TimelineAudioDisplayMode;
   audioFocusMode?: boolean;
+  trackFocusMode?: TimelineTrackFocusMode;
   proxyEnabled?: boolean;
   showTranscriptMarkers?: boolean;
   showChangelogOnStartup?: boolean;

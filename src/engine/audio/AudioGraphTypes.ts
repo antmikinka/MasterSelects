@@ -74,7 +74,7 @@ export interface AudioGraphEffectDescriptor {
   enabled: boolean;
   bypassed: boolean;
   status: AudioGraphEffectStatus;
-  params: Record<string, AudioGraphJsonPrimitive>;
+  params: Record<string, AudioGraphJsonValue>;
   automationMode?: AudioEffectInstance['automationMode'];
 }
 
@@ -144,7 +144,7 @@ export interface AudioGraphEffectPlanStep {
   effectId: string;
   descriptorId: string;
   order: number;
-  params: Record<string, AudioGraphJsonPrimitive>;
+  params: Record<string, AudioGraphJsonValue>;
   automationMode?: AudioEffectInstance['automationMode'];
 }
 

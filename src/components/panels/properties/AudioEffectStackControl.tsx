@@ -1,15 +1,16 @@
 import type { AudioDynamicsReductionSnapshot, AudioEffectInstance } from '../../../types';
+import type { AudioEqAnalyzerView } from '../../../engine/audio/eq/AudioEqTypes';
 import './VolumeBlendshapeTabs.css';
 import {
   getAllAudioEffects,
   getAudioEffect,
   type AudioEffectParamValue,
 } from '../../../engine/audio/AudioEffectRegistry';
-import { EQ_FREQUENCIES } from '../../../services/audioManager';
-import { DraggableNumber, EffectKeyframeToggle } from './shared';
+import { normalizeAudioEqParams } from '../../../engine/audio/eq/AudioEqLegacy';
+import { DraggableNumber, EffectKeyframeToggle, MultiKeyframeToggle } from './shared';
 import { createAudioDynamicsViewModel } from './audioDynamicsView';
-import { GraphicalEqualizerControl } from './GraphicalEqualizerControl';
-import { formatEqualizerFrequency } from './equalizerFormatting';
+import { FlexEqualizerControl } from './FlexEqualizerControl';
+import { getAudioEqAllNumericKeyframeEntries } from './audioEqKeyframes';
 
 export interface AudioEffectStackControlProps {
   title?: string;
@@ -20,6 +21,7 @@ export interface AudioEffectStackControlProps {
   excludeDescriptorIds?: ReadonlySet<string>;
   keyframeClipId?: string;
   runtimeDynamics?: Readonly<Record<string, AudioDynamicsReductionSnapshot>>;
+  runtimeAnalyzer?: AudioEqAnalyzerView;
   onAddEffect: (descriptorId: string) => void;
   onUpdateEffect: (effect: AudioEffectInstance, paramName: string, value: AudioEffectParamValue) => void;
   onSetEffectEnabled: (effectId: string, enabled: boolean) => void;
@@ -40,7 +42,7 @@ function getParamControlMeta(
   paramName: string,
   defaultValue: AudioEffectParamValue,
 ): { min: number; max: number; decimals: number; suffix: string; sensitivity: number } {
-  if (paramName.includes('frequencyHz')) return { min: 20, max: 22000, decimals: 0, suffix: ' Hz', sensitivity: 60 };
+  if (paramName.toLowerCase().includes('frequencyhz')) return { min: 20, max: 22000, decimals: 0, suffix: ' Hz', sensitivity: 60 };
   if (paramName === 'q') {
     const defaultQ = typeof defaultValue === 'number' ? defaultValue : 1;
     return { min: 0.1, max: Math.max(24, defaultQ * 2, 80), decimals: 2, suffix: '', sensitivity: 0.08 };
@@ -51,6 +53,10 @@ function getParamControlMeta(
   if (paramName.includes('rangeDb')) return { min: 0, max: 80, decimals: 1, suffix: ' dB', sensitivity: 0.25 };
   if (paramName.includes('floorDb')) return { min: -100, max: 0, decimals: 1, suffix: ' dB', sensitivity: 0.25 };
   if (paramName.includes('ceilingDb')) return { min: -24, max: 0, decimals: 1, suffix: ' dB', sensitivity: 0.15 };
+  if (paramName === 'targetPeakDb') return { min: -24, max: 0, decimals: 1, suffix: ' dB', sensitivity: 0.15 };
+  if (paramName === 'targetRmsDb') return { min: -60, max: 0, decimals: 1, suffix: ' dB', sensitivity: 0.25 };
+  if (paramName === 'targetLufs') return { min: -70, max: 0, decimals: 1, suffix: ' LUFS', sensitivity: 0.25 };
+  if (paramName === 'maxGainDb') return { min: 0, max: 60, decimals: 1, suffix: ' dB', sensitivity: 0.25 };
   if (paramName.includes('makeupGainDb') || paramName.includes('inputGainDb')) return { min: -24, max: 24, decimals: 1, suffix: ' dB', sensitivity: 0.2 };
   if (paramName === 'gainDb') return { min: -24, max: 24, decimals: 1, suffix: ' dB', sensitivity: 0.2 };
   if (paramName === 'pan') return { min: -1, max: 1, decimals: 2, suffix: '', sensitivity: 0.01 };
@@ -90,6 +96,7 @@ export function AudioEffectStackControl({
   excludeDescriptorIds,
   keyframeClipId,
   runtimeDynamics,
+  runtimeAnalyzer,
   onAddEffect,
   onUpdateEffect,
   onSetEffectEnabled,
@@ -126,31 +133,12 @@ export function AudioEffectStackControl({
             if (!descriptor) return null;
             const enabled = effect.enabled !== false;
             const dynamicsView = createAudioDynamicsViewModel(effect, descriptor.name, runtimeDynamics?.[effect.id]);
-            const isGraphicEqualizer = descriptor.id === 'audio-eq';
-            const graphicEqualizerBands = isGraphicEqualizer
-              ? descriptor.paramNames.map((paramName, bandIndex) => {
-                  const param = descriptor.params[paramName];
-                  const frequency = EQ_FREQUENCIES[bandIndex] ?? 1000;
-                  const defaultValue = typeof param?.default === 'number' ? param.default : 0;
-                  const currentValue = getAudioEffectValue(effect, paramName, defaultValue);
-                  const numericValue = typeof currentValue === 'number' ? currentValue : defaultValue;
-                  const label = formatEqualizerFrequency(frequency);
-                  return {
-                    id: paramName,
-                    frequencyHz: frequency,
-                    valueDb: numericValue,
-                    ariaLabel: `${label}Hz ${descriptor.name}`,
-                    label,
-                    keyframeToggle: keyframeClipId ? (
-                      <EffectKeyframeToggle
-                        clipId={keyframeClipId}
-                        effectId={effect.id}
-                        paramName={paramName}
-                        value={numericValue}
-                      />
-                    ) : undefined,
-                  };
-                })
+            const isFlexEqualizer = descriptor.id === 'audio-eq';
+            const eqAllKeyframeEntries = isFlexEqualizer && keyframeClipId
+              ? getAudioEqAllNumericKeyframeEntries(
+                  effect.id,
+                  normalizeAudioEqParams(effect.params).audible.bands,
+                )
               : [];
             return (
               <div key={effect.id} className={`audio-effect-stack-item ${enabled ? '' : 'bypassed'}`}>
@@ -169,6 +157,14 @@ export function AudioEffectStackControl({
                     >
                       Up
                     </button>
+                    {keyframeClipId && eqAllKeyframeEntries.length > 0 && (
+                      <MultiKeyframeToggle
+                        clipId={keyframeClipId}
+                        entries={eqAllKeyframeEntries}
+                        dragId={`${keyframeClipId}:effect:${effect.id}:eq-all`}
+                        title="Add all EQ parameter keyframes"
+                      />
+                    )}
                     <button
                       type="button"
                       className="btn btn-sm"
@@ -225,22 +221,17 @@ export function AudioEffectStackControl({
                   </div>
                 )}
 
-                {isGraphicEqualizer ? (
-                  <GraphicalEqualizerControl
-                    bands={graphicEqualizerBands}
-                    minDb={-12}
-                    maxDb={12}
-                    step={0.5}
+                {isFlexEqualizer ? (
+                  <FlexEqualizerControl
+                    params={effect.params}
                     compact={className?.includes('audio-effect-stack-compact') ?? false}
-                    ariaLabel={`${descriptor.name} frequency response`}
-                    onChange={(bandIndex, value) => {
-                      const paramName = descriptor.paramNames[bandIndex];
-                      if (paramName) onUpdateEffect(effect, paramName, value);
-                    }}
-                    onResetBand={(bandIndex) => {
-                      const paramName = descriptor.paramNames[bandIndex];
-                      if (paramName) onUpdateEffect(effect, paramName, 0);
-                    }}
+                    disabled={!enabled}
+                    ariaLabel={`${descriptor.name} graph`}
+                    analyzer={runtimeAnalyzer}
+                    keyframeClipId={keyframeClipId}
+                    effectId={effect.id}
+                    onUpdateParamPath={(path, value) => onUpdateEffect(effect, path, value)}
+                    onChangeParams={(params) => onUpdateEffect(effect, 'eq', params as unknown as AudioEffectParamValue)}
                   />
                 ) : (
                   <div className="audio-effect-param-grid">
@@ -256,6 +247,21 @@ export function AudioEffectStackControl({
                               checked={Boolean(currentValue)}
                               onChange={(e) => onUpdateEffect(effect, paramName, e.target.checked)}
                             />
+                          </label>
+                        );
+                      }
+                      if (typeof param.default === 'string' && param.options?.length) {
+                        return (
+                          <label key={paramName} className="audio-effect-param-row">
+                            <span>{formatParamLabel(paramName)}</span>
+                            <select
+                              value={typeof currentValue === 'string' ? currentValue : param.default}
+                              onChange={(e) => onUpdateEffect(effect, paramName, e.target.value)}
+                            >
+                              {param.options.map(option => (
+                                <option key={option} value={option}>{formatParamLabel(option)}</option>
+                              ))}
+                            </select>
                           </label>
                         );
                       }

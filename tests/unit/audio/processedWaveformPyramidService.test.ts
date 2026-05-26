@@ -93,6 +93,7 @@ describe('ProcessedWaveformPyramidService', () => {
           { id: 'pan-default', descriptorId: 'audio-pan', enabled: true, params: {} },
           { id: 'expander-default', descriptorId: 'audio-expander', enabled: true, params: {} },
           { id: 'noise-reduction-default', descriptorId: 'audio-noise-reduction', enabled: true, params: {} },
+          { id: 'spectral-gate-default', descriptorId: 'audio-spectral-gate', enabled: true, params: {} },
         ],
       },
     });
@@ -105,6 +106,7 @@ describe('ProcessedWaveformPyramidService', () => {
           { id: 'pan', descriptorId: 'audio-pan', enabled: true, params: { pan: 0.5 } },
           { id: 'expander', descriptorId: 'audio-expander', enabled: true, params: { thresholdDb: -35, ratio: 2, rangeDb: 18 } },
           { id: 'noise-reduction', descriptorId: 'audio-noise-reduction', enabled: true, params: { thresholdDb: -58, reductionDb: 18, mix: 0.7 } },
+          { id: 'spectral-gate', descriptorId: 'audio-spectral-gate', enabled: true, params: { thresholdDb: -54, reductionDb: 24, mix: 0.6 } },
           { id: 'compressor', descriptorId: 'audio-compressor', enabled: true, params: { thresholdDb: -18, ratio: 3 } },
         ],
       },
@@ -114,6 +116,13 @@ describe('ProcessedWaveformPyramidService', () => {
         effectStack: [
           { id: 'mono-sum', descriptorId: 'audio-mono-sum', enabled: true, params: {} },
           { id: 'stereo-split', descriptorId: 'audio-stereo-split', enabled: true, params: {} },
+        ],
+      },
+    });
+    const defaultAudibleNormalizeEffect = createMockClip({
+      audioState: {
+        effectStack: [
+          { id: 'normalize', descriptorId: 'audio-normalize', enabled: true, params: {} },
         ],
       },
     });
@@ -147,6 +156,7 @@ describe('ProcessedWaveformPyramidService', () => {
     expect(clipRequiresProcessedWaveformPyramid(defaultFilter)).toBe(false);
     expect(clipRequiresProcessedWaveformPyramid(audioEffect)).toBe(true);
     expect(clipRequiresProcessedWaveformPyramid(professionalAudioEffect)).toBe(true);
+    expect(clipRequiresProcessedWaveformPyramid(defaultAudibleNormalizeEffect)).toBe(true);
     expect(clipRequiresProcessedWaveformPyramid(defaultAudibleUtilityEffect)).toBe(true);
     expect(clipRequiresProcessedWaveformPyramid(defaultAudibleRepairEffect)).toBe(true);
     expect(clipRequiresProcessedWaveformPyramid(audioEdit)).toBe(true);

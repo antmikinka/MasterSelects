@@ -3,6 +3,7 @@ import {
   getAudioEffectDefaultParams,
   type AudioEffectParamValue,
 } from './AudioEffectRegistry';
+import { normalizeAudioEqParams } from './eq/AudioEqLegacy';
 import {
   AUDIO_GRAPH_SCHEMA_VERSION,
   type AudioEffectInstanceWithBypass,
@@ -166,18 +167,48 @@ function normalizeEffectParamValue(value: AudioEffectParamValue): AudioGraphJson
   return isJsonPrimitive(value) ? value : null;
 }
 
+function normalizeGraphJsonValue(value: unknown): AudioGraphJsonValue | undefined {
+  if (isJsonPrimitive(value)) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map(entry => normalizeGraphJsonValue(entry))
+      .filter((entry): entry is AudioGraphJsonValue => entry !== undefined);
+  }
+
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const normalized: Record<string, AudioGraphJsonValue> = {};
+  for (const key of Object.keys(value).toSorted()) {
+    if (PAYLOAD_FIELD_NAMES.has(key)) {
+      continue;
+    }
+
+    const nested = normalizeGraphJsonValue(value[key]);
+    if (nested !== undefined) {
+      normalized[key] = nested;
+    }
+  }
+
+  return normalized;
+}
+
 function normalizeLooseParams(
   params: unknown,
   effectId: string,
   scope: AudioGraphScope,
   ownerId: string,
   diagnostics: AudioGraphDiagnostic[]
-): Record<string, AudioGraphJsonPrimitive> {
+): Record<string, AudioGraphJsonValue> {
   if (!isRecord(params)) {
     return {};
   }
 
-  const normalized: Record<string, AudioGraphJsonPrimitive> = {};
+  const normalized: Record<string, AudioGraphJsonValue> = {};
   for (const key of Object.keys(params).toSorted()) {
     if (PAYLOAD_FIELD_NAMES.has(key)) {
       diagnostics.push({
@@ -191,7 +222,8 @@ function normalizeLooseParams(
     }
 
     const value = params[key];
-    if (!isJsonPrimitive(value)) {
+    const normalizedValue = normalizeGraphJsonValue(value);
+    if (normalizedValue === undefined) {
       diagnostics.push({
         severity: 'warning',
         code: 'audio-graph-effect-param-dropped',
@@ -202,7 +234,7 @@ function normalizeLooseParams(
       continue;
     }
 
-    normalized[key] = value;
+    normalized[key] = normalizedValue;
   }
 
   return normalized;
@@ -215,12 +247,18 @@ function normalizeRegisteredParams(
   scope: AudioGraphScope,
   ownerId: string,
   diagnostics: AudioGraphDiagnostic[]
-): Record<string, AudioGraphJsonPrimitive> {
+): Record<string, AudioGraphJsonValue> {
+  if (descriptorId === 'audio-eq') {
+    return {
+      eq: normalizeAudioEqParams(params) as unknown as AudioGraphJsonValue,
+    };
+  }
+
   const descriptor = getAudioEffect(descriptorId);
   const defaults = getAudioEffectDefaultParams(descriptorId);
   const paramNames = descriptor?.paramNames ?? [];
   const allowedParams = new Set(paramNames);
-  const normalized: Record<string, AudioGraphJsonPrimitive> = {};
+  const normalized: Record<string, AudioGraphJsonValue> = {};
 
   for (const paramName of paramNames) {
     normalized[paramName] = normalizeEffectParamValue(defaults[paramName]);
@@ -254,7 +292,8 @@ function normalizeRegisteredParams(
     }
 
     const value = params[key];
-    if (!isJsonPrimitive(value)) {
+    const normalizedValue = normalizeGraphJsonValue(value);
+    if (normalizedValue === undefined) {
       diagnostics.push({
         severity: 'warning',
         code: 'audio-graph-effect-param-dropped',
@@ -265,7 +304,7 @@ function normalizeRegisteredParams(
       continue;
     }
 
-    normalized[key] = value;
+    normalized[key] = normalizedValue;
   }
 
   return normalized;

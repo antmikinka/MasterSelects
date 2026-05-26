@@ -2,7 +2,7 @@
  * AudioRoutingManager - Routes audio through Web Audio API for live EQ and volume
  *
  * Architecture:
- * HTMLMediaElement → MediaElementSourceNode → GainNode → EQ Filters → Destination
+ * HTMLMediaElement -> track Gain/EQ/FX -> track meter -> shared master bus -> Destination
  *
  * Efficiency:
  * - Single shared AudioContext
@@ -12,8 +12,19 @@
  */
 
 import { clampAudioPan, dbToLinearGain, finiteNumber } from '../engine/audio/audioMath';
+import {
+  createSpectralGateState,
+  processSpectralGateBlock,
+  type SpectralGateState,
+} from '../engine/audio/spectralGateProcessor';
+import {
+  createAudioEqDynamicRuntimeState,
+  createSingleBandAudioEqParams,
+  processAudioEqChannels,
+  type AudioEqDynamicRuntimeState,
+} from '../engine/audio/eq/AudioEqDynamic';
 import { Logger } from './logger';
-import type { LiveAudioRouteProcessor } from './audio/audioGraphRouteSettings';
+import type { AudioRouteEffectSettings, LiveAudioRouteProcessor } from './audio/audioGraphRouteSettings';
 import type { AudioDynamicsReductionSnapshot, AudioMeterSnapshot } from '../types';
 import { calculateAudioMeterSnapshot } from './audio/audioMetering';
 
@@ -28,12 +39,36 @@ interface AudioRoute {
   gainNode: GainNode;
   panNode: StereoPannerNode;
   analyserNode: AnalyserNode;
+  stereoSplitterNode: ChannelSplitterNode;
+  leftAnalyserNode: AnalyserNode;
+  rightAnalyserNode: AnalyserNode;
   eqFilters: BiquadFilterNode[];
   processorNodes: AudioRouteProcessorNode[];
   meterBuffer: Float32Array<ArrayBuffer>;
+  leftMeterBuffer: Float32Array<ArrayBuffer>;
+  rightMeterBuffer: Float32Array<ArrayBuffer>;
+  frequencyBuffer: Float32Array<ArrayBuffer>;
   isConnected: boolean;
   lastVolume: number;
   lastPan: number;
+  lastEQGains: number[];
+  lastProcessorSignature: string;
+}
+
+interface MasterAudioRoute {
+  inputNode: GainNode;
+  gainNode: GainNode;
+  analyserNode: AnalyserNode;
+  stereoSplitterNode: ChannelSplitterNode;
+  leftAnalyserNode: AnalyserNode;
+  rightAnalyserNode: AnalyserNode;
+  eqFilters: BiquadFilterNode[];
+  processorNodes: AudioRouteProcessorNode[];
+  meterBuffer: Float32Array<ArrayBuffer>;
+  leftMeterBuffer: Float32Array<ArrayBuffer>;
+  rightMeterBuffer: Float32Array<ArrayBuffer>;
+  frequencyBuffer: Float32Array<ArrayBuffer>;
+  lastVolume: number;
   lastEQGains: number[];
   lastProcessorSignature: string;
 }
@@ -51,6 +86,8 @@ interface AudioRouteProcessorNode {
   makeupGain?: GainNode;
   scriptProcessor?: ScriptProcessorNode;
   sampleProcessor?: LiveAudioRouteProcessor;
+  spectralGateState?: SpectralGateState;
+  dynamicEqState?: AudioEqDynamicRuntimeState;
   gainByChannel?: number[];
   envelopeByChannel?: number[];
   gainReductionDb?: number;
@@ -109,6 +146,14 @@ function updateProcessorNode(
     node.filter.type = processor.type === 'high-pass' ? 'highpass' : 'lowpass';
     node.filter.frequency.value = clampFrequency(ctx, processor.frequencyHz);
     node.filter.Q.value = Math.max(0.0001, Math.min(30, finiteNumber(processor.q, 0.707)));
+    return;
+  }
+
+  if (processor.type === 'biquad-filter' && node.filter) {
+    node.filter.type = processor.filterType;
+    node.filter.frequency.value = clampFrequency(ctx, processor.frequencyHz);
+    node.filter.Q.value = Math.max(0.0001, Math.min(30, finiteNumber(processor.q, 0.707)));
+    node.filter.gain.value = Math.max(-48, Math.min(48, finiteNumber(processor.gainDb, 0)));
     return;
   }
 
@@ -177,6 +222,8 @@ function updateProcessorNode(
       processor.type === 'expander' ||
       processor.type === 'de-click' ||
       processor.type === 'noise-reduction' ||
+      processor.type === 'spectral-gate' ||
+      processor.type === 'dynamic-eq-band' ||
       processor.type === 'polarity-invert' ||
       processor.type === 'mono-sum' ||
       processor.type === 'channel-swap' ||
@@ -392,6 +439,21 @@ function processNoiseReductionFrame(
   node.gainReductionDb = 0;
 }
 
+function processSpectralGateFrame(
+  node: AudioRouteProcessorNode,
+  input: AudioBuffer,
+  output: AudioBuffer,
+  processor: Extract<LiveAudioRouteProcessor, { type: 'spectral-gate' }>,
+): void {
+  node.spectralGateState = processSpectralGateBlock(
+    input,
+    output,
+    processor,
+    node.spectralGateState ?? createSpectralGateState(),
+  );
+  node.gainReductionDb = 0;
+}
+
 function processPolarityInvertFrame(
   input: AudioBuffer,
   output: AudioBuffer,
@@ -523,6 +585,16 @@ function attachSampleProcessor(node: AudioRouteProcessorNode): void {
       return;
     }
 
+    if (processor.type === 'spectral-gate') {
+      processSpectralGateFrame(node, event.inputBuffer, event.outputBuffer, processor);
+      return;
+    }
+
+    if (processor.type === 'dynamic-eq-band') {
+      processDynamicEqBandFrame(node, event.inputBuffer, event.outputBuffer, processor);
+      return;
+    }
+
     if (processor.type === 'polarity-invert') {
       processPolarityInvertFrame(event.inputBuffer, event.outputBuffer, processor);
       node.gainReductionDb = 0;
@@ -550,6 +622,27 @@ function attachSampleProcessor(node: AudioRouteProcessorNode): void {
     copyInputToOutput(event.inputBuffer, event.outputBuffer);
     node.gainReductionDb = 0;
   };
+}
+
+function processDynamicEqBandFrame(
+  node: AudioRouteProcessorNode,
+  input: AudioBuffer,
+  output: AudioBuffer,
+  processor: Extract<LiveAudioRouteProcessor, { type: 'dynamic-eq-band' }>,
+): void {
+  node.dynamicEqState ??= createAudioEqDynamicRuntimeState();
+  const channels = Array.from({ length: input.numberOfChannels }, (_, channel) => input.getChannelData(channel));
+  const result = processAudioEqChannels(channels, createSingleBandAudioEqParams(processor.band), {
+    sampleRate: input.sampleRate,
+    state: node.dynamicEqState,
+  });
+  for (let channel = 0; channel < output.numberOfChannels; channel += 1) {
+    output.getChannelData(channel).set(result.channels[channel] ?? channels[channel]);
+  }
+  node.gainReductionDb = result.telemetry.reduce(
+    (maxReduction, band) => Math.max(maxReduction, band.maxGainReductionDb),
+    0,
+  );
 }
 
 function createReverbImpulse(
@@ -696,6 +789,7 @@ function reconnectCustomProcessorInternal(node: AudioRouteProcessorNode): void {
 
 class AudioRoutingManager {
   private audioContext: AudioContext | null = null;
+  private masterRoute: MasterAudioRoute | null = null;
   private routes = new Map<HTMLMediaElement, AudioRoute>();
   private contextResumePromise: Promise<void> | null = null;
 
@@ -705,6 +799,7 @@ class AudioRoutingManager {
   private async getContext(): Promise<AudioContext> {
     if (!this.audioContext || this.audioContext.state === 'closed') {
       this.audioContext = new AudioContext();
+      this.masterRoute = null;
       log.info('Created new AudioContext');
     }
 
@@ -721,6 +816,58 @@ class AudioRoutingManager {
     return this.audioContext;
   }
 
+  private getOrCreateMasterRoute(ctx: AudioContext): MasterAudioRoute {
+    if (this.masterRoute) return this.masterRoute;
+
+    const inputNode = ctx.createGain();
+    inputNode.gain.value = 1;
+
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = 1;
+
+    const analyserNode = ctx.createAnalyser();
+    analyserNode.fftSize = 1024;
+    analyserNode.smoothingTimeConstant = 0.2;
+
+    const stereoSplitterNode = ctx.createChannelSplitter(2);
+    const leftAnalyserNode = ctx.createAnalyser();
+    const rightAnalyserNode = ctx.createAnalyser();
+    leftAnalyserNode.fftSize = analyserNode.fftSize;
+    rightAnalyserNode.fftSize = analyserNode.fftSize;
+    leftAnalyserNode.smoothingTimeConstant = analyserNode.smoothingTimeConstant;
+    rightAnalyserNode.smoothingTimeConstant = analyserNode.smoothingTimeConstant;
+
+    const eqFilters: BiquadFilterNode[] = EQ_FREQUENCIES.map(freq => {
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'peaking';
+      filter.frequency.value = freq;
+      filter.Q.value = 1.4;
+      filter.gain.value = 0;
+      return filter;
+    });
+
+    this.masterRoute = {
+      inputNode,
+      gainNode,
+      analyserNode,
+      stereoSplitterNode,
+      leftAnalyserNode,
+      rightAnalyserNode,
+      eqFilters,
+      processorNodes: [],
+      meterBuffer: new Float32Array(analyserNode.fftSize),
+      leftMeterBuffer: new Float32Array(leftAnalyserNode.fftSize),
+      rightMeterBuffer: new Float32Array(rightAnalyserNode.fftSize),
+      frequencyBuffer: new Float32Array(analyserNode.frequencyBinCount),
+      lastVolume: 1,
+      lastEQGains: new Array(10).fill(0),
+      lastProcessorSignature: '',
+    };
+
+    this.reconnectMasterRouteChain(this.masterRoute);
+    return this.masterRoute;
+  }
+
   /**
    * Get or create audio route for an element
    */
@@ -731,6 +878,7 @@ class AudioRoutingManager {
 
     try {
       const ctx = await this.getContext();
+      this.getOrCreateMasterRoute(ctx);
 
       // Create source node (can only be done ONCE per element)
       const sourceNode = ctx.createMediaElementSource(element);
@@ -745,6 +893,13 @@ class AudioRoutingManager {
       const analyserNode = ctx.createAnalyser();
       analyserNode.fftSize = 1024;
       analyserNode.smoothingTimeConstant = 0.2;
+      const stereoSplitterNode = ctx.createChannelSplitter(2);
+      const leftAnalyserNode = ctx.createAnalyser();
+      const rightAnalyserNode = ctx.createAnalyser();
+      leftAnalyserNode.fftSize = analyserNode.fftSize;
+      rightAnalyserNode.fftSize = analyserNode.fftSize;
+      leftAnalyserNode.smoothingTimeConstant = analyserNode.smoothingTimeConstant;
+      rightAnalyserNode.smoothingTimeConstant = analyserNode.smoothingTimeConstant;
 
       // Create EQ filter chain
       const eqFilters: BiquadFilterNode[] = EQ_FREQUENCIES.map(freq => {
@@ -756,15 +911,21 @@ class AudioRoutingManager {
         return filter;
       });
 
-      // Connect chain: source → gain → eq[0] → eq[1] → ... → eq[9] → destination
+      // Connect chain: source -> track gain/FX/EQ/pan -> track meter -> master bus
       route = {
         sourceNode,
         gainNode,
         panNode,
         analyserNode,
+        stereoSplitterNode,
+        leftAnalyserNode,
+        rightAnalyserNode,
         eqFilters,
         processorNodes: [],
         meterBuffer: new Float32Array(analyserNode.fftSize),
+        leftMeterBuffer: new Float32Array(leftAnalyserNode.fftSize),
+        rightMeterBuffer: new Float32Array(rightAnalyserNode.fftSize),
+        frequencyBuffer: new Float32Array(analyserNode.frequencyBinCount),
         isConnected: true,
         lastVolume: 1,
         lastPan: 0,
@@ -794,17 +955,19 @@ class AudioRoutingManager {
     volume: number,
     eqGains: number[], // Array of 10 gain values in dB (-12 to +12)
     pan = 0,
-    processors: readonly LiveAudioRouteProcessor[] = []
+    processors: readonly LiveAudioRouteProcessor[] = [],
+    masterRoute?: AudioRouteEffectSettings,
   ): Promise<boolean> {
     const route = await this.getOrCreateRoute(element);
     if (!route) {
       // Fallback: just set element volume directly (no EQ)
-      element.volume = Math.max(0, Math.min(1, volume));
+      element.volume = Math.max(0, Math.min(1, volume * (masterRoute?.volume ?? 1)));
       return false;
     }
 
     const ctx = this.audioContext;
     if (!ctx) return false;
+    this.updateMasterRoute(ctx, masterRoute);
     this.updateRouteProcessors(route, ctx, processors);
 
     // Update volume if changed (with small delta threshold)
@@ -850,7 +1013,33 @@ class AudioRoutingManager {
     if (!route) return null;
 
     route.analyserNode.getFloatTimeDomainData(route.meterBuffer);
-    return calculateAudioMeterSnapshot(route.meterBuffer, updatedAt, this.getRouteDynamicsSnapshot(route, updatedAt));
+    route.analyserNode.getFloatFrequencyData(route.frequencyBuffer);
+    route.leftAnalyserNode.getFloatTimeDomainData(route.leftMeterBuffer);
+    route.rightAnalyserNode.getFloatTimeDomainData(route.rightMeterBuffer);
+    return calculateAudioMeterSnapshot(
+      route.meterBuffer,
+      updatedAt,
+      this.getRouteDynamicsSnapshot(route, updatedAt),
+      { left: route.leftMeterBuffer, right: route.rightMeterBuffer },
+      new Float32Array(route.frequencyBuffer),
+    );
+  }
+
+  getMasterMeterSnapshot(updatedAt = performance.now()): AudioMeterSnapshot | null {
+    const route = this.masterRoute;
+    if (!route) return null;
+
+    route.analyserNode.getFloatTimeDomainData(route.meterBuffer);
+    route.analyserNode.getFloatFrequencyData(route.frequencyBuffer);
+    route.leftAnalyserNode.getFloatTimeDomainData(route.leftMeterBuffer);
+    route.rightAnalyserNode.getFloatTimeDomainData(route.rightMeterBuffer);
+    return calculateAudioMeterSnapshot(
+      route.meterBuffer,
+      updatedAt,
+      this.getRouteDynamicsSnapshot(route, updatedAt),
+      { left: route.leftMeterBuffer, right: route.rightMeterBuffer },
+      new Float32Array(route.frequencyBuffer),
+    );
   }
 
   /**
@@ -865,6 +1054,9 @@ class AudioRoutingManager {
         route.gainNode.disconnect();
         route.panNode.disconnect();
         route.analyserNode.disconnect();
+        route.stereoSplitterNode.disconnect();
+        route.leftAnalyserNode.disconnect();
+        route.rightAnalyserNode.disconnect();
         route.eqFilters.forEach(f => f.disconnect());
         route.processorNodes.forEach(processor => processor.nodes.forEach(node => node.disconnect()));
       } catch {
@@ -882,10 +1074,12 @@ class AudioRoutingManager {
     for (const [element] of this.routes) {
       this.removeRoute(element);
     }
+    this.disconnectMasterRoute();
     if (this.audioContext && this.audioContext.state !== 'closed') {
       this.audioContext.close();
     }
     this.audioContext = null;
+    this.masterRoute = null;
     log.info('AudioRoutingManager disposed');
   }
 
@@ -894,6 +1088,23 @@ class AudioRoutingManager {
    */
   get activeRouteCount(): number {
     return this.routes.size;
+  }
+
+  private disconnectMasterRoute(): void {
+    const route = this.masterRoute;
+    if (!route) return;
+    try {
+      route.inputNode.disconnect();
+      route.gainNode.disconnect();
+      route.analyserNode.disconnect();
+      route.stereoSplitterNode.disconnect();
+      route.leftAnalyserNode.disconnect();
+      route.rightAnalyserNode.disconnect();
+      route.eqFilters.forEach(filter => filter.disconnect());
+      route.processorNodes.forEach(processor => processor.nodes.forEach(node => node.disconnect()));
+    } catch {
+      // Ignore disconnect errors during teardown.
+    }
   }
 
   private createProcessorNode(
@@ -912,7 +1123,12 @@ class AudioRoutingManager {
       return node;
     }
 
-    if (processor.type === 'high-pass' || processor.type === 'low-pass' || processor.type === 'parametric-eq') {
+    if (
+      processor.type === 'high-pass' ||
+      processor.type === 'low-pass' ||
+      processor.type === 'parametric-eq' ||
+      processor.type === 'biquad-filter'
+    ) {
       const filter = ctx.createBiquadFilter();
       const node: AudioRouteProcessorNode = {
         id: processor.id,
@@ -1075,6 +1291,8 @@ class AudioRoutingManager {
       processor.type === 'expander' ||
       processor.type === 'de-click' ||
       processor.type === 'noise-reduction' ||
+      processor.type === 'spectral-gate' ||
+      processor.type === 'dynamic-eq-band' ||
       processor.type === 'polarity-invert' ||
       processor.type === 'mono-sum' ||
       processor.type === 'channel-swap' ||
@@ -1107,7 +1325,7 @@ class AudioRoutingManager {
   }
 
   private getRouteDynamicsSnapshot(
-    route: AudioRoute,
+    route: { processorNodes: AudioRouteProcessorNode[] },
     updatedAt: number,
   ): Record<string, AudioDynamicsReductionSnapshot> | undefined {
     const dynamics: Record<string, AudioDynamicsReductionSnapshot> = {};
@@ -1123,7 +1341,7 @@ class AudioRoutingManager {
         continue;
       }
 
-      if ((processor.type === 'limiter' || processor.type === 'noise-gate' || processor.type === 'expander') && processor.scriptProcessor) {
+      if ((processor.type === 'limiter' || processor.type === 'noise-gate' || processor.type === 'expander' || processor.type === 'dynamic-eq-band') && processor.scriptProcessor) {
         dynamics[processor.id] = {
           effectId: processor.id,
           processorType: processor.type,
@@ -1156,6 +1374,43 @@ class AudioRoutingManager {
     });
   }
 
+  private updateMasterRoute(
+    ctx: AudioContext,
+    settings: AudioRouteEffectSettings | undefined,
+  ): void {
+    const route = this.getOrCreateMasterRoute(ctx);
+    const volume = settings?.volume ?? 1;
+    const eqGains = settings?.eqGains ?? [];
+    const processors = settings?.processors ?? [];
+
+    if (Math.abs(route.lastVolume - volume) > 0.001) {
+      route.gainNode.gain.value = Math.max(0, Math.min(4, volume));
+      route.lastVolume = volume;
+    }
+
+    for (let index = 0; index < route.eqFilters.length; index += 1) {
+      const gain = eqGains[index] ?? 0;
+      if (Math.abs(route.lastEQGains[index] - gain) > 0.01) {
+        route.eqFilters[index].gain.value = gain;
+        route.lastEQGains[index] = gain;
+      }
+    }
+
+    const signature = processorSignature(processors);
+    if (signature !== route.lastProcessorSignature) {
+      route.processorNodes.forEach(processor => processor.nodes.forEach(node => node.disconnect()));
+      route.processorNodes = processors.map(processor => this.createProcessorNode(ctx, processor));
+      route.lastProcessorSignature = signature;
+      this.reconnectMasterRouteChain(route);
+      return;
+    }
+
+    processors.forEach((processor, index) => {
+      const node = route.processorNodes[index];
+      if (node) updateProcessorNode(ctx, node, processor);
+    });
+  }
+
   private reconnectRouteChain(route: AudioRoute): void {
     try {
       route.sourceNode.disconnect();
@@ -1163,6 +1418,9 @@ class AudioRoutingManager {
       route.eqFilters.forEach(filter => filter.disconnect());
       route.panNode.disconnect();
       route.analyserNode.disconnect();
+      route.stereoSplitterNode.disconnect();
+      route.leftAnalyserNode.disconnect();
+      route.rightAnalyserNode.disconnect();
       route.processorNodes.forEach(processor => processor.nodes.forEach(node => node.disconnect()));
     } catch {
       // Disconnecting a partially connected graph can throw; rebuild below.
@@ -1189,7 +1447,51 @@ class AudioRoutingManager {
       route.eqFilters[i].connect(route.eqFilters[i + 1]);
     }
     route.eqFilters[route.eqFilters.length - 1].connect(route.panNode);
+    route.panNode.connect(route.stereoSplitterNode);
+    route.stereoSplitterNode.connect(route.leftAnalyserNode, 0);
+    route.stereoSplitterNode.connect(route.rightAnalyserNode, 1);
     route.panNode.connect(route.analyserNode);
+    route.analyserNode.connect(this.getOrCreateMasterRoute(this.audioContext!).inputNode);
+  }
+
+  private reconnectMasterRouteChain(route: MasterAudioRoute): void {
+    try {
+      route.inputNode.disconnect();
+      route.gainNode.disconnect();
+      route.eqFilters.forEach(filter => filter.disconnect());
+      route.analyserNode.disconnect();
+      route.stereoSplitterNode.disconnect();
+      route.leftAnalyserNode.disconnect();
+      route.rightAnalyserNode.disconnect();
+      route.processorNodes.forEach(processor => processor.nodes.forEach(node => node.disconnect()));
+    } catch {
+      // Disconnecting a partially connected graph can throw; rebuild below.
+    }
+
+    let tail: AudioNode = route.inputNode;
+
+    for (const processor of route.processorNodes) {
+      if (processor.inputNode && processor.outputNode) {
+        reconnectCustomProcessorInternal(processor);
+        tail.connect(processor.inputNode);
+        tail = processor.outputNode;
+      } else {
+        for (const node of processor.nodes) {
+          tail.connect(node);
+          tail = node;
+        }
+      }
+    }
+
+    tail.connect(route.eqFilters[0]);
+    for (let index = 0; index < route.eqFilters.length - 1; index += 1) {
+      route.eqFilters[index].connect(route.eqFilters[index + 1]);
+    }
+    route.eqFilters[route.eqFilters.length - 1].connect(route.gainNode);
+    route.gainNode.connect(route.stereoSplitterNode);
+    route.stereoSplitterNode.connect(route.leftAnalyserNode, 0);
+    route.stereoSplitterNode.connect(route.rightAnalyserNode, 1);
+    route.gainNode.connect(route.analyserNode);
     route.analyserNode.connect(this.audioContext!.destination);
   }
 }

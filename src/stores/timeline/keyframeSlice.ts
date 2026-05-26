@@ -1,7 +1,7 @@
 // Keyframe-related actions slice
 
 import type { KeyframeActions, SliceCreator, Keyframe, AnimatableProperty, ClipTransform } from './types';
-import type { TimelineClip, TimelineTrack, ClipMask, ClipCustomNodeParamValue, MaskPathKeyframeValue, TextBoundsPath } from '../../types';
+import type { Effect, TimelineClip, TimelineTrack, ClipMask, ClipCustomNodeParamValue, MaskPathKeyframeValue, TextBoundsPath } from '../../types';
 import { engine } from '../../engine/WebGPUEngine';
 import { parseCameraProperty } from '../../types';
 import { useMediaStore } from '../mediaStore';
@@ -57,6 +57,15 @@ import { calculateSourceTime, getSpeedAtTime, calculateTimelineDuration } from '
 import { dispatchKeyframeRecordingFeedback } from '../../utils/keyframeRecordingFeedback';
 import { clearProcessedAudioAnalysisRefs } from './helpers/audioAnalysisStateHelpers';
 import { hasAudioEffect } from '../../engine/audio/AudioEffectRegistry';
+import { normalizeAudioEqParams } from '../../engine/audio/eq/AudioEqLegacy';
+import {
+  AUDIO_EQ_DEFAULT_BAND_DYNAMICS,
+  AUDIO_EQ_DEFAULT_BAND_SPECTRAL_DYNAMICS,
+} from '../../engine/audio/eq/AudioEqDefaults';
+import {
+  getAudioEffectParamPathValue,
+  mergeAudioEffectParamPatch,
+} from '../../utils/audioEffectParamPath';
 import {
   getHexColorChannel,
   normalizeHexColor,
@@ -112,10 +121,70 @@ interface AudioKeyframeInvalidationTarget {
   property: AnimatableProperty;
 }
 
-function parseEffectKeyframeProperty(property: AnimatableProperty): { effectId: string; paramName: string } | null {
+function parseEffectKeyframeProperty(property: AnimatableProperty): { effectId: string; paramName: string; paramPath: string[] } | null {
   const parts = property.split('.');
-  if (parts.length !== 3 || parts[0] !== 'effect') return null;
-  return { effectId: parts[1], paramName: parts[2] };
+  if (parts.length < 3 || parts[0] !== 'effect') return null;
+  return { effectId: parts[1], paramName: parts.slice(2).join('.'), paramPath: parts.slice(2) };
+}
+
+function mergeLegacyEffectParamPatch(
+  effect: Effect,
+  params: Partial<Effect['params']>,
+): Effect['params'] {
+  if (hasAudioEffect(effect.type)) {
+    return mergeAudioEffectParamPatch(effect.params, params, effect.type) as Effect['params'];
+  }
+
+  return { ...effect.params, ...params } as Effect['params'];
+}
+
+function getDefaultAudioEqNumericPathValue(path: readonly string[]): number | undefined {
+  const [audible, bands, bandId, scope, paramName] = path;
+  if (audible !== 'audible' || bands !== 'bands' || !bandId || !scope || !paramName) {
+    return undefined;
+  }
+
+  if (scope === 'dynamic') {
+    const value = AUDIO_EQ_DEFAULT_BAND_DYNAMICS[paramName as keyof typeof AUDIO_EQ_DEFAULT_BAND_DYNAMICS];
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  }
+
+  if (scope === 'spectralDynamics') {
+    const value = AUDIO_EQ_DEFAULT_BAND_SPECTRAL_DYNAMICS[paramName as keyof typeof AUDIO_EQ_DEFAULT_BAND_SPECTRAL_DYNAMICS];
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  }
+
+  return undefined;
+}
+
+function getLegacyEffectKeyframeBaseValue(
+  effect: Effect,
+  paramName: string,
+): number | undefined {
+  if (!paramName.includes('.')) {
+    const value = effect.params[paramName];
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  }
+
+  const path = paramName.split('.').filter(Boolean);
+  if (path.length === 0) {
+    return undefined;
+  }
+
+  const value = effect.type === 'audio-eq' && path[0] === 'eq'
+    ? getAudioEffectParamPathValue(
+        normalizeAudioEqParams(effect.params) as unknown as Effect['params'],
+        path.slice(1),
+      )
+    : getAudioEffectParamPathValue(effect.params, path);
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  return effect.type === 'audio-eq' && path[0] === 'eq'
+    ? getDefaultAudioEqNumericPathValue(path.slice(1))
+    : undefined;
 }
 
 function keyframePropertyInvalidatesProcessedAudio(
@@ -129,6 +198,9 @@ function keyframePropertyInvalidatesProcessedAudio(
 
   const audioEffect = clip.audioState?.effectStack?.find(effect => effect.id === effectProperty.effectId);
   if (audioEffect && hasAudioEffect(audioEffect.descriptorId)) {
+    if (audioEffect.descriptorId === 'audio-eq' && effectProperty.paramName.startsWith('eq.display.')) {
+      return false;
+    }
     return audioEffect.descriptorId !== 'audio-volume';
   }
 
@@ -1223,24 +1295,44 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
 
     // Clone effects and apply interpolated values
     return clip.effects.map(effect => {
-      const newParams = { ...effect.params };
+      let newParams = { ...effect.params };
+      const paramNames = new Set<string>();
 
-      // Check each numeric parameter for keyframes
       Object.keys(effect.params).forEach(paramName => {
-        if (typeof effect.params[paramName] !== 'number') return;
+        if (typeof effect.params[paramName] === 'number') {
+          paramNames.add(paramName);
+        }
+      });
 
+      effectKeyframes.forEach(keyframe => {
+        const effectProperty = parseEffectKeyframeProperty(keyframe.property);
+        if (effectProperty?.effectId === effect.id) {
+          paramNames.add(effectProperty.paramName);
+        }
+      });
+
+      paramNames.forEach(paramName => {
         const propertyKey = `effect.${effect.id}.${paramName}`;
         const paramKeyframes = effectKeyframes.filter(k => k.property === propertyKey);
-
-        if (paramKeyframes.length > 0) {
-          // Interpolate the value
-          newParams[paramName] = interpolateKeyframes(
-            keyframes,
-            propertyKey as AnimatableProperty,
-            clipLocalTime,
-            effect.params[paramName] as number
-          );
+        if (paramKeyframes.length === 0) {
+          return;
         }
+
+        const baseValue = getLegacyEffectKeyframeBaseValue(effect, paramName);
+        if (baseValue === undefined) {
+          return;
+        }
+
+        const interpolatedValue = interpolateKeyframes(
+          keyframes,
+          propertyKey as AnimatableProperty,
+          clipLocalTime,
+          baseValue,
+        );
+        newParams = mergeLegacyEffectParamPatch(
+          { ...effect, params: newParams },
+          { [paramName]: interpolatedValue },
+        );
       });
 
       return { ...effect, params: newParams };
@@ -1813,10 +1905,9 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
 
       // Handle effect properties (format: effect.{effectId}.{paramName})
       if (property.startsWith('effect.')) {
-        const parts = property.split('.');
-        if (parts.length === 3) {
-          const effectId = parts[1];
-          const paramName = parts[2];
+        const effectProperty = parseEffectKeyframeProperty(property);
+        if (effectProperty) {
+          const { effectId, paramName } = effectProperty;
           const audioEffect = clip.audioState?.effectStack?.find(effect => effect.id === effectId);
           if (audioEffect) {
             updateClipAudioEffectInstance(clipId, effectId, { [paramName]: value });
@@ -2117,10 +2208,9 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
           : c),
       });
       } else if (property.startsWith('effect.')) {
-      const parts = property.split('.');
-      if (parts.length === 3) {
-        const effectId = parts[1];
-        const paramName = parts[2];
+      const effectProperty = parseEffectKeyframeProperty(property);
+      if (effectProperty) {
+        const { effectId, paramName } = effectProperty;
         const audioEffect = clip.audioState?.effectStack?.find(effect => effect.id === effectId);
         if (audioEffect) {
           updateClipAudioEffectInstance(clipId, effectId, { [paramName]: currentValue });

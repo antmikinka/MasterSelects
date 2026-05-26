@@ -34,6 +34,7 @@ function TimelineControlsComponent({
   waveformsEnabled,
   audioDisplayMode,
   audioFocusMode,
+  trackFocusMode,
   toolMode,
   onPlay,
   onPause,
@@ -50,6 +51,7 @@ function TimelineControlsComponent({
   onToggleWaveforms,
   onSetAudioDisplayMode,
   onToggleAudioFocusMode,
+  onSetTrackFocusMode,
   onToggleCutTool,
   onSetDuration,
   onFitToWindow,
@@ -543,11 +545,25 @@ function TimelineControlsComponent({
               </div>
               <div className="view-dropdown-divider" />
               <div
-                className={`view-dropdown-item ${audioFocusMode ? 'active' : ''}`}
+                className={`view-dropdown-item ${trackFocusMode === 'balanced' ? 'active' : ''}`}
+                onClick={() => onSetTrackFocusMode('balanced')}
+              >
+                <span className={`view-check ${trackFocusMode === 'balanced' ? 'checked' : ''}`}>✓</span>
+                <span>Balanced Tracks</span>
+              </div>
+              <div
+                className={`view-dropdown-item ${trackFocusMode === 'audio' ? 'active' : ''}`}
                 onClick={onToggleAudioFocusMode}
               >
                 <span className={`view-check ${audioFocusMode ? 'checked' : ''}`}>✓</span>
                 <span>Audio Focus</span>
+              </div>
+              <div
+                className={`view-dropdown-item ${trackFocusMode === 'video' ? 'active' : ''}`}
+                onClick={() => onSetTrackFocusMode('video')}
+              >
+                <span className={`view-check ${trackFocusMode === 'video' ? 'checked' : ''}`}>✓</span>
+                <span>Video Focus</span>
               </div>
               <div className="view-dropdown-divider" />
               <div

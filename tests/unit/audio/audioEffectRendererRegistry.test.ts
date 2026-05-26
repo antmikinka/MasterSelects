@@ -3,8 +3,10 @@ import {
   AudioEffectRenderer,
   EQ_BAND_PARAMS,
 } from '../../../src/engine/audio/AudioEffectRenderer';
+import { createDefaultAudioEqParams } from '../../../src/engine/audio/eq/AudioEqDefaults';
 import { getAudioEffectParamNames } from '../../../src/engine/audio/AudioEffectRegistry';
-import type { AnimatableProperty, AudioEffectInstance, Effect, Keyframe } from '../../../src/types';
+import { analyzeAudioBufferLoudnessSummary } from '../../../src/services/audio/LoudnessEnvelopeGenerator';
+import type { AnimatableProperty, AudioEffectInstance, AudioEffectParamValue, Effect, Keyframe } from '../../../src/types';
 
 type AudioEffectRendererRegistryTestAccess = AudioEffectRenderer & {
   getRenderableAudioEffects(effects: Effect[]): Effect[];
@@ -89,6 +91,30 @@ function makeMultiChannelBuffer(channels: number[][], sampleRate = 48000): Audio
   } as unknown as AudioBuffer;
 }
 
+function bufferPeak(buffer: AudioBuffer): number {
+  let peak = 0;
+  for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+    const data = buffer.getChannelData(channel);
+    for (const sample of data) {
+      peak = Math.max(peak, Math.abs(sample));
+    }
+  }
+  return peak;
+}
+
+function bufferRms(buffer: AudioBuffer): number {
+  let sumSquares = 0;
+  let totalSamples = 0;
+  for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+    const data = buffer.getChannelData(channel);
+    for (const sample of data) {
+      sumSquares += sample * sample;
+      totalSamples += 1;
+    }
+  }
+  return Math.sqrt(sumSquares / totalSamples);
+}
+
 function installAudioContextMock(): void {
   class AudioContextMock {
     createBuffer(numberOfChannels: number, length: number, sampleRate: number): AudioBuffer {
@@ -106,6 +132,36 @@ function installAudioContextMock(): void {
   }
 
   globalWithOfflineContext.AudioContext = AudioContextMock as unknown as typeof AudioContext;
+}
+
+type AudioParamMock = AudioParam & {
+  setValueAtTime: ReturnType<typeof vi.fn>;
+  linearRampToValueAtTime: ReturnType<typeof vi.fn>;
+  exponentialRampToValueAtTime: ReturnType<typeof vi.fn>;
+};
+
+type BiquadFilterNodeMock = BiquadFilterNode & {
+  frequency: AudioParamMock;
+  Q: AudioParamMock;
+  gain: AudioParamMock;
+  connect: ReturnType<typeof vi.fn>;
+};
+
+function createAudioParamMock(initialValue = 0): AudioParamMock {
+  const param: Partial<AudioParamMock> = { value: initialValue };
+  param.setValueAtTime = vi.fn((value: number) => {
+    param.value = value;
+    return param as AudioParam;
+  });
+  param.linearRampToValueAtTime = vi.fn((value: number) => {
+    param.value = value;
+    return param as AudioParam;
+  });
+  param.exponentialRampToValueAtTime = vi.fn((value: number) => {
+    param.value = value;
+    return param as AudioParam;
+  });
+  return param as AudioParamMock;
 }
 
 describe('AudioEffectRenderer registry migration', () => {
@@ -257,11 +313,27 @@ describe('AudioEffectRenderer registry migration', () => {
       ...defaultNoiseReduction,
       params: { thresholdDb: -58, reductionDb: 18, sensitivity: 1.6, attackMs: 6, releaseMs: 180, mix: 0.7 },
     };
+    const defaultSpectralGate: AudioEffectInstance = {
+      id: 'spectral-gate-1',
+      descriptorId: 'audio-spectral-gate',
+      enabled: true,
+      params: {},
+    };
+    const activeSpectralGate: AudioEffectInstance = {
+      ...defaultSpectralGate,
+      params: { thresholdDb: -54, reductionDb: 24, lowFrequencyHz: 180, highFrequencyHz: 6200, mix: 0.6 },
+    };
     const saturation: AudioEffectInstance = {
       id: 'saturation-1',
       descriptorId: 'audio-saturation',
       enabled: true,
       params: { driveDb: 12, toneHz: 12000, mix: 0.7 },
+    };
+    const normalize: AudioEffectInstance = {
+      id: 'normalize-1',
+      descriptorId: 'audio-normalize',
+      enabled: true,
+      params: {},
     };
     const polarity: AudioEffectInstance = {
       id: 'polarity-1',
@@ -294,7 +366,10 @@ describe('AudioEffectRenderer registry migration', () => {
     expect(access.shouldRenderAudioEffectInstance(deClick, [])).toBe(true);
     expect(access.shouldRenderAudioEffectInstance(defaultNoiseReduction, [])).toBe(false);
     expect(access.shouldRenderAudioEffectInstance(activeNoiseReduction, [])).toBe(true);
+    expect(access.shouldRenderAudioEffectInstance(defaultSpectralGate, [])).toBe(false);
+    expect(access.shouldRenderAudioEffectInstance(activeSpectralGate, [])).toBe(true);
     expect(access.shouldRenderAudioEffectInstance(saturation, [])).toBe(true);
+    expect(access.shouldRenderAudioEffectInstance(normalize, [])).toBe(true);
     expect(access.shouldRenderAudioEffectInstance(polarity, [])).toBe(true);
     expect(access.shouldRenderAudioEffectInstance(monoSum, [])).toBe(true);
     expect(access.shouldRenderAudioEffectInstance(stereoSplit, [])).toBe(true);
@@ -336,6 +411,11 @@ describe('AudioEffectRenderer registry migration', () => {
       type: 'audio-noise-reduction',
       params: { thresholdDb: -58, reductionDb: 18, sensitivity: 1.6, mix: 0.7 },
     });
+    const spectralGate = makeEffect({
+      id: 'spectral-gate-1',
+      type: 'audio-spectral-gate',
+      params: { thresholdDb: -54, reductionDb: 24, mix: 0.6 },
+    });
     const delay = makeEffect({
       id: 'delay-1',
       type: 'audio-delay',
@@ -361,6 +441,11 @@ describe('AudioEffectRenderer registry migration', () => {
       type: 'audio-stereo-split',
       params: { sourceChannel: 1 },
     });
+    const normalize = makeEffect({
+      id: 'normalize-1',
+      type: 'audio-normalize',
+      params: { mode: 'peak', targetPeakDb: -1 },
+    });
     const deEsser = makeEffect({
       id: 'de-esser-1',
       type: 'audio-de-esser',
@@ -383,11 +468,13 @@ describe('AudioEffectRenderer registry migration', () => {
       humNotch,
       deClick,
       noiseReduction,
+      spectralGate,
       stereoSplit,
+      normalize,
       pan,
       expander,
       eq,
-    ])).toEqual([humNotch, deClick, noiseReduction, eq, parametric, deEsser, expander, delay, saturation, polarity, stereoSplit, pan, volume]);
+    ])).toEqual([humNotch, deClick, noiseReduction, spectralGate, eq, parametric, deEsser, expander, delay, saturation, polarity, stereoSplit, normalize, pan, volume]);
   });
 
   it('returns the original buffer when registered effects are at defaults', async () => {
@@ -486,11 +573,23 @@ describe('AudioEffectRenderer registry migration', () => {
       enabled: true,
       params: { thresholdDb: -58, reductionDb: 18, sensitivity: 1.6, attackMs: 6, releaseMs: 180, mix: 0.7 },
     };
+    const spectralGateInstance: AudioEffectInstance = {
+      id: 'spectral-gate-instance',
+      descriptorId: 'audio-spectral-gate',
+      enabled: true,
+      params: { thresholdDb: -54, reductionDb: 24, lowFrequencyHz: 180, highFrequencyHz: 6200, mix: 0.6 },
+    };
     const saturationInstance: AudioEffectInstance = {
       id: 'saturation-instance',
       descriptorId: 'audio-saturation',
       enabled: true,
       params: { driveDb: 9, mix: 0.5 },
+    };
+    const normalizeInstance: AudioEffectInstance = {
+      id: 'normalize-instance',
+      descriptorId: 'audio-normalize',
+      enabled: true,
+      params: { mode: 'rms', targetRmsDb: -18, allowBoost: true },
     };
     const monoInstance: AudioEffectInstance = {
       id: 'mono-instance',
@@ -569,12 +668,26 @@ describe('AudioEffectRenderer registry migration', () => {
       enabled: true,
       params: { thresholdDb: -58, reductionDb: 18, sensitivity: 1.6, attackMs: 6, releaseMs: 180, mix: 0.7 },
     });
+    expect(access.audioEffectInstanceToLegacyEffect(spectralGateInstance)).toEqual({
+      id: 'spectral-gate-instance',
+      name: 'Spectral Gate',
+      type: 'audio-spectral-gate',
+      enabled: true,
+      params: { thresholdDb: -54, reductionDb: 24, lowFrequencyHz: 180, highFrequencyHz: 6200, mix: 0.6 },
+    });
     expect(access.audioEffectInstanceToLegacyEffect(saturationInstance)).toEqual({
       id: 'saturation-instance',
       name: 'Saturation',
       type: 'audio-saturation',
       enabled: true,
       params: { driveDb: 9, mix: 0.5 },
+    });
+    expect(access.audioEffectInstanceToLegacyEffect(normalizeInstance)).toEqual({
+      id: 'normalize-instance',
+      name: 'Normalize',
+      type: 'audio-normalize',
+      enabled: true,
+      params: { mode: 'rms', targetRmsDb: -18, allowBoost: true },
     });
     expect(access.audioEffectInstanceToLegacyEffect(monoInstance)).toEqual({
       id: 'mono-instance',
@@ -712,6 +825,30 @@ describe('AudioEffectRenderer registry migration', () => {
     expect(denoised.getChannelData(0)[2]).toBeGreaterThan(0.75);
     expect(offlineContextConstructor).not.toHaveBeenCalled();
 
+    const spectralGated = await renderer.renderEffectInstances(
+      makeMutableBuffer([0.01, 0.01, 0.8, 0.8], 1000),
+      [{
+        id: 'spectral-gate-1',
+        descriptorId: 'audio-spectral-gate',
+        enabled: true,
+        params: {
+          thresholdDb: -20,
+          reductionDb: 48,
+          lowFrequencyHz: 80,
+          highFrequencyHz: 400,
+          attackMs: 0.001,
+          releaseMs: 0.001,
+          mix: 1,
+        },
+      }],
+      [],
+    );
+
+    expect(Math.abs(spectralGated.getChannelData(0)[0])).toBeLessThan(0.004);
+    expect(Math.abs(spectralGated.getChannelData(0)[1])).toBeLessThan(0.004);
+    expect(spectralGated.getChannelData(0)[2]).toBeGreaterThan(0.45);
+    expect(offlineContextConstructor).not.toHaveBeenCalled();
+
     const stereo = makeMultiChannelBuffer([
       [0.25, -0.5],
       [0.75, 0.25],
@@ -751,6 +888,33 @@ describe('AudioEffectRenderer registry migration', () => {
     }], []);
     expect(Array.from(splitRight.getChannelData(0))).toEqual([0.75, 0.25]);
     expect(Array.from(splitRight.getChannelData(1))).toEqual([0.75, 0.25]);
+
+    const peakNormalized = await renderer.renderEffectInstances(makeMutableBuffer([0.1, -0.2], 1000), [{
+      id: 'normalize-peak',
+      descriptorId: 'audio-normalize',
+      enabled: true,
+      params: { mode: 'peak', targetPeakDb: -6, truePeakCeilingDb: 0, maxGainDb: 24, allowBoost: true },
+    }], []);
+    expect(bufferPeak(peakNormalized)).toBeCloseTo(Math.pow(10, -6 / 20), 3);
+
+    const rmsNormalized = await renderer.renderEffectInstances(makeMutableBuffer([0.1, -0.1, 0.1, -0.1], 1000), [{
+      id: 'normalize-rms',
+      descriptorId: 'audio-normalize',
+      enabled: true,
+      params: { mode: 'rms', targetRmsDb: -12, truePeakCeilingDb: 0, maxGainDb: 24, allowBoost: true },
+    }], []);
+    expect(bufferRms(rmsNormalized)).toBeCloseTo(Math.pow(10, -12 / 20), 3);
+
+    const sine = Array.from({ length: 48_000 }, (_, index) =>
+      0.01 * Math.sin((2 * Math.PI * 440 * index) / 48_000)
+    );
+    const lufsNormalized = await renderer.renderEffectInstances(makeMutableBuffer(sine), [{
+      id: 'normalize-lufs',
+      descriptorId: 'audio-normalize',
+      enabled: true,
+      params: { mode: 'lufs', targetLufs: -23, truePeakCeilingDb: 0, maxGainDb: 24, allowBoost: true },
+    }], []);
+    expect(analyzeAudioBufferLoudnessSummary(lufsNormalized).integratedLufs).toBeCloseTo(-23, 1);
     expect(offlineContextConstructor).not.toHaveBeenCalled();
   });
 
@@ -789,6 +953,72 @@ describe('AudioEffectRenderer registry migration', () => {
     expect(delayed.getChannelData(0)[0]).toBeCloseTo(0, 3);
     expect(delayed.getChannelData(0)[1]).toBeGreaterThan(0.95);
     expect(offlineContextConstructor).not.toHaveBeenCalled();
+  });
+
+  it('routes keyframed graphical EQ through an automated offline filter chain', async () => {
+    const buffer = makeMutableBuffer([0, 0, 0, 0], 4);
+    const createdFilters: BiquadFilterNodeMock[] = [];
+    const sourceNode = {
+      buffer: null as AudioBuffer | null,
+      connect: vi.fn(),
+      start: vi.fn(),
+    };
+    offlineContextConstructor = vi.fn(function OfflineAudioContextMock() {
+      return {
+        destination: {},
+        createBufferSource: vi.fn(() => sourceNode),
+        createBiquadFilter: vi.fn(() => {
+        const filter = {
+          type: 'peaking' as BiquadFilterType,
+          frequency: createAudioParamMock(),
+          Q: createAudioParamMock(),
+          gain: createAudioParamMock(),
+          connect: vi.fn(),
+        } as BiquadFilterNodeMock;
+        createdFilters.push(filter);
+        return filter;
+      }),
+        startRendering: vi.fn(async () => buffer),
+      };
+    });
+    globalWithOfflineContext.OfflineAudioContext =
+      offlineContextConstructor as unknown as typeof OfflineAudioContext;
+
+    const eqParams = createDefaultAudioEqParams();
+    eqParams.audible.bands = eqParams.audible.bands.map(band => ({
+      ...band,
+      enabled: band.id === 'band1k',
+      gainDb: 0,
+    }));
+
+    const result = await renderer.renderEffectInstances(
+      buffer,
+      [{
+        id: 'eq-animated',
+        descriptorId: 'audio-eq',
+        enabled: true,
+        params: { eq: eqParams as unknown as AudioEffectParamValue },
+      }],
+      [
+        makeKeyframe('eq-animated', 'eq.audible.bands.band1k.frequencyHz', 1000, 0),
+        makeKeyframe('eq-animated', 'eq.audible.bands.band1k.frequencyHz', 2000, 1),
+        makeKeyframe('eq-animated', 'eq.audible.bands.band1k.gainDb', 0, 0),
+        makeKeyframe('eq-animated', 'eq.audible.bands.band1k.gainDb', 6, 1),
+        makeKeyframe('eq-animated', 'eq.audible.bands.band1k.q', 1.4, 0),
+        makeKeyframe('eq-animated', 'eq.audible.bands.band1k.q', 3, 1),
+      ],
+      1,
+    );
+
+    expect(result).toBe(buffer);
+    expect(offlineContextConstructor).toHaveBeenCalledWith(1, 4, 4);
+    expect(createdFilters).toHaveLength(1);
+    expect(createdFilters[0].frequency.setValueAtTime).toHaveBeenCalledWith(1000, 0);
+    expect(createdFilters[0].frequency.linearRampToValueAtTime).toHaveBeenCalledWith(2000, 1);
+    expect(createdFilters[0].gain.setValueAtTime).toHaveBeenCalledWith(0, 0);
+    expect(createdFilters[0].gain.linearRampToValueAtTime).toHaveBeenCalledWith(6, 1);
+    expect(createdFilters[0].Q.setValueAtTime).toHaveBeenCalledWith(1.4, 0);
+    expect(createdFilters[0].Q.linearRampToValueAtTime).toHaveBeenCalledWith(3, 1);
   });
 
   it('returns the original buffer for unknown effects even with params and keyframes', async () => {

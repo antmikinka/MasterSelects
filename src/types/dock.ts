@@ -104,10 +104,12 @@ export interface HoveredDockTabTarget {
 
 // Drop target for drag operations
 export type DropPosition = 'center' | 'left' | 'right' | 'top' | 'bottom';
+export type DropScope = 'pane' | 'root-edge';
 
 export interface DropTarget {
   groupId: string;
   position: DropPosition;
+  scope?: DropScope; // Omitted/`pane` targets an existing tab group; `root-edge` wraps the full dock root
   tabInsertIndex?: number; // When position is 'center', which slot to insert at
 }
 

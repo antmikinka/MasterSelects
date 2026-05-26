@@ -1,6 +1,7 @@
 // Timeline store utility functions
 
 import type { EffectType } from '../../types';
+import type { AudioEffectParamValue } from '../../types/audio';
 import { getDefaultParams as getRegistryDefaultParams, hasEffect } from '../../effects';
 import {
   getAudioEffectDefaultParams,
@@ -24,7 +25,7 @@ export function seekVideo(video: HTMLVideoElement, time: number): Promise<void> 
 
 // Helper function to get default effect parameters
 // Now uses the modular effect registry, with fallback for audio effects
-export function getDefaultEffectParams(type: string | EffectType): Record<string, number | boolean | string> {
+export function getDefaultEffectParams(type: string | EffectType): Record<string, AudioEffectParamValue> {
   // Check if effect exists in the new registry
   if (hasEffect(type)) {
     return getRegistryDefaultParams(type);

@@ -154,6 +154,7 @@ export class AudioTrackSyncManager {
         eqGains: routeSettings.eqGains,
         pan: routeSettings.pan,
         processors: routeSettings.processors,
+        masterRoute: routeSettings.master,
         meterTrackId: track.id,
       }, ctx, state);
     }
@@ -215,6 +216,7 @@ export class AudioTrackSyncManager {
             eqGains: routeSettings.eqGains,
             pan: routeSettings.pan,
             processors: routeSettings.processors,
+            masterRoute: routeSettings.master,
           }
         );
         const scrubMeter = proxyFrameCache.getScrubMeterSnapshot(ctx.now);
@@ -256,6 +258,7 @@ export class AudioTrackSyncManager {
               eqGains: routeSettings.eqGains,
               pan: routeSettings.pan,
               processors: routeSettings.processors,
+              masterRoute: routeSettings.master,
               meterTrackId: audioSettingsTrack.id,
             }, ctx, state);
           } else if (!audioProxy.paused) {
@@ -306,6 +309,7 @@ export class AudioTrackSyncManager {
         eqGains: routeSettings.eqGains,
         pan: routeSettings.pan,
         processors: routeSettings.processors,
+        masterRoute: routeSettings.master,
         meterTrackId: track?.id,
       }, ctx, state);
     }

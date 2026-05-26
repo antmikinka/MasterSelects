@@ -12,6 +12,7 @@
  */
 
 import { Logger } from '../../services/logger';
+import { analyzeAudioBufferLoudnessSummary } from '../../services/audio/LoudnessEnvelopeGenerator';
 import type { AudioEffectInstance, Keyframe, Effect, EffectType, AnimatableProperty } from '../../types';
 import { normalizeEasingType } from '../../utils/easing';
 import {
@@ -21,6 +22,22 @@ import {
   type AudioEffectId,
   type AudioEffectParamValue,
 } from './AudioEffectRegistry';
+import { normalizeAudioEqParams } from './eq/AudioEqLegacy';
+import { isAudioEqAudibleStateDefault } from './eq/AudioEqIdentity';
+import {
+  processAudioEqChannels,
+} from './eq/AudioEqDynamic';
+import { processAudioEqCharacterChannels } from './eq/AudioEqCharacter';
+import {
+  hasAudioEqSpectralDynamicsBands,
+  processAudioEqSpectralDynamicsChannels,
+} from './eq/AudioEqSpectralDynamics';
+import {
+  hasAudioEqLinearPhaseMode,
+  processAudioEqLinearPhaseChannels,
+} from './eq/AudioEqLinearPhase';
+import type { AudioEqBand, AudioEqBandType } from './eq/AudioEqTypes';
+import { createSpectralGateState, processSpectralGateBlock } from './spectralGateProcessor';
 
 const log = Logger.create('AudioEffectRenderer');
 
@@ -33,12 +50,14 @@ export const EQ_BAND_PARAMS = getAudioEffectParamNames('audio-eq');
 const AUDIO_EQ_EFFECT_ID = 'audio-eq' satisfies AudioEffectId;
 const AUDIO_VOLUME_EFFECT_ID = 'audio-volume' satisfies AudioEffectId;
 const AUDIO_PAN_EFFECT_ID = 'audio-pan' satisfies AudioEffectId;
+const AUDIO_NORMALIZE_EFFECT_ID = 'audio-normalize' satisfies AudioEffectId;
 const AUDIO_PARAMETRIC_EQ_EFFECT_ID = 'audio-parametric-eq' satisfies AudioEffectId;
 const AUDIO_HIGH_PASS_EFFECT_ID = 'audio-high-pass' satisfies AudioEffectId;
 const AUDIO_LOW_PASS_EFFECT_ID = 'audio-low-pass' satisfies AudioEffectId;
 const AUDIO_HUM_NOTCH_EFFECT_ID = 'audio-hum-notch' satisfies AudioEffectId;
 const AUDIO_DE_CLICK_EFFECT_ID = 'audio-de-click' satisfies AudioEffectId;
 const AUDIO_NOISE_REDUCTION_EFFECT_ID = 'audio-noise-reduction' satisfies AudioEffectId;
+const AUDIO_SPECTRAL_GATE_EFFECT_ID = 'audio-spectral-gate' satisfies AudioEffectId;
 const AUDIO_COMPRESSOR_EFFECT_ID = 'audio-compressor' satisfies AudioEffectId;
 const AUDIO_DE_ESSER_EFFECT_ID = 'audio-de-esser' satisfies AudioEffectId;
 const AUDIO_LIMITER_EFFECT_ID = 'audio-limiter' satisfies AudioEffectId;
@@ -58,6 +77,7 @@ const LEGACY_AUDIO_EFFECT_RENDER_ORDER = [
   AUDIO_HUM_NOTCH_EFFECT_ID,
   AUDIO_DE_CLICK_EFFECT_ID,
   AUDIO_NOISE_REDUCTION_EFFECT_ID,
+  AUDIO_SPECTRAL_GATE_EFFECT_ID,
   AUDIO_EQ_EFFECT_ID,
   AUDIO_PARAMETRIC_EQ_EFFECT_ID,
   AUDIO_DE_ESSER_EFFECT_ID,
@@ -71,13 +91,38 @@ const LEGACY_AUDIO_EFFECT_RENDER_ORDER = [
   AUDIO_MONO_SUM_EFFECT_ID,
   AUDIO_CHANNEL_SWAP_EFFECT_ID,
   AUDIO_STEREO_SPLIT_EFFECT_ID,
+  AUDIO_NORMALIZE_EFFECT_ID,
   AUDIO_LIMITER_EFFECT_ID,
   AUDIO_PAN_EFFECT_ID,
   AUDIO_VOLUME_EFFECT_ID,
 ] as const satisfies readonly AudioEffectId[];
 
 const DEFAULT_PARAM_EPSILON = 0.001;
-const EQ_PARAM_EPSILON = 0.01;
+function getBiquadTypeForAudioEqBand(band: AudioEqBand): BiquadFilterType {
+  const bandType: AudioEqBandType = band.type;
+  switch (bandType) {
+    case 'bell':
+      return 'peaking';
+    case 'low-shelf':
+      return 'lowshelf';
+    case 'high-shelf':
+      return 'highshelf';
+    case 'low-cut':
+      return 'highpass';
+    case 'high-cut':
+      return 'lowpass';
+    case 'notch':
+      return 'notch';
+    case 'band-pass':
+      return 'bandpass';
+    case 'all-pass':
+      return 'allpass';
+    case 'tilt-shelf':
+      return band.gainDb >= 0 ? 'highshelf' : 'lowshelf';
+    default:
+      return 'peaking';
+  }
+}
 
 type RenderableAudioEffectInstance = AudioEffectInstance & {
   bypassed?: boolean;
@@ -94,6 +139,11 @@ function hasRenderableAudioEffect(effect: AudioEffectInstance & { bypassed?: boo
 function dbToLinearGain(db: number): number {
   if (!Number.isFinite(db)) return 1;
   return Math.pow(10, db / 20);
+}
+
+function linearToDb(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return -Infinity;
+  return 20 * Math.log10(value);
 }
 
 function clampPan(value: number): number {
@@ -192,6 +242,16 @@ export class AudioEffectRenderer {
     };
 
     for (const effect of effectsToApply) {
+      if (effect.descriptorId === AUDIO_EQ_EFFECT_ID) {
+        if (this.hasEffectKeyframes(keyframes, effect.id)) {
+          pendingOfflineEffects.push(effect);
+        } else {
+          await flushOfflineEffects();
+          workingBuffer = this.applySampleAccurateEQ(workingBuffer, effect);
+        }
+        continue;
+      }
+
       if (this.isPureSampleEffect(effect.descriptorId)) {
         await flushOfflineEffects();
         workingBuffer = this.renderPureSampleEffect(workingBuffer, effect, keyframes);
@@ -286,7 +346,7 @@ export class AudioEffectRenderer {
     }
 
     if (descriptor.id === AUDIO_EQ_EFFECT_ID) {
-      return this.hasNonDefaultRegistryParams(descriptor.id, effect.params, EQ_PARAM_EPSILON);
+      return this.hasNonDefaultEQ(effect as unknown as Effect);
     }
 
     if (descriptor.defaultAudible === true) {
@@ -374,9 +434,11 @@ export class AudioEffectRenderer {
       effectId === AUDIO_SATURATION_EFFECT_ID ||
       effectId === AUDIO_DE_CLICK_EFFECT_ID ||
       effectId === AUDIO_NOISE_REDUCTION_EFFECT_ID ||
+      effectId === AUDIO_SPECTRAL_GATE_EFFECT_ID ||
       effectId === AUDIO_POLARITY_INVERT_EFFECT_ID ||
       effectId === AUDIO_MONO_SUM_EFFECT_ID ||
       effectId === AUDIO_CHANNEL_SWAP_EFFECT_ID ||
+      effectId === AUDIO_NORMALIZE_EFFECT_ID ||
       effectId === AUDIO_STEREO_SPLIT_EFFECT_ID;
   }
 
@@ -402,6 +464,8 @@ export class AudioEffectRenderer {
         return this.applyDeClick(buffer, effect, keyframes);
       case AUDIO_NOISE_REDUCTION_EFFECT_ID:
         return this.applyNoiseReduction(buffer, effect, keyframes);
+      case AUDIO_SPECTRAL_GATE_EFFECT_ID:
+        return this.applySpectralGate(buffer, effect, keyframes);
       case AUDIO_POLARITY_INVERT_EFFECT_ID:
         return this.applyPolarityInvert(buffer, effect);
       case AUDIO_MONO_SUM_EFFECT_ID:
@@ -410,6 +474,8 @@ export class AudioEffectRenderer {
         return this.applyChannelSwap(buffer);
       case AUDIO_STEREO_SPLIT_EFFECT_ID:
         return this.applyStereoSplit(buffer, effect);
+      case AUDIO_NORMALIZE_EFFECT_ID:
+        return this.applyNormalize(buffer, effect);
       default:
         return buffer;
     }
@@ -639,33 +705,43 @@ export class AudioEffectRenderer {
     keyframes: Keyframe[],
     duration: number
   ): AudioNode {
-    const filters: BiquadFilterNode[] = [];
+    const eq = normalizeAudioEqParams(eqEffect.params);
+    const activeBands = eq.audible.bands.filter(band => band.enabled !== false);
+    if (activeBands.length === 0) {
+      return inputNode;
+    }
 
-    // Create filter for each band
-    EQ_FREQUENCIES.forEach((freq, index) => {
+    const filters = activeBands.map((band) => {
       const filter = context.createBiquadFilter();
-      filter.type = 'peaking';
-      filter.frequency.value = freq;
-      filter.Q.value = 1.4; // Standard Q for 10-band EQ
+      filter.type = getBiquadTypeForAudioEqBand(band);
+      this.automateParamByProperties(
+        filter.frequency,
+        [`effect.${eqEffect.id}.eq.audible.bands.${band.id}.frequencyHz`],
+        band.frequencyHz,
+        keyframes,
+        duration,
+        value => Math.max(20, Math.min(22000, value)),
+      );
+      this.automateParamByProperties(
+        filter.Q,
+        [`effect.${eqEffect.id}.eq.audible.bands.${band.id}.q`],
+        band.q,
+        keyframes,
+        duration,
+        value => Math.max(0.025, Math.min(100, value)),
+      );
+      this.automateParamByProperties(
+        filter.gain,
+        [
+          `effect.${eqEffect.id}.eq.audible.bands.${band.id}.gainDb`,
+          `effect.${eqEffect.id}.${band.id}`,
+        ],
+        band.gainDb,
+        keyframes,
+        duration,
+      );
 
-      // Get default gain from effect params
-      const paramName = EQ_BAND_PARAMS[index];
-      const defaultGain = (eqEffect.params?.[paramName] as number) ??
-        this.getNumericEffectParamDefault(AUDIO_EQ_EFFECT_ID, paramName, 0);
-
-      // Get keyframes for this band
-      const property = `effect.${eqEffect.id}.${paramName}` as AnimatableProperty;
-      const bandKeyframes = keyframes.filter(k => k.property === property);
-
-      if (bandKeyframes.length > 0) {
-        // Automate the gain parameter
-        this.automateParam(filter.gain, bandKeyframes, defaultGain, duration);
-      } else {
-        // Set constant value
-        filter.gain.value = defaultGain;
-      }
-
-      filters.push(filter);
+      return filter;
     });
 
     // Connect filters in series
@@ -676,6 +752,34 @@ export class AudioEffectRenderer {
 
     // Return last filter as output
     return filters[filters.length - 1];
+  }
+
+  private applySampleAccurateEQ(
+    buffer: AudioBuffer,
+    eqEffect: RenderableAudioEffectInstance,
+  ): AudioBuffer {
+    const inputChannels = Array.from({ length: buffer.numberOfChannels }, (_, channel) => buffer.getChannelData(channel));
+    const eqResult = hasAudioEqLinearPhaseMode(eqEffect.params)
+      ? processAudioEqLinearPhaseChannels(inputChannels, eqEffect.params, {
+          sampleRate: buffer.sampleRate,
+        })
+      : processAudioEqChannels(
+          hasAudioEqSpectralDynamicsBands(eqEffect.params)
+            ? processAudioEqSpectralDynamicsChannels(inputChannels, eqEffect.params, {
+                sampleRate: buffer.sampleRate,
+              }).channels
+            : inputChannels,
+          eqEffect.params,
+          { sampleRate: buffer.sampleRate },
+        );
+    const characterResult = processAudioEqCharacterChannels(eqResult.channels, eqEffect.params, {
+      sampleRate: buffer.sampleRate,
+    });
+    const output = this.createMutableAudioBufferLike(buffer);
+    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+      output.getChannelData(channel).set(characterResult.channels[channel] ?? inputChannels[channel]);
+    }
+    return output;
   }
 
   /**
@@ -924,6 +1028,24 @@ export class AudioEffectRenderer {
     return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
   }
 
+  private getBooleanEffectParam(
+    effect: RenderableAudioEffectInstance,
+    paramName: string,
+    fallback: boolean,
+  ): boolean {
+    const value = effect.params?.[paramName];
+    return typeof value === 'boolean' ? value : fallback;
+  }
+
+  private getStringEffectParam(
+    effect: RenderableAudioEffectInstance,
+    paramName: string,
+    fallback: string,
+  ): string {
+    const value = effect.params?.[paramName];
+    return typeof value === 'string' ? value : fallback;
+  }
+
   private createNumericSampleParamReader(
     effect: RenderableAudioEffectInstance,
     paramName: string,
@@ -974,9 +1096,29 @@ export class AudioEffectRenderer {
     }
   }
 
+  private automateParamByProperties(
+    param: AudioParam,
+    properties: readonly string[],
+    defaultValue: number,
+    keyframes: Keyframe[],
+    duration: number,
+    transformValue: (value: number) => number = value => value,
+  ): void {
+    const propertySet = new Set(properties);
+    const paramKeyframes = keyframes
+      .filter(k => propertySet.has(k.property))
+      .map(k => ({ ...k, value: transformValue(k.value) }));
+
+    if (paramKeyframes.length > 0) {
+      this.automateParam(param, paramKeyframes, defaultValue, duration);
+    } else {
+      param.value = defaultValue;
+    }
+  }
+
   private hasNonDefaultRegistryParams(
     effectId: AudioEffectId,
-    params: Record<string, number | boolean | string> | undefined,
+    params: Record<string, AudioEffectParamValue> | undefined,
     epsilon = DEFAULT_PARAM_EPSILON,
   ): boolean {
     const descriptor = getAudioEffect(effectId);
@@ -1011,15 +1153,7 @@ export class AudioEffectRenderer {
    * Check if EQ has non-default values
    */
   private hasNonDefaultEQ(eqEffect: Effect): boolean {
-    const defaults = getAudioEffectDefaultParams(AUDIO_EQ_EFFECT_ID);
-
-    return EQ_BAND_PARAMS.some(param => {
-      const value = eqEffect.params?.[param] as number;
-      const defaultValue = defaults[param];
-      return value !== undefined &&
-        typeof defaultValue === 'number' &&
-        Math.abs(value - defaultValue) > 0.01;
-    });
+    return !isAudioEqAudibleStateDefault(eqEffect.params);
   }
 
   private createMutableAudioBufferLike(buffer: AudioBuffer): AudioBuffer {
@@ -1069,6 +1203,97 @@ export class AudioEffectRenderer {
     }
 
     return output;
+  }
+
+  private applyNormalize(
+    buffer: AudioBuffer,
+    effect: RenderableAudioEffectInstance,
+  ): AudioBuffer {
+    const mode = this.getStringEffectParam(effect, 'mode', 'peak').toLowerCase();
+    const allowBoost = this.getBooleanEffectParam(effect, 'allowBoost', true);
+    const maxGainDb = clamp(this.getNumericEffectParam(effect, 'maxGainDb', 24), 0, 60);
+    const ceilingDb = clamp(this.getNumericEffectParam(effect, 'truePeakCeilingDb', -1), -60, 0);
+
+    let currentDb = -Infinity;
+    let targetDb = -Infinity;
+
+    if (mode === 'lufs') {
+      const summary = analyzeAudioBufferLoudnessSummary(buffer);
+      currentDb = typeof summary.integratedLufs === 'number' ? summary.integratedLufs : -Infinity;
+      targetDb = clamp(this.getNumericEffectParam(effect, 'targetLufs', -23), -70, 0);
+    } else if (mode === 'rms') {
+      currentDb = linearToDb(this.getBufferRms(buffer));
+      targetDb = clamp(this.getNumericEffectParam(effect, 'targetRmsDb', -18), -90, 0);
+    } else {
+      currentDb = linearToDb(this.getBufferPeak(buffer));
+      targetDb = clamp(this.getNumericEffectParam(effect, 'targetPeakDb', -1), -60, 0);
+    }
+
+    if (!Number.isFinite(currentDb) || currentDb <= -120 || !Number.isFinite(targetDb)) {
+      return buffer;
+    }
+
+    const upperGainDb = allowBoost ? maxGainDb : 0;
+    const gainDb = clamp(targetDb - currentDb, -maxGainDb, upperGainDb);
+    if (Math.abs(gainDb) <= 0.05) {
+      return buffer;
+    }
+
+    const output = this.createMutableAudioBufferLike(buffer);
+    const gain = dbToLinearGain(gainDb);
+    let outputPeak = 0;
+
+    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+      const input = buffer.getChannelData(channel);
+      const target = output.getChannelData(channel);
+      for (let index = 0; index < buffer.length; index += 1) {
+        const sample = (input[index] ?? 0) * gain;
+        target[index] = sample;
+        outputPeak = Math.max(outputPeak, Math.abs(sample));
+      }
+    }
+
+    const ceiling = dbToLinearGain(ceilingDb);
+    if (outputPeak > ceiling) {
+      this.scaleBuffer(output, ceiling / outputPeak);
+    }
+
+    return output;
+  }
+
+  private getBufferPeak(buffer: AudioBuffer): number {
+    let peak = 0;
+    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+      const data = buffer.getChannelData(channel);
+      for (let index = 0; index < data.length; index += 1) {
+        peak = Math.max(peak, Math.abs(data[index] ?? 0));
+      }
+    }
+    return peak;
+  }
+
+  private getBufferRms(buffer: AudioBuffer): number {
+    let sumSquares = 0;
+    let totalSamples = 0;
+    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+      const data = buffer.getChannelData(channel);
+      for (let index = 0; index < data.length; index += 1) {
+        const sample = data[index] ?? 0;
+        sumSquares += sample * sample;
+        totalSamples += 1;
+      }
+    }
+    return totalSamples > 0 ? Math.sqrt(sumSquares / totalSamples) : 0;
+  }
+
+  private scaleBuffer(buffer: AudioBuffer, gain: number): void {
+    if (!Number.isFinite(gain) || Math.abs(gain - 1) <= 0.000001) return;
+    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+      const data = buffer.getChannelData(channel);
+      for (let index = 0; index < data.length; index += 1) {
+        data[index] *= gain;
+      }
+    }
   }
 
   private applyNoiseGate(
@@ -1542,6 +1767,89 @@ export class AudioEffectRenderer {
       }
     }
 
+    return output;
+  }
+
+  private applySpectralGate(
+    buffer: AudioBuffer,
+    effect: RenderableAudioEffectInstance,
+    keyframes: Keyframe[],
+  ): AudioBuffer {
+    const staticReductionDb = this.getNumericEffectParam(effect, 'reductionDb', 0);
+    const staticMix = clamp(this.getNumericEffectParam(effect, 'mix', 1), 0, 1);
+    if (
+      (staticReductionDb <= 0.0001 || staticMix <= 0.0001) &&
+      !this.hasEffectParamKeyframes(keyframes, effect.id, 'reductionDb') &&
+      !this.hasEffectParamKeyframes(keyframes, effect.id, 'mix')
+    ) {
+      return buffer;
+    }
+
+    const readThresholdDb = this.createNumericSampleParamReader(
+      effect,
+      'thresholdDb',
+      -60,
+      keyframes,
+      value => clamp(value, -100, 0),
+    );
+    const readReductionDb = this.createNumericSampleParamReader(
+      effect,
+      'reductionDb',
+      0,
+      keyframes,
+      value => clamp(value, 0, 80),
+    );
+    const readLowFrequencyHz = this.createNumericSampleParamReader(
+      effect,
+      'lowFrequencyHz',
+      250,
+      keyframes,
+      value => clamp(value, 20, buffer.sampleRate / 2 - 20),
+    );
+    const readHighFrequencyHz = this.createNumericSampleParamReader(
+      effect,
+      'highFrequencyHz',
+      5000,
+      keyframes,
+      value => clamp(value, 40, buffer.sampleRate / 2 - 1),
+    );
+    const readAttackMs = this.createNumericSampleParamReader(
+      effect,
+      'attackMs',
+      8,
+      keyframes,
+      value => Math.max(0.001, value),
+    );
+    const readReleaseMs = this.createNumericSampleParamReader(
+      effect,
+      'releaseMs',
+      180,
+      keyframes,
+      value => Math.max(0.001, value),
+    );
+    const readMix = this.createNumericSampleParamReader(
+      effect,
+      'mix',
+      1,
+      keyframes,
+      value => clamp(value, 0, 1),
+    );
+    const output = this.createMutableAudioBufferLike(buffer);
+
+    processSpectralGateBlock(
+      buffer,
+      output,
+      time => ({
+        thresholdDb: readThresholdDb(time),
+        reductionDb: readReductionDb(time),
+        lowFrequencyHz: readLowFrequencyHz(time),
+        highFrequencyHz: readHighFrequencyHz(time),
+        attackMs: readAttackMs(time),
+        releaseMs: readReleaseMs(time),
+        mix: readMix(time),
+      }),
+      createSpectralGateState(),
+    );
     return output;
   }
 

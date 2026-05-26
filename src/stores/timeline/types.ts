@@ -86,6 +86,7 @@ export type TimelineToolMode = 'select' | 'cut';
 // Timeline audio display mode. Detailed remains waveform-backed today; spectral
 // reserves the inline image lane used by spectrogram tile artifacts.
 export type TimelineAudioDisplayMode = 'compact' | 'detailed' | 'spectral';
+export type TimelineTrackFocusMode = 'balanced' | 'audio' | 'video';
 
 export interface TimelineAudioRegionSelection {
   clipId: string;
@@ -235,6 +236,7 @@ export interface TimelineState {
   waveformsEnabled: boolean;
   audioDisplayMode: TimelineAudioDisplayMode;
   audioFocusMode: boolean;
+  trackFocusMode: TimelineTrackFocusMode;
   audioRegionSelection: TimelineAudioRegionSelection | null;
   audioSpectralRegionSelection: TimelineSpectralRegionSelection | null;
   audioRegionClipboard: TimelineAudioRegionClipboard | null;
@@ -321,7 +323,7 @@ export interface TrackActions {
   updateMasterAudioEffectInstance: (effectId: string, params: Partial<AudioEffectInstance['params']>) => void;
   setMasterAudioEffectInstanceEnabled: (effectId: string, enabled: boolean) => void;
   reorderMasterAudioEffectInstance: (effectId: string, newIndex: number) => void;
-  updateRuntimeAudioMeter: (trackId: string, snapshot: AudioMeterSnapshot) => void;
+  updateRuntimeAudioMeter: (trackId: string, snapshot: AudioMeterSnapshot, masterSnapshot?: AudioMeterSnapshot) => void;
   clearStaleRuntimeAudioMeters: (maxAgeMs?: number, now?: number) => void;
   setTrackLocked: (id: string, locked: boolean) => void;
   setTrackHeight: (id: string, height: number) => void;
@@ -531,6 +533,7 @@ export interface PlaybackActions {
   setAudioDisplayMode: (mode: TimelineAudioDisplayMode) => void;
   setAudioFocusMode: (enabled: boolean) => void;
   toggleAudioFocusMode: () => void;
+  setTrackFocusMode: (mode: TimelineTrackFocusMode) => void;
   setAudioRegionSelection: (selection: TimelineAudioRegionSelection | null) => void;
   clearAudioRegionSelection: () => void;
   setAudioSpectralRegionSelection: (selection: TimelineSpectralRegionSelection | null) => void;

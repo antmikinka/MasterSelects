@@ -11,6 +11,7 @@ import type { ColorCorrectionState, RuntimeColorGrade } from './colorCorrection'
 import type { MotionLayerDefinition, MotionProperty } from './motionDesign';
 import type { ClipNodeGraph } from './nodeGraph';
 import type {
+  AudioEffectParamValue,
   ClipAudioAnalysisJobState,
   ClipAudioState,
   MasterAudioState,
@@ -394,7 +395,7 @@ export interface Effect {
   name: string;
   type: EffectType;
   enabled: boolean;
-  params: Record<string, number | boolean | string>;
+  params: Record<string, AudioEffectParamValue>;
 }
 
 export type EffectType =
@@ -416,12 +417,14 @@ export type EffectType =
   | 'audio-eq'
   | 'audio-volume'
   | 'audio-pan'
+  | 'audio-normalize'
   | 'audio-parametric-eq'
   | 'audio-high-pass'
   | 'audio-low-pass'
   | 'audio-hum-notch'
   | 'audio-de-click'
   | 'audio-noise-reduction'
+  | 'audio-spectral-gate'
   | 'audio-compressor'
   | 'audio-de-esser'
   | 'audio-limiter'
@@ -440,12 +443,14 @@ export function isAudioEffect(type: EffectType): boolean {
   return type === 'audio-eq' ||
     type === 'audio-volume' ||
     type === 'audio-pan' ||
+    type === 'audio-normalize' ||
     type === 'audio-parametric-eq' ||
     type === 'audio-high-pass' ||
     type === 'audio-low-pass' ||
     type === 'audio-hum-notch' ||
     type === 'audio-de-click' ||
     type === 'audio-noise-reduction' ||
+    type === 'audio-spectral-gate' ||
     type === 'audio-compressor' ||
     type === 'audio-de-esser' ||
     type === 'audio-limiter' ||
@@ -932,8 +937,8 @@ export type TransformProperty =
 export type CameraPropertyName = 'fov' | 'near' | 'far' | 'resolutionWidth' | 'resolutionHeight';
 export type CameraProperty = `camera.${CameraPropertyName}`;
 
-// Effect property format: effect.{effectId}.{paramName}
-// Example: effect.effect_123456.shift, effect.effect_123456.amount
+// Effect property format: effect.{effectId}.{paramPath}
+// Example: effect.effect_123456.shift, effect.eq1.eq.audible.bands.band1k.gainDb
 export type EffectProperty = `effect.${string}.${string}`;
 
 // AI/custom node exposed parameter format: node.{nodeId}.{paramName}
@@ -974,11 +979,12 @@ export function isEffectProperty(property: string): property is EffectProperty {
   return property.startsWith('effect.');
 }
 
-// Helper to parse effect property into parts
-export function parseEffectProperty(property: EffectProperty): { effectId: string; paramName: string } | null {
+// Helper to parse effect property into parts. paramName preserves the full nested
+// path after the effect id for compatibility with older callers.
+export function parseEffectProperty(property: EffectProperty): { effectId: string; paramName: string; paramPath: string[] } | null {
   const parts = property.split('.');
-  if (parts.length === 3 && parts[0] === 'effect') {
-    return { effectId: parts[1], paramName: parts[2] };
+  if (parts.length >= 3 && parts[0] === 'effect') {
+    return { effectId: parts[1], paramName: parts.slice(2).join('.'), paramPath: parts.slice(2) };
   }
   return null;
 }

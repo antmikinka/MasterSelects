@@ -9,11 +9,13 @@ import {
   audioEffectInstanceRequiresProcessedAnalysis,
   legacyAudioEffectRequiresProcessedAnalysis,
 } from '../../services/audio/processedWaveformEligibility';
+import { getAudioEqAudibleStateForIdentity } from '../../engine/audio/eq/AudioEqIdentity';
 import {
   getAudioEffect,
   getAudioEffectDefaultParams,
   hasAudioEffect,
 } from '../../engine/audio/AudioEffectRegistry';
+import { mergeAudioEffectParamPatch } from '../../utils/audioEffectParamPath';
 
 function updateClipEffectState(
   clip: TimelineClip,
@@ -22,6 +24,25 @@ function updateClipEffectState(
 ): TimelineClip {
   const updated = updater(clip);
   return invalidateProcessedAudio ? clearProcessedAudioAnalysisRefs(updated) : updated;
+}
+
+function audioEffectUpdateInvalidatesProcessedAnalysis(
+  currentEffect: AudioEffectInstance | undefined,
+  nextEffect: AudioEffectInstance | undefined,
+  keyframes: readonly Keyframe[],
+): boolean {
+  const currentRequires = audioEffectInstanceRequiresProcessedAnalysis(currentEffect, keyframes);
+  const nextRequires = audioEffectInstanceRequiresProcessedAnalysis(nextEffect, keyframes);
+  if (!currentRequires && !nextRequires) {
+    return false;
+  }
+
+  if (currentEffect?.descriptorId === 'audio-eq' && nextEffect?.descriptorId === 'audio-eq') {
+    return JSON.stringify(getAudioEqAudibleStateForIdentity(currentEffect.params)) !==
+      JSON.stringify(getAudioEqAudibleStateForIdentity(nextEffect.params));
+  }
+
+  return true;
 }
 
 function createClipAudioEffectInstance(descriptorId: string): AudioEffectInstance | null {
@@ -35,6 +56,17 @@ function createClipAudioEffectInstance(descriptorId: string): AudioEffectInstanc
     params: getAudioEffectDefaultParams(descriptor.id),
     automationMode: descriptor.automation === 'none' ? 'none' : 'clip',
   };
+}
+
+function mergeLegacyEffectParamPatch(
+  effect: Effect,
+  params: Partial<Effect['params']>,
+): Effect['params'] {
+  if (hasAudioEffect(effect.type)) {
+    return mergeAudioEffectParamPatch(effect.params, params, effect.type) as Effect['params'];
+  }
+
+  return { ...effect.params, ...params } as Effect['params'];
 }
 
 function effectStackRequiresProcessedAnalysis(
@@ -93,14 +125,14 @@ export const createClipEffectSlice: SliceCreator<ClipEffectActions> = (set, get)
         if (c.id !== clipId) return c;
         const updatedEffect = c.effects.find(e => e.id === effectId);
         const nextEffect = updatedEffect
-          ? { ...updatedEffect, params: { ...updatedEffect.params, ...params } as Effect['params'] }
+          ? { ...updatedEffect, params: mergeLegacyEffectParamPatch(updatedEffect, params) }
           : undefined;
         return updateClipEffectState(
           c,
           clip => ({
             ...clip,
             effects: clip.effects.map(e => e.id === effectId
-              ? { ...e, params: { ...e.params, ...params } as Effect['params'] }
+              ? { ...e, params: mergeLegacyEffectParamPatch(e, params) }
               : e),
           }),
           legacyAudioEffectRequiresProcessedAnalysis(updatedEffect, keyframes) ||
@@ -216,7 +248,10 @@ export const createClipEffectSlice: SliceCreator<ClipEffectActions> = (set, get)
         if (c.id !== clipId || !c.audioState?.effectStack?.length) return c;
         const currentEffect = c.audioState.effectStack.find(effect => effect.id === effectId);
         const nextEffect = currentEffect
-          ? { ...currentEffect, params: { ...currentEffect.params, ...params } as AudioEffectInstance['params'] }
+          ? {
+              ...currentEffect,
+              params: mergeAudioEffectParamPatch(currentEffect.params, params, currentEffect.descriptorId),
+            }
           : undefined;
         return updateClipEffectState(
           c,
@@ -225,12 +260,11 @@ export const createClipEffectSlice: SliceCreator<ClipEffectActions> = (set, get)
             audioState: {
               ...(clip.audioState ?? {}),
               effectStack: clip.audioState?.effectStack?.map(effect => effect.id === effectId
-                ? { ...effect, params: { ...effect.params, ...params } as AudioEffectInstance['params'] }
+                ? { ...effect, params: mergeAudioEffectParamPatch(effect.params, params, effect.descriptorId) }
                 : effect) ?? [],
             },
           }),
-          audioEffectInstanceRequiresProcessedAnalysis(currentEffect, keyframes) ||
-            audioEffectInstanceRequiresProcessedAnalysis(nextEffect, keyframes),
+          audioEffectUpdateInvalidatesProcessedAnalysis(currentEffect, nextEffect, keyframes),
         );
       }),
     });

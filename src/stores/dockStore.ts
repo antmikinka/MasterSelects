@@ -21,6 +21,7 @@ import {
   removePanel,
   insertPanelAtTarget,
   collapseSingleChildSplits,
+  adjustDropTargetForMovedPanel,
 } from '../utils/dockLayout';
 import { Logger } from '../services/logger';
 import { createPreviewPanelDataPatch, createPreviewPanelSource } from '../utils/previewPanelSource';
@@ -361,6 +362,7 @@ export const useDockStore = create<DockState>()(
 
         movePanel: (panelId, sourceGroupId, target) => {
           const { layout } = get();
+          const targetAfterRemoval = adjustDropTargetForMovedPanel(layout.root, panelId, sourceGroupId, target);
 
           // Remove panel from source
           let newLayout = removePanel(layout, panelId, sourceGroupId);
@@ -368,7 +370,7 @@ export const useDockStore = create<DockState>()(
           // Insert at target
           const panel = findPanelById(layout, panelId);
           if (panel) {
-            newLayout = insertPanelAtTarget(newLayout, panel, target);
+            newLayout = insertPanelAtTarget(newLayout, panel, targetAfterRemoval);
           }
 
           // Clean up empty groups and single-child splits

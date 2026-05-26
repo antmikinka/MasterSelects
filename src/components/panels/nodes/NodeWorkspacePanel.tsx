@@ -109,6 +109,12 @@ function formatParamValue(value: string | number | boolean): string {
   return String(value);
 }
 
+function coerceEffectEditorValue(value: unknown, fallback: number | boolean | string): number | boolean | string {
+  return typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string'
+    ? value
+    : fallback;
+}
+
 function clampAINodeNumber(value: number, param: ClipCustomNodeParamDefinition): number {
   return Math.min(param.max ?? Number.POSITIVE_INFINITY, Math.max(param.min ?? Number.NEGATIVE_INFINITY, value));
 }
@@ -526,7 +532,7 @@ function EffectNodeParameters({ clip, node }: { clip: TimelineClip; node: NodeGr
               effect={effect}
               paramName={paramName}
               paramDef={paramDef}
-              value={interpolatedEffect.params[paramName] ?? paramDef.default}
+              value={coerceEffectEditorValue(interpolatedEffect.params[paramName], paramDef.default)}
             />
           ))
         ) : (

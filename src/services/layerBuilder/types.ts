@@ -13,7 +13,7 @@ import type {
 } from '../../types';
 import type { VectorAnimationClipSettings } from '../../types/vectorAnimation';
 import type { Composition, MediaFile } from '../../stores/mediaStore/types';
-import type { LiveAudioRouteProcessor } from '../audio/audioGraphRouteSettings';
+import type { AudioRouteEffectSettings, LiveAudioRouteProcessor } from '../audio/audioGraphRouteSettings';
 
 /**
  * Clip time calculation result - memoized per clip per frame
@@ -100,7 +100,8 @@ export interface AudioSyncTarget {
   volume?: number; // 0-2, from audio-volume effect (default 1)
   eqGains?: number[]; // 10-band EQ gains in dB, from audio-eq effect
   pan?: number; // Stereo pan -1..1, from track audio graph
-  processors?: LiveAudioRouteProcessor[]; // Browser-supported live processors from clip/track/master audio FX
+  processors?: LiveAudioRouteProcessor[]; // Browser-supported live processors from clip/track audio FX
+  masterRoute?: AudioRouteEffectSettings; // Runtime master bus FX/fader, applied after track metering
   meterTrackId?: string; // Runtime-only track meter destination
 }
 

@@ -8,6 +8,16 @@ import type {
 // These types are intentionally JSON-safe so project state can reference
 // analysis artifacts without embedding large audio buffers in project JSON.
 
+export type AudioEffectParamValue =
+  | string
+  | number
+  | boolean
+  | null
+  | AudioEffectParamValue[]
+  | { [key: string]: AudioEffectParamValue };
+
+export type AudioEffectParams = Record<string, AudioEffectParamValue>;
+
 export type AudioAnalysisArtifactKind =
   | 'waveform-pyramid'
   | 'processed-waveform-pyramid'
@@ -232,7 +242,7 @@ export interface AudioEffectInstance {
   id: string;
   descriptorId: string;
   enabled: boolean;
-  params: Record<string, string | number | boolean>;
+  params: AudioEffectParams;
   automationMode?: 'none' | 'clip' | 'track' | 'sample-accurate';
 }
 
@@ -326,13 +336,27 @@ export interface AudioMeterSnapshot {
   peakDb: number;
   rmsDb: number;
   clipping: boolean;
+  channels?: {
+    left: AudioMeterChannelSnapshot;
+    right: AudioMeterChannelSnapshot;
+  };
+  phaseCorrelation?: number;
+  stereoWidth?: number;
+  spectrumDb?: Float32Array;
   updatedAt: number;
   dynamics?: Record<string, AudioDynamicsReductionSnapshot>;
 }
 
+export interface AudioMeterChannelSnapshot {
+  peakLinear: number;
+  rmsLinear: number;
+  peakDb: number;
+  rmsDb: number;
+}
+
 export interface AudioDynamicsReductionSnapshot {
   effectId: string;
-  processorType: 'compressor' | 'de-esser' | 'limiter' | 'noise-gate' | 'expander';
+  processorType: 'compressor' | 'de-esser' | 'limiter' | 'noise-gate' | 'expander' | 'dynamic-eq-band';
   gainReductionDb: number;
   updatedAt: number;
 }

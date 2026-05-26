@@ -14,6 +14,7 @@ describe('AudioEffectRegistry', () => {
     expect(Array.from(AUDIO_EFFECT_REGISTRY.keys())).toEqual([
       'audio-volume',
       'audio-pan',
+      'audio-normalize',
       'audio-eq',
       'audio-parametric-eq',
       'audio-high-pass',
@@ -21,6 +22,7 @@ describe('AudioEffectRegistry', () => {
       'audio-hum-notch',
       'audio-de-click',
       'audio-noise-reduction',
+      'audio-spectral-gate',
       'audio-compressor',
       'audio-de-esser',
       'audio-limiter',
@@ -37,6 +39,7 @@ describe('AudioEffectRegistry', () => {
     expect(getAllAudioEffects().map(effect => effect.id)).toEqual([
       'audio-volume',
       'audio-pan',
+      'audio-normalize',
       'audio-eq',
       'audio-parametric-eq',
       'audio-high-pass',
@@ -44,6 +47,7 @@ describe('AudioEffectRegistry', () => {
       'audio-hum-notch',
       'audio-de-click',
       'audio-noise-reduction',
+      'audio-spectral-gate',
       'audio-compressor',
       'audio-de-esser',
       'audio-limiter',
@@ -76,6 +80,24 @@ describe('AudioEffectRegistry', () => {
     });
     expect(getAudioEffectDefaultParams('audio-pan')).toEqual({ pan: 0 });
     expect(getAudioEffectParamNames('audio-pan')).toEqual(['pan']);
+    expect(getAudioEffect('audio-normalize')).toMatchObject({
+      id: 'audio-normalize',
+      name: 'Normalize',
+      category: 'gain',
+      automation: 'none',
+      defaultAudible: true,
+      paramNames: ['mode', 'targetPeakDb', 'targetRmsDb', 'targetLufs', 'truePeakCeilingDb', 'maxGainDb', 'allowBoost'],
+    });
+    expect(getAudioEffect('audio-normalize')?.params.mode.options).toEqual(['peak', 'rms', 'lufs']);
+    expect(getAudioEffectDefaultParams('audio-normalize')).toEqual({
+      mode: 'peak',
+      targetPeakDb: -1,
+      targetRmsDb: -18,
+      targetLufs: -23,
+      truePeakCeilingDb: -1,
+      maxGainDb: 24,
+      allowBoost: true,
+    });
   });
 
   it('describes audio-eq defaults and params in renderer order', () => {
@@ -180,6 +202,21 @@ describe('AudioEffectRegistry', () => {
       attackMs: 5,
       releaseMs: 160,
       mix: 0,
+    });
+    expect(getAudioEffect('audio-spectral-gate')).toMatchObject({
+      id: 'audio-spectral-gate',
+      name: 'Spectral Gate',
+      category: 'spectral',
+      paramNames: ['thresholdDb', 'reductionDb', 'lowFrequencyHz', 'highFrequencyHz', 'attackMs', 'releaseMs', 'mix'],
+    });
+    expect(getAudioEffectDefaultParams('audio-spectral-gate')).toEqual({
+      thresholdDb: -60,
+      reductionDb: 0,
+      lowFrequencyHz: 250,
+      highFrequencyHz: 5000,
+      attackMs: 8,
+      releaseMs: 180,
+      mix: 1,
     });
 
     expect(getAudioEffect('audio-compressor')).toMatchObject({

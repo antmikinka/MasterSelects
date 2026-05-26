@@ -12,6 +12,7 @@ import {
   getProcessedWaveformRefFreshnessForAudioState,
   isProcessedWaveformRefStaleForAudioState,
 } from '../../../src/services/audio/audioAnalysisIdentity';
+import { normalizeAudioEqParams } from '../../../src/engine/audio/eq/AudioEqLegacy';
 
 const BASE_ANALYSIS_INPUT: Omit<AudioAnalysisCacheKeyInput, 'kind' | 'clipAudioStateHash'> = {
   mediaFileId: 'media-a',
@@ -51,7 +52,7 @@ const BASE_CLIP_STATE = {
         id: 'effect-eq',
         descriptorId: 'audio-eq',
         enabled: true,
-        params: { q: 1.2, gainDb: -3 },
+        params: { band31: 1, band1k: -3 },
         automationMode: 'clip' as const,
       },
     ],
@@ -84,7 +85,7 @@ describe('audio analysis identity', () => {
           {
             descriptorId: 'audio-eq',
             automationMode: 'clip',
-            params: { gainDb: -3, q: 1.2 },
+            params: { band1k: -3, band31: 1 },
             enabled: true,
             id: 'effect-eq',
           },
@@ -98,6 +99,7 @@ describe('audio analysis identity', () => {
 
   it('changes when effect params or timeline playback fields change', () => {
     const baseline = createClipAudioStateHash(BASE_CLIP_STATE);
+    const eq = normalizeAudioEqParams(BASE_CLIP_STATE.audioState.effectStack[0].params);
 
     expect(createClipAudioStateHash({
       ...BASE_CLIP_STATE,
@@ -105,7 +107,40 @@ describe('audio analysis identity', () => {
         ...BASE_CLIP_STATE.audioState,
         effectStack: [{
           ...BASE_CLIP_STATE.audioState.effectStack[0],
-          params: { q: 1.2, gainDb: -2 },
+          params: { band31: 1, band1k: -2 },
+        }],
+      },
+    })).not.toBe(baseline);
+
+    expect(createClipAudioStateHash({
+      ...BASE_CLIP_STATE,
+      audioState: {
+        ...BASE_CLIP_STATE.audioState,
+        effectStack: [{
+          ...BASE_CLIP_STATE.audioState.effectStack[0],
+          params: {
+            eq: {
+              ...eq,
+              audible: {
+                ...eq.audible,
+                bands: eq.audible.bands.map(band => band.id === 'band1k'
+                  ? {
+                      ...band,
+                      spectralDynamics: {
+                        enabled: true,
+                        mode: 'compress' as const,
+                        thresholdDb: -36,
+                        rangeDb: 8,
+                        ratio: 4,
+                        attackMs: 4,
+                        releaseMs: 120,
+                        resolution: 'balanced' as const,
+                      },
+                    }
+                  : band),
+              },
+            },
+          },
         }],
       },
     })).not.toBe(baseline);
@@ -114,6 +149,33 @@ describe('audio analysis identity', () => {
     expect(createClipAudioStateHash({ ...BASE_CLIP_STATE, reversed: true })).not.toBe(baseline);
     expect(createClipAudioStateHash({ ...BASE_CLIP_STATE, inPoint: 2 })).not.toBe(baseline);
     expect(createClipAudioStateHash({ ...BASE_CLIP_STATE, outPoint: 8 })).not.toBe(baseline);
+  });
+
+  it('does not change processed identity for audio-eq display-only state', () => {
+    const baseline = createClipAudioStateHash(BASE_CLIP_STATE);
+    const eq = normalizeAudioEqParams(BASE_CLIP_STATE.audioState.effectStack[0].params);
+
+    expect(createClipAudioStateHash({
+      ...BASE_CLIP_STATE,
+      audioState: {
+        ...BASE_CLIP_STATE.audioState,
+        effectStack: [{
+          ...BASE_CLIP_STATE.audioState.effectStack[0],
+          params: {
+            eq: {
+              ...eq,
+              display: {
+                ...eq.display,
+                analyzerMode: 'pre-post',
+                analyzerRangeDb: 30,
+                graphRangeDb: 30,
+                selectedBandIds: ['band1k'],
+              },
+            },
+          },
+        }],
+      },
+    })).toBe(baseline);
   });
 
   it('ignores disabled operations while keeping enabled invalidators', () => {
@@ -177,12 +239,12 @@ describe('audio analysis identity', () => {
         effectStack: [{
           ...BASE_CLIP_STATE.audioState.effectStack[0],
           params: {
-            gainDb: -3,
-            q: 1.2,
+            band31: 1,
+            band1k: -3,
             waveform: [0.1, 0.2, 0.3],
             rawBuffer: [1, 2, 3],
             sourceFile: 'large.wav',
-          } as unknown as Record<string, string | number | boolean>,
+          },
         }],
       },
     });
@@ -198,11 +260,11 @@ describe('audio analysis identity', () => {
         effectStack: [{
           ...BASE_CLIP_STATE.audioState.effectStack[0],
           params: {
-            gainDb: -3,
-            q: 1.2,
+            band31: 1,
+            band1k: -3,
             waveform: [9, 9, 9],
             rawBuffer: [9, 9, 9],
-          } as unknown as Record<string, string | number | boolean>,
+          },
         }],
       },
     })).toBe(createClipAudioStateHash(BASE_CLIP_STATE));

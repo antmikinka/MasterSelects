@@ -22,6 +22,7 @@ import {
   getAudioEffectDefaultParams,
   hasAudioEffect,
 } from '../../engine/audio/AudioEffectRegistry';
+import { mergeAudioEffectParamPatch } from '../../utils/audioEffectParamPath';
 import { runAudioExportPreflight as computeAudioExportPreflight } from '../../services/audio/audioExportPreflight';
 
 const log = Logger.create('TrackSlice');
@@ -133,7 +134,7 @@ function updateEffectStackParams(
   params: Partial<AudioEffectInstance['params']>,
 ): AudioEffectInstance[] {
   return (effectStack ?? []).map(effect => effect.id === effectId
-    ? { ...effect, params: { ...effect.params, ...params } as AudioEffectInstance['params'] }
+    ? { ...effect, params: mergeAudioEffectParamPatch(effect.params, params, effect.descriptorId) }
     : effect);
 }
 
@@ -168,6 +169,8 @@ function updateRuntimeMeterState(
   patch: Record<string, AudioMeterSnapshot | undefined>,
   now: number,
   maxAgeMs = RUNTIME_AUDIO_METER_MAX_AGE_MS,
+  currentMaster?: AudioMeterSnapshot,
+  masterPatch?: AudioMeterSnapshot,
 ) {
   const trackMeters: Record<string, AudioMeterSnapshot> = {};
 
@@ -186,7 +189,10 @@ function updateRuntimeMeterState(
 
   return {
     trackMeters,
-    master: aggregateAudioMeterSnapshots(Object.values(trackMeters), now),
+    master: masterPatch
+      ?? (currentMaster && now - currentMaster.updatedAt <= maxAgeMs
+        ? currentMaster
+        : aggregateAudioMeterSnapshots(Object.values(trackMeters), now)),
   };
 }
 
@@ -603,20 +609,29 @@ export const createTrackSlice: SliceCreator<TrackActions> = (set, get) => ({
     });
   },
 
-  updateRuntimeAudioMeter: (trackId, snapshot) => {
+  updateRuntimeAudioMeter: (trackId, snapshot, masterSnapshot) => {
     const { runtimeAudioMeters } = get();
     set({
       runtimeAudioMeters: updateRuntimeMeterState(
         runtimeAudioMeters.trackMeters,
         { [trackId]: snapshot },
         snapshot.updatedAt,
+        RUNTIME_AUDIO_METER_MAX_AGE_MS,
+        undefined,
+        masterSnapshot,
       ),
     });
   },
 
   clearStaleRuntimeAudioMeters: (maxAgeMs = RUNTIME_AUDIO_METER_MAX_AGE_MS, now = performance.now()) => {
     const { runtimeAudioMeters } = get();
-    const next = updateRuntimeMeterState(runtimeAudioMeters.trackMeters, {}, now, maxAgeMs);
+    const next = updateRuntimeMeterState(
+      runtimeAudioMeters.trackMeters,
+      {},
+      now,
+      maxAgeMs,
+      runtimeAudioMeters.master,
+    );
     const hadTrackMeters = Object.keys(runtimeAudioMeters.trackMeters).length > 0;
     const hasTrackMeters = Object.keys(next.trackMeters).length > 0;
 

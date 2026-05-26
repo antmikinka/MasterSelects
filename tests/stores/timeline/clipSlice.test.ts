@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createTestTimelineStore } from '../../helpers/storeFactory';
 import { createMockClip, createMockTrack, createMockTransform, resetIdCounter } from '../../helpers/mockData';
 import { clipAudioAnalysisJobService } from '../../../src/services/audio/ClipAudioAnalysisJobService';
+import { normalizeAudioEqParams } from '../../../src/engine/audio';
 
 describe('clipSlice', () => {
   let store: ReturnType<typeof createTestTimelineStore>;
@@ -1076,6 +1077,24 @@ describe('clipSlice', () => {
 
       expect(updated.audioState?.sourceAnalysisRefs).toEqual(audioState.sourceAnalysisRefs);
       expect(updated.audioState?.processedAnalysisRefs).toBeUndefined();
+    });
+
+    it('merges nested legacy EQ paths into structured params', () => {
+      const clip = createMockClip({
+        id: 'clip-1',
+        trackId: 'video-1',
+        effects: [
+          { id: 'fx-1', name: 'EQ', type: 'audio-eq', enabled: true, params: { band1k: 2 } },
+        ],
+      });
+      store = createTestTimelineStore({ clips: [clip] });
+
+      store.getState().updateClipEffect('clip-1', 'fx-1', { 'eq.audible.bands.band1k.gainDb': 5 });
+      const updated = store.getState().clips.find(c => c.id === 'clip-1')!;
+      const eq = normalizeAudioEqParams(updated.effects[0].params);
+
+      expect(eq.audible.bands.find(band => band.id === 'band1k')?.gainDb).toBe(5);
+      expect(Object.prototype.hasOwnProperty.call(updated.effects[0].params, 'eq.audible.bands.band1k.gainDb')).toBe(false);
     });
 
     it('setPropertyValue updates registry audio effect params by effect id', () => {

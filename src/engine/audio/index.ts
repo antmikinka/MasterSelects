@@ -46,6 +46,167 @@ export type { AudioEffectDescriptor, AudioEffectId, AudioEffectParamDescriptor, 
 export { AudioEffectRenderer, audioEffectRenderer, EQ_FREQUENCIES, EQ_BAND_PARAMS } from './AudioEffectRenderer';
 export type { EffectRenderProgress, EffectRenderProgressCallback } from './AudioEffectRenderer';
 export { audioGraphRenderer, createAudioGraphKey, normalizeAudioGraph, renderAudioGraph } from './AudioGraphRenderer';
+export {
+  normalizeAudioEqParams,
+  normalizeLegacyParametricAudioEqParams,
+  getAudioEqLegacyBandGains,
+} from './eq/AudioEqLegacy';
+export {
+  createAudioEqBiquadCascadeCoefficients,
+  createAudioEqBiquadCoefficients,
+  getBiquadMagnitudeAtFrequency,
+} from './eq/AudioEqBiquad';
+export {
+  compileAudioEqPlan,
+  AUDIO_EQ_DEFAULT_SAMPLE_RATE,
+  AUDIO_EQ_LINEAR_PHASE_LATENCY_SAMPLES,
+} from './eq/AudioEqCompiler';
+export {
+  addAudioEqBand,
+  updateAudioEqBand,
+  removeAudioEqBand,
+  reorderAudioEqBand,
+  isAudioEqAutomationOrphaned,
+} from './eq/AudioEqOperations';
+export {
+  applyAudioEqPreset,
+  cloneAudioEqPreset,
+  createAudioEqParamsForPresetKind,
+  createUserAudioEqPreset,
+  findAudioEqFactoryPreset,
+  getAudioEqFactoryPresets,
+} from './eq/AudioEqPresets';
+export type {
+  AudioEqPreset,
+  AudioEqPresetApplyMode,
+} from './eq/AudioEqPresets';
+export {
+  AUDIO_EQ_CLIPBOARD_SCHEMA_VERSION,
+  copyAudioEqBands,
+  copyAudioEqCurve,
+  parseAudioEqClipboardPayload,
+  pasteAudioEqClipboardPayload,
+  serializeAudioEqClipboardPayload,
+} from './eq/AudioEqClipboard';
+export type {
+  AudioEqClipboardPayload,
+  AudioEqClipboardScope,
+  AudioEqPasteMode,
+} from './eq/AudioEqClipboard';
+export {
+  copyAudioEqABSlot,
+  createAudioEqABState,
+  resetInactiveAudioEqABSlot,
+  switchAudioEqABSlot,
+  syncAudioEqABActiveSlot,
+} from './eq/AudioEqAB';
+export type {
+  AudioEqABSlot,
+  AudioEqABState,
+} from './eq/AudioEqAB';
+export {
+  hasAudioEqCharacterMode,
+  processAudioEqCharacterChannels,
+} from './eq/AudioEqCharacter';
+export type {
+  AudioEqCharacterProcessResult,
+} from './eq/AudioEqCharacter';
+export {
+  calculateAudioEqDynamicGainDb,
+  createAudioEqDynamicRuntimeState,
+  createSingleBandAudioEqParams,
+  hasAudioEqDynamicBands,
+  processAudioEqChannels,
+} from './eq/AudioEqDynamic';
+export type {
+  AudioEqDynamicBandTelemetry,
+  AudioEqDynamicProcessResult,
+  AudioEqDynamicRuntimeState,
+} from './eq/AudioEqDynamic';
+export {
+  hasAudioEqLinearPhaseMode,
+  processAudioEqLinearPhaseChannels,
+} from './eq/AudioEqLinearPhase';
+export type {
+  AudioEqLinearPhaseProcessResult,
+} from './eq/AudioEqLinearPhase';
+export {
+  calculateAudioEqSpectralDynamicsGainDb,
+  chooseAudioEqSpectralDynamicsFftSize,
+  fftRadix2,
+  getAudioEqSpectralDynamicsBandRange,
+  hannWindow,
+  hasAudioEqSpectralDynamicsBands,
+  processAudioEqSpectralDynamicsChannels,
+} from './eq/AudioEqSpectralDynamics';
+export type {
+  AudioEqSpectralDynamicsBandRange,
+  AudioEqSpectralDynamicsBandTelemetry,
+  AudioEqSpectralDynamicsProcessResult,
+} from './eq/AudioEqSpectralDynamics';
+export {
+  applyAudioEqCurveFit,
+  applyAudioEqMatch,
+  createAudioEqCurvePointsFromSpectrumDelta,
+  fitAudioEqBandsToCurve,
+} from './eq/AudioEqCurveFitting';
+export type {
+  AudioEqCurveFitOptions,
+  AudioEqCurveFitResult,
+  AudioEqCurvePoint,
+} from './eq/AudioEqCurveFitting';
+export {
+  applyAudioEqSpectrumGrabPeak,
+  detectAudioEqSpectrumGrabPeaks,
+} from './eq/AudioEqSpectrumGrab';
+export type {
+  AudioEqSpectrumGrabOptions,
+  AudioEqSpectrumGrabPeak,
+} from './eq/AudioEqSpectrumGrab';
+export {
+  collectAudioEqInstances,
+  filterAudioEqInstances,
+  findAudioEqInstance,
+} from './eq/AudioEqInstanceRegistry';
+export type {
+  AudioEqInstanceDescriptor,
+  AudioEqInstanceRegistryFilter,
+  AudioEqInstanceRegistryInput,
+  AudioEqInstanceScope,
+} from './eq/AudioEqInstanceRegistry';
+export {
+  createAudioEqResponseSet,
+  createLogFrequencySamples,
+  sampleCompiledEqBandResponseDb,
+  sumBandResponsesDb,
+} from './eq/AudioEqResponse';
+export {
+  createAudioEqGraphViewModel,
+  dbToGraphY,
+  frequencyToGraphX,
+} from './eq/AudioEqGraphViewModel';
+export {
+  getAudioEqAudibleStateForIdentity,
+  isAudioEqAudibleStateDefault,
+} from './eq/AudioEqIdentity';
+export type {
+  AudioEqAnalyzerMode,
+  AudioEqAudibleStateV2,
+  AudioEqBand,
+  AudioEqBandDynamics,
+  AudioEqBandSpectralDynamics,
+  AudioEqBandStereoMode,
+  AudioEqBandType,
+  AudioEqCharacterMode,
+  AudioEqDisplayStateV2,
+  AudioEqGraphViewModel,
+  AudioEqParamsV2,
+  AudioEqPhaseMode,
+  AudioEqPresetKind,
+  CompiledAudioEqPlan,
+  CompiledAudioEqBandPlan,
+  AudioEqCompilerDiagnostic,
+} from './eq/AudioEqTypes';
 export type {
   AudioGraphAnalysisRefsDescriptor,
   AudioGraphClipDescriptor,

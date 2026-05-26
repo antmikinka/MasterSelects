@@ -4,6 +4,7 @@ import type {
   ClipAudioState,
   SpectralImageLayer,
 } from '../../types/audio';
+import { getAudioEqAudibleStateForIdentity } from '../../engine/audio/eq/AudioEqIdentity';
 import {
   getAudioAnalysisRefFreshness,
   type AudioAnalysisCacheKeyInput,
@@ -151,10 +152,14 @@ function normalizeEditOperation(operation: ClipAudioEditOperation): CanonicalJso
 }
 
 function normalizeEffectInstance(effect: AudioEffectInstance): CanonicalJsonValue {
+  const params = effect.descriptorId === 'audio-eq'
+    ? getAudioEqAudibleStateForIdentity(effect.params)
+    : effect.params;
+
   return normalizeJsonValue({
     id: effect.id,
     descriptorId: effect.descriptorId,
-    params: effect.params,
+    params,
     automationMode: effect.automationMode,
   }) ?? {};
 }

@@ -11,7 +11,18 @@ const log = Logger.create('ProxyFrameCache');
 import { fileSystemService } from './fileSystemService';
 import { useMediaStore } from '../stores/mediaStore';
 import { clampAudioPan, dbToLinearGain, finiteNumber } from '../engine/audio/audioMath';
-import type { LiveAudioRouteProcessor } from './audio/audioGraphRouteSettings';
+import {
+  createSpectralGateState,
+  processSpectralGateBlock,
+  type SpectralGateState,
+} from '../engine/audio/spectralGateProcessor';
+import {
+  createAudioEqDynamicRuntimeState,
+  createSingleBandAudioEqParams,
+  processAudioEqChannels,
+  type AudioEqDynamicRuntimeState,
+} from '../engine/audio/eq/AudioEqDynamic';
+import type { AudioRouteEffectSettings, LiveAudioRouteProcessor } from './audio/audioGraphRouteSettings';
 import type { AudioDynamicsReductionSnapshot, AudioMeterSnapshot } from '../types';
 import { calculateAudioMeterSnapshot } from './audio/audioMetering';
 
@@ -43,6 +54,7 @@ interface ScrubAudioOptions {
   eqGains?: number[];
   pan?: number;
   processors?: LiveAudioRouteProcessor[];
+  masterRoute?: AudioRouteEffectSettings;
 }
 
 interface ScrubProcessorNode {
@@ -60,6 +72,8 @@ interface ScrubProcessorNode {
   wetGain?: GainNode;
   scriptProcessor?: ScriptProcessorNode;
   sampleProcessor?: LiveAudioRouteProcessor;
+  spectralGateState?: SpectralGateState;
+  dynamicEqState?: AudioEqDynamicRuntimeState;
   gainByChannel?: number[];
   envelopeByChannel?: number[];
   gainReductionDb?: number;
@@ -110,6 +124,14 @@ function updateScrubProcessorNode(
     return;
   }
 
+  if (processor.type === 'biquad-filter' && node.filter) {
+    node.filter.type = processor.filterType;
+    node.filter.frequency.value = clampScrubFrequency(ctx, processor.frequencyHz);
+    node.filter.Q.value = Math.max(0.0001, Math.min(30, finiteNumber(processor.q, 0.707)));
+    node.filter.gain.value = Math.max(-48, Math.min(48, finiteNumber(processor.gainDb, 0)));
+    return;
+  }
+
   if (processor.type === 'hum-notch' && node.filters && node.dryGain && node.wetGain) {
     const nyquist = Math.max(20, ctx.sampleRate / 2 - 1);
     const baseFrequency = Math.max(20, Math.min(nyquist, finiteNumber(processor.frequencyHz, 50)));
@@ -154,6 +176,8 @@ function updateScrubProcessorNode(
       processor.type === 'expander' ||
       processor.type === 'de-click' ||
       processor.type === 'noise-reduction' ||
+      processor.type === 'spectral-gate' ||
+      processor.type === 'dynamic-eq-band' ||
       processor.type === 'saturation' ||
       processor.type === 'polarity-invert' ||
       processor.type === 'mono-sum' ||
@@ -334,6 +358,21 @@ function processScrubNoiseReductionFrame(
   node.gainReductionDb = 0;
 }
 
+function processScrubSpectralGateFrame(
+  node: ScrubProcessorNode,
+  input: AudioBuffer,
+  output: AudioBuffer,
+  processor: Extract<LiveAudioRouteProcessor, { type: 'spectral-gate' }>,
+): void {
+  node.spectralGateState = processSpectralGateBlock(
+    input,
+    output,
+    processor,
+    node.spectralGateState ?? createSpectralGateState(),
+  );
+  node.gainReductionDb = 0;
+}
+
 function processScrubSaturationFrame(
   input: AudioBuffer,
   output: AudioBuffer,
@@ -487,6 +526,16 @@ function attachScrubSampleProcessor(node: ScrubProcessorNode): void {
       return;
     }
 
+    if (processor?.type === 'spectral-gate') {
+      processScrubSpectralGateFrame(node, event.inputBuffer, event.outputBuffer, processor);
+      return;
+    }
+
+    if (processor?.type === 'dynamic-eq-band') {
+      processScrubDynamicEqBandFrame(node, event.inputBuffer, event.outputBuffer, processor);
+      return;
+    }
+
     if (processor?.type === 'saturation') {
       processScrubSaturationFrame(event.inputBuffer, event.outputBuffer, processor);
       node.gainReductionDb = 0;
@@ -520,6 +569,27 @@ function attachScrubSampleProcessor(node: ScrubProcessorNode): void {
     copyScrubInputToOutput(event.inputBuffer, event.outputBuffer);
     node.gainReductionDb = 0;
   };
+}
+
+function processScrubDynamicEqBandFrame(
+  node: ScrubProcessorNode,
+  input: AudioBuffer,
+  output: AudioBuffer,
+  processor: Extract<LiveAudioRouteProcessor, { type: 'dynamic-eq-band' }>,
+): void {
+  node.dynamicEqState ??= createAudioEqDynamicRuntimeState();
+  const channels = Array.from({ length: input.numberOfChannels }, (_, channel) => input.getChannelData(channel));
+  const result = processAudioEqChannels(channels, createSingleBandAudioEqParams(processor.band), {
+    sampleRate: input.sampleRate,
+    state: node.dynamicEqState,
+  });
+  for (let channel = 0; channel < output.numberOfChannels; channel += 1) {
+    output.getChannelData(channel).set(result.channels[channel] ?? channels[channel]);
+  }
+  node.gainReductionDb = result.telemetry.reduce(
+    (maxReduction, band) => Math.max(maxReduction, band.maxGainReductionDb),
+    0,
+  );
 }
 
 function reconnectScrubCustomProcessor(node: ScrubProcessorNode): void {
@@ -559,7 +629,13 @@ class ProxyFrameCache {
   private audioContext: AudioContext | null = null;
   private scrubGain: GainNode | null = null;
   private scrubAnalyser: AnalyserNode | null = null;
+  private scrubStereoSplitter: ChannelSplitterNode | null = null;
+  private scrubLeftAnalyser: AnalyserNode | null = null;
+  private scrubRightAnalyser: AnalyserNode | null = null;
   private scrubMeterBuffer: Float32Array<ArrayBuffer> | null = null;
+  private scrubLeftMeterBuffer: Float32Array<ArrayBuffer> | null = null;
+  private scrubRightMeterBuffer: Float32Array<ArrayBuffer> | null = null;
+  private scrubFrequencyBuffer: Float32Array<ArrayBuffer> | null = null;
 
   // Get cache key
   private getKey(mediaFileId: string, frameIndex: number): string {
@@ -1260,6 +1336,7 @@ class ProxyFrameCache {
     }
 
     const scrubVolume = Math.max(0, Math.min(4, options?.volume ?? 1));
+    const scrubMasterVolume = Math.max(0, Math.min(4, options?.masterRoute?.volume ?? 1));
     const scrubEqGains = options?.eqGains ?? [];
     const scrubPan = clampAudioPan(options?.pan);
     const scrubProcessors = options?.processors ?? [];
@@ -1341,6 +1418,10 @@ class ProxyFrameCache {
     } else {
       this.updateScrubEffects(scrubVolume, scrubEqGains, scrubPan, scrubProcessors);
     }
+
+    if (this.scrubGain && Math.abs(this.scrubGain.gain.value - scrubMasterVolume) > 0.001) {
+      this.scrubGain.gain.value = scrubMasterVolume;
+    }
   }
 
   /**
@@ -1367,6 +1448,27 @@ class ProxyFrameCache {
       } catch { /* ignore */ }
       this.scrubPanNode = null;
     }
+    if (this.scrubStereoSplitter) {
+      try {
+        this.scrubStereoSplitter.disconnect();
+      } catch { /* ignore */ }
+      this.scrubStereoSplitter = null;
+    }
+    if (this.scrubLeftAnalyser) {
+      try {
+        this.scrubLeftAnalyser.disconnect();
+      } catch { /* ignore */ }
+      this.scrubLeftAnalyser = null;
+    }
+    if (this.scrubRightAnalyser) {
+      try {
+        this.scrubRightAnalyser.disconnect();
+      } catch { /* ignore */ }
+      this.scrubRightAnalyser = null;
+    }
+    this.scrubLeftMeterBuffer = null;
+    this.scrubRightMeterBuffer = null;
+    this.scrubFrequencyBuffer = null;
     for (const processor of this.scrubProcessorNodes) {
       for (const node of processor.nodes) {
         try {
@@ -1392,7 +1494,29 @@ class ProxyFrameCache {
   getScrubMeterSnapshot(updatedAt = performance.now()): AudioMeterSnapshot | null {
     if (!this.scrubAnalyser || !this.scrubMeterBuffer || !this.scrubIsActive) return null;
     this.scrubAnalyser.getFloatTimeDomainData(this.scrubMeterBuffer);
-    return calculateAudioMeterSnapshot(this.scrubMeterBuffer, updatedAt, this.getScrubDynamicsSnapshot(updatedAt));
+    if (!this.scrubFrequencyBuffer || this.scrubFrequencyBuffer.length !== this.scrubAnalyser.frequencyBinCount) {
+      this.scrubFrequencyBuffer = new Float32Array(this.scrubAnalyser.frequencyBinCount);
+    }
+    this.scrubAnalyser.getFloatFrequencyData(this.scrubFrequencyBuffer);
+    const leftAnalyser = this.scrubLeftAnalyser;
+    const rightAnalyser = this.scrubRightAnalyser;
+    const leftMeterBuffer = this.scrubLeftMeterBuffer;
+    const rightMeterBuffer = this.scrubRightMeterBuffer;
+    let stereoSamples;
+
+    if (leftAnalyser && rightAnalyser && leftMeterBuffer && rightMeterBuffer) {
+      leftAnalyser.getFloatTimeDomainData(leftMeterBuffer);
+      rightAnalyser.getFloatTimeDomainData(rightMeterBuffer);
+      stereoSamples = { left: leftMeterBuffer, right: rightMeterBuffer };
+    }
+
+    return calculateAudioMeterSnapshot(
+      this.scrubMeterBuffer,
+      updatedAt,
+      this.getScrubDynamicsSnapshot(updatedAt),
+      stereoSamples,
+      new Float32Array(this.scrubFrequencyBuffer),
+    );
   }
 
   /**
@@ -1414,6 +1538,16 @@ class ProxyFrameCache {
     this.scrubSourceGain.gain.value = volume;
     this.scrubPanNode = ctx.createStereoPanner();
     this.scrubPanNode.pan.value = pan;
+    this.scrubStereoSplitter = ctx.createChannelSplitter(2);
+    this.scrubLeftAnalyser = ctx.createAnalyser();
+    this.scrubRightAnalyser = ctx.createAnalyser();
+    this.scrubLeftAnalyser.fftSize = this.scrubAnalyser?.fftSize ?? 1024;
+    this.scrubRightAnalyser.fftSize = this.scrubAnalyser?.fftSize ?? 1024;
+    this.scrubLeftAnalyser.smoothingTimeConstant = this.scrubAnalyser?.smoothingTimeConstant ?? 0.2;
+    this.scrubRightAnalyser.smoothingTimeConstant = this.scrubAnalyser?.smoothingTimeConstant ?? 0.2;
+    this.scrubLeftMeterBuffer = new Float32Array(this.scrubLeftAnalyser.fftSize);
+    this.scrubRightMeterBuffer = new Float32Array(this.scrubRightAnalyser.fftSize);
+    this.scrubFrequencyBuffer = new Float32Array(this.scrubAnalyser?.frequencyBinCount ?? 512);
     this.scrubProcessorNodes = processors.map(processor => this.createScrubProcessorNode(ctx, processor));
 
     this.scrubEqFilters = EQ_FREQUENCIES.map((frequency, index) => {
@@ -1444,6 +1578,9 @@ class ProxyFrameCache {
       this.scrubEqFilters[i].connect(this.scrubEqFilters[i + 1]);
     }
     this.scrubEqFilters[this.scrubEqFilters.length - 1].connect(this.scrubPanNode);
+    this.scrubPanNode.connect(this.scrubStereoSplitter);
+    this.scrubStereoSplitter.connect(this.scrubLeftAnalyser, 0);
+    this.scrubStereoSplitter.connect(this.scrubRightAnalyser, 1);
     this.scrubPanNode.connect(this.scrubAnalyser!);
   }
 
@@ -1488,7 +1625,12 @@ class ProxyFrameCache {
       return node;
     }
 
-    if (processor.type === 'high-pass' || processor.type === 'low-pass' || processor.type === 'parametric-eq') {
+    if (
+      processor.type === 'high-pass' ||
+      processor.type === 'low-pass' ||
+      processor.type === 'parametric-eq' ||
+      processor.type === 'biquad-filter'
+    ) {
       const filter = ctx.createBiquadFilter();
       const node: ScrubProcessorNode = {
         id: processor.id,
@@ -1526,6 +1668,8 @@ class ProxyFrameCache {
       processor.type === 'expander' ||
       processor.type === 'de-click' ||
       processor.type === 'noise-reduction' ||
+      processor.type === 'spectral-gate' ||
+      processor.type === 'dynamic-eq-band' ||
       processor.type === 'saturation' ||
       processor.type === 'polarity-invert' ||
       processor.type === 'mono-sum' ||
@@ -1581,7 +1725,7 @@ class ProxyFrameCache {
         continue;
       }
 
-      if ((processor.type === 'limiter' || processor.type === 'noise-gate' || processor.type === 'expander') && processor.scriptProcessor) {
+      if ((processor.type === 'limiter' || processor.type === 'noise-gate' || processor.type === 'expander' || processor.type === 'dynamic-eq-band') && processor.scriptProcessor) {
         dynamics[processor.id] = {
           effectId: processor.id,
           processorType: processor.type,
@@ -1649,7 +1793,13 @@ class ProxyFrameCache {
     this.audioContext = null;
     this.scrubGain = null;
     this.scrubAnalyser = null;
+    this.scrubStereoSplitter = null;
+    this.scrubLeftAnalyser = null;
+    this.scrubRightAnalyser = null;
     this.scrubMeterBuffer = null;
+    this.scrubLeftMeterBuffer = null;
+    this.scrubRightMeterBuffer = null;
+    this.scrubFrequencyBuffer = null;
 
     // Clear audio buffer cache (buffers are tied to the old context)
     this.audioBufferCache.clear();

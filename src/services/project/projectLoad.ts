@@ -1161,7 +1161,11 @@ export async function loadProjectToStores(): Promise<void> {
     if (ui.thumbnailsEnabled !== undefined) ts.setThumbnailsEnabled(ui.thumbnailsEnabled);
     if (ui.waveformsEnabled !== undefined) ts.setWaveformsEnabled(ui.waveformsEnabled);
     if (ui.audioDisplayMode !== undefined) ts.setAudioDisplayMode(ui.audioDisplayMode);
-    if (ui.audioFocusMode !== undefined) ts.setAudioFocusMode(ui.audioFocusMode);
+    if (ui.trackFocusMode !== undefined) {
+      ts.setTrackFocusMode(ui.trackFocusMode);
+    } else if (ui.audioFocusMode !== undefined) {
+      ts.setAudioFocusMode(ui.audioFocusMode);
+    }
     if (ui.showTranscriptMarkers !== undefined) ts.setShowTranscriptMarkers(ui.showTranscriptMarkers);
     if (ui.proxyEnabled !== undefined) useMediaStore.getState().setProxyEnabled(ui.proxyEnabled);
 

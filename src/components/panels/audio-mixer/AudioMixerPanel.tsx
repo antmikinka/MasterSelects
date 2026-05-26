@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import './AudioMixerPanel.css';
 import { useTimelineStore } from '../../../stores/timeline';
 import type {
+  AudioEffectInstance,
   AudioExportPreflightState,
   AudioSendState,
   MasterAudioState,
@@ -15,8 +16,12 @@ import {
   resolveTimelineRecordingRange,
   toggleTimelineAudioRecording,
 } from '../../../services/audio/timelineRecordingWorkflow';
+import { getAudioEffect } from '../../../engine/audio/AudioEffectRegistry';
 import { AudioEffectStackControl } from '../properties/AudioEffectStackControl';
+import { AudioEqualizerInstanceList } from '../properties/AudioEqualizerInstanceList';
 import { AudioLevelMeter } from '../../timeline/components/AudioLevelMeter';
+import { getAudioPanSliderStyle } from '../../timeline/utils/audioPanSliderStyle';
+import { collectAudioEqInstances, type AudioEqInstanceDescriptor } from '../../../engine/audio';
 
 const DEFAULT_MASTER_AUDIO_STATE: MasterAudioState = {
   volumeDb: 0,
@@ -25,6 +30,17 @@ const DEFAULT_MASTER_AUDIO_STATE: MasterAudioState = {
   targetLufs: -14,
   effectStack: [],
 };
+
+const MASTER_FOCUS_ID = '__master__';
+const TRACK_COLORS = ['#b2e000', '#cc8a12', '#5527b8', '#c23491', '#185b2f', '#9a9d70', '#6b122a', '#ac0a53'];
+
+type MixerCssProperties = CSSProperties & {
+  '--strip-color'?: string;
+};
+
+type FxWindowTarget =
+  | { scope: 'track'; trackId: string; effectId?: string }
+  | { scope: 'master'; effectId?: string };
 
 function getTrackAudioState(track: TimelineTrack): TrackAudioState {
   return {
@@ -40,7 +56,13 @@ function getTrackAudioState(track: TimelineTrack): TrackAudioState {
 }
 
 function formatDb(value: number): string {
-  return `${value.toFixed(1)} dB`;
+  if (!Number.isFinite(value)) return '-inf';
+  return value <= -99 ? '-inf' : value.toFixed(1);
+}
+
+function formatDbLong(value: number): string {
+  const formatted = formatDb(value);
+  return formatted === '-inf' ? formatted : `${formatted} dB`;
 }
 
 function formatPan(value: number): string {
@@ -51,15 +73,6 @@ function formatPan(value: number): string {
 function formatSeconds(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return '0.0s';
   return `${value.toFixed(1)}s`;
-}
-
-function formatClock(timestamp: number | undefined): string {
-  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) return '--:--:--';
-  return new Date(timestamp).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
 }
 
 function getPreflightStatus(preflight: AudioExportPreflightState | undefined): {
@@ -103,109 +116,182 @@ function getRecordingLabel(phase: string): string {
   }
 }
 
-function TrackSendControls({
-  trackId,
-  sends,
-}: {
-  trackId: string;
-  sends: readonly AudioSendState[];
-}) {
-  const addSend = useCallback(() => {
-    useTimelineStore.getState().addTrackAudioSend(trackId);
-  }, [trackId]);
+function getTrackColor(track: TimelineTrack, index: number): string {
+  const name = track.name.toLowerCase();
+  if (name.includes('kick') || name.includes('drum')) return '#516a86';
+  if (name.includes('snare')) return '#355f85';
+  if (name.includes('synth')) return '#77815d';
+  if (name.includes('violin')) return TRACK_COLORS[index % TRACK_COLORS.length];
+  if (name.includes('voice') || name.includes('dialog')) return '#53a8d9';
+  return TRACK_COLORS[index % TRACK_COLORS.length];
+}
 
+function getEffectName(effect: AudioEffectInstance): string {
+  return getAudioEffect(effect.descriptorId)?.name ?? effect.descriptorId;
+}
+
+function getEffectRackLabel(effect: AudioEffectInstance): string {
+  const name = getEffectName(effect);
+  return name.length > 17 ? `${name.slice(0, 16)}...` : name;
+}
+
+function stopPropagation(event: { stopPropagation: () => void }) {
+  event.stopPropagation();
+}
+
+function MixerMeterScale() {
   return (
-    <div className="audio-mixer-send-list">
-      <div className="audio-mixer-section-head">
-        <span>Sends</span>
-        <button type="button" onClick={addSend}>+ Send</button>
+    <div className="audio-mixer-meter-scale-labels" aria-hidden="true">
+      <span>+3</span>
+      <span>0</span>
+      <span>-5</span>
+      <span>-10</span>
+      <span>-18</span>
+      <span>-30</span>
+      <span>-50</span>
+    </div>
+  );
+}
+
+function MixerRack({
+  effects,
+  sends,
+  onOpenEffect,
+  onAddSend,
+  onToggleSend,
+}: {
+  effects: readonly AudioEffectInstance[];
+  sends: readonly AudioSendState[];
+  onOpenEffect: (effectId?: string) => void;
+  onAddSend?: () => void;
+  onToggleSend?: (send: AudioSendState) => void;
+}) {
+  return (
+    <div className="audio-mixer-rack" onPointerDown={stopPropagation}>
+      <div className="audio-mixer-rack-group inserts">
+        {effects.length === 0 ? (
+          <button type="button" className="audio-mixer-rack-slot empty" onClick={() => onOpenEffect()}>
+            FX
+          </button>
+        ) : (
+          effects.slice(0, 6).map((effect) => (
+            <button
+              type="button"
+              key={effect.id}
+              className={`audio-mixer-rack-slot ${effect.enabled === false ? 'bypassed' : ''}`}
+              onClick={() => onOpenEffect(effect.id)}
+              title={getEffectName(effect)}
+            >
+              <i />
+              <span>{getEffectRackLabel(effect)}</span>
+            </button>
+          ))
+        )}
+        {effects.length > 6 && (
+          <button type="button" className="audio-mixer-rack-slot more" onClick={() => onOpenEffect()}>
+            +{effects.length - 6} FX
+          </button>
+        )}
       </div>
-      {sends.length === 0 ? (
-        <div className="audio-mixer-empty">No sends</div>
-      ) : (
-        sends.map((send, index) => (
-          <div className="audio-mixer-send-row" key={send.id}>
-            <button
-              type="button"
-              className={`audio-mixer-mini-toggle ${send.enabled !== false ? 'active' : ''}`}
-              onClick={() => useTimelineStore.getState().updateTrackAudioSend(trackId, send.id, { enabled: send.enabled === false })}
-              title={send.enabled === false ? 'Enable send' : 'Bypass send'}
-            >
-              {index + 1}
-            </button>
-            <input
-              type="text"
-              value={send.targetBusId}
-              onChange={(event) => useTimelineStore.getState().updateTrackAudioSend(trackId, send.id, { targetBusId: event.currentTarget.value })}
-              aria-label="Send target bus"
-            />
-            <input
-              type="range"
-              min="-60"
-              max="18"
-              step="0.5"
-              value={send.gainDb}
-              onChange={(event) => useTimelineStore.getState().updateTrackAudioSend(trackId, send.id, { gainDb: Number(event.currentTarget.value) })}
-              aria-label="Send gain"
-            />
-            <span>{formatDb(send.gainDb)}</span>
-            <label title="Pre-fader send">
-              <input
-                type="checkbox"
-                checked={send.preFader}
-                onChange={(event) => useTimelineStore.getState().updateTrackAudioSend(trackId, send.id, { preFader: event.currentTarget.checked })}
-              />
-              Pre
-            </label>
-            <button
-              type="button"
-              className="audio-mixer-remove"
-              onClick={() => useTimelineStore.getState().removeTrackAudioSend(trackId, send.id)}
-              title="Remove send"
-            >
-              x
-            </button>
-          </div>
-        ))
-      )}
+
+      <div className="audio-mixer-rack-group sends">
+        {sends.slice(0, 3).map((send) => (
+          <button
+            type="button"
+            key={send.id}
+            className={`audio-mixer-rack-slot send ${send.enabled === false ? 'bypassed' : ''}`}
+            onClick={() => onToggleSend?.(send)}
+            title={`${send.targetBusId} ${formatDbLong(send.gainDb)} ${send.preFader ? 'pre' : 'post'}`}
+          >
+            <i />
+            <span>{send.targetBusId || 'bus'}</span>
+          </button>
+        ))}
+        {onAddSend && (
+          <button type="button" className="audio-mixer-rack-slot send-add" onClick={onAddSend}>
+            Send
+          </button>
+        )}
+      </div>
     </div>
   );
 }
 
 function TrackMixerStrip({
   track,
+  index,
+  focused,
+  onFocus,
+  onOpenFx,
 }: {
   track: TimelineTrack;
+  index: number;
+  focused: boolean;
+  onFocus: () => void;
+  onOpenFx: (target: FxWindowTarget) => void;
 }) {
   const meter = useTimelineStore(state => state.runtimeAudioMeters.trackMeters[track.id]);
   const audioState = getTrackAudioState(track);
   const effectiveMuted = audioState.muted;
   const effectiveSolo = audioState.solo;
+  const effects = audioState.effectStack ?? [];
+  const sends = audioState.sends ?? [];
+  const stripStyle: MixerCssProperties = { '--strip-color': getTrackColor(track, index) };
+  const resetTrackPan = (event: ReactMouseEvent<HTMLInputElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    useTimelineStore.getState().setTrackAudioPan(track.id, 0);
+  };
+  const resetTrackVolume = (event: ReactMouseEvent<HTMLInputElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    useTimelineStore.getState().setTrackAudioVolumeDb(track.id, 0);
+  };
 
   return (
-    <section className={`audio-mixer-strip ${effectiveMuted ? 'muted' : ''} ${audioState.recordArm ? 'armed' : ''}`}>
-      <div className="audio-mixer-strip-header">
+    <section
+      className={`audio-mixer-strip ${focused ? 'focused' : ''} ${effectiveMuted ? 'muted' : ''} ${audioState.recordArm ? 'armed' : ''}`}
+      style={stripStyle}
+      onClick={onFocus}
+    >
+      <div className="audio-mixer-strip-color" aria-hidden="true" />
+
+      <div className="audio-mixer-strip-name">
         <strong title={track.name}>{track.name}</strong>
-        <span>{formatDb(audioState.volumeDb)}</span>
+        <span>{track.type}</span>
       </div>
 
-      <div className="audio-mixer-button-row">
-        <button
-          type="button"
-          className={effectiveSolo ? 'active' : ''}
-          onClick={() => useTimelineStore.getState().setTrackSolo(track.id, !effectiveSolo)}
-          title={effectiveSolo ? 'Solo On' : 'Solo Off'}
-        >
-          S
-        </button>
-        <button
-          type="button"
-          className={effectiveMuted ? 'active' : ''}
-          onClick={() => useTimelineStore.getState().setTrackMuted(track.id, !effectiveMuted)}
-          title={effectiveMuted ? 'Unmute' : 'Mute'}
-        >
-          M
-        </button>
+      <MixerRack
+        effects={effects}
+        sends={sends}
+        onOpenEffect={(effectId) => {
+          onFocus();
+          onOpenFx({ scope: 'track', trackId: track.id, effectId });
+        }}
+        onAddSend={() => useTimelineStore.getState().addTrackAudioSend(track.id)}
+        onToggleSend={(send) => useTimelineStore.getState().updateTrackAudioSend(track.id, send.id, {
+          enabled: send.enabled === false,
+        })}
+      />
+
+      <div className="audio-mixer-pan-row" onPointerDown={stopPropagation}>
+        <span>L</span>
+        <input
+          type="range"
+          min="-1"
+          max="1"
+          step="0.01"
+          value={audioState.pan}
+          aria-label={`${track.name} pan`}
+          title="Double-click to center pan"
+          style={getAudioPanSliderStyle(audioState.pan)}
+          onChange={(event) => useTimelineStore.getState().setTrackAudioPan(track.id, Number(event.currentTarget.value))}
+          onDoubleClick={resetTrackPan}
+        />
+        <span>R</span>
+      </div>
+
+      <div className="audio-mixer-io-row" onPointerDown={stopPropagation}>
         <button
           type="button"
           className={audioState.recordArm ? 'record-active' : ''}
@@ -220,129 +306,122 @@ function TrackMixerStrip({
           onClick={() => useTimelineStore.getState().updateTrackAudioState(track.id, { inputMonitor: !audioState.inputMonitor })}
           title={audioState.inputMonitor ? 'Input monitor on' : 'Input monitor off'}
         >
-          I
+          In
         </button>
       </div>
 
-      <AudioLevelMeter meter={meter} label={`${track.name} level`} className="audio-mixer-meter" />
+      <div className="audio-mixer-mode-row" onPointerDown={stopPropagation}>
+        <button
+          type="button"
+          className={effectiveMuted ? 'active' : ''}
+          onClick={() => useTimelineStore.getState().setTrackMuted(track.id, !effectiveMuted)}
+          title={effectiveMuted ? 'Unmute' : 'Mute'}
+        >
+          Mute
+        </button>
+        <button
+          type="button"
+          className={effectiveSolo ? 'active' : ''}
+          onClick={() => useTimelineStore.getState().setTrackSolo(track.id, !effectiveSolo)}
+          title={effectiveSolo ? 'Solo On' : 'Solo Off'}
+        >
+          Solo
+        </button>
+      </div>
 
-      <label className="audio-mixer-control-row">
-        <span>Volume</span>
+      <div className="audio-mixer-value-row">
+        <span>{formatDb(audioState.volumeDb)}</span>
+        <span>{formatPan(audioState.pan)}</span>
+      </div>
+
+      <div className="audio-mixer-fader-meter" onPointerDown={stopPropagation}>
         <input
+          className="audio-mixer-strip-fader"
           type="range"
           min="-60"
           max="18"
           step="0.5"
           value={audioState.volumeDb}
+          aria-label={`${track.name} volume`}
+          title="Double-click to reset volume to 0 dB"
           onChange={(event) => useTimelineStore.getState().setTrackAudioVolumeDb(track.id, Number(event.currentTarget.value))}
+          onDoubleClick={resetTrackVolume}
         />
-        <input
-          type="number"
-          min="-60"
-          max="18"
-          step="0.5"
-          value={audioState.volumeDb}
-          onChange={(event) => useTimelineStore.getState().setTrackAudioVolumeDb(track.id, Number(event.currentTarget.value))}
+        <AudioLevelMeter
+          meter={meter}
+          label={`${track.name} level`}
+          className="audio-mixer-meter"
+          orientation="vertical"
+          display="stereo"
         />
-      </label>
+        <MixerMeterScale />
+      </div>
 
-      <label className="audio-mixer-control-row">
-        <span>Pan</span>
-        <input
-          type="range"
-          min="-1"
-          max="1"
-          step="0.01"
-          value={audioState.pan}
-          onChange={(event) => useTimelineStore.getState().setTrackAudioPan(track.id, Number(event.currentTarget.value))}
-        />
-        <output>{formatPan(audioState.pan)}</output>
-      </label>
-
-      <label className="audio-mixer-control-row">
-        <span>Input</span>
-        <input
-          type="text"
-          value={audioState.inputDeviceId ?? ''}
-          placeholder="default"
-          onChange={(event) => useTimelineStore.getState().updateTrackAudioState(track.id, {
-            inputDeviceId: event.currentTarget.value.trim() || undefined,
-          })}
-        />
-      </label>
-
-      <details className="audio-mixer-section" open={(audioState.sends?.length ?? 0) > 0}>
-        <summary>Sends {(audioState.sends?.length ?? 0) > 0 ? `(${audioState.sends?.length})` : ''}</summary>
-        <TrackSendControls trackId={track.id} sends={audioState.sends ?? []} />
-      </details>
-
-      <details className="audio-mixer-section" open={(audioState.effectStack?.length ?? 0) > 0}>
-        <summary>Track FX {(audioState.effectStack?.length ?? 0) > 0 ? `(${audioState.effectStack?.length})` : ''}</summary>
-        <AudioEffectStackControl
-          title={`${track.name} FX`}
-          className="audio-effect-stack-compact audio-mixer-fx-stack"
-          effects={audioState.effectStack ?? []}
-          runtimeDynamics={meter?.dynamics}
-          emptyLabel="No track FX"
-          onAddEffect={(descriptorId) => useTimelineStore.getState().addTrackAudioEffectInstance(track.id, descriptorId)}
-          onUpdateEffect={(effect, paramName, value) => useTimelineStore.getState().updateTrackAudioEffectInstance(track.id, effect.id, { [paramName]: value })}
-          onSetEffectEnabled={(effectId, enabled) => useTimelineStore.getState().setTrackAudioEffectInstanceEnabled(track.id, effectId, enabled)}
-          onRemoveEffect={(effectId) => useTimelineStore.getState().removeTrackAudioEffectInstance(track.id, effectId)}
-          onReorderEffect={(effectId, newIndex) => useTimelineStore.getState().reorderTrackAudioEffectInstance(track.id, effectId, newIndex)}
-        />
-      </details>
+      <div className="audio-mixer-strip-output">
+        <span>Post</span>
+        <strong>{meter ? formatDbLong(meter.peakDb) : '-inf'}</strong>
+      </div>
     </section>
   );
 }
 
 function MasterMixerStrip({
   masterAudio,
+  focused,
   preflightMeasuring,
+  onFocus,
+  onOpenFx,
   onStaticPreflight,
   onRenderedPreflight,
 }: {
   masterAudio: MasterAudioState;
+  focused: boolean;
   preflightMeasuring: boolean;
+  onFocus: () => void;
+  onOpenFx: (target: FxWindowTarget) => void;
   onStaticPreflight: () => void;
   onRenderedPreflight: () => void;
 }) {
   const meter = useTimelineStore(state => state.runtimeAudioMeters.master);
-  const preflight = masterAudio.exportPreflight;
-  const status = getPreflightStatus(preflight);
-  const warnings = preflight?.warnings ?? [];
-  const measurement = preflight?.measurement;
-  const measurementHistory = preflight?.measurementHistory ?? [];
+  const status = getPreflightStatus(masterAudio.exportPreflight);
+  const measurement = masterAudio.exportPreflight?.measurement;
+  const effects = masterAudio.effectStack ?? [];
+  const stripStyle: MixerCssProperties = { '--strip-color': '#4a9eff' };
+  const resetMasterVolume = (event: ReactMouseEvent<HTMLInputElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    useTimelineStore.getState().setMasterAudioVolumeDb(0);
+  };
 
   return (
-    <section className={`audio-mixer-strip master ${masterAudio.limiterEnabled ? 'limited' : ''}`}>
-      <div className="audio-mixer-strip-header">
+    <section
+      className={`audio-mixer-strip master ${focused ? 'focused' : ''} ${masterAudio.limiterEnabled ? 'limited' : ''}`}
+      style={stripStyle}
+      onClick={onFocus}
+    >
+      <div className="audio-mixer-strip-color" aria-hidden="true" />
+
+      <div className="audio-mixer-strip-name">
         <strong>Master</strong>
-        <span>{formatDb(masterAudio.volumeDb)}</span>
+        <span>bus</span>
       </div>
 
-      <AudioLevelMeter meter={meter} label="Master level" className="audio-mixer-meter" />
+      <MixerRack
+        effects={effects}
+        sends={[]}
+        onOpenEffect={(effectId) => {
+          onFocus();
+          onOpenFx({ scope: 'master', effectId });
+        }}
+      />
 
-      <label className="audio-mixer-control-row">
-        <span>Volume</span>
-        <input
-          type="range"
-          min="-60"
-          max="18"
-          step="0.5"
-          value={masterAudio.volumeDb}
-          onChange={(event) => useTimelineStore.getState().setMasterAudioVolumeDb(Number(event.currentTarget.value))}
-        />
-        <input
-          type="number"
-          min="-60"
-          max="18"
-          step="0.5"
-          value={masterAudio.volumeDb}
-          onChange={(event) => useTimelineStore.getState().setMasterAudioVolumeDb(Number(event.currentTarget.value))}
-        />
-      </label>
+      <div className="audio-mixer-master-readout">
+        <span>LUFS {measurement?.integratedLufs?.toFixed(1) ?? (masterAudio.targetLufs ?? -14).toFixed(1)}</span>
+        <span>TP {measurement?.truePeakDbtp?.toFixed(1) ?? masterAudio.truePeakCeilingDb.toFixed(1)}</span>
+        <em className={status.className}>{status.label}</em>
+      </div>
 
-      <label className="audio-mixer-check-row">
+      <label className="audio-mixer-limiter-row" onPointerDown={stopPropagation}>
         <input
           type="checkbox"
           checked={masterAudio.limiterEnabled}
@@ -351,94 +430,143 @@ function MasterMixerStrip({
         <span>Limiter</span>
       </label>
 
-      <label className="audio-mixer-control-row compact">
-        <span>True Peak</span>
-        <input
-          type="number"
-          min="-24"
-          max="0"
-          step="0.1"
-          value={masterAudio.truePeakCeilingDb}
-          onChange={(event) => useTimelineStore.getState().setMasterTruePeakCeilingDb(Number(event.currentTarget.value))}
-        />
-      </label>
-
-      <label className="audio-mixer-control-row compact">
-        <span>Target LUFS</span>
-        <input
-          type="number"
-          min="-36"
-          max="-5"
-          step="0.5"
-          value={masterAudio.targetLufs ?? -14}
-          onChange={(event) => useTimelineStore.getState().setMasterTargetLufs(Number(event.currentTarget.value))}
-        />
-      </label>
-
-      <div className="audio-mixer-preflight">
-        <div className="audio-mixer-section-head">
-          <span>Preflight</span>
-          <span className={`audio-mixer-status ${status.className}`}>{status.label}</span>
-        </div>
-        <div className="audio-mixer-preflight-actions">
-          <button type="button" onClick={onStaticPreflight}>Check</button>
-          <button type="button" onClick={onRenderedPreflight} disabled={preflightMeasuring}>
-            {preflightMeasuring ? 'Measuring' : 'Measure'}
-          </button>
-        </div>
-        {measurement && (
-          <div className="audio-mixer-measurements">
-            <span>LUFS {measurement.integratedLufs?.toFixed(1) ?? 'n/a'}</span>
-            <span>TP {measurement.truePeakDbtp?.toFixed(1) ?? 'n/a'} dBTP</span>
-            <span>RMS {measurement.rmsDbfs?.toFixed(1) ?? 'n/a'} dBFS</span>
-          </div>
-        )}
-        {measurementHistory.length > 0 && (
-          <details className="audio-mixer-measurement-history" open={measurementHistory.length > 1}>
-            <summary>Meter History ({measurementHistory.length})</summary>
-            <div>
-              {measurementHistory.slice(0, 5).map((entry, index) => (
-                <p key={`${entry.checkedAt}-${index}`}>
-                  <span>{formatClock(entry.checkedAt)}</span>
-                  <span>{entry.startTime.toFixed(1)}-{entry.endTime.toFixed(1)}s</span>
-                  <span>{entry.measurement.integratedLufs?.toFixed(1) ?? 'n/a'} LUFS</span>
-                  <span>{entry.measurement.truePeakDbtp?.toFixed(1) ?? 'n/a'} dBTP</span>
-                </p>
-              ))}
-            </div>
-          </details>
-        )}
-        {warnings.length > 0 && (
-          <div className="audio-mixer-warning-list">
-            {warnings.slice(0, 4).map((warning) => (
-              <p key={warning.code} className={warning.severity}>{warning.message}</p>
-            ))}
-            {warnings.length > 4 && <p>{warnings.length - 4} more warnings</p>}
-          </div>
-        )}
+      <div className="audio-mixer-preflight-actions compact" onPointerDown={stopPropagation}>
+        <button type="button" onClick={onStaticPreflight}>Check</button>
+        <button type="button" onClick={onRenderedPreflight} disabled={preflightMeasuring}>
+          {preflightMeasuring ? 'Measuring' : 'Measure'}
+        </button>
       </div>
 
-      <details className="audio-mixer-section" open={(masterAudio.effectStack?.length ?? 0) > 0}>
-        <summary>Master FX {(masterAudio.effectStack?.length ?? 0) > 0 ? `(${masterAudio.effectStack?.length})` : ''}</summary>
-        <AudioEffectStackControl
-          title="Master FX"
-          className="audio-effect-stack-compact audio-mixer-fx-stack"
-          effects={masterAudio.effectStack ?? []}
-          runtimeDynamics={meter?.dynamics}
-          emptyLabel="No master FX"
-          onAddEffect={(descriptorId) => useTimelineStore.getState().addMasterAudioEffectInstance(descriptorId)}
-          onUpdateEffect={(effect, paramName, value) => useTimelineStore.getState().updateMasterAudioEffectInstance(effect.id, { [paramName]: value })}
-          onSetEffectEnabled={(effectId, enabled) => useTimelineStore.getState().setMasterAudioEffectInstanceEnabled(effectId, enabled)}
-          onRemoveEffect={(effectId) => useTimelineStore.getState().removeMasterAudioEffectInstance(effectId)}
-          onReorderEffect={(effectId, newIndex) => useTimelineStore.getState().reorderMasterAudioEffectInstance(effectId, newIndex)}
+      <div className="audio-mixer-value-row">
+        <span>{formatDb(masterAudio.volumeDb)}</span>
+        <span>TP {masterAudio.truePeakCeilingDb.toFixed(1)}</span>
+      </div>
+
+      <div className="audio-mixer-fader-meter master" onPointerDown={stopPropagation}>
+        <input
+          className="audio-mixer-strip-fader"
+          type="range"
+          min="-60"
+          max="18"
+          step="0.5"
+          value={masterAudio.volumeDb}
+          aria-label="Master volume"
+          title="Double-click to reset volume to 0 dB"
+          onChange={(event) => useTimelineStore.getState().setMasterAudioVolumeDb(Number(event.currentTarget.value))}
+          onDoubleClick={resetMasterVolume}
         />
-      </details>
+        <AudioLevelMeter
+          meter={meter}
+          label="Master level"
+          className="audio-mixer-meter"
+          orientation="vertical"
+          display="stereo"
+        />
+        <MixerMeterScale />
+      </div>
+
+      <div className="audio-mixer-strip-output">
+        <span>Master</span>
+        <strong>{meter ? formatDbLong(meter.peakDb) : '-inf'}</strong>
+      </div>
     </section>
+  );
+}
+
+function MixerFxWindow({
+  target,
+  tracks,
+  masterAudio,
+  onClose,
+}: {
+  target: FxWindowTarget | null;
+  tracks: readonly TimelineTrack[];
+  masterAudio: MasterAudioState;
+  onClose: () => void;
+}) {
+  const runtimeMeters = useTimelineStore(state => state.runtimeAudioMeters);
+  if (!target) return null;
+
+  const track = target.scope === 'track'
+    ? tracks.find(item => item.id === target.trackId)
+    : undefined;
+  const audioState = track ? getTrackAudioState(track) : undefined;
+  const effects = target.scope === 'track'
+    ? audioState?.effectStack ?? []
+    : masterAudio.effectStack ?? [];
+  const selectedEffect = target.effectId
+    ? effects.find(effect => effect.id === target.effectId)
+    : undefined;
+  const title = target.scope === 'track'
+    ? `${track?.name ?? 'Track'} FX`
+    : 'Master FX';
+  const meter = target.scope === 'track' && track
+    ? runtimeMeters.trackMeters[track.id]
+    : runtimeMeters.master;
+
+  if (target.scope === 'track' && !track) return null;
+
+  return (
+    <div className="audio-mixer-floating-fx" role="dialog" aria-label={title}>
+      <div className="audio-mixer-floating-fx-header">
+        <div>
+          <strong>{title}</strong>
+          <span>{selectedEffect ? getEffectName(selectedEffect) : `${effects.length} inserts`}</span>
+        </div>
+        <button type="button" onClick={onClose} title="Close FX window">X</button>
+      </div>
+
+      <AudioEffectStackControl
+        title={title}
+        className="audio-effect-stack-compact audio-mixer-fx-stack floating"
+        effects={effects}
+        runtimeDynamics={meter?.dynamics}
+        runtimeAnalyzer={meter?.spectrumDb ? { postDb: meter.spectrumDb } : undefined}
+        emptyLabel={target.scope === 'track' ? 'No track FX' : 'No master FX'}
+        onAddEffect={(descriptorId) => {
+          if (target.scope === 'track' && track) {
+            useTimelineStore.getState().addTrackAudioEffectInstance(track.id, descriptorId);
+          } else {
+            useTimelineStore.getState().addMasterAudioEffectInstance(descriptorId);
+          }
+        }}
+        onUpdateEffect={(effect, paramName, value) => {
+          if (target.scope === 'track' && track) {
+            useTimelineStore.getState().updateTrackAudioEffectInstance(track.id, effect.id, { [paramName]: value });
+          } else {
+            useTimelineStore.getState().updateMasterAudioEffectInstance(effect.id, { [paramName]: value });
+          }
+        }}
+        onSetEffectEnabled={(effectId, enabled) => {
+          if (target.scope === 'track' && track) {
+            useTimelineStore.getState().setTrackAudioEffectInstanceEnabled(track.id, effectId, enabled);
+          } else {
+            useTimelineStore.getState().setMasterAudioEffectInstanceEnabled(effectId, enabled);
+          }
+        }}
+        onRemoveEffect={(effectId) => {
+          if (target.scope === 'track' && track) {
+            useTimelineStore.getState().removeTrackAudioEffectInstance(track.id, effectId);
+          } else {
+            useTimelineStore.getState().removeMasterAudioEffectInstance(effectId);
+          }
+        }}
+        onReorderEffect={(effectId, newIndex) => {
+          if (target.scope === 'track' && track) {
+            useTimelineStore.getState().reorderTrackAudioEffectInstance(track.id, effectId, newIndex);
+          } else {
+            useTimelineStore.getState().reorderMasterAudioEffectInstance(effectId, newIndex);
+          }
+        }}
+      />
+    </div>
   );
 }
 
 export function AudioMixerPanel() {
   const tracks = useTimelineStore(state => state.tracks);
+  const clips = useTimelineStore(state => state.clips);
+  const selectClip = useTimelineStore(state => state.selectClip);
   const duration = useTimelineStore(state => state.duration);
   const inPoint = useTimelineStore(state => state.inPoint);
   const outPoint = useTimelineStore(state => state.outPoint);
@@ -448,6 +576,8 @@ export function AudioMixerPanel() {
   const [recordingState, setRecordingState] = useState(audioRecordingService.getSnapshot());
   const [recordingBusy, setRecordingBusy] = useState(false);
   const [preflightMeasuring, setPreflightMeasuring] = useState(false);
+  const [focusedStripId, setFocusedStripId] = useState<string>(MASTER_FOCUS_ID);
+  const [fxWindowTarget, setFxWindowTarget] = useState<FxWindowTarget | null>(null);
 
   useEffect(() => audioRecordingService.subscribe(setRecordingState), []);
 
@@ -455,11 +585,28 @@ export function AudioMixerPanel() {
     () => tracks.filter(track => track.type === 'audio'),
     [tracks],
   );
+  useEffect(() => {
+    const hasFocusedTrack = audioTracks.some(track => track.id === focusedStripId);
+    if (focusedStripId !== MASTER_FOCUS_ID && !hasFocusedTrack) {
+      setFocusedStripId(audioTracks[0]?.id ?? MASTER_FOCUS_ID);
+    }
+  }, [audioTracks, focusedStripId]);
+
+  useEffect(() => {
+    if (fxWindowTarget?.scope === 'track' && !audioTracks.some(track => track.id === fxWindowTarget.trackId)) {
+      setFxWindowTarget(null);
+    }
+  }, [audioTracks, fxWindowTarget]);
+
   const armedAudioTracks = useMemo(
     () => audioTracks.filter(track => track.audioState?.recordArm === true),
     [audioTracks],
   );
   const masterAudio = masterAudioState ?? DEFAULT_MASTER_AUDIO_STATE;
+  const eqInstances = useMemo(
+    () => collectAudioEqInstances({ clips, tracks: audioTracks, masterAudioState: masterAudio }),
+    [audioTracks, clips, masterAudio],
+  );
   const recoveryEntries = recordingState.recoveryEntries ?? audioRecordingService.listRecoveryEntries();
   const isRecording = isAudioRecordingActivePhase(recordingState.phase);
   const recordingStorageWarnings = recordingState.storageWarnings ?? [];
@@ -524,6 +671,12 @@ export function AudioMixerPanel() {
     }
   }, [armedAudioTracks, duration, inPoint, isRecording, outPoint, playheadPosition, recordingBusy]);
 
+  const handleJumpToEqInstance = useCallback((instance: AudioEqInstanceDescriptor) => {
+    if (instance.scope === 'clip') {
+      selectClip(instance.ownerId);
+    }
+  }, [selectClip]);
+
   const handleCommitRecovery = useCallback(async (sessionId: string) => {
     try {
       await audioRecordingService.commitRecoveryEntry(sessionId);
@@ -548,6 +701,7 @@ export function AudioMixerPanel() {
     count + (track.audioState?.effectStack?.filter(effect => effect.enabled !== false).length ?? 0)
   ), masterAudio.effectStack?.filter(effect => effect.enabled !== false).length ?? 0);
   const preflightStatus = getPreflightStatus(masterAudio.exportPreflight);
+  const focusedIsMaster = focusedStripId === MASTER_FOCUS_ID;
   const recordButtonTitle = isRecording
     ? `Stop audio recording${recordingElapsed > 0 ? ` (${formatSeconds(recordingElapsed)})` : ''}`
     : armedAudioTracks.length > 0
@@ -566,6 +720,9 @@ export function AudioMixerPanel() {
           </span>
         </div>
         <div className="audio-mixer-header-actions">
+          <span className={`audio-mixer-live-pill ${isRecording ? 'recording' : ''}`}>
+            {isRecording ? 'Recording' : 'Live'}
+          </span>
           <span className={`audio-mixer-status ${preflightStatus.className}`}>{preflightStatus.label}</span>
           {recoveryEntries.length > 0 && (
             <span className="audio-mixer-status warning">{recoveryEntries.length} recovery</span>
@@ -635,18 +792,48 @@ export function AudioMixerPanel() {
         </div>
       )}
 
-      <div className="audio-mixer-strip-grid">
-        {audioTracks.map(track => (
-          <TrackMixerStrip
-            key={track.id}
-            track={track}
-          />
-        ))}
-        <MasterMixerStrip
+      {eqInstances.length > 0 && (
+        <AudioEqualizerInstanceList
+          instances={eqInstances}
+          onJump={handleJumpToEqInstance}
+        />
+      )}
+
+      <div className="audio-mixer-body">
+        <div className="audio-mixer-console">
+          <div className="audio-mixer-track-scroll">
+            <div className="audio-mixer-strip-grid">
+              {audioTracks.map((track, index) => (
+                <TrackMixerStrip
+                  key={track.id}
+                  track={track}
+                  index={index}
+                  focused={focusedStripId === track.id}
+                  onFocus={() => setFocusedStripId(track.id)}
+                  onOpenFx={setFxWindowTarget}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="audio-mixer-master-bay">
+            <MasterMixerStrip
+              masterAudio={masterAudio}
+              focused={focusedIsMaster}
+              preflightMeasuring={preflightMeasuring}
+              onFocus={() => setFocusedStripId(MASTER_FOCUS_ID)}
+              onOpenFx={setFxWindowTarget}
+              onStaticPreflight={handleStaticPreflight}
+              onRenderedPreflight={handleRenderedPreflight}
+            />
+          </div>
+        </div>
+
+        <MixerFxWindow
+          target={fxWindowTarget}
+          tracks={audioTracks}
           masterAudio={masterAudio}
-          preflightMeasuring={preflightMeasuring}
-          onStaticPreflight={handleStaticPreflight}
-          onRenderedPreflight={handleRenderedPreflight}
+          onClose={() => setFxWindowTarget(null)}
         />
       </div>
     </div>

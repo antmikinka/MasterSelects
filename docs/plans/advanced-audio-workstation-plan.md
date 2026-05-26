@@ -528,7 +528,7 @@ Required processors:
 - Compressor.
 - Hard limiter.
 - Gate/expander.
-- Peak/RMS/LUFS normalize.
+- Peak/RMS/LUFS Normalize is implemented as a registry-backed render-time processor for processed analysis, bake, and export.
 - De-esser.
 - Delay.
 - Reverb.
@@ -537,10 +537,10 @@ Required processors:
 - De-click.
 - Edit repair / splice smoothing.
 - Basic non-neural noise reduction.
-- Spectral gate.
+- Spectral gate implemented as a registry-backed deterministic three-band gate for live playback, varispeed scrub, processed analysis, bake, and export.
 - Spectral brush/mask.
 - Image-to-spectrum processor.
-- Utility processors: polarity invert, mono sum, channel swap, stereo split, phase/correlation meter.
+- Utility processors: polarity invert, mono sum, channel swap, stereo split. Runtime phase/correlation metering is implemented for routed playback, varispeed scrub, track aggregation, and the timeline/mixer meter UI.
 
 Migration requirements:
 
@@ -836,13 +836,13 @@ Current checkpoint:
 
 Current checkpoint:
 
-- `AudioEffectRegistry` describes `audio-volume`, `audio-pan`, `audio-eq`, `audio-parametric-eq`, `audio-high-pass`, `audio-low-pass`, `audio-hum-notch`, `audio-de-click`, `audio-noise-reduction`, `audio-compressor`, `audio-de-esser`, `audio-limiter`, `audio-noise-gate`, `audio-expander`, `audio-delay`, `audio-reverb`, `audio-saturation`, `audio-polarity-invert`, `audio-mono-sum`, `audio-channel-swap`, and `audio-stereo-split` with defaults, category metadata, automation metadata, latency, tail declarations, and default-audible metadata where adding an effect is itself the audible operation.
-- `AudioEffectRenderer` consumes registry defaults, skips disabled/default effects, preserves legacy EQ/volume ordering for old `clip.effects`, and renders new `AudioEffectInstance` stacks through registry-aware offline processors. EQ, gain, pan, parametric EQ, filters, hum notch, compressor, and de-esser use Web Audio offline nodes; de-click, noise reduction, limiter, noise gate, expander, delay, reverb, saturation, polarity invert, mono sum, channel swap, and stereo split use deterministic sample-domain processors that read clip effect keyframes where applicable during export/render.
+- `AudioEffectRegistry` describes `audio-volume`, `audio-pan`, `audio-normalize`, `audio-eq`, `audio-parametric-eq`, `audio-high-pass`, `audio-low-pass`, `audio-hum-notch`, `audio-de-click`, `audio-noise-reduction`, `audio-spectral-gate`, `audio-compressor`, `audio-de-esser`, `audio-limiter`, `audio-noise-gate`, `audio-expander`, `audio-delay`, `audio-reverb`, `audio-saturation`, `audio-polarity-invert`, `audio-mono-sum`, `audio-channel-swap`, and `audio-stereo-split` with defaults, category metadata, automation metadata, latency, tail declarations, and default-audible metadata where adding an effect is itself the audible operation.
+- `AudioEffectRenderer` consumes registry defaults, skips disabled/default effects, preserves legacy EQ/volume ordering for old `clip.effects`, and renders new `AudioEffectInstance` stacks through registry-aware offline processors. EQ, gain, pan, parametric EQ, filters, hum notch, compressor, and de-esser use Web Audio offline nodes; normalize, de-click, noise reduction, spectral gate, limiter, noise gate, expander, delay, reverb, saturation, polarity invert, mono sum, channel swap, and stereo split use deterministic sample-domain processors that read clip effect keyframes where applicable during export/render.
 - Clip audio effect-stack actions can add, update, bypass, remove, and reorder registry `AudioEffectInstance` entries on `clip.audioState.effectStack`, with processed-analysis invalidation tied to the same registry/default logic as rendering.
-- The audio Properties tab now exposes a registry-backed `Audio FX Stack` inspector for clip-level high-pass, low-pass, hum notch, de-click, noise reduction, compressor, limiter, noise gate, expander, delay, reverb, saturation, pan, and utility-channel params without replacing the existing volume/EQ controls.
+- The audio Properties tab now exposes a registry-backed `Audio FX Stack` inspector for clip-level normalize, high-pass, low-pass, hum notch, de-click, noise reduction, spectral gate, compressor, limiter, noise gate, expander, delay, reverb, saturation, pan, and utility-channel params without replacing the existing volume/EQ controls.
 - The legacy Volume/EQ tab now uses lazy defaults for missing `audio-volume` and `audio-eq` entries and creates those effects only on user edits, so opening Properties no longer mutates clip history.
 - `AudioGraphRenderer` projects clip, track, and master effect chains into deterministic JSON-safe graph plans and includes legacy `clip.effects` audio EQ/volume entries for old/current clips without duplicating explicit `audioState.effectStack` entries.
-- Live playback route settings and varispeed scrub audio now project registry pan, parametric EQ, hum notch, de-click, noise reduction, expander, saturation, polarity invert, mono sum, channel swap, and stereo split through the same registry-backed route contract as export-visible effect stacks.
+- Live playback route settings and varispeed scrub audio now project registry pan, parametric EQ, hum notch, de-click, noise reduction, spectral gate, expander, saturation, polarity invert, mono sum, channel swap, and stereo split through the same registry-backed route contract as export-visible effect stacks. Normalize is intentionally render-time only because it needs full-buffer Peak/RMS/LUFS measurement before applying target gain.
 
 ### Track D: Waveform Pyramid And Timeline Rendering
 
@@ -931,9 +931,9 @@ Current checkpoint:
 
 - Track and master audio state now expose inline timeline controls for volume, pan, mute/solo, limiter settings, and registry-backed FX stacks.
 - Audio track headers now expose Aux send management inline: add, enable/bypass, target-bus id, gain, pre/post fader, and remove. The state is normalized through timeline track actions and reused by the AudioGraph export path.
-- Live route settings merge clip, track, and master volume/EQ state, fold enabled Aux sends into the master-return gain model with pre/post-fader parity, and project browser-supported registry processors for pan, high-pass, low-pass, parametric EQ, hum notch, de-click, noise reduction, compressor, de-esser, limiter, noise gate, expander, delay, reverb, saturation, and utility channel effects into `audioRoutingManager`.
+- Live route settings merge clip, track, and master volume/EQ state, fold enabled Aux sends into the master-return gain model with pre/post-fader parity, and project browser-supported registry processors for pan, high-pass, low-pass, parametric EQ, hum notch, de-click, noise reduction, spectral gate, compressor, de-esser, limiter, noise gate, expander, delay, reverb, saturation, and utility channel effects into `audioRoutingManager`.
 - Element playback and varispeed scrub audio pass the same live processor identity. Filter/compressor processors use native Web Audio nodes, limiter/noise-gate/expander/de-click/saturation/channel processors use sample-domain preview nodes, and de-esser/delay/reverb remain represented where the current browser graph can model them.
-- Track headers and the master bus now display runtime Peak/RMS meters fed by `AnalyserNode` snapshots from element routes and the varispeed scrub graph. Meter state is held in non-serialized `runtimeAudioMeters` with stale cleanup and master aggregation.
+- Track headers and the master bus now display runtime Peak/RMS meters fed by `AnalyserNode` snapshots from element routes and the varispeed scrub graph. Routed playback and scrub graphs also publish stereo phase-correlation and width values from L/R analyser snapshots, with the correlation marker shown in timeline and mixer meters. Meter state is held in non-serialized `runtimeAudioMeters` with stale cleanup and master aggregation.
 - The master bus stores and displays an Export Preflight result built from the normalized AudioGraph. Static `Check` reports invalid skipped effects, enabled sends rendered as master-return audio, active record/input-monitor states, and positive master gain without a limiter. Export now applies track sends, then the master target LUFS after master effects/fader and before the final limiter/peak-normalize stage; rendered `Measure` exports the current audio range to an `AudioBuffer` and records integrated LUFS, true peak, sample peak, RMS, and target mismatch warnings.
 - Rendered preflight measurements are retained as a bounded master-side history, so LUFS/true-peak/RMS comparisons survive later static checks and remain visible in the docked mixer while staying serialized with the project audio state.
 - Timeline audio track headers now include `R` record-arm and `I` input-monitor controls. The toolbar Record button starts capture for armed tracks at the current playhead, stops into imported audio media, adds recorded clips to the armed tracks, and queues waveform/loudness artifact jobs for the recorded clips.
@@ -945,7 +945,7 @@ Current checkpoint:
 - Recording now estimates browser storage headroom before capture, requests persistent storage for long or low-headroom sessions when available, and surfaces quota/persistence warnings in both the timeline toolbar and Audio Mixer without blocking capture.
 - Punch recording now warms audio inputs shortly before punch-in with paused capture handles, then resumes capture exactly at the punch point so device permission/initialization latency is reduced without adding pre-roll audio to the committed clip.
 - Track, clip, and master FX stacks now render a dedicated dynamics view for compressor, de-esser, limiter, noise gate, and expander effects. The view shows the same registry params used by live/offline/export paths as a transfer curve plus threshold/ceiling/floor/range/timing readouts instead of leaving dynamics as an unstructured numeric list.
-- Runtime audio meter snapshots now carry live gain-reduction readings for Web Audio compressor/de-esser processors and sample-domain limiter/noise-gate/expander processors, keyed by effect id. Clip, track, and master dynamics views display those readings as `GR` readouts while the master meter keeps the strongest current reduction per effect id across audible tracks.
+- Runtime audio meter snapshots now carry stereo phase-correlation/width values plus live gain-reduction readings for Web Audio compressor/de-esser processors and sample-domain limiter/noise-gate/expander processors, keyed by effect id. Clip, track, and master dynamics views display those readings as `GR` readouts while the master meter keeps the strongest current reduction per effect id across audible tracks.
 
 ### Track H: Node Workspace And Signal IR Integration
 
@@ -976,7 +976,7 @@ Current checkpoint:
 
 Current checkpoint:
 
-- Hum notch, de-click, noise reduction, splice smoothing, and RMS loudness matching are available as deterministic repair workflows. Hum notch and de-click are available as registry-backed default-audible insert effects for clip/track/master FX stacks; noise reduction is a registry-backed insert that stays neutral until reduction/mix are raised.
+- Hum notch, de-click, noise reduction, splice smoothing, and RMS loudness matching are available as deterministic repair workflows. Hum notch and de-click are available as registry-backed default-audible insert effects for clip/track/master FX stacks; noise reduction is a registry-backed insert that stays neutral until reduction/mix are raised. Normalize is a registry-backed default-audible render processor for Peak/RMS/LUFS target gain with ceiling protection.
 - Repair operations are stored in `clip.audioState.editStack`, invalidate only processed analysis refs, and render through `ClipAudioRenderService`, giving processed waveform/spectrogram jobs, bake, and export the same deterministic output.
 - Silence Cleanup detects quiet source ranges, applies compacting non-destructive `delete-silence` operations, can optionally ripple later same-track clips, and leaves original media untouched.
 - Room Tone Fill loops detected quiet source ranges into selected regions through a non-destructive `room-tone-fill` operation, with deterministic low-level generated tone as fallback.
