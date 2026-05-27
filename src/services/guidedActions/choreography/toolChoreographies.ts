@@ -1,6 +1,8 @@
 import type {
   GuidedAction,
   GuidedActionFamily,
+  GuidedMaskCreateOptions,
+  GuidedMaskPathVertexInput,
   GuidedTargetRef,
   GuidedToolCall,
   ValidationCheck,
@@ -28,10 +30,12 @@ const CHOREOGRAPHIES = new Map<string, GuidedToolChoreography>([
   ['moveClip', compileTimelineEdit],
   ['deleteClip', compileTimelineEdit],
   ['deleteClips', compileTimelineEdit],
+  ['addClipSegment', compileAddClipSegment],
   ['addRectangleMask', compileMaskEdit],
   ['addEllipseMask', compileMaskEdit],
   ['addMask', compileMaskEdit],
   ['updateMask', compileMaskEdit],
+  ['addMaskPathKeyframe', compileMaskEdit],
   ['addEffect', compileEffectEdit],
   ['updateEffect', compileEffectEdit],
   ['addKeyframe', compileKeyframeEdit],
@@ -120,6 +124,7 @@ export function normalizeBatchToolCalls(actions: unknown): GuidedToolCall[] {
 export function stripExecutionActions(actions: GuidedAction[]): GuidedAction[] {
   return actions.filter((action) => (
     action.type !== 'executeTool'
+    && action.type !== 'drawMaskPath'
     && action.type !== 'confirmState'
     && action.type !== 'waitForUserAction'
   ));
@@ -140,6 +145,8 @@ function compileSelectClips(
   if (primaryTarget) {
     actions.push(
       { type: 'resolveTarget', target: primaryTarget, required: false, family },
+      { type: 'moveCursorTo', target: primaryTarget, durationMs: 420, optional: true, family, label: 'Move to clip' },
+      { type: 'clickVisual', target: primaryTarget, optional: true, family, label: 'Click clip' },
       { type: 'highlightTarget', target: primaryTarget, tone: 'primary', durationMs: 350, family },
       { type: 'callout', title: 'Select clips', body: `${clipIds.length} clip${clipIds.length === 1 ? '' : 's'}`, target: primaryTarget, family },
     );
@@ -222,7 +229,9 @@ function compileSetTransform(
   for (const change of changes) {
     actions.push(
       { type: 'resolveTarget', target: change.target, required: false, family },
+      { type: 'moveCursorTo', target: change.target, durationMs: 520, optional: true, family, label: `Move to ${change.property}` },
       { type: 'highlightTarget', target: change.target, tone: 'primary', durationMs: 350, family, label: `Highlight ${change.property}` },
+      { type: 'clickVisual', target: change.target, optional: true, family, label: `Click ${change.property}` },
     );
   }
 
@@ -296,6 +305,74 @@ function compileTimelineEdit(
   return actions;
 }
 
+function compileAddClipSegment(
+  toolCall: GuidedToolCall,
+  context: GuidedToolChoreographyContext,
+): GuidedAction[] {
+  const family: GuidedActionFamily = 'media';
+  const mediaFileId = readString(toolCall.args.mediaFileId);
+  const trackId = readString(toolCall.args.trackId);
+  const startTime = readNumber(toolCall.args.startTime);
+  const mediaTarget = mediaFileId ? mediaItemTarget(mediaFileId) : undefined;
+  const timelineTarget = startTime !== null
+    ? {
+        kind: 'timelineTime' as const,
+        ...(trackId ? { trackId } : {}),
+        time: startTime,
+      }
+    : undefined;
+  const actions: GuidedAction[] = [
+    { type: 'focusPanel', panel: 'media', family, label: 'Open Media' },
+  ];
+
+  if (mediaTarget) {
+    actions.push(
+      { type: 'resolveTarget', target: mediaTarget, required: false, family },
+      { type: 'moveCursorTo', target: mediaTarget, durationMs: 420, optional: true, family, label: 'Move to media item' },
+      { type: 'highlightTarget', target: mediaTarget, tone: 'primary', durationMs: 260, family, label: 'Highlight media item' },
+      { type: 'clickVisual', target: mediaTarget, optional: true, family, label: 'Pick up media item' },
+    );
+  }
+
+  actions.push({ type: 'focusPanel', panel: 'timeline', family, label: 'Open timeline' });
+
+  if (timelineTarget) {
+    actions.push(
+      { type: 'scrollIntoView', target: timelineTarget, block: 'center', family, label: `Reveal ${startTime}s` },
+      mediaTarget
+        ? { type: 'dragCursor', from: mediaTarget, to: timelineTarget, durationMs: 760, optional: true, family, label: 'Drag media to timeline' }
+        : { type: 'moveCursorTo', target: timelineTarget, durationMs: 520, optional: true, family, label: 'Move to timeline position' },
+    );
+  }
+
+  actions.push(createExecutionAction(toolCall, family));
+
+  if (timelineTarget) {
+    actions.push({
+      type: 'highlightTarget',
+      target: timelineTarget,
+      tone: 'success',
+      durationMs: 220,
+      family,
+      label: 'Highlight drop position',
+    });
+  }
+
+  actions.push({
+    type: 'callout',
+    title: 'Added clip segment',
+    body: timelineTarget ? `Placed at ${formatMaybeNumber(startTime)}.` : 'Media was added to the timeline.',
+    target: timelineTarget ?? mediaTarget,
+    family,
+  });
+
+  if (context.includeValidation) {
+    actions.push(createCustomConfirmation(toolCall, family));
+  }
+
+  return actions;
+}
+
 function compileMaskEdit(
   toolCall: GuidedToolCall,
   context: GuidedToolChoreographyContext,
@@ -316,13 +393,33 @@ function compileMaskEdit(
   if (toolbarTarget) {
     actions.push(
       { type: 'resolveTarget', target: toolbarTarget, required: false, family },
+      { type: 'moveCursorTo', target: toolbarTarget, durationMs: 520, optional: true, family, label: `Move to ${toolCall.tool}` },
       { type: 'highlightTarget', target: toolbarTarget, tone: 'primary', durationMs: 350, family },
+      { type: 'clickVisual', target: toolbarTarget, optional: true, family, label: `Click ${toolCall.tool}` },
     );
   }
 
-  const path = getMaskPath(toolCall.args.vertices);
+  const path = getMaskPathForToolCall(toolCall);
+  const shouldCommitIncrementally = toolCall.tool === 'addMask'
+    && Boolean(clipId)
+    && path.length > 0
+    && context.includeValidation;
   if (path.length > 0) {
-    actions.push({ type: 'drawPreviewPath', points: path, close: toolCall.args.closed !== false, family, label: 'Preview mask path' });
+    actions.push({ type: 'focusPanel', panel: 'preview', family, label: 'Open Preview' });
+    if (shouldCommitIncrementally && clipId) {
+      actions.push({
+        type: 'drawMaskPath',
+        clipId,
+        vertices: getMaskVerticesForToolCall(toolCall),
+        close: getMaskPathClosedForToolCall(toolCall),
+        mask: getMaskCreateOptions(toolCall.args),
+        policy: 'semanticTool',
+        family,
+        label: 'Draw mask path',
+      });
+    } else {
+      actions.push({ type: 'drawPreviewPath', points: path, close: getMaskPathClosedForToolCall(toolCall), family, label: 'Preview mask path' });
+    }
   }
 
   actions.push({
@@ -332,9 +429,28 @@ function compileMaskEdit(
     target: toolbarTarget ?? { kind: 'propertiesTab', tab: 'masks' },
     family,
   });
-  actions.push(createExecutionAction(toolCall, family));
+  if (!shouldCommitIncrementally) {
+    actions.push(createExecutionAction(toolCall, family));
+  }
 
   if (context.includeValidation && clipId) {
+    if (toolCall.tool === 'addMaskPathKeyframe') {
+      const maskId = readString(toolCall.args.maskId);
+      const time = readNumber(toolCall.args.time);
+      actions.push({
+        type: 'confirmState',
+        check: {
+          kind: 'keyframeExists',
+          clipId,
+          ...(maskId ? { property: `mask.${maskId}.path` } : {}),
+          ...(time !== null ? { time } : {}),
+        },
+        family,
+        label: 'Confirm mask path keyframe',
+      });
+      return actions;
+    }
+
     actions.push({
       type: 'confirmState',
       check: toolCall.tool === 'updateMask' && readString(toolCall.args.maskId)
@@ -389,7 +505,9 @@ function compileKeyframeEdit(
     const target: GuidedTargetRef = { kind: 'propertyControl', property, clipId };
     actions.splice(actions.length - 1, 0,
       { type: 'resolveTarget', target, required: false, family },
+      { type: 'moveCursorTo', target, durationMs: 520, optional: true, family, label: `Move to ${property}` },
       { type: 'highlightTarget', target, tone: 'primary', durationMs: 350, family },
+      { type: 'clickVisual', target, optional: true, family, label: `Click ${property}` },
     );
   }
 
@@ -472,7 +590,9 @@ function compilePropertiesStackEdit(
     { type: 'focusPanel', panel: 'clip-properties', family, label: 'Open Properties' },
     { type: 'openPropertiesTab', tab, family, label: `Open ${tab}` },
     { type: 'resolveTarget', target: tabTarget, required: false, family },
+    { type: 'moveCursorTo', target: tabTarget, durationMs: 420, optional: true, family, label: `Move to ${tab}` },
     { type: 'highlightTarget', target: tabTarget, tone: 'primary', durationMs: 350, family },
+    { type: 'clickVisual', target: tabTarget, optional: true, family, label: `Click ${tab}` },
     { type: 'callout', title, body: formatToolName(toolCall.tool), target: tabTarget, family },
     createExecutionAction(toolCall, family),
   );
@@ -619,7 +739,41 @@ function getMaskToolbarTarget(tool: string): GuidedTargetRef | null {
   }
 }
 
+function getMaskPathForToolCall(toolCall: GuidedToolCall): Array<{ x: number; y: number }> {
+  if (toolCall.tool === 'addMaskPathKeyframe' && isRecord(toolCall.args.pathValue)) {
+    return getMaskPath(toolCall.args.pathValue.vertices);
+  }
+  return getMaskPath(toolCall.args.vertices);
+}
+
+function getMaskVerticesForToolCall(toolCall: GuidedToolCall): GuidedMaskPathVertexInput[] {
+  return getMaskVertices(toolCall.args.vertices);
+}
+
+function getMaskPathClosedForToolCall(toolCall: GuidedToolCall): boolean {
+  if (toolCall.tool === 'addMaskPathKeyframe' && isRecord(toolCall.args.pathValue)) {
+    return toolCall.args.pathValue.closed !== false;
+  }
+  return toolCall.args.closed !== false;
+}
+
+function getMaskCreateOptions(args: Record<string, unknown>): GuidedMaskCreateOptions {
+  const options: GuidedMaskCreateOptions = {};
+  if (typeof args.enabled === 'boolean') options.enabled = args.enabled;
+  if (typeof args.feather === 'number') options.feather = args.feather;
+  if (typeof args.inverted === 'boolean') options.inverted = args.inverted;
+  if (args.mode === 'add' || args.mode === 'subtract' || args.mode === 'intersect') options.mode = args.mode;
+  if (typeof args.name === 'string') options.name = args.name;
+  if (typeof args.opacity === 'number') options.opacity = args.opacity;
+  if (typeof args.visible === 'boolean') options.visible = args.visible;
+  return options;
+}
+
 function getMaskPath(vertices: unknown): Array<{ x: number; y: number }> {
+  return getMaskVertices(vertices).map((vertex) => ({ x: vertex.x, y: vertex.y }));
+}
+
+function getMaskVertices(vertices: unknown): GuidedMaskPathVertexInput[] {
   if (!Array.isArray(vertices)) {
     return [];
   }
@@ -633,8 +787,32 @@ function getMaskPath(vertices: unknown): Array<{ x: number; y: number }> {
     if (x === null || y === null) {
       return [];
     }
-    return [{ x, y }];
+    return [{
+      x,
+      y,
+      ...readPointRecord(vertex.handleIn, 'handleIn'),
+      ...readPointRecord(vertex.handleOut, 'handleOut'),
+      ...readMaskHandleMode(vertex.handleMode),
+    }];
   });
+}
+
+function readPointRecord(value: unknown, key: 'handleIn' | 'handleOut'): Record<string, { x: number; y: number }> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  const x = readNumber(value.x);
+  const y = readNumber(value.y);
+  if (x === null || y === null) {
+    return {};
+  }
+  return { [key]: { x, y } };
+}
+
+function readMaskHandleMode(value: unknown): { handleMode?: 'none' | 'mirrored' | 'split' } {
+  return value === 'none' || value === 'mirrored' || value === 'split'
+    ? { handleMode: value }
+    : {};
 }
 
 function inferFallbackFamily(tool: string): GuidedActionFamily {
@@ -655,6 +833,10 @@ function inferFallbackFamily(tool: string): GuidedActionFamily {
 
 function clipTarget(clipId: string): GuidedTargetRef {
   return { kind: 'timelineClip', clipId };
+}
+
+function mediaItemTarget(itemId: string): GuidedTargetRef {
+  return { kind: 'mediaItem', itemId };
 }
 
 function formatToolName(tool: string): string {

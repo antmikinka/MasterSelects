@@ -113,6 +113,24 @@ export interface GuidedActionBase {
   optional?: boolean;
 }
 
+export interface GuidedMaskPathVertexInput {
+  x: number;
+  y: number;
+  handleIn?: { x: number; y: number };
+  handleOut?: { x: number; y: number };
+  handleMode?: 'none' | 'mirrored' | 'split';
+}
+
+export interface GuidedMaskCreateOptions {
+  enabled?: boolean;
+  feather?: number;
+  inverted?: boolean;
+  mode?: 'add' | 'subtract' | 'intersect';
+  name?: string;
+  opacity?: number;
+  visible?: boolean;
+}
+
 export type GuidedAction =
   | (GuidedActionBase & { type: 'delay'; ms: number })
   | (GuidedActionBase & { type: 'resolveTarget'; target: GuidedTargetRef; required?: boolean })
@@ -132,6 +150,7 @@ export type GuidedAction =
   | (GuidedActionBase & { type: 'chooseDropdownOption'; target: GuidedTargetRef; policy?: SurfaceExecutionPolicy })
   | (GuidedActionBase & { type: 'typeInto'; target: GuidedTargetRef; text: string; policy?: SurfaceExecutionPolicy })
   | (GuidedActionBase & { type: 'drawPreviewPath'; points: Array<{ x: number; y: number }>; close?: boolean; policy?: SurfaceExecutionPolicy })
+  | (GuidedActionBase & { type: 'drawMaskPath'; clipId: string; vertices: GuidedMaskPathVertexInput[]; close?: boolean; mask?: GuidedMaskCreateOptions; policy?: SurfaceExecutionPolicy })
   | (GuidedActionBase & { type: 'selectClip'; clipId: string })
   | (GuidedActionBase & { type: 'setPlayheadVisual'; time: number })
   | (GuidedActionBase & { type: 'executeTool'; tool: string; args: Record<string, unknown> })

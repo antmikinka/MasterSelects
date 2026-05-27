@@ -11,6 +11,7 @@ describe('ElevenLabs API key settings UI', () => {
     mockedUseSettingsStore.mockImplementation((selector: (state: { apiKeys: Record<string, string> }) => unknown) => selector({
       apiKeys: {
         openai: '',
+        anthropic: '',
         assemblyai: '',
         deepgram: '',
         piapi: '',

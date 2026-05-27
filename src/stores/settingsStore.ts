@@ -70,6 +70,7 @@ function clampGuidedActionReplayBudgetMs(value: number): number {
 
 export interface APIKeys {
   openai: string;
+  anthropic: string; // Anthropic key for Claude chat models
   assemblyai: string;
   deepgram: string;
   piapi: string;  // PiAPI key for AI video generation (Kling, Luma, etc.)
@@ -241,6 +242,7 @@ export const useSettingsStore = create<SettingsState>()(
       customBrightness: 15, // Default: dark
       apiKeys: {
         openai: '',
+        anthropic: '',
         assemblyai: '',
         deepgram: '',
         piapi: '',

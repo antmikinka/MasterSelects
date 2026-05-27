@@ -394,6 +394,9 @@ Multi Preview is available from the View menu and can be floated or docked, but 
 - Floating panels are restored across sessions
 - Invalid panel types are cleaned up on load
 - Named layouts can be stored in the View menu and reused later
+- The active named layout can be overwritten directly with `Save to Current Layout`
+- Named layouts also store the timeline audio focus/display mode and track heights
+- Loading a saved layout animates panel movement, resizing, and reflow over 500ms
 - A saved layout can be marked as the default layout
 
 ### Layout Actions
@@ -401,6 +404,7 @@ Multi Preview is available from the View menu and can be floated or docked, but 
 | Action | Location |
 |--------|----------|
 | Save Current Layout | View -> Layouts |
+| Save to Current Layout | View -> Layouts |
 | Load Saved Layout | View -> Layouts |
 | Set Current as Default | View -> Layouts |
 | Set Saved Layout as Default | View -> Layouts |

@@ -53,21 +53,16 @@ function TimelineControlsComponent({
   onToggleAudioFocusMode,
   onSetTrackFocusMode,
   onToggleCutTool,
-  onSetDuration,
   onFitToWindow,
   onToggleSlotGrid,
   slotGridActive,
   formatTime,
-  parseTime,
 }: TimelineControlsProps) {
-  const [isEditingDuration, setIsEditingDuration] = useState(false);
-  const [durationInputValue, setDurationInputValue] = useState('');
   const [viewDropdownOpen, setViewDropdownOpen] = useState(false);
   const [masterDropdownOpen, setMasterDropdownOpen] = useState(false);
   const [preflightMeasuring, setPreflightMeasuring] = useState(false);
   const [recordingBusy, setRecordingBusy] = useState(false);
   const [recordingState, setRecordingState] = useState(audioRecordingService.getSnapshot());
-  const durationInputRef = useRef<HTMLInputElement>(null);
   const viewDropdownRef = useRef<HTMLDivElement>(null);
   const masterDropdownRef = useRef<HTMLDivElement>(null);
   const masterAudioState = useTimelineStore(state => state.masterAudioState);
@@ -118,14 +113,6 @@ function TimelineControlsComponent({
         : `Record armed audio track${armedAudioTracks.length === 1 ? '' : 's'} from ${formatTime(recordingRange.startTime)}`
       : 'Arm an audio track before recording';
 
-  // Focus input when editing starts
-  useEffect(() => {
-    if (isEditingDuration && durationInputRef.current) {
-      durationInputRef.current.focus();
-      durationInputRef.current.select();
-    }
-  }, [isEditingDuration]);
-
   useEffect(() => audioRecordingService.subscribe(setRecordingState), []);
 
   // Close dropdown when clicking outside
@@ -152,31 +139,6 @@ function TimelineControlsComponent({
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [masterDropdownOpen]);
-
-  const handleDurationClick = () => {
-    setDurationInputValue(formatTime(duration));
-    setIsEditingDuration(true);
-  };
-
-  const handleDurationSubmit = () => {
-    const newDuration = parseTime(durationInputValue);
-    if (newDuration !== null && newDuration > 0) {
-      onSetDuration(newDuration);
-    }
-    setIsEditingDuration(false);
-  };
-
-  const handleDurationKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleDurationSubmit();
-    } else if (e.key === 'Escape') {
-      setIsEditingDuration(false);
-    }
-  };
-
-  const handleDurationBlur = () => {
-    handleDurationSubmit();
-  };
 
   const handleStaticPreflight = useCallback(() => {
     runAudioExportPreflight(inPoint ?? 0, outPoint ?? duration);
@@ -283,28 +245,6 @@ function TimelineControlsComponent({
             title={recordingStorageWarning.message}
           >
             !
-          </span>
-        )}
-      </div>
-      <div className="timeline-time">
-        {formatTime(playheadPosition)} /{' '}
-        {isEditingDuration ? (
-          <input
-            ref={durationInputRef}
-            type="text"
-            className="duration-input"
-            value={durationInputValue}
-            onChange={(e) => setDurationInputValue(e.target.value)}
-            onKeyDown={handleDurationKeyDown}
-            onBlur={handleDurationBlur}
-          />
-        ) : (
-          <span
-            className="duration-display"
-            onClick={handleDurationClick}
-            title="Click to edit composition duration"
-          >
-            {formatTime(duration)}
           </span>
         )}
       </div>

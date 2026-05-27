@@ -63,6 +63,7 @@ const MASK_TOOLS = new Set([
   'addMask',
   'addRectangleMask',
   'addEllipseMask',
+  'addMaskPathKeyframe',
   'addVertex',
   'updateVertex',
   'removeVertex',
@@ -205,6 +206,7 @@ export function inferGuidedActionFamily(action: GuidedAction): GuidedActionFamil
     case 'clickVisual':
     case 'doubleClickVisual':
     case 'dragCursor':
+    case 'drawMaskPath':
     case 'drawPreviewPath':
     case 'highlightTarget':
     case 'moveCursorTo':
@@ -258,8 +260,9 @@ export function getNaturalActionDurationMs(action: GuidedAction): number {
       return 220;
     case 'typeInto':
       return clampDurationMs(120 + action.text.length * 35);
+    case 'drawMaskPath':
     case 'drawPreviewPath':
-      return clampDurationMs(250 + action.points.length * 140 + (action.close ? 120 : 0));
+      return clampDurationMs(250 + getPathPointCount(action) * 140 + (action.close ? 120 : 0));
     case 'selectClip':
     case 'setPlayheadVisual':
       return 180;
@@ -330,6 +333,7 @@ function isCompressibleAction(action: GuidedAction): boolean {
   }
 
   return action.type !== 'executeTool'
+    && action.type !== 'drawMaskPath'
     && action.type !== 'confirmState'
     && action.type !== 'waitForUserAction'
     && action.type !== 'resolveTarget';
@@ -392,6 +396,7 @@ function getPrimaryTarget(action: GuidedAction): GuidedTargetRef | null {
     case 'resizePanel':
       return action.visualTarget ?? null;
     case 'delay':
+    case 'drawMaskPath':
     case 'drawPreviewPath':
     case 'focusPanel':
     case 'openPropertiesTab':
@@ -403,6 +408,12 @@ function getPrimaryTarget(action: GuidedAction): GuidedTargetRef | null {
     case 'resolveTarget':
       return null;
   }
+}
+
+function getPathPointCount(action: Extract<GuidedAction, { type: 'drawPreviewPath' | 'drawMaskPath' }>): number {
+  return action.type === 'drawMaskPath'
+    ? action.vertices.length
+    : action.points.length;
 }
 
 function clampBudgetMs(value: number): number {

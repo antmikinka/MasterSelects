@@ -17,8 +17,9 @@ FlashBoard is not a separate model backend. It is a composer/runtime layer on to
 - `cloud` for hosted Kling 3.0, hosted Nano Banana 2, and hosted ElevenLabs speech
 - `elevenlabs` for user-key text-to-speech audio generation
 - `suno` for Kie.ai-backed Suno music generation using the user's Kie.ai key
+- compact chat for prompt discussion through OpenAI, Anthropic, or local Lemonade without creating a generation node
 
-The Media Panel generator tray opens only the compact FlashBoard composer when expanded. If only an ElevenLabs key is configured, the composer starts on the audio text-to-speech target. If Kie.ai or hosted cloud access is also available, the composer can still switch between video, image, and audio targets.
+The Media Panel generator tray offers two collapsed launch actions: `Generate` opens the normal generation prompt, while `Chat` opens a separate chat prompt window with provider/model/temperature controls and OpenAI reasoning effort for GPT-5.x models. If only an ElevenLabs key is configured, the generation composer starts on the audio text-to-speech target. If Kie.ai or hosted cloud access is also available, the generation composer can still switch between video, image, and audio targets. `Generate` remains the only action that queues media generation.
 
 ---
 
@@ -29,7 +30,7 @@ FlashBoard is composed of:
 - `MediaAIGenerativeTray` - Media Panel bottom-right expand/collapse shell
 - `MediaAIGenerationQueue` - compact Media Panel preview cards for queued, processing, failed, and canceled generation nodes
 - `useFlashBoardRuntime` - board initialization plus queue/import callbacks
-- `FlashBoardComposer` - provider/output selection, prompt, ordered media reference cards, text-to-speech or music editing, durations, aspect ratio, image size, multi-shot setup, audio voice settings, and Suno song controls
+- `FlashBoardComposer` - provider/output selection, separate generate/chat prompt windows, ordered media reference cards, compact chat controls, text-to-speech or music editing, durations, aspect ratio, image size, multi-shot setup, audio voice settings, and Suno song controls
 
 Boards are persisted inside the project state. The active board is restored on project load, and generation metadata is serialized alongside the board state.
 

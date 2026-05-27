@@ -44,6 +44,7 @@ export function ApiKeysSettings({ localKeys, onKeyChange }: ApiKeysSettingsProps
   const apiKeys = useSettingsStore((s) => s.apiKeys);
   const [showKeys, setShowKeys] = useState({
     openai: false,
+    anthropic: false,
     assemblyai: false,
     deepgram: false,
     piapi: false,
@@ -144,6 +145,21 @@ export function ApiKeysSettings({ localKeys, onKeyChange }: ApiKeysSettingsProps
           show={showKeys.evolink}
           onToggle={() => toggleShowKey('evolink')}
           onChange={(v) => onKeyChange('evolink', v)}
+        />
+      </div>
+      <div className="settings-group">
+        <div className="settings-group-title">AI Chat</div>
+
+        <ApiKeyRow
+          label="Anthropic API Key"
+          provider="anthropic"
+          value={getKey('anthropic')}
+          placeholder="sk-ant-..."
+          linkUrl="https://console.anthropic.com/settings/keys"
+          linkText="Get API Key"
+          show={showKeys.anthropic}
+          onToggle={() => toggleShowKey('anthropic')}
+          onChange={(v) => onKeyChange('anthropic', v)}
         />
       </div>
       <div className="settings-group">

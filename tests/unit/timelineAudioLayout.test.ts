@@ -43,12 +43,13 @@ describe('timeline audio layout', () => {
     expect(getTimelineTrackBaseHeight(track('audio', 160), 'spectral')).toBe(160);
   });
 
-  it('turns audio focus into large inline editor lanes without mutating persisted heights', () => {
+  it('lets audio focus lanes shrink to the normal compact track floor', () => {
     const audioTrack = track('audio', 40);
 
-    expect(getTimelineTrackBaseHeight(audioTrack, 'compact', true)).toBe(96);
-    expect(getTimelineTrackBaseHeight(audioTrack, 'detailed', true)).toBe(144);
-    expect(getTimelineTrackBaseHeight(audioTrack, 'spectral', true)).toBe(180);
+    expect(getTimelineTrackBaseHeight(audioTrack, 'compact', true)).toBe(40);
+    expect(getTimelineTrackBaseHeight(audioTrack, 'detailed', true)).toBe(40);
+    expect(getTimelineTrackBaseHeight(audioTrack, 'spectral', true)).toBe(40);
+    expect(getTimelineTrackBaseHeight(track('audio', 20), 'spectral', true)).toBe(20);
     expect(audioTrack.height).toBe(40);
   });
 

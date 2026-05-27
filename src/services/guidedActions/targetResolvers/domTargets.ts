@@ -411,6 +411,13 @@ function resolutionFromElement(target: GuidedTargetRef, element: Element): Guide
     };
   }
 
+  if (target.kind === 'timelineClip') {
+    const timelineClipResolution = resolutionFromTimelineClipElement(target, element, rect);
+    if (timelineClipResolution) {
+      return timelineClipResolution;
+    }
+  }
+
   if (isOffscreen(rect)) {
     return {
       status: 'missing',
@@ -430,6 +437,55 @@ function resolutionFromElement(target: GuidedTargetRef, element: Element): Guide
     target,
     rect,
     center: centerOfRect(rect),
+    element,
+  };
+}
+
+function resolutionFromTimelineClipElement(
+  target: Extract<GuidedTargetRef, { kind: 'timelineClip' }>,
+  element: Element,
+  rect: GuidedRect,
+): GuidedTargetResolution | null {
+  const timelineSurface = findFirstElement(TIMELINE_SURFACE_SELECTORS);
+  if (!timelineSurface) {
+    return null;
+  }
+
+  const surfaceRect = rectFromElement(timelineSurface);
+  if (surfaceRect.width <= 0 || surfaceRect.height <= 0) {
+    return null;
+  }
+
+  const contentLeft = Math.min(
+    Math.max(resolveTimelineContentOriginX(timelineSurface, surfaceRect), surfaceRect.x),
+    surfaceRect.x + surfaceRect.width,
+  );
+  const viewportRect = {
+    x: contentLeft,
+    y: surfaceRect.y,
+    width: Math.max(0, surfaceRect.x + surfaceRect.width - contentLeft),
+    height: surfaceRect.height,
+  };
+  const visibleRect = intersectRects(rect, viewportRect);
+  if (!visibleRect || visibleRect.width <= 0 || visibleRect.height <= 0 || isOffscreen(visibleRect)) {
+    return {
+      status: 'missing',
+      target,
+      reason: 'offscreen',
+      message: 'Timeline clip target is outside the visible timeline viewport',
+      suggestedAction: {
+        type: 'scrollIntoView',
+        target,
+        block: 'center',
+      },
+    };
+  }
+
+  return {
+    status: 'resolved',
+    target,
+    rect: visibleRect,
+    center: centerOfRect(visibleRect),
     element,
   };
 }
@@ -615,6 +671,22 @@ function centerOfRect(rect: GuidedRect): GuidedPoint {
   return {
     x: rect.x + rect.width / 2,
     y: rect.y + rect.height / 2,
+  };
+}
+
+function intersectRects(a: GuidedRect, b: GuidedRect): GuidedRect | null {
+  const left = Math.max(a.x, b.x);
+  const top = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  if (right <= left || bottom <= top) {
+    return null;
+  }
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
   };
 }
 

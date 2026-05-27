@@ -23,6 +23,8 @@ import {
 import {
   EXTERNAL_DRAG_BRIDGE_EVENT,
   getExternalDragPayload,
+  getExternalDragPayloadMimeData,
+  getExternalDragPayloadMimeTypes,
   type ExternalDragBridgeEventDetail,
   type ExternalDragPayload,
 } from '../utils/externalDragSession';
@@ -200,60 +202,18 @@ type CustomExternalDragTarget =
   | { kind: 'track'; trackId: string }
   | { kind: 'new-track'; trackType: 'video' | 'audio' };
 
-function getPayloadMimeTypes(payload: ExternalDragPayload): string[] {
-  switch (payload.kind) {
-    case 'composition':
-      return ['application/x-composition-id'];
-    case 'text':
-      return ['application/x-text-item-id'];
-    case 'solid':
-      return ['application/x-solid-item-id'];
-    case 'mesh':
-      return ['application/x-mesh-item-id'];
-    case 'camera':
-      return ['application/x-camera-item-id'];
-    case 'splat-effector':
-      return ['application/x-splat-effector-item-id'];
-    case 'math-scene':
-      return ['application/x-math-scene-item-id'];
-    case 'motion-shape':
-      return ['application/x-motion-shape-item-id'];
-    case 'signal':
-      return ['application/x-signal-asset-id'];
-    case 'media-file':
-      return payload.isAudio
-        ? ['application/x-media-file-id', 'application/x-media-is-audio']
-        : ['application/x-media-file-id'];
-  }
-}
-
-function getPayloadMimeData(payload: ExternalDragPayload, mimeType: string): string {
-  if (mimeType === 'application/x-composition-id' && payload.kind === 'composition') return payload.id;
-  if (mimeType === 'application/x-text-item-id' && payload.kind === 'text') return payload.id;
-  if (mimeType === 'application/x-solid-item-id' && payload.kind === 'solid') return payload.id;
-  if (mimeType === 'application/x-mesh-item-id' && payload.kind === 'mesh') return payload.id;
-  if (mimeType === 'application/x-camera-item-id' && payload.kind === 'camera') return payload.id;
-  if (mimeType === 'application/x-splat-effector-item-id' && payload.kind === 'splat-effector') return payload.id;
-  if (mimeType === 'application/x-math-scene-item-id' && payload.kind === 'math-scene') return payload.id;
-  if (mimeType === 'application/x-motion-shape-item-id' && payload.kind === 'motion-shape') return payload.id;
-  if (mimeType === 'application/x-signal-asset-id' && payload.kind === 'signal') return payload.id;
-  if (mimeType === 'application/x-media-file-id' && payload.kind === 'media-file') return payload.id;
-  if (mimeType === 'application/x-media-is-audio' && payload.kind === 'media-file' && payload.isAudio) return 'true';
-  return '';
-}
-
 function createPayloadDragEvent(
   detail: ExternalDragBridgeEventDetail,
   payload: ExternalDragPayload,
 ): React.DragEvent {
-  const types = getPayloadMimeTypes(payload);
+  const types = getExternalDragPayloadMimeTypes(payload);
   const dataTransfer = {
     types,
     dropEffect: 'copy',
     effectAllowed: 'copyMove',
     files: { length: 0, item: () => null },
     items: { length: 0, item: () => null },
-    getData: (mimeType: string) => getPayloadMimeData(payload, mimeType),
+    getData: (mimeType: string) => getExternalDragPayloadMimeData(payload, mimeType),
     setData: () => undefined,
     clearData: () => undefined,
     setDragImage: () => undefined,
@@ -437,6 +397,7 @@ export function useExternalDrop({
     const targetTrack = tracks.find((t) => t.id === trackId);
     const isVideoTrack = targetTrack?.type === 'video';
     const isAudioTrack = targetTrack?.type === 'audio';
+    const dragPayload = getExternalDragPayload();
     const previewDuration = duration ?? dragMetadataCacheRef.current?.duration ?? 5;
     const previewHasAudio = hasAudio ?? dragMetadataCacheRef.current?.hasAudio;
     const resolvedStartTime = resolveTrackStartTime(trackId, desiredStartTime, previewDuration);
@@ -465,6 +426,9 @@ export function useExternalDrop({
       isAudio,
       hasAudio: previewHasAudio,
       duration: previewDuration,
+      label: dragPayload?.label,
+      mediaType: dragPayload?.mediaType,
+      thumbnailUrl: dragPayload?.thumbnailUrl,
       showVideoNewTrackZone: updateVideoNewTrackGesture(y, isAudio),
     };
   }, [tracks, clips, resolveTrackStartTime, updateVideoNewTrackGesture]);
@@ -1980,7 +1944,11 @@ export function useExternalDrop({
         return;
       }
 
-      const target = resolveCustomExternalDragTarget(detail.clientX, detail.clientY);
+      const target = detail.targetTrackId
+        ? { kind: 'track' as const, trackId: detail.targetTrackId }
+        : detail.targetNewTrackType
+          ? { kind: 'new-track' as const, trackType: detail.targetNewTrackType }
+          : resolveCustomExternalDragTarget(detail.clientX, detail.clientY);
       if (!target) {
         if (detail.phase === 'drop') {
           dragCounterRef.current = 0;

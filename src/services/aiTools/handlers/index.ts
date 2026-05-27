@@ -115,6 +115,7 @@ import {
   handleAddVertex,
   handleRemoveVertex,
   handleUpdateVertex,
+  handleAddMaskPathKeyframe,
 } from './masks';
 
 import {
@@ -198,6 +199,7 @@ const timelineHandlers: Record<string, (args: Record<string, unknown>, store: Re
   addVertex: handleAddVertex,
   removeVertex: handleRemoveVertex,
   updateVertex: handleUpdateVertex,
+  addMaskPathKeyframe: handleAddMaskPathKeyframe,
 };
 
 const mediaHandlers: Record<string, (args: Record<string, unknown>, store: ReturnType<typeof useMediaStore.getState>, callerContext?: CallerContext) => Promise<ToolResult>> = {

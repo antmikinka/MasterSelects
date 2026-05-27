@@ -1,4 +1,12 @@
 import { useGuidedActionStore, type GuidedActionStoreApi } from '../../stores/guidedActionStore';
+import { useMediaStore } from '../../stores/mediaStore';
+import {
+  clearExternalDragPayload,
+  createExternalDragPayloadForProjectItem,
+  dispatchExternalDragBridgeEvent,
+  getExternalDragPayload,
+  setExternalDragPayload,
+} from '../../components/timeline/utils/externalDragSession';
 import {
   guidedTargetRegistry,
   type GuidedTargetRegistry,
@@ -16,6 +24,7 @@ import type {
   GuidedAction,
   GuidedActionType,
   GuidedExecutionContext,
+  GuidedPoint,
   GuidedRuntimeEvent,
   GuidedScheduledAction,
   GuidedSerializableTargetResolution,
@@ -82,6 +91,8 @@ export class GuidedActionRuntime {
   private clock: GuidedRuntimeClock;
   private activeSession: ActiveSession | null = null;
   private stopRequests = new Map<string, { status: StopStatus; reason?: string }>();
+  private skipDelayResolvers = new Map<string, Set<() => void>>();
+  private guidedExternalDragTimers = new Set<ReturnType<typeof setTimeout>>();
 
   constructor(options: GuidedActionRuntimeOptions = {}) {
     this.store = options.store ?? useGuidedActionStore;
@@ -181,6 +192,11 @@ export class GuidedActionRuntime {
 
     try {
       for (const scheduledAction of plan.actions) {
+        if (this.isSkipRequested(sessionId) && !isExecutionAction(scheduledAction.action)) {
+          skippedActions += 1;
+          continue;
+        }
+
         throwIfAborted(controller.signal);
         this.emitEvent({ type: 'step-started', sessionId, action: scheduledAction });
         this.store.getState().setCurrentStep(scheduledAction);
@@ -190,13 +206,25 @@ export class GuidedActionRuntime {
           session,
           executionContext,
         );
-        if (scheduledAction.action.type === 'executeTool' && isToolResult(result)) {
+        if (scheduledAction.action.type === 'executeTool') {
+          this.cancelGuidedExternalDragPreview();
+        }
+        if (isSemanticToolResultAction(scheduledAction.action) && isToolResult(result)) {
           toolResults.push(result);
         }
 
         executedActions += 1;
+
+        if (!this.isSkipRequested(sessionId)) {
+          await this.waitForPlannedDuration(scheduledAction, executionContext);
+        }
+
         this.store.getState().completeCurrentStep();
         this.emitEvent({ type: 'step-completed', sessionId, action: scheduledAction });
+      }
+
+      if (this.isSkipRequested(sessionId)) {
+        status = 'skipped';
       }
     } catch (caught) {
       const stopRequest = this.stopRequests.get(sessionId);
@@ -215,6 +243,7 @@ export class GuidedActionRuntime {
         this.activeSession = null;
       }
       this.stopRequests.delete(sessionId);
+      this.cancelGuidedExternalDragPreview();
     }
 
     this.finishSession(sessionId, status, error);
@@ -245,7 +274,12 @@ export class GuidedActionRuntime {
     }
     this.stopRequests.set(sessionId, { status: 'skipped', reason });
     this.store.getState().markSessionCancelling(sessionId);
-    this.activeSession.controller.abort();
+    const activeSnapshot = this.store.getState().activeSession;
+    if (activeSnapshot?.context.playbackMode !== 'aiReplay') {
+      this.activeSession.controller.abort();
+      return;
+    }
+    this.resolveSkipDelays(sessionId);
   }
 
   private async executeScheduledAction(
@@ -265,14 +299,10 @@ export class GuidedActionRuntime {
     };
 
     if (handler) {
-      const result = await handler(action, context);
-      await this.waitForPlannedDuration(scheduledAction, executionContext.abortSignal);
-      return result;
+      return await handler(action, context);
     }
 
-    const result = await this.executeDefaultAction(action, scheduledAction, executionContext);
-    await this.waitForPlannedDuration(scheduledAction, executionContext.abortSignal);
-    return result;
+    return await this.executeDefaultAction(action, scheduledAction, executionContext);
   }
 
   private async executeDefaultAction(
@@ -293,23 +323,65 @@ export class GuidedActionRuntime {
       case 'moveCursorTo': {
         const resolution = await this.resolveTarget(action.target, context);
         if (resolution.status === 'missing') {
+          if (action.optional) {
+            return resolution;
+          }
           throw new Error(resolution.message ?? `Missing guided target: ${resolution.reason}`);
         }
-        this.store.getState().setCursor({ visible: true, position: resolution.center });
+        this.store.getState().setCursor({
+          visible: true,
+          position: resolution.center,
+          transitionMs: scheduledAction.plannedDurationMs,
+        });
         return resolution;
       }
       case 'dragCursor': {
+        const fromResolution = await this.resolveTarget(action.from, context);
         const resolution = await this.resolveTarget(action.to, context);
         if (resolution.status === 'missing') {
+          if (action.optional) {
+            return resolution;
+          }
           throw new Error(resolution.message ?? `Missing guided target: ${resolution.reason}`);
         }
-        this.store.getState().setCursor({ visible: true, position: resolution.center });
+        this.store.getState().setCursor({
+          visible: true,
+          position: resolution.center,
+          clicking: true,
+          transitionMs: scheduledAction.plannedDurationMs,
+        });
+        this.startGuidedExternalDragPreview(
+          action,
+          fromResolution.status === 'resolved'
+            ? fromResolution.center
+            : this.store.getState().cursor.position ?? resolution.center,
+          resolution.center,
+          scheduledAction.plannedDurationMs,
+          context.abortSignal,
+        );
         return resolution;
       }
       case 'clickVisual':
-      case 'doubleClickVisual':
-        this.store.getState().setCursor({ visible: true, clicking: true });
+      case 'doubleClickVisual': {
+        if (action.target) {
+          const resolution = await this.resolveTarget(action.target, context);
+          if (resolution.status === 'missing') {
+            if (action.optional) {
+              return resolution;
+            }
+            throw new Error(resolution.message ?? `Missing guided target: ${resolution.reason}`);
+          }
+          this.store.getState().setCursor({
+            visible: true,
+            position: resolution.center,
+            clicking: true,
+            transitionMs: 0,
+          });
+          return resolution;
+        }
+        this.store.getState().setCursor({ visible: true, clicking: true, transitionMs: 0 });
         return undefined;
+      }
       case 'highlightTarget':
         await this.resolveTarget(action.target, context);
         this.store.getState().addHighlight({
@@ -394,13 +466,13 @@ export class GuidedActionRuntime {
 
   private async waitForPlannedDuration(
     scheduledAction: GuidedScheduledAction,
-    signal: AbortSignal,
+    context: GuidedExecutionContext,
   ): Promise<void> {
-    await this.delay(scheduledAction.plannedDurationMs, signal);
+    await this.delay(scheduledAction.plannedDurationMs, context.abortSignal, context.sessionId);
   }
 
-  private delay(ms: number, signal: AbortSignal): Promise<void> {
-    if (ms <= 0) {
+  private delay(ms: number, signal: AbortSignal, sessionId: string): Promise<void> {
+    if (ms <= 0 || this.isSkipRequested(sessionId)) {
       throwIfAborted(signal);
       return Promise.resolve();
     }
@@ -411,19 +483,117 @@ export class GuidedActionRuntime {
         return;
       }
 
-      const timer = this.clock.setTimeout(() => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let onAbort: () => void = () => undefined;
+      let onSkip: () => void = () => undefined;
+      const cleanup = () => {
+        if (timer !== null) {
+          this.clock.clearTimeout(timer);
+        }
         signal.removeEventListener('abort', onAbort);
+        const resolvers = this.skipDelayResolvers.get(sessionId);
+        resolvers?.delete(onSkip);
+        if (resolvers?.size === 0) {
+          this.skipDelayResolvers.delete(sessionId);
+        }
+      };
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
         resolve();
-      }, ms);
+      };
 
-      const onAbort = () => {
-        this.clock.clearTimeout(timer);
-        signal.removeEventListener('abort', onAbort);
+      onAbort = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
         reject(new GuidedRuntimeAbortError());
       };
 
+      onSkip = () => finish();
+      const resolvers = this.skipDelayResolvers.get(sessionId) ?? new Set<() => void>();
+      resolvers.add(onSkip);
+      this.skipDelayResolvers.set(sessionId, resolvers);
+      timer = this.clock.setTimeout(finish, ms);
       signal.addEventListener('abort', onAbort, { once: true });
     });
+  }
+
+  private startGuidedExternalDragPreview(
+    action: Extract<GuidedAction, { type: 'dragCursor' }>,
+    from: GuidedPoint,
+    to: GuidedPoint,
+    durationMs: number,
+    signal: AbortSignal,
+  ): void {
+    if (action.from.kind !== 'mediaItem' || action.to.kind !== 'timelineTime') {
+      return;
+    }
+    const targetTrackId = action.to.trackId;
+
+    const mediaState = useMediaStore.getState();
+    const item = mediaState.getItemById(action.from.itemId);
+    if (!item) {
+      return;
+    }
+
+    const payload = createExternalDragPayloadForProjectItem(item, {
+      activeCompositionId: mediaState.activeCompositionId,
+      requireMediaFileObject: false,
+    });
+    if (!payload) {
+      return;
+    }
+
+    this.clearGuidedExternalDragTimers();
+    setExternalDragPayload(payload);
+    this.store.getState().setDragGhost({
+      label: payload.label ?? action.from.itemId,
+      mediaType: payload.mediaType,
+      thumbnailUrl: payload.thumbnailUrl,
+    });
+
+    const plannedDurationMs = Math.max(0, durationMs);
+    const stepCount = Math.max(2, Math.min(10, Math.ceil(plannedDurationMs / 120)));
+    for (let index = 0; index <= stepCount; index += 1) {
+      const progress = index / stepCount;
+      const delayMs = Math.round(plannedDurationMs * progress);
+      const timer: ReturnType<typeof setTimeout> = this.clock.setTimeout(() => {
+        this.guidedExternalDragTimers.delete(timer);
+        if (signal.aborted) {
+          return;
+        }
+        dispatchExternalDragBridgeEvent({
+          phase: 'move',
+          clientX: from.x + (to.x - from.x) * progress,
+          clientY: from.y + (to.y - from.y) * progress,
+          targetTrackId,
+        });
+      }, delayMs);
+      this.guidedExternalDragTimers.add(timer);
+    }
+  }
+
+  private cancelGuidedExternalDragPreview(): void {
+    this.clearGuidedExternalDragTimers();
+    if (getExternalDragPayload()) {
+      dispatchExternalDragBridgeEvent({ phase: 'cancel', clientX: 0, clientY: 0 });
+    }
+    clearExternalDragPayload();
+    this.store.getState().setDragGhost(null);
+  }
+
+  private clearGuidedExternalDragTimers(): void {
+    for (const timer of this.guidedExternalDragTimers) {
+      this.clock.clearTimeout(timer);
+    }
+    this.guidedExternalDragTimers.clear();
   }
 
   private emitEvent(event: GuidedRuntimeEvent): void {
@@ -437,6 +607,20 @@ export class GuidedActionRuntime {
   ): void {
     this.store.getState().finishSession(sessionId, status, error);
     this.emitEvent({ type: 'session-finished', sessionId, status });
+  }
+
+  private isSkipRequested(sessionId: string): boolean {
+    return this.stopRequests.get(sessionId)?.status === 'skipped';
+  }
+
+  private resolveSkipDelays(sessionId: string): void {
+    const resolvers = this.skipDelayResolvers.get(sessionId);
+    if (!resolvers) {
+      return;
+    }
+    for (const resolve of resolvers) {
+      resolve();
+    }
   }
 }
 
@@ -461,7 +645,14 @@ function createRejectedResult(
 }
 
 function isExecutionAction(action: GuidedAction): boolean {
-  return action.type === 'executeTool' || action.type === 'confirmState' || action.type === 'waitForUserAction';
+  return action.type === 'executeTool'
+    || action.type === 'drawMaskPath'
+    || action.type === 'confirmState'
+    || action.type === 'waitForUserAction';
+}
+
+function isSemanticToolResultAction(action: GuidedAction): boolean {
+  return action.type === 'executeTool' || action.type === 'drawMaskPath';
 }
 
 function stripElementFromResolution(

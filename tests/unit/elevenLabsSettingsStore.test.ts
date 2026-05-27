@@ -4,6 +4,7 @@ import type { APIKeys } from '../../src/stores/settingsStore';
 
 const emptyKeys: APIKeys = {
   openai: '',
+  anthropic: '',
   assemblyai: '',
   deepgram: '',
   piapi: '',

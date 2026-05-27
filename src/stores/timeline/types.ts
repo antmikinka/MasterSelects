@@ -328,7 +328,7 @@ export interface TrackActions {
   clearStaleRuntimeAudioMeters: (maxAgeMs?: number, now?: number) => void;
   setTrackLocked: (id: string, locked: boolean) => void;
   setTrackHeight: (id: string, height: number) => void;
-  scaleTracksOfType: (type: 'video' | 'audio', delta: number) => void;
+  scaleTracksOfType: (type: 'video' | 'audio', delta: number, baselineHeight?: number) => void;
   // Track parenting (layer linking)
   setTrackParent: (trackId: string, parentTrackId: string | null) => void;
   getTrackChildren: (trackId: string) => TimelineTrack[];

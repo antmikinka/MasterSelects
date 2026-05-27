@@ -182,6 +182,7 @@ const TOOL_POLICY_MAP = new Map<string, ToolPolicyEntry>([
   ['addEllipseMask', mutatingMedium()],
   ['removeMask', mutatingMedium()],
   ['updateMask', mutatingMedium()],
+  ['addMaskPathKeyframe', mutatingMedium()],
   ['addVertex', mutatingMedium()],
   ['removeVertex', mutatingMedium()],
   ['updateVertex', mutatingMedium()],

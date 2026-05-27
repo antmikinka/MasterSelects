@@ -1,7 +1,7 @@
 // Timeline component - Main orchestrator for video editing timeline
 // Composes TimelineRuler, TimelineControls, TimelineHeader, TimelineTrack, TimelineClip, TimelineKeyframes
 
-import { useRef, useState, useCallback, useEffect, useMemo } from 'react';
+import { useRef, useState, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import './Timeline.css';
 import './TimelineTracks.css';
 import { useShallow } from 'zustand/react/shallow';
@@ -75,6 +75,19 @@ type TrackSectionMetrics = {
   contentHeight: number;
 };
 
+type KeyframeAreaRevealSnapshot = {
+  clipId: string;
+  trackId: string;
+  sectionKind: TrackSectionKind;
+  keyframeCount: number;
+  curveSignature: string;
+  trackHeight: number;
+  contentHeight: number;
+  viewportHeight: number;
+  keyframeAreaTop: number;
+  keyframeAreaBottom: number;
+};
+
 function clampScrollY(scrollY: number, contentHeight: number, viewportHeight: number): number {
   const maxScroll = Math.max(0, contentHeight - viewportHeight);
   return Math.max(0, Math.min(maxScroll, scrollY));
@@ -84,6 +97,33 @@ function getNormalizedWheelDeltaY(e: React.WheelEvent, viewportHeight: number): 
   if (e.deltaMode === 1) return e.deltaY * 40;
   if (e.deltaMode === 2) return e.deltaY * viewportHeight;
   return e.deltaY;
+}
+
+function applyKeyframeAreaRevealScroll(
+  currentScrollY: number,
+  snapshot: KeyframeAreaRevealSnapshot,
+): number {
+  const viewportHeight = Math.max(0, snapshot.viewportHeight);
+  if (viewportHeight <= 0 || snapshot.contentHeight <= viewportHeight) {
+    return 0;
+  }
+
+  const padding = 10;
+  const visibleTop = currentScrollY;
+  const visibleBottom = currentScrollY + viewportHeight;
+  const targetTop = Math.max(0, snapshot.keyframeAreaTop - padding);
+  const targetBottom = Math.min(snapshot.contentHeight, snapshot.keyframeAreaBottom + padding);
+  let nextScrollY = currentScrollY;
+
+  if (targetBottom > visibleBottom) {
+    nextScrollY = targetBottom - viewportHeight;
+  }
+
+  if (targetTop < visibleTop && targetBottom - targetTop <= viewportHeight) {
+    nextScrollY = targetTop;
+  }
+
+  return clampScrollY(nextScrollY, snapshot.contentHeight, viewportHeight);
 }
 
 function getTrackFocusModeForSplitPosition(videoHeight: number, availableHeight: number): TimelineTrackFocusMode {
@@ -405,19 +445,25 @@ export function Timeline() {
     () => new Map(timelineViewTracks.map(t => [t.id, t])),
     [timelineViewTracks],
   );
+  const keyframeLayoutInputs = useMemo(
+    () => ({ selectedClipIds, clipKeyframes, expandedCurveProperties }),
+    [clipKeyframes, expandedCurveProperties, selectedClipIds],
+  );
   const getRenderedTrackBaseHeight = useCallback(
     (track: TimelineTrackType) => getTimelineTrackBaseHeight(track, audioDisplayMode, audioFocusMode),
     [audioDisplayMode, audioFocusMode],
   );
   const getRenderedTrackHeight = useCallback(
     (trackId: string, fallbackBaseHeight: number) => {
+      // getExpandedTrackHeight reads keyframe UI state from the store; this keeps memoized layout users fresh.
+      void keyframeLayoutInputs;
       const track = timelineViewTrackMap.get(trackId) ?? trackMap.get(trackId);
       const baseHeight = track ? getRenderedTrackBaseHeight(track) : fallbackBaseHeight;
       return isTrackExpandedForRender(trackId)
         ? getExpandedTrackHeight(trackId, baseHeight)
         : baseHeight;
     },
-    [timelineViewTrackMap, trackMap, getRenderedTrackBaseHeight, isTrackExpandedForRender, getExpandedTrackHeight],
+    [timelineViewTrackMap, trackMap, getRenderedTrackBaseHeight, isTrackExpandedForRender, getExpandedTrackHeight, keyframeLayoutInputs],
   );
   const getRenderedTrackHeightForTrack = useCallback(
     (track: TimelineTrackType) => getRenderedTrackHeight(track.id, track.height),
@@ -440,6 +486,37 @@ export function Timeline() {
     getClipsAtTime,
     getSnapTargetTimes,
   } = useTimelineHelpers({ zoom, frameRate: compositionFrameRate, clips, getClipKeyframes });
+  const [isEditingTimelineDuration, setIsEditingTimelineDuration] = useState(false);
+  const [timelineDurationInputValue, setTimelineDurationInputValue] = useState('');
+  const timelineDurationInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isEditingTimelineDuration && timelineDurationInputRef.current) {
+      timelineDurationInputRef.current.focus();
+      timelineDurationInputRef.current.select();
+    }
+  }, [isEditingTimelineDuration]);
+
+  const handleTimelineDurationClick = useCallback(() => {
+    setTimelineDurationInputValue(formatTime(duration));
+    setIsEditingTimelineDuration(true);
+  }, [duration, formatTime]);
+
+  const handleTimelineDurationSubmit = useCallback(() => {
+    const nextDuration = parseTime(timelineDurationInputValue);
+    if (nextDuration !== null && nextDuration > 0) {
+      setDuration(nextDuration);
+    }
+    setIsEditingTimelineDuration(false);
+  }, [parseTime, setDuration, timelineDurationInputValue]);
+
+  const handleTimelineDurationKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      handleTimelineDurationSubmit();
+    } else if (e.key === 'Escape') {
+      setIsEditingTimelineDuration(false);
+    }
+  }, [handleTimelineDurationSubmit]);
 
   // Clip dragging - extracted to hook
   const { clipDrag, handleClipMouseDown, handleClipDoubleClick } = useClipDrag({
@@ -601,6 +678,8 @@ export function Timeline() {
   const [scrollY, setScrollY] = useState(0);
   const [videoScrollY, setVideoScrollY] = useState(0);
   const [audioScrollY, setAudioScrollY] = useState(0);
+  const keyframeAreaRevealSnapshotRef = useRef<KeyframeAreaRevealSnapshot | null>(null);
+  const splitDragAnchorVideoBottomRef = useRef(false);
   const videoSectionViewportRef = useRef<HTMLDivElement>(null);
   const audioSectionViewportRef = useRef<HTMLDivElement>(null);
   const [videoViewportHeight, setVideoViewportHeight] = useState(160);
@@ -776,13 +855,15 @@ export function Timeline() {
 
   const getSectionTrackHeight = useCallback(
     (track: TimelineTrackType, sectionKind: TrackSectionKind) => {
+      // getExpandedTrackHeight reads keyframe UI state from the store; this keeps section metrics fresh.
+      void keyframeLayoutInputs;
       const baseHeight = getSectionTrackBaseHeight(track, sectionKind);
       if (isSectionCollapsed(sectionKind)) return baseHeight;
       return isTrackExpandedForRender(track.id)
         ? getExpandedTrackHeight(track.id, baseHeight)
         : baseHeight;
     },
-    [getExpandedTrackHeight, getSectionTrackBaseHeight, isSectionCollapsed, isTrackExpandedForRender],
+    [getExpandedTrackHeight, getSectionTrackBaseHeight, isSectionCollapsed, isTrackExpandedForRender, keyframeLayoutInputs],
   );
 
   const buildSectionMetrics = useCallback(
@@ -894,6 +975,99 @@ export function Timeline() {
     videoSectionMetrics.contentHeight,
   ]);
 
+  const selectedKeyframeAreaRevealSnapshot = useMemo<KeyframeAreaRevealSnapshot | null>(() => {
+    const selectedClip = clips.find(clip => selectedClipIds.has(clip.id));
+    if (!selectedClip) return null;
+
+    const track = timelineViewTrackMap.get(selectedClip.trackId) ?? trackMap.get(selectedClip.trackId);
+    if (!track || (track.type !== 'video' && track.type !== 'audio')) return null;
+
+    const sectionKind: TrackSectionKind = track.type;
+    if (isSectionCollapsed(sectionKind) || !isTrackExpandedForRender(track.id)) return null;
+
+    const sectionTracks = sectionKind === 'video' ? displayedVideoTracks : displayedAudioTracks;
+    const sectionTrackIndex = sectionTracks.findIndex(candidate => candidate.id === track.id);
+    if (sectionTrackIndex < 0) return null;
+
+    const trackOffsetTop = sectionTracks
+      .slice(0, sectionTrackIndex)
+      .reduce((sum, candidate) => sum + getSectionTrackHeight(candidate, sectionKind), 0);
+    const baseHeight = getSectionTrackBaseHeight(track, sectionKind);
+    const trackHeight = getSectionTrackHeight(track, sectionKind);
+    const keyframes = clipKeyframes.get(selectedClip.id) ?? [];
+    const curveSignature = Array.from(expandedCurveProperties.get(track.id) ?? new Set<AnimatableProperty>()).sort().join('|');
+
+    return {
+      clipId: selectedClip.id,
+      trackId: track.id,
+      sectionKind,
+      keyframeCount: keyframes.length,
+      curveSignature,
+      trackHeight,
+      contentHeight: sectionKind === 'video' ? videoSectionMetrics.contentHeight : audioSectionMetrics.contentHeight,
+      viewportHeight: sectionKind === 'video' ? videoSectionHeight : audioSectionHeight,
+      keyframeAreaTop: trackOffsetTop + baseHeight,
+      keyframeAreaBottom: trackOffsetTop + trackHeight,
+    };
+  }, [
+    audioSectionHeight,
+    audioSectionMetrics.contentHeight,
+    clipKeyframes,
+    clips,
+    displayedAudioTracks,
+    displayedVideoTracks,
+    expandedCurveProperties,
+    getSectionTrackBaseHeight,
+    getSectionTrackHeight,
+    isSectionCollapsed,
+    isTrackExpandedForRender,
+    selectedClipIds,
+    timelineViewTrackMap,
+    trackMap,
+    videoSectionHeight,
+    videoSectionMetrics.contentHeight,
+  ]);
+
+  useLayoutEffect(() => {
+    const previousSnapshot = keyframeAreaRevealSnapshotRef.current;
+    keyframeAreaRevealSnapshotRef.current = selectedKeyframeAreaRevealSnapshot;
+
+    if (!previousSnapshot || !selectedKeyframeAreaRevealSnapshot) {
+      return;
+    }
+
+    const sameSelection =
+      previousSnapshot.clipId === selectedKeyframeAreaRevealSnapshot.clipId &&
+      previousSnapshot.trackId === selectedKeyframeAreaRevealSnapshot.trackId &&
+      previousSnapshot.sectionKind === selectedKeyframeAreaRevealSnapshot.sectionKind;
+    if (!sameSelection) {
+      return;
+    }
+
+    const keyframeWasAdded = selectedKeyframeAreaRevealSnapshot.keyframeCount > previousSnapshot.keyframeCount;
+    const curveWasOpened =
+      previousSnapshot.curveSignature.length === 0 &&
+      selectedKeyframeAreaRevealSnapshot.curveSignature.length > 0;
+    const layoutGrew =
+      selectedKeyframeAreaRevealSnapshot.trackHeight > previousSnapshot.trackHeight ||
+      selectedKeyframeAreaRevealSnapshot.contentHeight > previousSnapshot.contentHeight;
+
+    if (!keyframeWasAdded && !curveWasOpened && !layoutGrew) {
+      return;
+    }
+
+    const applyReveal = (current: number) => {
+      const next = applyKeyframeAreaRevealScroll(current, selectedKeyframeAreaRevealSnapshot);
+      return Math.abs(next - current) > 0.5 ? next : current;
+    };
+
+    if (selectedKeyframeAreaRevealSnapshot.sectionKind === 'video') {
+      setVideoScrollY(applyReveal);
+    } else {
+      setAudioScrollY(applyReveal);
+    }
+  }, [selectedKeyframeAreaRevealSnapshot]);
+
   // Legacy vertical values remain for zoom-hook compatibility; section wheel handlers own real Y scroll.
   const contentHeight = Math.max(videoSectionMetrics.contentHeight, audioSectionMetrics.contentHeight);
   const trackSnapPositions = useMemo(() => [0], []);
@@ -1004,6 +1178,22 @@ export function Timeline() {
     setTrackFocusMode(focusOrder[nextIndex]);
   }, [setTrackFocusMode, trackFocusMode]);
 
+  const isVideoBottomVisible = useCallback(() => {
+    const videoContentHeight = videoSectionMetrics.contentHeight;
+    if (isVideoSectionCollapsed || videoContentHeight <= 0 || timelineViewVideoTracks.length === 0) {
+      return false;
+    }
+
+    return videoSectionHeight >= videoContentHeight - 1
+      || videoScrollY + videoSectionHeight >= videoContentHeight - 1;
+  }, [
+    isVideoSectionCollapsed,
+    timelineViewVideoTracks.length,
+    videoScrollY,
+    videoSectionHeight,
+    videoSectionMetrics.contentHeight,
+  ]);
+
   const applySplitDragPosition = useCallback((clientY: number) => {
     const wrapper = scrollWrapperRef.current;
     if (!wrapper) return;
@@ -1016,13 +1206,21 @@ export function Timeline() {
     const nextMode = getTrackFocusModeForSplitPosition(nextVideoHeight, availableHeight);
 
     setSplitDragVideoHeight(nextVideoHeight);
+    if (splitDragAnchorVideoBottomRef.current) {
+      const nextVideoScrollY = clampScrollY(
+        videoSectionMetrics.contentHeight - nextVideoHeight,
+        videoSectionMetrics.contentHeight,
+        nextVideoHeight,
+      );
+      setVideoScrollY((current) => Math.abs(current - nextVideoScrollY) > 0.5 ? nextVideoScrollY : current);
+    }
     if (nextMode === 'balanced') {
       setBalancedSplitRatio(nextVideoHeight / availableHeight);
     }
     if (useTimelineStore.getState().trackFocusMode !== nextMode) {
       setTrackFocusMode(nextMode);
     }
-  }, [clampSplitDragVideoHeight, setTrackFocusMode]);
+  }, [clampSplitDragVideoHeight, setTrackFocusMode, videoSectionMetrics.contentHeight]);
 
   const scheduleSplitDragPosition = useCallback((clientY: number) => {
     splitDragPendingClientYRef.current = clientY;
@@ -1049,6 +1247,7 @@ export function Timeline() {
     e.preventDefault();
     e.stopPropagation();
 
+    splitDragAnchorVideoBottomRef.current = isVideoBottomVisible();
     applySplitDragPosition(e.clientY);
 
     const handleMouseMove = (event: MouseEvent) => {
@@ -1063,6 +1262,7 @@ export function Timeline() {
       }
       splitDragPendingClientYRef.current = null;
       applySplitDragPosition(event.clientY);
+      splitDragAnchorVideoBottomRef.current = false;
       setSplitDragVideoHeight(null);
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
@@ -1070,7 +1270,7 @@ export function Timeline() {
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-  }, [applySplitDragPosition, scheduleSplitDragPosition]);
+  }, [applySplitDragPosition, isVideoBottomVisible, scheduleSplitDragPosition]);
 
   // Performance: Memoize proxy-ready file count
   const mediaFilesWithProxyCount = useMemo(
@@ -1166,18 +1366,25 @@ export function Timeline() {
 
       const timelineState = useTimelineStore.getState();
       const currentTrack = timelineState.tracks.find(candidate => candidate.id === trackId) ?? track;
+      const visibleBaseHeight = getTimelineTrackBaseHeight(
+        currentTrack,
+        timelineState.audioDisplayMode,
+        timelineState.audioFocusMode,
+      );
+      const resizeBaseHeight = Math.max(currentTrack.height, visibleBaseHeight);
+      const scaleBaselineHeight = visibleBaseHeight > currentTrack.height ? visibleBaseHeight : undefined;
 
       if (e.altKey) {
         e.preventDefault();
         e.stopPropagation();
         // Smooth scaling: each mouse-wheel notch is roughly 5px of track height.
         const delta = -wheelDelta * 0.05;
-        timelineState.scaleTracksOfType(currentTrack.type, delta);
+        timelineState.scaleTracksOfType(currentTrack.type, delta, scaleBaselineHeight);
       } else if (e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
         const delta = -wheelDelta * 0.05;
-        timelineState.setTrackHeight(trackId, currentTrack.height + delta);
+        timelineState.setTrackHeight(trackId, resizeBaseHeight + delta);
       }
     },
     [trackMap]
@@ -1676,7 +1883,6 @@ export function Timeline() {
                       onDragOver={(e) => handleCombinedDragOver(e, track.id)}
                       onDragEnter={(e) => handleTrackDragEnter(e, track.id)}
                       onDragLeave={handleCombinedDragLeave}
-                      onWheel={(e) => handleTrackHeightWheel(e, track.id)}
                       renderClip={(clip, trackId) => renderClipForSection(clip, trackId)}
                       clipKeyframes={clipKeyframes}
                       renderKeyframeDiamonds={renderKeyframeDiamonds}
@@ -1893,12 +2099,10 @@ export function Timeline() {
           onToggleAudioFocusMode={toggleAudioFocusMode}
           onSetTrackFocusMode={setTrackFocusMode}
           onToggleCutTool={toggleCutTool}
-          onSetDuration={setDuration}
           onFitToWindow={handleFitToWindow}
           onToggleSlotGrid={handleToggleSlotGrid}
           slotGridActive={slotGridProgress > 0.5}
           formatTime={formatTime}
-          parseTime={parseTime}
         />
       </div>
 
@@ -1939,7 +2143,30 @@ export function Timeline() {
         } : undefined}>
           <div className="timeline-header-row">
             <div className="ruler-header">
-              <span>Time</span>
+              <div className="timeline-ruler-timecode" title="Current time / composition duration">
+                <span className="timeline-ruler-current-time">{formatTime(playheadPosition)}</span>
+                <span className="timeline-ruler-time-separator" aria-hidden="true">/</span>
+                {isEditingTimelineDuration ? (
+                  <input
+                    ref={timelineDurationInputRef}
+                    type="text"
+                    className="timeline-ruler-duration-input"
+                    value={timelineDurationInputValue}
+                    onChange={(e) => setTimelineDurationInputValue(e.target.value)}
+                    onKeyDown={handleTimelineDurationKeyDown}
+                    onBlur={handleTimelineDurationSubmit}
+                  />
+                ) : (
+                  <button
+                    className="timeline-ruler-duration"
+                    type="button"
+                    onClick={handleTimelineDurationClick}
+                    title="Click to edit composition duration"
+                  >
+                    {formatTime(duration)}
+                  </button>
+                )}
+              </div>
               <button
                 className={`add-marker-btn ${markerCreateDrag?.isDragging ? 'dragging' : ''}`}
                 onMouseDown={handleMarkerButtonDragStart}

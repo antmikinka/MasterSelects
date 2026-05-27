@@ -11,11 +11,13 @@ import type { AIToolExecutionOptions } from './types';
 import { useTimelineStore } from '../../stores/timeline';
 import { useMediaStore } from '../../stores/mediaStore';
 import { useDockStore } from '../../stores/dockStore';
+import { useGuidedActionStore } from '../../stores/guidedActionStore';
 import { useRenderTargetStore } from '../../stores/renderTargetStore';
 import { layerPlaybackManager } from '../layerPlaybackManager';
 import { layerBuilder } from '../layerBuilder';
 import { projectFileService } from '../projectFileService';
 import { loadProjectToStores } from '../project/projectLoad';
+import { compileGuidedToolCall, inspectGuidedToolCall } from '../guidedActions';
 
 const tabId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
   ? crypto.randomUUID()
@@ -112,6 +114,7 @@ function collectDebugState(scope: string = 'all') {
   const timelineState = useTimelineStore.getState();
   const mediaState = useMediaStore.getState();
   const dockState = useDockStore.getState();
+  const guidedState = useGuidedActionStore.getState();
   const renderTargetState = useRenderTargetStore.getState();
   const activeLayers = Object.fromEntries(
     layerPlaybackManager.getActiveLayerIndices().map((layerIndex) => [
@@ -207,6 +210,33 @@ function collectDebugState(scope: string = 'all') {
       isOpen: projectFileService.isProjectOpen(),
       hasUnsavedChanges: projectFileService.hasUnsavedChanges(),
     },
+    guided: {
+      activeSession: guidedState.activeSession
+        ? {
+            id: guidedState.activeSession.id,
+            status: guidedState.activeSession.status,
+            label: guidedState.activeSession.label,
+            playbackMode: guidedState.activeSession.context.playbackMode,
+            visualizationMode: guidedState.activeSession.context.visualizationMode,
+            inputLockMode: guidedState.activeSession.context.inputLock.mode,
+            plannedDurationMs: guidedState.activeSession.plan.diagnostics.plannedDurationMs,
+            actionCount: guidedState.activeSession.plan.diagnostics.actionCount,
+          }
+        : null,
+      currentStep: guidedState.currentStep
+        ? {
+            index: guidedState.currentStep.index,
+            type: guidedState.currentStep.action.type,
+            family: guidedState.currentStep.family,
+            label: guidedState.currentStep.action.label,
+            startsAtMs: guidedState.currentStep.startsAtMs,
+            plannedDurationMs: guidedState.currentStep.plannedDurationMs,
+          }
+        : null,
+      diagnosticCount: guidedState.diagnostics.length,
+      recentDiagnostics: guidedState.diagnostics.slice(-5),
+      eventCount: guidedState.eventLog.length,
+    },
     layerPlayback: activeLayers,
     builtLayers,
     renderTargets,
@@ -216,6 +246,30 @@ function collectDebugState(scope: string = 'all') {
           ? dockState.layout.root.panels.map((panel) => panel.type)
           : []
         : [],
+    },
+  };
+}
+
+function inspectGuidedBridgeTool(args: Record<string, unknown>) {
+  const tool = typeof args.tool === 'string'
+    ? args.tool
+    : typeof args.name === 'string'
+      ? args.name
+      : '';
+  const toolArgs = isRecord(args.args) ? args.args : {};
+
+  if (!tool) {
+    return { success: false, error: 'Missing guided tool name. Pass { tool, args }.' };
+  }
+
+  const toolCall = { tool, args: toolArgs };
+  const compiled = compileGuidedToolCall(toolCall);
+  return {
+    success: true,
+    data: {
+      actions: inspectGuidedToolCall(toolCall),
+      diagnostics: compiled.diagnostics,
+      tool,
     },
   };
 }
@@ -365,6 +419,8 @@ if (import.meta.hot) {
         result = { success: true, data: AI_TOOLS };
       } else if (data.tool === '_status') {
         result = { success: true, data: getQuickTimelineSummary() };
+      } else if (data.tool === '_inspectGuided') {
+        result = inspectGuidedBridgeTool(data.args);
       } else {
         const execution = resolveBridgeToolExecution(data.args, data.options);
         result = await executeAITool(data.tool, execution.args, 'devBridge', execution.options);

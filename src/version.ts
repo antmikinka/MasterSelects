@@ -1,6 +1,6 @@
 // App version
 // Format: MAJOR.MINOR.PATCH
-export const APP_VERSION = '1.8.5';
+export const APP_VERSION = '2.0.0';
 
 export interface ChangelogNotice {
   type: 'info' | 'warning' | 'success' | 'danger';
@@ -27,8 +27,8 @@ export const FEATURED_VIDEO: {
   title: 'MasterSelects Demo',
   banner: {
     type: 'success',
-    title: 'ElevenLabs Audio Generation',
-    message: 'FlashBoard can now generate, preview, persist, and route ElevenLabs audio with encrypted API-key settings and compact audio controls.',
+    title: 'MasterSelects 2.0',
+    message: 'AI chat, guided editing, dock persistence, and timeline interaction updates are now bundled for the 2.0.0 release.',
     animated: true,
   },
 };
@@ -36,8 +36,8 @@ export const FEATURED_VIDEO: {
 // Build/Platform notice shown at top of changelog (set to null to hide)
 export const BUILD_NOTICE: ChangelogNotice | null = {
   type: 'success',
-  title: 'Advanced Audio + AI Audio Workflow',
-  message: 'ElevenLabs audio generation and the advanced timeline audio workstation now cover generated audio cards, mixer routing, metering, export tails, and bridge diagnostics.',
+  title: 'MasterSelects 2.0.0',
+  message: 'This release consolidates the new FlashBoard chat workflow, guided AI editing surfaces, persistent dock layouts, and refined timeline controls.',
   animated: true,
 };
 

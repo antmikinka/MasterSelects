@@ -170,6 +170,45 @@ describe('guided DOM target resolvers', () => {
     }));
   });
 
+  it('resolves timeline clips at the center of their visible timeline slice', async () => {
+    const registry = new GuidedTargetRegistry();
+    registerDomGuidedTargetResolvers(registry);
+
+    const surface = addElement({
+      'data-guided-target': 'timeline-tracks',
+      'data-guided-timeline-origin-x': '210',
+    }, {
+      x: 20,
+      y: 50,
+      width: 600,
+      height: 220,
+    });
+    const clip = addElement({
+      'data-guided-target': 'timeline-clip:clip-1',
+      'data-clip-id': 'clip-1',
+    }, {
+      x: -400,
+      y: 100,
+      width: 1000,
+      height: 40,
+    });
+    surface.appendChild(clip);
+
+    const resolution = await registry.resolve({
+      kind: 'timelineClip',
+      clipId: 'clip-1',
+    });
+
+    expect(resolution.status).toBe('resolved');
+    expect(resolution.rect).toEqual({
+      x: 230,
+      y: 100,
+      width: 370,
+      height: 40,
+    });
+    expect(resolution.center).toEqual({ x: 415, y: 120 });
+  });
+
   it('resolves mask vertex, handle, and edge SVG targets by stable mask ids', async () => {
     const registry = new GuidedTargetRegistry();
     registerDomGuidedTargetResolvers(registry);

@@ -694,6 +694,39 @@ describe('trackSlice', () => {
     }
   });
 
+  it('scaleTracksOfType: scales from a visible baseline when stored heights are smaller', () => {
+    store = createTestTimelineStore({
+      tracks: [
+        createMockTrack({ id: 'v1', name: 'Video 1', type: 'video', height: 60 }),
+        createMockTrack({ id: 'a1', name: 'Audio 1', type: 'audio', height: 40 }),
+        createMockTrack({ id: 'a2', name: 'Audio 2', type: 'audio', height: 40 }),
+      ],
+    });
+
+    store.getState().scaleTracksOfType('audio', 5, 96);
+
+    const audioTracks = store.getState().tracks.filter(t => t.type === 'audio');
+    for (const t of audioTracks) {
+      expect(t.height).toBe(101);
+    }
+  });
+
+  it('scaleTracksOfType: treats tracks below the visible baseline as already synced', () => {
+    store = createTestTimelineStore({
+      tracks: [
+        createMockTrack({ id: 'a1', name: 'Audio 1', type: 'audio', height: 40 }),
+        createMockTrack({ id: 'a2', name: 'Audio 2', type: 'audio', height: 60 }),
+      ],
+    });
+
+    store.getState().scaleTracksOfType('audio', 4, 96);
+
+    const audioTracks = store.getState().tracks.filter(t => t.type === 'audio');
+    for (const t of audioTracks) {
+      expect(t.height).toBe(100);
+    }
+  });
+
   it('scaleTracksOfType: delta 0 with different heights syncs to max', () => {
     store = createTestTimelineStore({
       tracks: [

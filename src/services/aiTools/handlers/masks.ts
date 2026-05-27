@@ -1,6 +1,8 @@
 import { useTimelineStore } from '../../../stores/timeline';
 import type { ToolResult } from '../types';
 import { selectClipAndOpenTab } from '../aiFeedback';
+import { createMaskPathProperty } from '../../../types';
+import type { ClipMask, MaskPathKeyframeValue, MaskVertex, MaskVertexHandleMode } from '../../../types';
 
 type TimelineStore = ReturnType<typeof useTimelineStore.getState>;
 
@@ -10,6 +12,10 @@ interface VertexInput {
   handleIn?: { x: number; y: number };
   handleOut?: { x: number; y: number };
   handleMode?: 'none' | 'mirrored' | 'split';
+}
+
+interface MaskPathVertexInput extends VertexInput {
+  id?: string;
 }
 
 export async function handleGetMasks(
@@ -309,5 +315,92 @@ export async function handleUpdateVertex(
   return {
     success: true,
     data: { clipId, maskId, vertexId, updatedProperties: Object.keys(updates) },
+  };
+}
+
+export async function handleAddMaskPathKeyframe(
+  args: Record<string, unknown>,
+  timelineStore: TimelineStore
+): Promise<ToolResult> {
+  const clipId = args.clipId as string;
+  const maskId = args.maskId as string;
+  const time = typeof args.time === 'number' ? args.time : undefined;
+  const easing = typeof args.easing === 'string' ? args.easing : undefined;
+  const property = createMaskPathProperty(maskId);
+  const clip = timelineStore.clips.find(c => c.id === clipId);
+  if (!clip) return { success: false, error: `Clip not found: ${clipId}` };
+
+  const mask = (clip.masks || []).find(m => m.id === maskId);
+  if (!mask) return { success: false, error: `Mask not found: ${maskId}` };
+
+  const pathValue = normalizeMaskPathValue(args.pathValue, mask);
+  const { addMaskPathKeyframe, invalidateCache } = useTimelineStore.getState();
+  addMaskPathKeyframe(clipId, maskId, pathValue, time, easing);
+  invalidateCache();
+
+  const keyframes = useTimelineStore.getState().getClipKeyframes(clipId)
+    .filter((keyframe) => keyframe.property === property);
+  const targetTime = typeof time === 'number'
+    ? Math.max(0, Math.min(time, clip.duration))
+    : undefined;
+  const newKeyframe = typeof targetTime === 'number'
+    ? keyframes.find((keyframe) => keyframe.time === targetTime) ?? keyframes[keyframes.length - 1]
+    : keyframes[keyframes.length - 1];
+
+  selectClipAndOpenTab(clipId, 'masks');
+
+  return {
+    success: true,
+    data: {
+      clipId,
+      maskId,
+      keyframeId: newKeyframe?.id,
+      property,
+      time: newKeyframe?.time ?? time,
+      vertexCount: newKeyframe?.pathValue?.vertices.length ?? pathValue?.vertices.length ?? mask.vertices.length,
+      pathValue: newKeyframe?.pathValue ?? pathValue,
+    },
+  };
+}
+
+function normalizeMaskPathValue(value: unknown, mask: ClipMask): MaskPathKeyframeValue | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const verticesInput = Array.isArray(record.vertices) ? record.vertices : null;
+  if (!verticesInput) {
+    return undefined;
+  }
+
+  const currentVerticesById = new Map(mask.vertices.map((vertex) => [vertex.id, vertex]));
+  const vertices = verticesInput.map((vertexInput, index) => {
+    const vertex = vertexInput as MaskPathVertexInput;
+    const fallback = vertex.id ? currentVerticesById.get(vertex.id) : mask.vertices[index];
+    const normalizedVertex: MaskVertex = {
+      id: typeof vertex.id === 'string' ? vertex.id : fallback?.id ?? `vertex-path-${index}`,
+      x: typeof vertex.x === 'number' ? vertex.x : fallback?.x ?? 0,
+      y: typeof vertex.y === 'number' ? vertex.y : fallback?.y ?? 0,
+      handleIn: normalizeHandle(vertex.handleIn, fallback?.handleIn),
+      handleOut: normalizeHandle(vertex.handleOut, fallback?.handleOut),
+      handleMode: (vertex.handleMode ?? fallback?.handleMode ?? 'none') as MaskVertexHandleMode,
+    };
+    return normalizedVertex;
+  });
+
+  return {
+    closed: typeof record.closed === 'boolean' ? record.closed : mask.closed,
+    vertices,
+  };
+}
+
+function normalizeHandle(
+  value: { x: number; y: number } | undefined,
+  fallback: { x: number; y: number } | undefined
+): { x: number; y: number } {
+  return {
+    x: typeof value?.x === 'number' ? value.x : fallback?.x ?? 0,
+    y: typeof value?.y === 'number' ? value.y : fallback?.y ?? 0,
   };
 }

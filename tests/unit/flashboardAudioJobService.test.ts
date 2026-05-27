@@ -22,6 +22,7 @@ describe('FlashBoardJobService ElevenLabs audio jobs', () => {
     vi.mocked(useSettingsStore.getState).mockReturnValue({
       apiKeys: {
         openai: '',
+        anthropic: '',
         assemblyai: '',
         deepgram: '',
         piapi: '',

@@ -20,12 +20,36 @@ export function GuidedActionOverlay() {
   const callout = useGuidedActionStore((state) => state.callout);
   const currentStep = useGuidedActionStore((state) => state.currentStep);
   const cursor = useGuidedActionStore((state) => state.cursor);
+  const dragGhost = useGuidedActionStore((state) => state.dragGhost);
   const highlights = useGuidedActionStore((state) => state.highlights);
   const previewPaths = useGuidedActionStore((state) => state.previewPaths);
   const spotlight = useGuidedActionStore((state) => state.spotlight);
   const targetResolutions = useGuidedActionStore((state) => state.targetResolutions);
 
   useEffect(() => registerDomGuidedTargetResolvers(guidedTargetRegistry), []);
+
+  useEffect(() => {
+    const recordPointerPosition = (event: PointerEvent | MouseEvent) => {
+      if (!event.isTrusted) {
+        return;
+      }
+
+      const position = { x: event.clientX, y: event.clientY };
+      if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) {
+        return;
+      }
+
+      useGuidedActionStore.getState().setLastUserPointerPosition(position);
+    };
+
+    window.addEventListener('pointermove', recordPointerPosition, { capture: true, passive: true });
+    window.addEventListener('mousemove', recordPointerPosition, { capture: true, passive: true });
+
+    return () => {
+      window.removeEventListener('pointermove', recordPointerPosition, true);
+      window.removeEventListener('mousemove', recordPointerPosition, true);
+    };
+  }, []);
 
   useEffect(() => {
     if (
@@ -108,13 +132,6 @@ export function GuidedActionOverlay() {
     return getResolvedRect(spotlight, targetResolutions);
   }, [spotlight, targetResolutions]);
 
-  const calloutRect = useMemo(() => {
-    if (!callout?.target) {
-      return null;
-    }
-    return getResolvedRect(callout.target, targetResolutions);
-  }, [callout, targetResolutions]);
-
   if (!activeSession || activeSession.status === 'completed' || activeSession.status === 'cancelled' || activeSession.status === 'skipped') {
     return null;
   }
@@ -167,7 +184,6 @@ export function GuidedActionOverlay() {
       {callout && (
         <GuidedCallout
           body={callout.body}
-          targetRect={calloutRect}
           title={callout.title}
         />
       )}
@@ -175,8 +191,16 @@ export function GuidedActionOverlay() {
       <GuidedCursor
         clicking={cursor.clicking}
         position={cursor.position}
+        transitionMs={cursor.transitionMs}
         visible={cursor.visible}
       />
+      {dragGhost && cursor.position && (
+        <GuidedDragGhost
+          ghost={dragGhost}
+          position={cursor.position}
+          transitionMs={cursor.transitionMs}
+        />
+      )}
 
       <GuidedStepHud currentStep={currentStep} session={activeSession} />
 
@@ -202,6 +226,38 @@ export function GuidedActionOverlay() {
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function GuidedDragGhost({
+  ghost,
+  position,
+  transitionMs,
+}: {
+  ghost: { label: string; mediaType?: string; thumbnailUrl?: string };
+  position: { x: number; y: number };
+  transitionMs?: number;
+}) {
+  return (
+    <div
+      className={`guided-drag-ghost${ghost.thumbnailUrl ? ' guided-drag-ghost--thumbnail' : ''}`}
+      style={{
+        transform: `translate3d(${position.x + 18}px, ${position.y + 16}px, 0)`,
+        transitionDuration: `${Math.max(0, transitionMs ?? 420)}ms`,
+      }}
+      aria-hidden="true"
+    >
+      {ghost.thumbnailUrl && (
+        <div
+          className="guided-drag-ghost-thumb"
+          style={{ backgroundImage: `url("${ghost.thumbnailUrl.replace(/"/g, '\\"')}")` }}
+        />
+      )}
+      <div className="guided-drag-ghost-meta">
+        <span className="guided-drag-ghost-name">{ghost.label}</span>
+        {ghost.mediaType && <span className="guided-drag-ghost-type">{ghost.mediaType}</span>}
+      </div>
     </div>
   );
 }

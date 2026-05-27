@@ -190,7 +190,6 @@ function TimelineTrackComponent({
   onDragOver,
   onDragEnter,
   onDragLeave,
-  onWheel,
   renderClip,
   clipKeyframes,
   renderKeyframeDiamonds,
@@ -235,6 +234,31 @@ function TimelineTrackComponent({
   }, [allTrackClips, clipDrag, clipTrim?.clipId, selectedClipIds, visibleEndTime, visibleStartTime]);
   const trackClipIds = useMemo(() => new Set(allTrackClips.map((clip) => clip.id)), [allTrackClips]);
   const selectedTrackClip = allTrackClips.find((c) => selectedClipIds.has(c.id));
+  const renderExternalPreview = (
+    className: string,
+    left: number,
+    width: number,
+    label: string,
+    thumbnailUrl?: string,
+  ) => (
+    <div
+      className={`${className}${thumbnailUrl ? ' has-thumbnail' : ''}`}
+      style={{
+        left,
+        width,
+      }}
+    >
+      {thumbnailUrl && (
+        <div
+          className="timeline-clip-preview-thumbnail"
+          style={{ backgroundImage: `url("${thumbnailUrl.replace(/"/g, '\\"')}")` }}
+        />
+      )}
+      <div className="clip-content">
+        <span className="clip-name">{label}</span>
+      </div>
+    </div>
+  );
 
   return (
     <div
@@ -249,7 +273,6 @@ function TimelineTrackComponent({
       onDragOver={onDragOver}
       onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
-      onWheelCapture={onWheel}
     >
       {/* Clip row - the normal clip area */}
       <div className="track-clip-row" style={{ height: baseHeight }}>
@@ -263,48 +286,29 @@ function TimelineTrackComponent({
             .filter((c) => c.id === clipDrag.clipId && !trackClipIds.has(c.id))
             .map((clip) => renderClip(clip, track.id))}
         {/* External file drag preview - video clip */}
-        {externalDrag && externalDrag.trackId === track.id && (
-          <div
-            className="timeline-clip-preview"
-            style={{
-              left: timeToPixel(externalDrag.startTime),
-              width: timeToPixel(externalDrag.duration ?? 5),
-            }}
-          >
-            <div className="clip-content">
-              <span className="clip-name">Drop to add clip</span>
-            </div>
-          </div>
+        {externalDrag && externalDrag.trackId === track.id && renderExternalPreview(
+          'timeline-clip-preview',
+          timeToPixel(externalDrag.startTime),
+          timeToPixel(externalDrag.duration ?? 5),
+          externalDrag.label ?? 'Drop to add clip',
+          externalDrag.thumbnailUrl,
         )}
         {/* External file drag preview - linked audio clip (when hovering video track) */}
         {externalDrag &&
-          externalDrag.audioTrackId === track.id && (
-            <div
-              className="timeline-clip-preview audio"
-              style={{
-                left: timeToPixel(externalDrag.startTime),
-                width: timeToPixel(externalDrag.duration ?? 5),
-              }}
-            >
-              <div className="clip-content">
-                <span className="clip-name">Audio</span>
-              </div>
-            </div>
+          externalDrag.audioTrackId === track.id && renderExternalPreview(
+            'timeline-clip-preview audio',
+            timeToPixel(externalDrag.startTime),
+            timeToPixel(externalDrag.duration ?? 5),
+            'Audio (linked)',
           )}
         {/* External file drag preview - linked video clip (when hovering audio track) */}
         {externalDrag &&
-          externalDrag.videoTrackId === track.id && (
-            <div
-              className="timeline-clip-preview video"
-              style={{
-                left: timeToPixel(externalDrag.startTime),
-                width: timeToPixel(externalDrag.duration ?? 5),
-              }}
-            >
-              <div className="clip-content">
-                <span className="clip-name">Video</span>
-              </div>
-            </div>
+          externalDrag.videoTrackId === track.id && renderExternalPreview(
+            'timeline-clip-preview video',
+            timeToPixel(externalDrag.startTime),
+            timeToPixel(externalDrag.duration ?? 5),
+            externalDrag.label ?? 'Video',
+            externalDrag.thumbnailUrl,
           )}
       </div>
       {/* Property rows - only shown when track is expanded (for both video and audio) */}

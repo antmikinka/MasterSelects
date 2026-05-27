@@ -1,5 +1,12 @@
 [
   {
+    "date": "2026-05-27",
+    "type": "new",
+    "title": "MasterSelects 2.0.0",
+    "description": "The 2.0.0 release bundles the new FlashBoard chat workflow, provider/model controls, guided AI editing interactions, persistent dock layouts, and timeline UI refinements for keyframes, ruler alignment, timecode display, and split-pane visibility.",
+    "section": "Release"
+  },
+  {
     "date": "2026-05-26",
     "type": "new",
     "title": "ElevenLabs Audio Generation",

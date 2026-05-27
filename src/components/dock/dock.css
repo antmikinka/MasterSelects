@@ -25,6 +25,44 @@
     opacity 220ms ease;
 }
 
+.dock-container.layout-switch-animating .dock-split-child {
+  transition:
+    width 500ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 500ms cubic-bezier(0.22, 1, 0.36, 1),
+    min-width 500ms cubic-bezier(0.22, 1, 0.36, 1),
+    min-height 500ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 360ms ease;
+}
+
+.dock-container.layout-switch-animating .dock-tab-pane,
+.dock-container.layout-switch-animating .floating-panel {
+  transform-origin: top left;
+  will-change: transform, opacity;
+}
+
+.dock-layout-transition-ghost {
+  position: absolute;
+  z-index: 9000;
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  min-height: 0;
+  padding: 8px 10px;
+  overflow: hidden;
+  border: 1px solid rgba(92, 153, 255, 0.32);
+  border-radius: 2px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.015) 100%),
+    var(--bg-secondary);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.34);
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+  pointer-events: none;
+  text-overflow: ellipsis;
+  transform-origin: top left;
+  white-space: nowrap;
+}
+
 .dock-root {
   flex: 1;
   display: flex;

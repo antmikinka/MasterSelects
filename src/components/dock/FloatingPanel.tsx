@@ -84,6 +84,8 @@ export function FloatingPanel({ floating }: FloatingPanelProps) {
       className={`floating-panel ${isDragging ? 'dragging' : ''} ${isResizing ? 'resizing' : ''}`}
       data-guided-panel={floating.panel.type}
       data-panel-type={floating.panel.type}
+      data-dock-layout-anim-id={`panel:${floating.panel.id}`}
+      data-dock-layout-anim-title={floating.panel.title}
       style={{
         left: floating.position.x,
         top: floating.position.y,

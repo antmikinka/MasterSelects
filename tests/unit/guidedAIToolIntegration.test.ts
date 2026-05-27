@@ -199,6 +199,42 @@ describe('guided AI tool integration', () => {
     }));
   });
 
+  it('executes guided executeBatch sub-actions inline', async () => {
+    const clip = createClip();
+    useTimelineStore.setState({ clips: [clip] });
+
+    const result = await executeAITool('executeBatch', {
+      actions: [
+        { tool: 'setTransform', args: { clipId: clip.id, x: 192 } },
+        { tool: 'setTransform', args: { clipId: clip.id, y: -108 } },
+      ],
+    }, 'devBridge', {
+      guidedReplay: true,
+      guidedAnimationBudgetMs: 0,
+    });
+
+    const updated = useTimelineStore.getState().clips.find((entry) => entry.id === clip.id);
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      data: expect.objectContaining({
+        totalActions: 2,
+        succeeded: 2,
+        failed: 0,
+      }),
+    }));
+    expect((result.data as { results: Array<{ tool: string }> }).results.map((entry) => entry.tool)).toEqual([
+      'setTransform',
+      'setTransform',
+    ]);
+    expect(updated?.transform.position.x).toBe(0.1);
+    expect(updated?.transform.position.y).toBe(-0.1);
+    expect(useGuidedActionStore.getState().activeSession).toEqual(expect.objectContaining({
+      label: 'AI: executeBatch',
+      status: 'completed',
+    }));
+  });
+
   it('suppresses legacy AI feedback while guided replay owns chat visualization', async () => {
     flags.guidedActionsRuntime = true;
     flags.guidedActionsAIReplay = true;
@@ -261,6 +297,7 @@ function resetGuidedActionStore(): void {
     activeSession: null,
     currentStep: null,
     cursor: { visible: false, position: null, clicking: false },
+    lastUserPointerPosition: null,
     spotlight: null,
     callout: null,
     highlights: [],

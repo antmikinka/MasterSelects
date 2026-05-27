@@ -120,6 +120,7 @@ export function DockTabPane({ group }: DockTabPaneProps) {
   const hoveredPanelId = hoveredTabTarget?.panelId ?? null;
   const groupContainsMaximizedPanel = maximizedPanelId !== null && group.panels.some((panel) => panel.id === maximizedPanelId);
   const isActivePanelMaximized = activePanel?.id === maximizedPanelId;
+  const layoutAnimationId = activePanel ? `panel:${activePanel.id}` : `group:${group.id}`;
 
   // Check if this group contains a timeline panel
   const hasTimelinePanel = timelinePanel !== null;
@@ -498,6 +499,8 @@ export function DockTabPane({ group }: DockTabPaneProps) {
       ref={containerRef}
       className={`dock-tab-pane ${isDropTarget ? 'drop-target' : ''} ${groupContainsMaximizedPanel ? 'is-maximized-pane' : ''}`}
       data-group-id={group.id}
+      data-dock-layout-anim-id={layoutAnimationId}
+      data-dock-layout-anim-title={activePanel?.title ?? group.id}
       onMouseEnter={handlePaneMouseEnter}
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}

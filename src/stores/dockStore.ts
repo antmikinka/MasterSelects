@@ -15,6 +15,7 @@ import type {
   PreviewPanelData,
   HoveredDockTabTarget,
   SavedDockLayout,
+  SavedDockTimelineLayout,
 } from '../types/dock';
 import { DEPRECATED_PANEL_TYPES, PANEL_CONFIGS } from '../types/dock';
 import {
@@ -26,15 +27,21 @@ import {
 import { Logger } from '../services/logger';
 import { createPreviewPanelDataPatch, createPreviewPanelSource } from '../utils/previewPanelSource';
 import { useMediaStore } from './mediaStore';
+import { useTimelineStore } from './timeline';
 
 const log = Logger.create('DockStore');
 const LEGACY_DEFAULT_LAYOUT_STORAGE_KEY = 'webvj-dock-layout-default';
+const DEFAULT_TIMELINE_LAYOUT_STORAGE_KEY = 'webvj-dock-layout-default-timeline';
+export const DOCK_LAYOUT_TRANSITION_EVENT = 'masterselects:dock-layout-transition';
+const DOCK_LAYOUT_TRANSITION_DURATION_MS = 500;
 
 // Valid panel types (used to filter out removed panels from saved layouts)
 const DEPRECATED_PANEL_TYPE_SET = new Set<PanelType>(DEPRECATED_PANEL_TYPES);
 const VALID_PANEL_TYPES = new Set(
   (Object.keys(PANEL_CONFIGS) as PanelType[]).filter((type) => !DEPRECATED_PANEL_TYPE_SET.has(type)),
 );
+const VALID_TIMELINE_AUDIO_DISPLAY_MODES = new Set(['compact', 'detailed', 'spectral']);
+const VALID_TIMELINE_TRACK_FOCUS_MODES = new Set(['balanced', 'audio', 'video']);
 const LEGACY_PANEL_TYPE_ALIASES: Partial<Record<PanelType, PanelType>> = {
   youtube: 'download',
 };
@@ -184,10 +191,101 @@ function getLayoutMaxZIndex(layout: DockLayout): number {
   ), 1000);
 }
 
+function requestDockLayoutTransition(durationMs = DOCK_LAYOUT_TRANSITION_DURATION_MS): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.dispatchEvent(new CustomEvent(DOCK_LAYOUT_TRANSITION_EVENT, {
+    detail: { durationMs },
+  }));
+}
+
+function cleanupSavedTimelineLayout(timeline: SavedDockTimelineLayout | undefined): SavedDockTimelineLayout | undefined {
+  if (!timeline || typeof timeline !== 'object') {
+    return undefined;
+  }
+
+  const cleaned: SavedDockTimelineLayout = {};
+  if (
+    typeof timeline.audioDisplayMode === 'string'
+    && VALID_TIMELINE_AUDIO_DISPLAY_MODES.has(timeline.audioDisplayMode)
+  ) {
+    cleaned.audioDisplayMode = timeline.audioDisplayMode;
+  }
+  if (typeof timeline.audioFocusMode === 'boolean') {
+    cleaned.audioFocusMode = timeline.audioFocusMode;
+  }
+  if (
+    typeof timeline.trackFocusMode === 'string'
+    && VALID_TIMELINE_TRACK_FOCUS_MODES.has(timeline.trackFocusMode)
+  ) {
+    cleaned.trackFocusMode = timeline.trackFocusMode;
+  }
+
+  if (
+    timeline.trackHeights
+    && typeof timeline.trackHeights === 'object'
+    && !Array.isArray(timeline.trackHeights)
+  ) {
+    const trackHeights: Record<string, number> = {};
+    for (const [trackId, height] of Object.entries(timeline.trackHeights)) {
+      if (typeof height === 'number' && Number.isFinite(height)) {
+        trackHeights[trackId] = height;
+      }
+    }
+    if (Object.keys(trackHeights).length > 0) {
+      cleaned.trackHeights = trackHeights;
+    }
+  }
+
+  return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+}
+
+function captureTimelineLayout(): SavedDockTimelineLayout {
+  const timelineState = useTimelineStore.getState();
+  return {
+    audioDisplayMode: timelineState.audioDisplayMode,
+    audioFocusMode: timelineState.audioFocusMode,
+    trackFocusMode: timelineState.trackFocusMode,
+    trackHeights: Object.fromEntries(
+      timelineState.tracks.map((track) => [track.id, track.height]),
+    ),
+  };
+}
+
+function applySavedTimelineLayout(timeline: SavedDockTimelineLayout | undefined): void {
+  const cleaned = cleanupSavedTimelineLayout(timeline);
+  if (!cleaned) {
+    return;
+  }
+
+  const timelineStore = useTimelineStore.getState();
+  if (cleaned.audioDisplayMode) {
+    timelineStore.setAudioDisplayMode(cleaned.audioDisplayMode);
+  }
+  if (cleaned.trackFocusMode) {
+    timelineStore.setTrackFocusMode(cleaned.trackFocusMode);
+  } else if (typeof cleaned.audioFocusMode === 'boolean') {
+    timelineStore.setAudioFocusMode(cleaned.audioFocusMode);
+  }
+
+  if (cleaned.trackHeights) {
+    const currentTrackIds = new Set(useTimelineStore.getState().tracks.map((track) => track.id));
+    for (const [trackId, height] of Object.entries(cleaned.trackHeights)) {
+      if (currentTrackIds.has(trackId)) {
+        useTimelineStore.getState().setTrackHeight(trackId, height);
+      }
+    }
+  }
+}
+
 function cleanupSavedLayout(savedLayout: SavedDockLayout): SavedDockLayout {
   return {
     ...savedLayout,
     layout: cleanupPersistedLayout(savedLayout.layout),
+    favorite: savedLayout.favorite === true,
+    timeline: cleanupSavedTimelineLayout(savedLayout.timeline),
   };
 }
 
@@ -281,6 +379,7 @@ interface DockState {
   maximizedPanelId: string | null;
   savedLayouts: SavedDockLayout[];
   defaultSavedLayoutId: string | null;
+  activeSavedLayoutId: string | null;
 
   // Layout mutations
   setActiveTab: (groupId: string, index: number) => void;
@@ -326,8 +425,10 @@ interface DockState {
 
   // Layout management
   saveNamedLayout: (name: string) => SavedDockLayout | null;
+  saveCurrentNamedLayout: () => SavedDockLayout | null;
   loadSavedLayout: (layoutId: string) => void;
   setDefaultSavedLayout: (layoutId: string | null) => void;
+  toggleFavoriteSavedLayout: (layoutId: string) => void;
   resetLayout: () => void;
   saveLayoutAsDefault: () => void;
 
@@ -347,6 +448,7 @@ export const useDockStore = create<DockState>()(
         maximizedPanelId: null,
         savedLayouts: [],
         defaultSavedLayoutId: null,
+        activeSavedLayoutId: null,
 
         setActiveTab: (groupId, index) => {
           set((state) => ({
@@ -788,6 +890,7 @@ export const useDockStore = create<DockState>()(
           }
 
           const cleanedLayout = cleanupPersistedLayout(cloneDockLayout(get().layout));
+          const timelineLayout = captureTimelineLayout();
           const now = Date.now();
           const existingLayout = get().savedLayouts.find((savedLayout) => (
             savedLayout.name.trim().toLowerCase() === trimmedName.toLowerCase()
@@ -797,12 +900,14 @@ export const useDockStore = create<DockState>()(
                 ...existingLayout,
                 name: trimmedName,
                 layout: cleanedLayout,
+                timeline: timelineLayout,
                 updatedAt: now,
               }
             : {
                 id: `saved-layout-${now}-${Math.random().toString(36).slice(2, 8)}`,
                 name: trimmedName,
                 layout: cleanedLayout,
+                timeline: timelineLayout,
                 createdAt: now,
                 updatedAt: now,
               };
@@ -812,6 +917,37 @@ export const useDockStore = create<DockState>()(
               nextSavedLayout,
               ...state.savedLayouts.filter((savedLayout) => savedLayout.id !== nextSavedLayout.id),
             ],
+            activeSavedLayoutId: nextSavedLayout.id,
+          }));
+
+          return nextSavedLayout;
+        },
+
+        saveCurrentNamedLayout: () => {
+          const { activeSavedLayoutId, savedLayouts, layout } = get();
+          if (!activeSavedLayoutId) {
+            return null;
+          }
+
+          const existingLayout = savedLayouts.find((savedLayout) => savedLayout.id === activeSavedLayoutId);
+          if (!existingLayout) {
+            set({ activeSavedLayoutId: null });
+            return null;
+          }
+
+          const nextSavedLayout: SavedDockLayout = {
+            ...existingLayout,
+            layout: cleanupPersistedLayout(cloneDockLayout(layout)),
+            timeline: captureTimelineLayout(),
+            updatedAt: Date.now(),
+          };
+
+          set((state) => ({
+            savedLayouts: [
+              nextSavedLayout,
+              ...state.savedLayouts.filter((savedLayout) => savedLayout.id !== nextSavedLayout.id),
+            ],
+            activeSavedLayoutId: nextSavedLayout.id,
           }));
 
           return nextSavedLayout;
@@ -824,12 +960,15 @@ export const useDockStore = create<DockState>()(
           }
 
           const nextLayout = cleanupPersistedLayout(cloneDockLayout(savedLayout.layout));
+          requestDockLayoutTransition();
           set({
             layout: nextLayout,
             maxZIndex: getLayoutMaxZIndex(nextLayout),
             hoveredTabTarget: null,
             maximizedPanelId: null,
+            activeSavedLayoutId: savedLayout.id,
           });
+          applySavedTimelineLayout(savedLayout.timeline);
         },
 
         setDefaultSavedLayout: (layoutId) => {
@@ -840,18 +979,31 @@ export const useDockStore = create<DockState>()(
           set({ defaultSavedLayoutId: layoutId });
         },
 
+        toggleFavoriteSavedLayout: (layoutId) => {
+          set((state) => ({
+            savedLayouts: state.savedLayouts.map((savedLayout) => (
+              savedLayout.id === layoutId
+                ? { ...savedLayout, favorite: savedLayout.favorite !== true }
+                : savedLayout
+            )),
+          }));
+        },
+
         resetLayout: () => {
           const { defaultSavedLayoutId, savedLayouts } = get();
           if (defaultSavedLayoutId) {
             const defaultSavedLayout = savedLayouts.find((savedLayout) => savedLayout.id === defaultSavedLayoutId);
             if (defaultSavedLayout) {
               const nextLayout = cleanupPersistedLayout(cloneDockLayout(defaultSavedLayout.layout));
+              requestDockLayoutTransition();
               set({
                 layout: nextLayout,
                 maxZIndex: getLayoutMaxZIndex(nextLayout),
                 hoveredTabTarget: null,
                 maximizedPanelId: null,
+                activeSavedLayoutId: defaultSavedLayout.id,
               });
+              applySavedTimelineLayout(defaultSavedLayout.timeline);
               return;
             }
           }
@@ -861,22 +1013,34 @@ export const useDockStore = create<DockState>()(
           if (savedDefault) {
             try {
               const parsed = cleanupPersistedLayout(JSON.parse(savedDefault) as DockLayout);
+              const defaultTimeline = localStorage.getItem(DEFAULT_TIMELINE_LAYOUT_STORAGE_KEY);
+              requestDockLayoutTransition();
               set({
                 layout: parsed,
                 maxZIndex: getLayoutMaxZIndex(parsed),
                 hoveredTabTarget: null,
                 maximizedPanelId: null,
+                activeSavedLayoutId: null,
               });
+              if (defaultTimeline) {
+                try {
+                  applySavedTimelineLayout(JSON.parse(defaultTimeline) as SavedDockTimelineLayout);
+                } catch (e) {
+                  log.warn('Failed to parse saved default timeline layout:', e);
+                }
+              }
               return;
             } catch (e) {
               log.error('Failed to parse saved default layout:', e);
             }
           }
+          requestDockLayoutTransition();
           set({
             layout: cloneDockLayout(DEFAULT_LAYOUT),
             maxZIndex: getLayoutMaxZIndex(DEFAULT_LAYOUT),
             hoveredTabTarget: null,
             maximizedPanelId: null,
+            activeSavedLayoutId: null,
           });
         },
 
@@ -884,6 +1048,7 @@ export const useDockStore = create<DockState>()(
           const { layout } = get();
           const cleanedLayout = cleanupPersistedLayout(cloneDockLayout(layout));
           localStorage.setItem(LEGACY_DEFAULT_LAYOUT_STORAGE_KEY, JSON.stringify(cleanedLayout));
+          localStorage.setItem(DEFAULT_TIMELINE_LAYOUT_STORAGE_KEY, JSON.stringify(captureTimelineLayout()));
 
           const matchingSavedLayout = get().savedLayouts.find((savedLayout) => (
             areDockLayoutsEqual(savedLayout.layout, cleanedLayout)
@@ -903,6 +1068,7 @@ export const useDockStore = create<DockState>()(
             maxZIndex: getLayoutMaxZIndex(cleanedLayout),
             hoveredTabTarget: null,
             maximizedPanelId: null,
+            activeSavedLayoutId: null,
           });
         },
       }),
@@ -913,6 +1079,7 @@ export const useDockStore = create<DockState>()(
           maxZIndex: state.maxZIndex,
           savedLayouts: state.savedLayouts,
           defaultSavedLayoutId: state.defaultSavedLayoutId,
+          activeSavedLayoutId: state.activeSavedLayoutId,
         }),
         merge: (persistedState, currentState) => {
           const persisted = persistedState as Partial<DockState> | undefined;
@@ -925,6 +1092,12 @@ export const useDockStore = create<DockState>()(
           )
             ? persisted.defaultSavedLayoutId
             : null;
+          const activeSavedLayoutId = (
+            typeof persisted?.activeSavedLayoutId === 'string'
+            && savedLayouts.some((savedLayout) => savedLayout.id === persisted.activeSavedLayoutId)
+          )
+            ? persisted.activeSavedLayoutId
+            : null;
 
           if (persisted?.layout) {
             // Clean up any invalid panel types from persisted layout
@@ -935,12 +1108,14 @@ export const useDockStore = create<DockState>()(
               maxZIndex: persisted.maxZIndex ?? currentState.maxZIndex,
               savedLayouts,
               defaultSavedLayoutId,
+              activeSavedLayoutId,
             };
           }
           return {
             ...currentState,
             savedLayouts,
             defaultSavedLayoutId,
+            activeSavedLayoutId,
           };
         },
       }

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const emptyKeys = {
   openai: '',
+  anthropic: '',
   assemblyai: '',
   deepgram: '',
   piapi: '',

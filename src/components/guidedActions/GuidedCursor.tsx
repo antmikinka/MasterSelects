@@ -3,10 +3,11 @@ import type { GuidedPoint } from '../../services/guidedActions';
 interface GuidedCursorProps {
   clicking: boolean;
   position: GuidedPoint | null;
+  transitionMs?: number;
   visible: boolean;
 }
 
-export function GuidedCursor({ clicking, position, visible }: GuidedCursorProps) {
+export function GuidedCursor({ clicking, position, transitionMs, visible }: GuidedCursorProps) {
   if (!visible || !position) {
     return null;
   }
@@ -16,6 +17,7 @@ export function GuidedCursor({ clicking, position, visible }: GuidedCursorProps)
       className={`guided-cursor ${clicking ? 'guided-cursor--clicking' : ''}`}
       style={{
         transform: `translate3d(${position.x}px, ${position.y}px, 0)`,
+        transitionDuration: `${Math.max(0, transitionMs ?? 420)}ms`,
       }}
       aria-hidden="true"
     >

@@ -124,6 +124,47 @@ export const maskToolDefinitions: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'addMaskPathKeyframe',
+      description: 'Add or update a keyframe for an entire mask path. Use this to animate mask vertices over time. Times are clip-local seconds and coordinates are normalized 0-1.',
+      parameters: {
+        type: 'object',
+        properties: {
+          clipId: { type: 'string', description: 'The clip ID' },
+          maskId: { type: 'string', description: 'The mask ID' },
+          time: { type: 'number', description: 'Clip-local keyframe time in seconds. Defaults to current playhead relative to the clip.' },
+          easing: { type: 'string', description: 'Easing: linear, easeIn, easeOut, easeInOut' },
+          pathValue: {
+            type: 'object',
+            description: 'Full mask path snapshot. Omit to capture the current mask path.',
+            properties: {
+              closed: { type: 'boolean', description: 'Whether the mask path is closed' },
+              vertices: {
+                type: 'array',
+                description: 'All vertices in path order. Keep existing IDs when animating a vertex so interpolation preserves topology.',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string', description: 'Existing vertex ID from getMasks' },
+                    x: { type: 'number', description: 'X position (0-1 normalized)' },
+                    y: { type: 'number', description: 'Y position (0-1 normalized)' },
+                    handleIn: { type: 'object', description: '{x, y} bezier handle in', properties: { x: { type: 'number' }, y: { type: 'number' } } },
+                    handleOut: { type: 'object', description: '{x, y} bezier handle out', properties: { x: { type: 'number' }, y: { type: 'number' } } },
+                    handleMode: { type: 'string', description: 'Vertex handle mode: none, mirrored, split' },
+                  },
+                  required: ['x', 'y'],
+                },
+              },
+            },
+            required: ['vertices'],
+          },
+        },
+        required: ['clipId', 'maskId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'addVertex',
       description: 'Add a vertex to an existing mask. Coordinates are normalized 0-1. Optional bezier handles for curves.',
       parameters: {

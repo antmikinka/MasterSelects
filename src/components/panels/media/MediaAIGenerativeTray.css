@@ -41,6 +41,10 @@
   background: var(--bg-hover);
 }
 
+.media-ai-tray-launch-chat {
+  border-color: color-mix(in srgb, var(--accent, #4aa3ff) 42%, var(--border-color));
+}
+
 .media-ai-tray-launch svg {
   color: var(--accent);
   flex: 0 0 auto;
@@ -57,6 +61,11 @@
   gap: 8px;
   width: min(340px, calc(100% - 20px));
   pointer-events: auto;
+}
+
+.media-ai-tray-expanded.is-collapsed {
+  display: none;
+  pointer-events: none;
 }
 
 .media-ai-tray-expanded:has(.fb-bubble.has-references) {
@@ -193,6 +202,10 @@
   bottom: auto;
   height: 60px;
   padding-left: 10px;
+}
+
+.media-ai-tray-expanded .fb-bubble.has-references.has-chat-panel > .fb-chat-output {
+  width: min(var(--media-ai-tray-prompt-width), calc(100vw - 24px));
 }
 
 .media-ai-tray-expanded .fb-bubble.has-references .fb-reference-strip {

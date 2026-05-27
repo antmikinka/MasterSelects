@@ -206,15 +206,15 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  overflow-x: hidden;
+  overflow-x: auto;
   overflow-y: auto;
   scrollbar-gutter: stable;
 }
 
 .media-panel-table-wrapper .media-column-headers,
 .media-panel-table-wrapper .media-item-list {
-  width: 100%;
-  min-width: 0;
+  width: max-content;
+  min-width: 100%;
 }
 
 /* Column headers */
@@ -500,10 +500,10 @@
 .media-item-list {
   padding: 4px 0;
   user-select: none;
-  flex: 1;
+  flex: 0 0 auto;
   min-height: 0;
   overflow: visible;
-  contain: layout paint;
+  contain: paint;
 }
 
 .media-classic-virtual-spacer {

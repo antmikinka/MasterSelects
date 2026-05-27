@@ -10,6 +10,7 @@ import {
 import { useDockStore } from '../../src/stores/dockStore';
 import { useGuidedActionStore } from '../../src/stores/guidedActionStore';
 import { useTimelineStore } from '../../src/stores/timeline';
+import { createMockClip } from '../helpers/mockData';
 
 describe('guided surface interaction driver', () => {
   beforeEach(() => {
@@ -17,6 +18,7 @@ describe('guided surface interaction driver', () => {
     resetGuidedActionStore();
     useDockStore.getState().resetLayout();
     useTimelineStore.setState({
+      clips: [createMockClip({ id: 'clip-1', trackId: 'video-1', startTime: 0, duration: 10 })],
       selectedClipIds: new Set(),
       primarySelectedClipId: null,
       playheadPosition: 0,
@@ -132,6 +134,47 @@ describe('guided surface interaction driver', () => {
       closed: true,
       points: [{ x: 25, y: 50 }, { x: 75, y: 50 }],
     }));
+    expect(useGuidedActionStore.getState().cursor.position).toEqual({ x: 75, y: 50 });
+    expect(useGuidedActionStore.getState().cursor.clicking).toBe(false);
+  });
+
+  it('draws mask paths by committing vertices during the cursor clicks', async () => {
+    const registry = new GuidedTargetRegistry();
+    registry.registerResolver('previewPathVertex', previewVertexResolver, 'test-preview-vertex');
+    const runtime = new GuidedActionRuntime({ targetRegistry: registry });
+
+    const resultPromise = startSurfaceSession(runtime, [
+      {
+        type: 'drawMaskPath',
+        clipId: 'clip-1',
+        vertices: [{ x: 0.25, y: 0.5 }, { x: 0.75, y: 0.5 }, { x: 0.5, y: 0.75 }],
+        close: true,
+        mask: { name: 'Incremental mask' },
+        policy: 'semanticTool',
+      },
+    ]);
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    const mask = useTimelineStore.getState().clips.find((clip) => clip.id === 'clip-1')?.masks?.[0];
+    expect(result.status).toBe('completed');
+    expect(result.toolResults[0]).toEqual(expect.objectContaining({
+      success: true,
+      data: expect.objectContaining({
+        clipId: 'clip-1',
+        incremental: true,
+        vertexCount: 3,
+      }),
+    }));
+    expect(mask).toEqual(expect.objectContaining({
+      closed: true,
+      name: 'Incremental mask',
+    }));
+    expect(mask?.vertices.map((vertex) => ({ x: vertex.x, y: vertex.y }))).toEqual([
+      { x: 0.25, y: 0.5 },
+      { x: 0.75, y: 0.5 },
+      { x: 0.5, y: 0.75 },
+    ]);
   });
 });
 
@@ -180,6 +223,8 @@ function resetGuidedActionStore(): void {
     activeSession: null,
     currentStep: null,
     cursor: { visible: false, position: null, clicking: false },
+    dragGhost: null,
+    lastUserPointerPosition: null,
     spotlight: null,
     callout: null,
     highlights: [],

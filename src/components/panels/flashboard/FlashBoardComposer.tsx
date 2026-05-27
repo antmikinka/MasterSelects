@@ -28,6 +28,11 @@ import {
   type ElevenLabsMp3OutputFormat,
   type ElevenLabsVoice,
 } from '../../../services/elevenLabsService';
+import {
+  checkLemonadeHealth,
+  DEFAULT_LEMONADE_MODEL,
+  type LemonadeModelInfo,
+} from '../../../services/lemonadeProvider';
 import { cloudAiService } from '../../../services/cloudAiService';
 import {
   DEFAULT_SUNO_AUDIO_WEIGHT,
@@ -46,6 +51,19 @@ import {
   parseSunoPromptRefinement,
   streamRefineFlashBoardPrompt,
 } from '../../../services/flashboard/FlashBoardPromptRefiner';
+import {
+  DEFAULT_FLASHBOARD_CHAT_PROVIDER,
+  DEFAULT_FLASHBOARD_CHAT_TEMPERATURE,
+  DEFAULT_FLASHBOARD_OPENAI_REASONING_EFFORT,
+  FLASHBOARD_CHAT_MODEL_OPTIONS,
+  FLASHBOARD_CHAT_PROVIDERS,
+  getOpenAiReasoningEffortOptions,
+  isOpenAiReasoningEffortSupported,
+  sendFlashBoardChatMessage,
+  type FlashBoardChatModelOption,
+  type FlashBoardOpenAiReasoningEffort,
+  type FlashBoardChatProvider,
+} from '../../../services/flashboard/FlashBoardChatService';
 import type { CatalogEntry } from '../../../services/flashboard/types';
 import { FileTypeIcon } from '../media/FileTypeIcon';
 
@@ -62,10 +80,39 @@ type PopoverType =
   | 'sunoModel'
   | 'sunoMode'
   | 'sunoTuning'
+  | 'chatProvider'
+  | 'chatModel'
+  | 'chatTemperature'
+  | 'chatReasoning'
   | null;
 type NumberVoiceSettingKey = 'speed' | 'stability' | 'similarityBoost' | 'style';
 type ModelCategoryId = 'image' | 'video' | 'voice' | 'music';
 type ComposerReferenceRoleTarget = FlashBoardComposerReferenceRole;
+
+interface FlashBoardChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  isError?: boolean;
+  isPending?: boolean;
+}
+
+function createFlashBoardChatMessageId(role: FlashBoardChatMessage['role']): string {
+  return `${role}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function buildFlashBoardChatRequestPrompt(messages: FlashBoardChatMessage[], nextUserPrompt: string): string {
+  const previousContext = messages
+    .filter((message) => !message.isPending && !message.isError && message.text.trim())
+    .map((message) => `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.text.trim()}`)
+    .join('\n\n');
+
+  return previousContext ? `${previousContext}\n\nUser: ${nextUserPrompt}` : nextUserPrompt;
+}
+
+function normalizeApiKeyValue(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
 
 const INLINE_SUBMENU_POPOVERS = new Set<PopoverType>([
   'model',
@@ -75,6 +122,10 @@ const INLINE_SUBMENU_POPOVERS = new Set<PopoverType>([
   'mode',
   'sunoModel',
   'sunoMode',
+  'chatProvider',
+  'chatModel',
+  'chatTemperature',
+  'chatReasoning',
 ]);
 
 interface ComposerReferenceBadge {
@@ -92,6 +143,7 @@ interface FlashBoardComposerProps {
   initialProviderId?: string;
   initialService?: CatalogEntry['service'];
   initialVersion?: string;
+  initialMode?: 'generate' | 'chat';
   allowedServices?: CatalogEntry['service'][];
   serviceScope?: CatalogEntry['service'];
 }
@@ -517,6 +569,7 @@ export function FlashBoardComposer({
   initialProviderId,
   initialService,
   initialVersion,
+  initialMode = 'generate',
   allowedServices,
   serviceScope,
 }: FlashBoardComposerProps) {
@@ -528,12 +581,15 @@ export function FlashBoardComposer({
   const queueNode = useFlashBoardStore((s) => s.queueNode);
   const setHoveredComposerReference = useFlashBoardStore((s) => s.setHoveredComposerReference);
   const mediaFiles = useMediaStore((s) => s.files);
-  const openAiApiKey = useSettingsStore((s) => s.apiKeys.openai);
-  const kieAiApiKey = useSettingsStore((s) => s.apiKeys.kieai);
-  const evolinkApiKey = useSettingsStore((s) => s.apiKeys.evolink);
-  const elevenLabsApiKey = useSettingsStore((s) => s.apiKeys.elevenlabs);
+  const openAiApiKey = normalizeApiKeyValue(useSettingsStore((s) => s.apiKeys.openai));
+  const anthropicApiKey = normalizeApiKeyValue(useSettingsStore((s) => s.apiKeys.anthropic));
+  const kieAiApiKey = normalizeApiKeyValue(useSettingsStore((s) => s.apiKeys.kieai));
+  const evolinkApiKey = normalizeApiKeyValue(useSettingsStore((s) => s.apiKeys.evolink));
+  const elevenLabsApiKey = normalizeApiKeyValue(useSettingsStore((s) => s.apiKeys.elevenlabs));
+  const lemonadeEndpoint = useSettingsStore((s) => s.lemonadeEndpoint);
   const openSettings = useSettingsStore((s) => s.openSettings);
   const hasOpenAiKey = openAiApiKey.trim().length > 0;
+  const hasAnthropicKey = anthropicApiKey.trim().length > 0;
   const hasKieAiKey = kieAiApiKey.trim().length > 0;
   const hasEvolinkKey = evolinkApiKey.trim().length > 0;
   const hasElevenLabsKey = elevenLabsApiKey.trim().length > 0;
@@ -603,7 +659,11 @@ export function FlashBoardComposer({
   const referenceAutoScrollFrameRef = useRef<number | null>(null);
   const referenceAutoScrollVelocityRef = useRef(0);
   const promptRefineAbortRef = useRef<AbortController | null>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
+  const chatHistoryRef = useRef<HTMLDivElement>(null);
+  const copiedChatResetTimeoutRef = useRef<number | null>(null);
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const appliedInitialTargetRef = useRef<string | null>(null);
 
   const [service, setService] = useState<CatalogEntry['service']>(
@@ -613,6 +673,20 @@ export function FlashBoardComposer({
   const [version, setVersion] = useState(initialVersion ?? initialEntry?.versions[0] ?? DEFAULT_FLASHBOARD_MODEL_VERSION);
   const [mode, setMode] = useState('std');
   const [prompt, setPrompt] = useState('');
+  const [chatPanelOpen, setChatPanelOpen] = useState(initialMode === 'chat');
+  const [chatPrompt, setChatPrompt] = useState('');
+  const [chatProvider, setChatProvider] = useState<FlashBoardChatProvider>(DEFAULT_FLASHBOARD_CHAT_PROVIDER);
+  const [chatModel, setChatModel] = useState(FLASHBOARD_CHAT_MODEL_OPTIONS[DEFAULT_FLASHBOARD_CHAT_PROVIDER][0]?.id ?? 'gpt-5.5');
+  const [chatTemperature, setChatTemperature] = useState(DEFAULT_FLASHBOARD_CHAT_TEMPERATURE);
+  const [openAiReasoningEffort, setOpenAiReasoningEffort] = useState<FlashBoardOpenAiReasoningEffort>(
+    DEFAULT_FLASHBOARD_OPENAI_REASONING_EFFORT,
+  );
+  const [chatMessages, setChatMessages] = useState<FlashBoardChatMessage[]>([]);
+  const [copiedChatMessageId, setCopiedChatMessageId] = useState<string | null>(null);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [isChatting, setIsChatting] = useState(false);
+  const [lemonadeStatus, setLemonadeStatus] = useState<'idle' | 'checking' | 'online' | 'offline'>('idle');
+  const [lemonadeModels, setLemonadeModels] = useState<LemonadeModelInfo[]>([]);
   const [duration, setDuration] = useState(5);
   const [aspectRatio, setAspectRatio] = useState('16:9');
   const [imageSize, setImageSize] = useState('1K');
@@ -725,6 +799,47 @@ export function FlashBoardComposer({
 
     return '';
   }, [multiShots, normalizedMultiPrompt, prompt]);
+  const effectiveChatPrompt = chatPrompt.trim();
+  const chatModelOptions = useMemo<FlashBoardChatModelOption[]>(() => {
+    if (chatProvider !== 'lemonade') {
+      return FLASHBOARD_CHAT_MODEL_OPTIONS[chatProvider];
+    }
+
+    const discoveredModels = lemonadeModels.map((model) => ({
+      id: model.id,
+      label: model.name || model.id,
+      provider: 'lemonade' as const,
+      supportsTemperature: true,
+    }));
+    const fallbackModels = FLASHBOARD_CHAT_MODEL_OPTIONS.lemonade;
+    const mergedModels = discoveredModels.length > 0 ? discoveredModels : fallbackModels;
+
+    if (chatModel && !mergedModels.some((model) => model.id === chatModel)) {
+      return [
+        ...mergedModels,
+        {
+          id: chatModel,
+          label: chatModel === DEFAULT_LEMONADE_MODEL ? 'Lemonade' : chatModel,
+          provider: 'lemonade',
+          supportsTemperature: true,
+        },
+      ];
+    }
+
+    return mergedModels;
+  }, [chatModel, chatProvider, lemonadeModels]);
+  const activeChatModel = useMemo(
+    () => chatModelOptions.find((model) => model.id === chatModel) ?? chatModelOptions[0],
+    [chatModel, chatModelOptions],
+  );
+  const activeChatModelId = activeChatModel?.id ?? chatModel;
+  const chatTemperatureSupported = activeChatModel?.supportsTemperature ?? chatProvider !== 'openai';
+  const chatReasoningSupported = chatProvider === 'openai' && isOpenAiReasoningEffortSupported(activeChatModelId);
+  const chatReasoningEffortOptions = useMemo(
+    () => (chatReasoningSupported ? getOpenAiReasoningEffortOptions(activeChatModelId) : []),
+    [activeChatModelId, chatReasoningSupported],
+  );
+  const chatProviderLabel = FLASHBOARD_CHAT_PROVIDERS.find((provider) => provider.id === chatProvider)?.label ?? 'Chat';
   const multiShotDurationTotal = useMemo(
     () => normalizedMultiPrompt.reduce((sum, shot) => sum + shot.duration, 0),
     [normalizedMultiPrompt],
@@ -1399,6 +1514,218 @@ export function FlashBoardComposer({
     return () => window.removeEventListener('mousedown', handler);
   }, [closePopover, popover]);
 
+  useEffect(() => {
+    if (chatModelOptions.length === 0) {
+      return;
+    }
+
+    if (!chatModelOptions.some((model) => model.id === chatModel)) {
+      setChatModel(chatModelOptions[0]?.id ?? chatModel);
+    }
+  }, [chatModel, chatModelOptions]);
+
+  useEffect(() => {
+    setChatPanelOpen(initialMode === 'chat');
+    setChatError(null);
+  }, [initialMode]);
+
+  useEffect(() => {
+    if (!chatReasoningSupported || chatReasoningEffortOptions.length === 0) {
+      return;
+    }
+
+    if (!chatReasoningEffortOptions.some((option) => option.id === openAiReasoningEffort)) {
+      setOpenAiReasoningEffort(DEFAULT_FLASHBOARD_OPENAI_REASONING_EFFORT);
+    }
+  }, [chatReasoningEffortOptions, chatReasoningSupported, openAiReasoningEffort]);
+
+  useLayoutEffect(() => {
+    const historyNode = chatHistoryRef.current;
+    if (!historyNode) {
+      return;
+    }
+
+    historyNode.scrollTop = historyNode.scrollHeight;
+  }, [chatError, chatMessages]);
+
+  useEffect(() => {
+    if (!chatPanelOpen || chatProvider !== 'lemonade') {
+      return;
+    }
+
+    let cancelled = false;
+    setLemonadeStatus('checking');
+
+    void checkLemonadeHealth(lemonadeEndpoint).then((health) => {
+      if (cancelled) {
+        return;
+      }
+
+      setLemonadeModels(health.models);
+      setLemonadeStatus(health.available ? 'online' : 'offline');
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [chatPanelOpen, chatProvider, lemonadeEndpoint]);
+
+  const handleChatProviderSelect = useCallback((provider: FlashBoardChatProvider) => {
+    setChatProvider(provider);
+    setChatError(null);
+
+    const nextDefaultModel = provider === 'lemonade'
+      ? lemonadeModels[0]?.id ?? FLASHBOARD_CHAT_MODEL_OPTIONS.lemonade[0]?.id
+      : FLASHBOARD_CHAT_MODEL_OPTIONS[provider][0]?.id;
+
+    if (nextDefaultModel) {
+      setChatModel(nextDefaultModel);
+    }
+  }, [lemonadeModels]);
+
+  const handleChatButtonClick = useCallback(async () => {
+    closePopover();
+
+    if (!chatPanelOpen) {
+      setChatPanelOpen(true);
+      setChatError(null);
+      return;
+    }
+
+    if (isChatting) {
+      chatAbortRef.current?.abort();
+      return;
+    }
+
+    if (!effectiveChatPrompt) {
+      setChatError('Write a chat prompt before starting chat.');
+      return;
+    }
+
+    if (chatProvider === 'openai' && !hasOpenAiKey) {
+      setChatError('Add an OpenAI API key in Settings to use compact chat.');
+      openSettings();
+      return;
+    }
+
+    if (chatProvider === 'anthropic' && !hasAnthropicKey) {
+      setChatError('Add an Anthropic API key in Settings to use Claude chat.');
+      openSettings();
+      return;
+    }
+
+    const abortController = new AbortController();
+    chatAbortRef.current?.abort();
+    chatAbortRef.current = abortController;
+    const userMessage: FlashBoardChatMessage = {
+      id: createFlashBoardChatMessageId('user'),
+      role: 'user',
+      text: effectiveChatPrompt,
+    };
+    const assistantMessageId = createFlashBoardChatMessageId('assistant');
+    const requestPrompt = buildFlashBoardChatRequestPrompt(chatMessages, effectiveChatPrompt);
+
+    setIsChatting(true);
+    setChatError(null);
+    setChatPrompt('');
+    setChatMessages((current) => [
+      ...current,
+      userMessage,
+      {
+        id: assistantMessageId,
+        role: 'assistant',
+        text: 'Thinking...',
+        isPending: true,
+      },
+    ]);
+
+    try {
+      const response = await sendFlashBoardChatMessage({
+        anthropicApiKey,
+        lemonadeEndpoint,
+        model: activeChatModelId,
+        openAiApiKey,
+        openAiReasoningEffort,
+        prompt: requestPrompt,
+        provider: chatProvider,
+        signal: abortController.signal,
+        temperature: chatTemperature,
+      });
+      setChatMessages((current) => current.map((message) => (
+        message.id === assistantMessageId
+          ? { ...message, text: response || 'Empty response.', isPending: false }
+          : message
+      )));
+    } catch (error) {
+      const errorMessage = abortController.signal.aborted
+        ? 'Chat stopped.'
+        : error instanceof Error ? error.message : 'Chat request failed.';
+      setChatMessages((current) => current.map((message) => (
+        message.id === assistantMessageId
+          ? { ...message, text: errorMessage, isError: true, isPending: false }
+          : message
+      )));
+    } finally {
+      if (chatAbortRef.current === abortController) {
+        chatAbortRef.current = null;
+      }
+      setIsChatting(false);
+    }
+  }, [
+    activeChatModelId,
+    anthropicApiKey,
+    chatMessages,
+    chatPanelOpen,
+    chatProvider,
+    chatTemperature,
+    closePopover,
+    effectiveChatPrompt,
+    hasAnthropicKey,
+    hasOpenAiKey,
+    isChatting,
+    lemonadeEndpoint,
+    openAiApiKey,
+    openAiReasoningEffort,
+    openSettings,
+  ]);
+
+  const handleChatMessageDoubleClick = useCallback((message: FlashBoardChatMessage) => {
+    if (message.role !== 'assistant' || message.isPending || !message.text.trim()) {
+      return;
+    }
+
+    if (!navigator.clipboard?.writeText) {
+      setChatError('Clipboard is unavailable in this browser.');
+      return;
+    }
+
+    void navigator.clipboard.writeText(message.text).then(() => {
+      setCopiedChatMessageId(message.id);
+      if (copiedChatResetTimeoutRef.current !== null) {
+        window.clearTimeout(copiedChatResetTimeoutRef.current);
+      }
+      copiedChatResetTimeoutRef.current = window.setTimeout(() => {
+        setCopiedChatMessageId(null);
+        copiedChatResetTimeoutRef.current = null;
+      }, 1100);
+    }).catch(() => {
+      setChatError('Could not copy response.');
+    });
+  }, []);
+
+  const handleChatInputKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || event.nativeEvent.isComposing) {
+      return;
+    }
+
+    if (event.ctrlKey || event.metaKey) {
+      return;
+    }
+
+    event.preventDefault();
+    void handleChatButtonClick();
+  }, [handleChatButtonClick]);
+
   const handleProviderChange = useCallback((newService: CatalogEntry['service'], newId: string) => {
     setService(newService);
     setProviderId(newId);
@@ -1752,10 +2079,14 @@ export function FlashBoardComposer({
   }, [isSunoMode, promptBeforeAiRewrite, sunoBeforeAiRewrite]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (chatPanelOpen) {
+      return;
+    }
+
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       handleGenerate();
     }
-  }, [handleGenerate]);
+  }, [chatPanelOpen, handleGenerate]);
 
   const togglePopover = useCallback((type: PopoverType) => {
     if (!type) {
@@ -2052,6 +2383,10 @@ export function FlashBoardComposer({
 
   useEffect(() => () => {
     promptRefineAbortRef.current?.abort();
+    chatAbortRef.current?.abort();
+    if (copiedChatResetTimeoutRef.current !== null) {
+      window.clearTimeout(copiedChatResetTimeoutRef.current);
+    }
   }, []);
 
   const resizePromptInput = useCallback((textarea: HTMLTextAreaElement | null) => {
@@ -2073,8 +2408,8 @@ export function FlashBoardComposer({
   }, []);
 
   useLayoutEffect(() => {
-    resizePromptInput(promptInputRef.current);
-  }, [isAudioMode, multiShots, prompt, resizePromptInput]);
+    resizePromptInput(chatPanelOpen ? chatInputRef.current : promptInputRef.current);
+  }, [chatPanelOpen, chatPrompt, isAudioMode, multiShots, prompt, resizePromptInput]);
 
   const getReferenceMediaFileIdsFromTransfer = useCallback((dataTransfer: DataTransfer): string[] => {
     const externalDragPayload = getExternalDragPayload();
@@ -2184,13 +2519,14 @@ export function FlashBoardComposer({
 
   if (!board) return null;
 
-  const composerStyle = composerReferenceBadges.length > 0
+  const showComposerReferences = composerReferenceBadges.length > 0;
+  const composerStyle = showComposerReferences
     ? ({ '--fb-reference-strip-width': `${Math.max(80, composerReferenceBadges.length * 80 + 4)}px` } as CSSProperties)
     : undefined;
 
   return (
     <div
-      className={`fb-bubble ${composerReferenceBadges.length > 0 ? 'has-references' : ''} ${isReferenceDragOver ? 'reference-drop-active' : ''} ${isRefiningPrompt ? 'is-refining-prompt' : ''}`}
+      className={`fb-bubble ${showComposerReferences ? 'has-references' : ''} ${chatPanelOpen ? 'has-chat-panel' : ''} ${isReferenceDragOver ? 'reference-drop-active' : ''} ${isRefiningPrompt ? 'is-refining-prompt' : ''}`}
       style={composerStyle}
       onKeyDown={handleKeyDown}
       onMouseDown={(e) => e.stopPropagation()}
@@ -2198,8 +2534,37 @@ export function FlashBoardComposer({
       onDragLeave={handleReferenceDragLeave}
       onDrop={handleReferenceDrop}
     >
-      <div className={`fb-bubble-main ${composerReferenceBadges.length > 0 ? 'has-references' : ''}`}>
-        {composerReferenceBadges.length > 0 && (
+      {chatPanelOpen && (chatMessages.length > 0 || chatError) && (
+        <div className="fb-chat-output" ref={chatHistoryRef} role="log" aria-live="polite">
+          {chatMessages.map((message) => {
+            const canCopy = message.role === 'assistant' && !message.isPending && !message.isError && Boolean(message.text.trim());
+            const copied = copiedChatMessageId === message.id;
+
+            return (
+              <div
+                key={message.id}
+                className={`fb-chat-message ${message.role} ${message.isPending ? 'is-pending' : ''} ${message.isError ? 'is-error' : ''} ${canCopy ? 'is-copyable' : ''} ${copied ? 'is-copied' : ''}`}
+                onDoubleClick={() => handleChatMessageDoubleClick(message)}
+                title={canCopy ? 'Double-click to copy response' : undefined}
+              >
+                <div className="fb-chat-output-label">
+                  {message.role === 'user' ? 'You' : copied ? 'Copied' : message.isError ? 'Error' : 'AI'}
+                </div>
+                <div className="fb-chat-output-message">{message.text}</div>
+              </div>
+            );
+          })}
+          {chatError && (
+            <div className="fb-chat-message assistant is-error">
+              <div className="fb-chat-output-label">Error</div>
+              <div className="fb-chat-output-message">{chatError}</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className={`fb-bubble-main ${showComposerReferences ? 'has-references' : ''}`}>
+        {showComposerReferences && (
           <div
             ref={referenceStripRef}
             className={`fb-reference-strip ${composerReferenceBadges.length <= 3 ? 'is-loose' : ''}`}
@@ -2282,6 +2647,36 @@ export function FlashBoardComposer({
           </div>
         )}
 
+        {chatPanelOpen ? (
+          <div className="fb-bubble-prompt fb-chat-prompt-window">
+            <div className="fb-bubble-row">
+              <textarea
+                ref={chatInputRef}
+                className="fb-bubble-input fb-chat-input"
+                value={chatPrompt}
+                onInput={(event) => resizePromptInput(event.currentTarget)}
+                onKeyDown={handleChatInputKeyDown}
+                onChange={(event) => {
+                  setChatPrompt(event.target.value);
+                  setChatError(null);
+                }}
+                placeholder="Ask about the prompt, model choice, or next variation..."
+                rows={3}
+              />
+              <button
+                className="fb-bubble-close"
+                type="button"
+                onClick={() => {
+                  setChatPrompt('');
+                  setChatError(null);
+                }}
+                title="Clear chat prompt"
+              >
+                &times;
+              </button>
+            </div>
+          </div>
+        ) : (
         <div className={`fb-bubble-prompt ${isRefiningPrompt ? 'is-refining' : ''}`}>
           <div className={`fb-bubble-row ${isSunoMode ? 'fb-bubble-row-suno' : ''}`}>
             {isSunoMode ? (
@@ -2394,9 +2789,10 @@ export function FlashBoardComposer({
             </div>
           )}
         </div>
+        )}
       </div>
 
-      {!isAudioMode && renderMultiShotPanel && (
+      {!chatPanelOpen && !isAudioMode && renderMultiShotPanel && (
         <div className={`fb-multishot-panel ${isMultiShotPanelClosing ? 'is-closing' : 'is-opening'}`}>
           <div className="fb-multishot-header">
             <span>Shots</span>
@@ -2460,19 +2856,20 @@ export function FlashBoardComposer({
         </div>
       )}
 
-      {isAudioMode && audioValidationError && (
+      {!chatPanelOpen && isAudioMode && audioValidationError && (
         <div className="fb-audio-warning compact">{audioValidationError}</div>
       )}
 
-      {backendValidationError && (
+      {!chatPanelOpen && backendValidationError && (
         <div className="fb-audio-warning compact">{backendValidationError}</div>
       )}
 
-      {promptRefineError && (
+      {!chatPanelOpen && promptRefineError && (
         <div className="fb-audio-warning compact">{promptRefineError}</div>
       )}
 
       <div className={`fb-bubble-bar ${inlineSubmenuStateClassName}`}>
+        {!chatPanelOpen && (
         <div className="fb-control-stack">
           <div className={popoverHostClassName} ref={popoverRef}>
             <button className="fb-pill" onClick={() => togglePopover('model')} title={`Model: ${modelButtonLabel}`}>
@@ -3060,28 +3457,190 @@ export function FlashBoardComposer({
             {modelButtonLabel}
           </div>
         </div>
+        )}
 
-        <button
-          className="fb-generate"
-          disabled={!canGenerate}
-          onClick={handleGenerate}
-          title={currentPrice ? `${currentPrice.fullLabel} (Ctrl+Enter)` : `${generateActionLabel} (Ctrl+Enter)`}
-        >
-          <svg
-            className="fb-generate-icon"
-            viewBox="0 0 16 16"
-            width="14"
-            height="14"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            aria-hidden="true"
+        {chatPanelOpen && (
+        <div className="fb-control-stack">
+          <div className={popoverHostClassName} ref={popoverRef}>
+            <button
+              className={`fb-pill ${popover === 'chatProvider' ? 'active' : ''}`}
+              onClick={() => togglePopover('chatProvider')}
+              title={`Provider: ${chatProviderLabel}`}
+            >
+              {chatProviderLabel}
+            </button>
+            <button
+              className={`fb-pill ${popover === 'chatModel' ? 'active' : ''}`}
+              onClick={() => togglePopover('chatModel')}
+              title={`Model: ${activeChatModel?.label ?? activeChatModelId}`}
+            >
+              {activeChatModel?.label ?? activeChatModelId}
+            </button>
+            {chatReasoningSupported && (
+              <button
+                className={`fb-pill ${popover === 'chatReasoning' ? 'active' : ''}`}
+                onClick={() => togglePopover('chatReasoning')}
+                title={`Reasoning effort: ${openAiReasoningEffort}`}
+              >
+                {openAiReasoningEffort}
+              </button>
+            )}
+            <button
+              className={`fb-pill ${popover === 'chatTemperature' ? 'active' : ''}`}
+              onClick={() => togglePopover('chatTemperature')}
+              title={chatTemperatureSupported ? `Temperature: ${chatTemperature.toFixed(1)}` : 'Temperature fixed for this model'}
+            >
+              {chatTemperatureSupported ? `Temp ${chatTemperature.toFixed(1)}` : 'Fixed temp'}
+            </button>
+
+            {renderedPopover === 'chatProvider' && (
+              <div className="fb-popover">
+                <div className="fb-popover-title">Provider</div>
+                <div className="fb-popover-pills">
+                  {FLASHBOARD_CHAT_PROVIDERS.map((provider) => (
+                    <button
+                      key={provider.id}
+                      className={`fb-popover-pill ${chatProvider === provider.id ? 'active' : ''}`}
+                      type="button"
+                      onClick={() => {
+                        handleChatProviderSelect(provider.id);
+                        closePopover('chatProvider');
+                      }}
+                      disabled={isChatting}
+                    >
+                      <span className="fb-popover-pill-label">{provider.label}</span>
+                    </button>
+                  ))}
+                </div>
+                {chatProvider === 'lemonade' && (
+                  <div className={`fb-chat-status ${lemonadeStatus}`}>
+                    {lemonadeStatus === 'idle' ? 'Local' : lemonadeStatus}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {renderedPopover === 'chatModel' && (
+              <div className="fb-popover">
+                <div className="fb-popover-title">Model</div>
+                <div className="fb-popover-pills">
+                  {chatModelOptions.map((model) => (
+                    <button
+                      key={model.id}
+                      className={`fb-popover-pill ${activeChatModelId === model.id ? 'active' : ''}`}
+                      type="button"
+                      onClick={() => {
+                        setChatModel(model.id);
+                        setChatError(null);
+                        closePopover('chatModel');
+                      }}
+                      disabled={isChatting}
+                      title={model.id}
+                    >
+                      <span className="fb-popover-pill-label">{model.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {renderedPopover === 'chatReasoning' && (
+              <div className="fb-popover">
+                <div className="fb-popover-title">Reasoning</div>
+                <div className="fb-popover-pills">
+                  {chatReasoningEffortOptions.map((option) => (
+                    <button
+                      key={option.id}
+                      className={`fb-popover-pill ${openAiReasoningEffort === option.id ? 'active' : ''}`}
+                      type="button"
+                      onClick={() => {
+                        setOpenAiReasoningEffort(option.id);
+                        setChatError(null);
+                        closePopover('chatReasoning');
+                      }}
+                      disabled={isChatting}
+                    >
+                      <span className="fb-popover-pill-label">{option.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {renderedPopover === 'chatTemperature' && (
+              <div className="fb-popover fb-chat-temperature-popover">
+                <div className="fb-popover-title">Temperature</div>
+                <label className={`fb-chat-temperature ${chatTemperatureSupported ? '' : 'disabled'}`}>
+                  <span>Temp</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    value={chatTemperature}
+                    onChange={(event) => setChatTemperature(Number(event.target.value))}
+                    disabled={isChatting || !chatTemperatureSupported}
+                  />
+                  <strong>{chatTemperatureSupported ? chatTemperature.toFixed(1) : 'fixed'}</strong>
+                </label>
+              </div>
+            )}
+          </div>
+          <div
+            className="fb-selected-model-label fb-chat-selected-model-label"
+            title={`${chatProviderLabel} / ${activeChatModel?.label ?? activeChatModelId}`}
           >
-            <path d="M8 1.5 9.2 5 13 6.2 9.2 7.4 8 11 6.8 7.4 3 6.2 6.8 5 8 1.5Z" />
-            <path d="m12.4 10.4.5 1.4 1.5.5-1.5.5-.5 1.4-.5-1.4-1.5-.5 1.5-.5.5-1.4Z" />
-          </svg>
-          <span>{generateButtonLabel}</span>
-        </button>
+            Chat
+          </div>
+        </div>
+        )}
+
+        <div className="fb-action-stack">
+          {chatPanelOpen ? (
+            <button
+              className="fb-generate fb-chat-button active"
+              onClick={handleChatButtonClick}
+              title="Send chat prompt"
+            >
+              <svg
+                className="fb-generate-icon"
+                viewBox="0 0 16 16"
+                width="14"
+                height="14"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                aria-hidden="true"
+              >
+                <path d="M3.4 3.5h9.2a1.8 1.8 0 0 1 1.8 1.8v4.4a1.8 1.8 0 0 1-1.8 1.8H7.2L3.6 14v-2.5h-.2a1.8 1.8 0 0 1-1.8-1.8V5.3a1.8 1.8 0 0 1 1.8-1.8Z" />
+                <path d="M5 6.5h6M5 8.9h4" />
+              </svg>
+              <span>{isChatting ? 'Stop' : 'Chat'}</span>
+            </button>
+          ) : (
+          <button
+            className="fb-generate"
+            disabled={!canGenerate}
+            onClick={handleGenerate}
+            title={currentPrice ? `${currentPrice.fullLabel} (Ctrl+Enter)` : `${generateActionLabel} (Ctrl+Enter)`}
+          >
+            <svg
+              className="fb-generate-icon"
+              viewBox="0 0 16 16"
+              width="14"
+              height="14"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              aria-hidden="true"
+            >
+              <path d="M8 1.5 9.2 5 13 6.2 9.2 7.4 8 11 6.8 7.4 3 6.2 6.8 5 8 1.5Z" />
+              <path d="m12.4 10.4.5 1.4 1.5.5-1.5.5-.5 1.4-.5-1.4-1.5-.5 1.5-.5.5-1.4Z" />
+            </svg>
+            <span>{generateButtonLabel}</span>
+          </button>
+          )}
+        </div>
       </div>
     </div>
   );

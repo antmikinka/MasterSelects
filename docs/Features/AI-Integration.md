@@ -139,6 +139,7 @@ The old dock-level AI Generative tab is deprecated and removed from default and 
 - Nano Banana 2 accepts up to 14 ordered reference images through Kie.ai or EvoLink; Kie.ai Seedance 2.0 accepts multimodal image/video/audio references and sends audio references as `reference_audio_urls` for lip-sync / performance timing; the composer labels generic references as `REF 1`, `REF 2`, ... so prompts can refer to them explicitly
 - Seedance 2.0 cannot combine strict `first_frame_url` / `last_frame_url` with multimodal references in the same Kie.ai request, so IN / OUT cards are converted to image references when REF media is present
 - The wand button in the composer refines the current prompt with GPT-5.5 through the OpenAI Responses API. It sends the current draft plus prepared reference images, applies selected-model-specific prompt guidance, streams the returned English prompt into the prompt box, keeps a one-step restore button for the pre-AI prompt, and shows a rainbow active state while the refinement is running.
+- The collapsed Media tray shows separate `Chat` and `Generate` launch buttons. `Chat` opens a compact chat prompt window with OpenAI, Anthropic, and Lemonade providers, model selection as inline buttons, OpenAI reasoning effort for GPT-5.x models, and a temperature slider when the selected model accepts temperature.
 - Queued and running generations appear as Media Panel preview cards with output type, status, elapsed timer, prompt, metadata, and progress when the provider reports it
 - The tray reuses the FlashBoard queue/import runtime without showing the full node canvas
 
@@ -154,6 +155,8 @@ The current generator stack is no longer best described as "PiAPI as one unified
 | `ElevenLabs` | FlashBoard audio generation | User-supplied key in Settings; text-to-speech output imports as durable audio media |
 | `Suno` | FlashBoard music generation | Uses Kie.ai's Suno API with the user-supplied Kie.ai key; generated music imports as durable audio media |
 | `OpenAI` | FlashBoard prompt refinement | User-supplied OpenAI key in Settings; reference images are resized in-browser and sent to the Responses API with `store: false` |
+| `Anthropic` | FlashBoard compact chat | User-supplied Anthropic key in Settings; used only for prompt discussion, not media generation |
+| `Lemonade` | FlashBoard compact chat | Local loopback Lemonade Server; model list is discovered from `/models` when the chat controls are opened |
 | `PiAPI` | Legacy compatibility and some catalog/pricing metadata | Still present in older history/key migration paths and FlashBoard pricing/catalog helpers, but not the primary runtime path the current panel describes |
 
 The practical rule for the current branch is:
@@ -271,7 +274,7 @@ MatAnyone2 is the second step in the workflow:
 
 ## AI Editor Tools
 
-### 79 Tools across 15 Exported Definition Groups
+### 80 Tools across 15 Exported Definition Groups
 
 > **Note:** `openComposition` and `searchVideos` are still the two current dispatch gaps. They are defined and appear in the policy registry, but the shared handler registry does not map them yet. Gaussian Splat tool definitions also exist in `src/services/aiTools/definitions/gaussian.ts`, but that file is not currently exported through `AI_TOOLS`.
 
@@ -298,6 +301,7 @@ The chat and bridge code call the shared dispatcher, so the same registry is use
 
 - `executeBatch` groups multiple actions under one undo point and shares a single visual stagger budget.
 - Several clip tools default `withLinked: true`, so linked audio/video companions move, split, or delete together unless the caller opts out.
+- `addMaskPathKeyframe` stores full `mask.{maskId}.path` snapshots, preserving vertex IDs so individual mask vertices can animate between keyframed shapes.
 - Local filesystem tools such as `importLocalFiles` and `listLocalDirectory` run through the dev bridge in development or the Native Helper in production, and they still respect the file-access policy/allowed-root checks.
 
 ---
@@ -332,6 +336,8 @@ When the AI executes tools, the UI gives feedback so the user can see what is ha
 | `animateKeyframe()` | Triggers a keyframe animation |
 
 All feedback functions are guarded by `isAIExecutionActive()` so they only trigger during active AI tool execution.
+
+Guided replay also renders semantic surface gestures. Custom mask creation and `addMaskPathKeyframe` resolve normalized vertices against the Preview panel, draw the path overlay, and animate the guided cursor through each vertex with click pulses before executing the semantic tool.
 
 ---
 
@@ -461,6 +467,7 @@ A dedicated `MultiCamPanel` component provides the workflow UI:
 ### API Keys
 Settings dialog -> API Keys:
 - OpenAI API key
+- Anthropic API key
 - Kie.ai API key
 - PiAPI key (legacy compatibility)
 - Kling access and secret keys (legacy compatibility)

@@ -14,6 +14,7 @@ function resetGuidedActionStore(): void {
     activeSession: null,
     currentStep: null,
     cursor: { visible: false, position: null, clicking: false },
+    lastUserPointerPosition: null,
     spotlight: null,
     callout: null,
     highlights: [],
@@ -22,6 +23,12 @@ function resetGuidedActionStore(): void {
     diagnostics: [],
     eventLog: [],
   });
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 8; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 describe('guided action runtime', () => {
@@ -62,7 +69,7 @@ describe('guided action runtime', () => {
     const result = await resultPromise;
     expect(result.status).toBe('cancelled');
     expect(result.error).toBe('User cancelled replay');
-    expect(result.skippedActions).toBe(2);
+    expect(result.skippedActions).toBe(1);
     expect(executeTool).not.toHaveBeenCalled();
     expect(useGuidedActionStore.getState().activeSession?.status).toBe('cancelled');
   });
@@ -131,6 +138,224 @@ describe('guided action runtime', () => {
     expect(state.highlights[0]).toEqual(expect.objectContaining({ target }));
   });
 
+  it('keeps the click ripple visible for the scheduled visual duration', async () => {
+    vi.useFakeTimers();
+    const target = { kind: 'dom' as const, id: 'click-target' };
+    const registry = new GuidedTargetRegistry();
+    registry.registerResolver('dom', (requestedTarget) => {
+      if (requestedTarget.kind !== 'dom' || requestedTarget.id !== target.id) {
+        return null;
+      }
+      return {
+        status: 'resolved',
+        target: requestedTarget,
+        rect: { x: 30, y: 40, width: 80, height: 20 },
+        center: { x: 70, y: 50 },
+      };
+    }, 'test-click-target');
+    const runtime = new GuidedActionRuntime({ targetRegistry: registry });
+
+    const resultPromise = runtime.startSession({
+      sessionId: 'click-ripple-duration',
+      callerContext: 'chat',
+      animationBudget: { totalMs: 1000, compression: 'none' },
+      actions: [
+        { type: 'clickVisual', target, label: 'Click target' },
+      ],
+    });
+
+    await flushMicrotasks();
+    expect(useGuidedActionStore.getState().cursor).toEqual(expect.objectContaining({
+      visible: true,
+      position: { x: 70, y: 50 },
+      clicking: true,
+      transitionMs: 0,
+    }));
+    expect(useGuidedActionStore.getState().currentStep?.action.type).toBe('clickVisual');
+
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result.status).toBe('completed');
+    expect(useGuidedActionStore.getState().cursor.clicking).toBe(false);
+    expect(useGuidedActionStore.getState().currentStep).toBeNull();
+  });
+
+  it('primes the next replay from the last guided cursor position and uses planned move duration', async () => {
+    vi.useFakeTimers();
+    const firstTarget = { kind: 'dom' as const, id: 'first-target' };
+    const secondTarget = { kind: 'dom' as const, id: 'second-target' };
+    const registry = new GuidedTargetRegistry();
+    registry.registerResolver('dom', (requestedTarget) => {
+      if (requestedTarget.kind === 'dom' && requestedTarget.id === firstTarget.id) {
+        return {
+          status: 'resolved',
+          target: requestedTarget,
+          rect: { x: 10, y: 20, width: 20, height: 20 },
+          center: { x: 20, y: 30 },
+        };
+      }
+      if (requestedTarget.kind === 'dom' && requestedTarget.id === secondTarget.id) {
+        return {
+          status: 'resolved',
+          target: requestedTarget,
+          rect: { x: 210, y: 120, width: 20, height: 20 },
+          center: { x: 220, y: 130 },
+        };
+      }
+      return null;
+    }, 'test-replay-cursor-targets');
+    const runtime = new GuidedActionRuntime({ targetRegistry: registry });
+
+    const firstResultPromise = runtime.startSession({
+      sessionId: 'cursor-origin-first',
+      callerContext: 'chat',
+      animationBudget: { totalMs: 1000, compression: 'none' },
+      actions: [
+        { type: 'moveCursorTo', target: firstTarget, durationMs: 600 },
+      ],
+    });
+    await vi.runAllTimersAsync();
+    await firstResultPromise;
+    expect(useGuidedActionStore.getState().cursor).toEqual(expect.objectContaining({
+      visible: false,
+      position: { x: 20, y: 30 },
+    }));
+
+    const secondResultPromise = runtime.startSession({
+      sessionId: 'cursor-origin-second',
+      callerContext: 'chat',
+      animationBudget: { totalMs: 1000, compression: 'none' },
+      actions: [
+        { type: 'moveCursorTo', target: secondTarget, durationMs: 600 },
+      ],
+    });
+
+    expect(useGuidedActionStore.getState().cursor).toEqual(expect.objectContaining({
+      visible: true,
+      position: { x: 20, y: 30 },
+      transitionMs: 0,
+    }));
+
+    await flushMicrotasks();
+    expect(useGuidedActionStore.getState().cursor).toEqual(expect.objectContaining({
+      visible: true,
+      position: { x: 220, y: 130 },
+      transitionMs: 600,
+    }));
+
+    await vi.runAllTimersAsync();
+    const secondResult = await secondResultPromise;
+    expect(secondResult.status).toBe('completed');
+  });
+
+  it('prefers the last user pointer position when priming a replay cursor', async () => {
+    vi.useFakeTimers();
+    const target = { kind: 'dom' as const, id: 'target-from-user-pointer' };
+    const registry = new GuidedTargetRegistry();
+    registry.registerResolver('dom', (requestedTarget) => {
+      if (requestedTarget.kind !== 'dom' || requestedTarget.id !== target.id) {
+        return null;
+      }
+      return {
+        status: 'resolved',
+        target: requestedTarget,
+        rect: { x: 200, y: 100, width: 40, height: 30 },
+        center: { x: 220, y: 115 },
+      };
+    }, 'test-user-pointer-origin');
+    const runtime = new GuidedActionRuntime({ targetRegistry: registry });
+
+    useGuidedActionStore.setState({
+      cursor: { visible: false, position: { x: 20, y: 30 }, clicking: false },
+      lastUserPointerPosition: { x: 400, y: 250 },
+    });
+
+    const resultPromise = runtime.startSession({
+      sessionId: 'cursor-origin-user-pointer',
+      callerContext: 'chat',
+      animationBudget: { totalMs: 1000, compression: 'none' },
+      actions: [
+        { type: 'moveCursorTo', target, durationMs: 600 },
+      ],
+    });
+
+    expect(useGuidedActionStore.getState().cursor).toEqual(expect.objectContaining({
+      visible: true,
+      position: { x: 400, y: 250 },
+      transitionMs: 0,
+    }));
+
+    await flushMicrotasks();
+    expect(useGuidedActionStore.getState().cursor).toEqual(expect.objectContaining({
+      visible: true,
+      position: { x: 220, y: 115 },
+      transitionMs: 600,
+    }));
+
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+    expect(result.status).toBe('completed');
+  });
+
+  it('keeps the cursor pressed while visually dragging between targets', async () => {
+    vi.useFakeTimers();
+    const fromTarget = { kind: 'dom' as const, id: 'drag-from' };
+    const toTarget = { kind: 'dom' as const, id: 'drag-to' };
+    const registry = new GuidedTargetRegistry();
+    registry.registerResolver('dom', (requestedTarget) => {
+      if (requestedTarget.kind === 'dom' && requestedTarget.id === fromTarget.id) {
+        return {
+          status: 'resolved',
+          target: requestedTarget,
+          rect: { x: 20, y: 30, width: 20, height: 20 },
+          center: { x: 30, y: 40 },
+        };
+      }
+      if (requestedTarget.kind === 'dom' && requestedTarget.id === toTarget.id) {
+        return {
+          status: 'resolved',
+          target: requestedTarget,
+          rect: { x: 220, y: 130, width: 20, height: 20 },
+          center: { x: 230, y: 140 },
+        };
+      }
+      return null;
+    }, 'test-drag-cursor-targets');
+    const runtime = new GuidedActionRuntime({ targetRegistry: registry });
+
+    const resultPromise = runtime.startSession({
+      sessionId: 'drag-cursor-pressed',
+      callerContext: 'chat',
+      animationBudget: { totalMs: 1000, compression: 'none' },
+      actions: [
+        { type: 'moveCursorTo', target: fromTarget, durationMs: 200 },
+        { type: 'dragCursor', from: fromTarget, to: toTarget, durationMs: 800 },
+      ],
+    });
+
+    await flushMicrotasks();
+    expect(useGuidedActionStore.getState().cursor).toEqual(expect.objectContaining({
+      visible: true,
+      position: { x: 30, y: 40 },
+      clicking: false,
+    }));
+
+    await vi.advanceTimersByTimeAsync(200);
+    await flushMicrotasks();
+    expect(useGuidedActionStore.getState().cursor).toEqual(expect.objectContaining({
+      visible: true,
+      position: { x: 230, y: 140 },
+      clicking: true,
+      transitionMs: 800,
+    }));
+
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+    expect(result.status).toBe('completed');
+    expect(useGuidedActionStore.getState().cursor.clicking).toBe(false);
+  });
+
   it('bypasses visual actions in instant mode while still executing semantic actions', async () => {
     const registry = new GuidedTargetRegistry();
     const executed: GuidedAction[] = [];
@@ -163,6 +388,71 @@ describe('guided action runtime', () => {
     expect(state.activeSession?.context.visualizationMode).toBe('off');
     expect(state.cursor.visible).toBe(false);
     expect(state.spotlight).toBeNull();
+  });
+
+  it('skips AI replay visuals while still executing remaining semantic actions', async () => {
+    vi.useFakeTimers();
+    const executeTool = vi.fn((_action: GuidedAction): ToolResult => ({
+      success: true,
+      data: { executed: true },
+    }));
+    const runtime = new GuidedActionRuntime({
+      actionHandlers: {
+        executeTool,
+      },
+    });
+
+    const resultPromise = runtime.startSession({
+      sessionId: 'skip-ai-visuals',
+      callerContext: 'chat',
+      playbackMode: 'aiReplay',
+      animationBudget: { totalMs: 1000, compression: 'none' },
+      actions: [
+        { type: 'delay', ms: 1000, label: 'Visual prelude' },
+        { type: 'callout', title: 'Visual context' },
+        { type: 'executeTool', tool: 'setTransform', args: { clipId: 'clip-1', x: 240 } },
+        { type: 'spotlight', target: { kind: 'dom', id: 'result' } },
+      ],
+    });
+
+    await Promise.resolve();
+    runtime.skipSession('skip-ai-visuals', 'Skip visual replay');
+    await vi.runAllTimersAsync();
+
+    const result = await resultPromise;
+    expect(result.status).toBe('skipped');
+    expect(result.skippedActions).toBe(2);
+    expect(executeTool).toHaveBeenCalledOnce();
+    expect(result.toolResults).toEqual([
+      expect.objectContaining({ success: true, data: { executed: true } }),
+    ]);
+    expect(useGuidedActionStore.getState().activeSession?.status).toBe('skipped');
+  });
+
+  it('uses skip as an abort for guided-user tutorial waits', async () => {
+    vi.useFakeTimers();
+    const runtime = new GuidedActionRuntime({
+      targetRegistry: new GuidedTargetRegistry(),
+    });
+
+    const resultPromise = runtime.startSession({
+      sessionId: 'skip-guided-user',
+      callerContext: 'internal',
+      playbackMode: 'guidedUser',
+      animationBudget: { totalMs: 1000, compression: 'none' },
+      inputLock: { mode: 'targetOnly', targets: [{ kind: 'panel', panel: 'timeline' }] },
+      actions: [
+        { type: 'waitForUserAction', check: { kind: 'clipSelected', clipId: 'clip-1' }, timeoutMs: 10000 },
+      ],
+    });
+
+    await Promise.resolve();
+    runtime.skipSession('skip-guided-user', 'Skip tutorial');
+    await vi.runAllTimersAsync();
+
+    const result = await resultPromise;
+    expect(result.status).toBe('skipped');
+    expect(result.skippedActions).toBe(1);
   });
 
   it('caps planned animation when the system prefers reduced motion', async () => {

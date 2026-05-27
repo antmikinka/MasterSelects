@@ -90,12 +90,24 @@ export interface DockLayout {
   panelZoom: Record<string, number>; // Panel ID -> zoom level (1.0 = 100%)
 }
 
+export type SavedDockTimelineAudioDisplayMode = 'compact' | 'detailed' | 'spectral';
+export type SavedDockTimelineTrackFocusMode = 'balanced' | 'audio' | 'video';
+
+export interface SavedDockTimelineLayout {
+  audioDisplayMode?: SavedDockTimelineAudioDisplayMode;
+  audioFocusMode?: boolean;
+  trackFocusMode?: SavedDockTimelineTrackFocusMode;
+  trackHeights?: Record<string, number>;
+}
+
 export interface SavedDockLayout {
   id: string;
   name: string;
   layout: DockLayout;
   createdAt: number;
   updatedAt: number;
+  favorite?: boolean;
+  timeline?: SavedDockTimelineLayout;
 }
 
 export interface HoveredDockTabTarget {

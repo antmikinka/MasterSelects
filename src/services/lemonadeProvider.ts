@@ -55,6 +55,7 @@ interface LemonadeChatOptions {
   messages: LemonadeMessage[];
   tools?: ToolDefinition[];
   maxTokens?: number;
+  temperature?: number;
   signal?: AbortSignal;
   timeoutMs?: number;
 }
@@ -165,6 +166,10 @@ function buildChatRequestBody(options: LemonadeChatOptions, stream: boolean): Re
   if (options.tools && options.tools.length > 0) {
     requestBody.tools = options.tools;
     requestBody.tool_choice = 'auto';
+  }
+
+  if (typeof options.temperature === 'number' && Number.isFinite(options.temperature)) {
+    requestBody.temperature = Math.max(0, Math.min(2, options.temperature));
   }
 
   return requestBody;

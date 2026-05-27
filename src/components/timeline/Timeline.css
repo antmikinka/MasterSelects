@@ -67,12 +67,75 @@
   height: 30px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
+  gap: 6px;
+  box-sizing: border-box;
+  padding: 0 6px;
   font-size: 11px;
   color: var(--text-secondary);
   background: var(--bg-tertiary);
   border-right: 1px solid var(--border-color);
   border-bottom: 1px solid var(--border-color);
+}
+
+.timeline-ruler-timecode {
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  padding: 0 2px;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.timeline-ruler-current-time,
+.timeline-ruler-duration {
+  flex: 0 0 auto;
+}
+
+.timeline-ruler-time-separator {
+  flex: 0 0 auto;
+  margin: 0 5px;
+  color: var(--text-muted);
+}
+
+.timeline-ruler-duration {
+  display: inline;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.timeline-ruler-duration:hover {
+  color: var(--accent-timeline);
+}
+
+.timeline-ruler-duration-input {
+  flex: 0 1 64px;
+  width: 64px;
+  min-width: 0;
+  height: 17px;
+  padding: 0 3px;
+  border: 1px solid var(--accent-primary);
+  border-radius: 2px;
+  outline: none;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.timeline-header-row .add-marker-btn {
+  flex: 0 0 18px;
 }
 
 .time-ruler-wrapper {

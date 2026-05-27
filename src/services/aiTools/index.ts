@@ -170,13 +170,19 @@ async function _executeAIToolInternal(
 
   // Special-case: executeBatch wraps all sub-actions in a single undo group
   if (toolName === 'executeBatch') {
-    startBatch('AI: batch');
+    if (!options.suppressHistory) {
+      startBatch('AI: batch');
+    }
     try {
       const result = await handleExecuteBatch(args, callerContext, options);
-      endBatch();
+      if (!options.suppressHistory) {
+        endBatch();
+      }
       return result;
     } catch (error) {
-      endBatch();
+      if (!options.suppressHistory) {
+        endBatch();
+      }
       log.error('Error executing batch', error);
       return {
         success: false,
@@ -189,7 +195,7 @@ async function _executeAIToolInternal(
   const mediaStore = useMediaStore.getState();
 
   // Track history for modifying operations
-  const isModifying = MODIFYING_TOOLS.has(toolName);
+  const isModifying = MODIFYING_TOOLS.has(toolName) && !options.suppressHistory;
   if (isModifying) {
     startBatch(`AI: ${toolName}`);
   }
@@ -241,15 +247,21 @@ async function executeGuidedAITool(
   callerContext: CallerContext,
   options: AIToolExecutionOptions,
 ): Promise<ToolResult> {
+  const inlineBatchExecution = toolName === 'executeBatch';
   const compiled = compileGuidedToolCall({
     tool: toolName,
     args,
+  }, {
+    batchMode: inlineBatchExecution ? 'inlineExecutions' : 'singleExecution',
   });
   const adapter = new SemanticExecutionAdapter({
     defaultCallerContext: callerContext,
     defaultLegacyFeedback: getGuidedLegacyFeedback(options),
     executeTool: (tool, toolArgs, nestedCallerContext, nestedOptions) => (
-      _executeAIToolInternal(tool, toolArgs, nestedCallerContext, nestedOptions)
+      _executeAIToolInternal(tool, toolArgs, nestedCallerContext, {
+        ...nestedOptions,
+        suppressHistory: inlineBatchExecution || nestedOptions?.suppressHistory,
+      })
     ),
   });
   const runtime = getGuidedActionRuntime();
@@ -259,6 +271,9 @@ async function executeGuidedAITool(
   }));
 
   try {
+    if (inlineBatchExecution) {
+      startBatch('AI: batch');
+    }
     const result = await runtime.startSession({
       actions: compiled.actions,
       animationBudget: getGuidedAnimationBudget(options),
@@ -274,8 +289,13 @@ async function executeGuidedAITool(
       visualizationMode: getGuidedVisualizationMode(options),
     });
     consumeGuidedReplayBudget(options, result);
-    return toolResultFromGuidedSession(toolName, result);
+    return inlineBatchExecution
+      ? batchToolResultFromGuidedSession(args, result)
+      : toolResultFromGuidedSession(toolName, result);
   } finally {
+    if (inlineBatchExecution) {
+      endBatch();
+    }
     unregisterHandlers();
   }
 }
@@ -435,6 +455,39 @@ function toolResultFromGuidedSession(
   };
 }
 
+function batchToolResultFromGuidedSession(
+  args: Record<string, unknown>,
+  result: GuidedSessionResult,
+): ToolResult {
+  const actions = Array.isArray(args.actions) ? args.actions : [];
+  const results = actions.map((action, index) => {
+    const tool = isToolActionRecord(action) ? action.tool : `action-${index}`;
+    const toolResult = result.toolResults[index];
+    return {
+      tool,
+      success: toolResult?.success ?? false,
+      data: toolResult?.data,
+      error: toolResult?.error,
+    };
+  });
+  const succeeded = results.filter((entry) => entry.success).length;
+  const failed = results.length - succeeded;
+  const completed = result.status === 'completed';
+
+  return {
+    success: completed && failed === 0,
+    ...(completed ? {} : { error: result.error ?? `Guided AI execution ${result.status}` }),
+    data: {
+      guidedSessionId: result.sessionId,
+      totalActions: actions.length,
+      succeeded,
+      failed,
+      results,
+      status: result.status,
+    },
+  };
+}
+
 function toolResultsFromGuidedSessionGroup(
   toolCalls: AIToolCallExecution[],
   result: GuidedSessionResult,
@@ -486,4 +539,11 @@ function formatGroupedToolLabel(toolCalls: AIToolCallExecution[]): string {
 
 function getToolCallResultKey(toolCall: Pick<AIToolCallExecution, 'id' | 'tool'>): string {
   return toolCall.id ? `id:${toolCall.id}` : `tool:${toolCall.tool}`;
+}
+
+function isToolActionRecord(value: unknown): value is { tool: string } {
+  return !!value
+    && typeof value === 'object'
+    && 'tool' in value
+    && typeof (value as { tool?: unknown }).tool === 'string';
 }

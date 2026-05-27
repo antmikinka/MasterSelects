@@ -74,6 +74,9 @@ export interface ExternalDragState {
   isAudio?: boolean;      // Is the dragged file audio-only?
   hasAudio?: boolean;     // Does the video file have audio tracks?
   duration?: number;      // Actual duration of dragged file
+  label?: string;
+  mediaType?: string;
+  thumbnailUrl?: string;
   newTrackType?: 'video' | 'audio' | null;  // If hovering over "new track" drop zone
   showVideoNewTrackZone?: boolean; // True after dragging upward against the timeline top edge
 }
@@ -150,12 +153,10 @@ export interface TimelineControlsProps {
   onToggleAudioFocusMode: () => void;
   onSetTrackFocusMode: (mode: TimelineTrackFocusMode) => void;
   onToggleCutTool: () => void;
-  onSetDuration: (duration: number) => void;
   onFitToWindow: () => void;
   onToggleSlotGrid: () => void;
   slotGridActive: boolean;
   formatTime: (seconds: number) => string;
-  parseTime: (timeStr: string) => number | null;
 }
 
 // Props for TimelineHeader component
@@ -232,7 +233,6 @@ export interface TimelineTrackProps {
   onDragOver: (e: React.DragEvent) => void;
   onDragEnter: (e: React.DragEvent) => void;
   onDragLeave: (e: React.DragEvent) => void;
-  onWheel?: (e: React.WheelEvent) => void;
   renderClip: (clip: TimelineClip, trackId: string, trackBaseHeightOverride?: number) => React.ReactNode;
   // For keyframe tracks - clipKeyframes map triggers re-render when keyframes change
   clipKeyframes: Map<string, Array<{ id: string; clipId: string; time: number; property: AnimatableProperty; value: number; easing: string }>>;

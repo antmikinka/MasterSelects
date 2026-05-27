@@ -78,6 +78,10 @@ describe('GuidedActionOverlay', () => {
     expect(screen.getByText('1 / 1')).toBeTruthy();
     expect(screen.getByText('Adjust position')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Cancel guided action' })).toBeTruthy();
+    const callout = container.querySelector<HTMLElement>('.guided-callout');
+    expect(callout).not.toBeNull();
+    expect(callout?.style.left).toBe('');
+    expect(callout?.style.top).toBe('');
     expect(container.querySelector('.guided-cursor--clicking')).not.toBeNull();
     expect(container.querySelector('.guided-spotlight')).not.toBeNull();
     expect(container.querySelector('.guided-target-highlight--primary')).not.toBeNull();
@@ -196,6 +200,7 @@ function resetGuidedActionStore(): void {
     activeSession: null,
     currentStep: null,
     cursor: { visible: false, position: null, clicking: false },
+    lastUserPointerPosition: null,
     spotlight: null,
     callout: null,
     highlights: [],

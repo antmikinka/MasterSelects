@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   compileGuidedScenario,
   createGuidedScenarioSessionRequest,
+  GuidedActionRuntime,
   inspectGuidedScenario,
+  SemanticExecutionAdapter,
+  type SemanticToolExecutor,
   type GuidedScenario,
 } from '../../src/services/guidedActions';
 
@@ -40,6 +43,47 @@ describe('guided tutorial scenario compiler', () => {
     expect(request.actions).toContainEqual(expect.objectContaining({
       type: 'confirmState',
       check: expect.objectContaining({ kind: 'clipTransformMatches' }),
+    }));
+  });
+
+  it('can execute tutorial demo semantic actions through the shared runtime adapter', async () => {
+    const executor = vi.fn<SemanticToolExecutor>(async () => ({
+      success: true,
+      data: { tutorialEdit: true },
+    }));
+    const adapter = new SemanticExecutionAdapter({ executeTool: executor });
+    const runtime = new GuidedActionRuntime({
+      actionHandlers: adapter.createActionHandlers(),
+    });
+    const scenario: GuidedScenario = {
+      id: 'demo-runtime-transform',
+      title: 'Demo Runtime Transform',
+      steps: [
+        {
+          id: 'move-x',
+          title: 'Move clip',
+          mode: 'demo',
+          toolCall: {
+            tool: 'setTransform',
+            args: { clipId: 'clip-1', x: 192 },
+          },
+        },
+      ],
+    };
+    const request = createGuidedScenarioSessionRequest(scenario, {
+      animationBudgetMs: 0,
+      includeValidation: false,
+      sessionId: 'tutorial-demo-runtime-test',
+    });
+
+    const result = await runtime.startSession(request);
+
+    expect(result.status).toBe('completed');
+    expect(result.toolResults).toEqual([
+      expect.objectContaining({ success: true, data: { tutorialEdit: true } }),
+    ]);
+    expect(executor).toHaveBeenCalledWith('setTransform', { clipId: 'clip-1', x: 192 }, 'internal', expect.objectContaining({
+      guidedSessionId: 'tutorial-demo-runtime-test',
     }));
   });
 

@@ -97,12 +97,12 @@ import { useContextMenuPosition } from '../../hooks/useContextMenuPosition';
 import { RelinkDialog } from '../common/RelinkDialog';
 import { mediaNeedsRelink } from '../../services/project/relinkMedia';
 import {
+  applyExternalDragPayloadToDataTransfer,
   clearExternalDragPayload,
+  createExternalDragPayloadForProjectItem,
   dispatchExternalDragBridgeEvent,
   setExternalDragPayload,
-  type ExternalDragPayload,
 } from '../timeline/utils/externalDragSession';
-import { createSignalTimelineAdapterPlan } from '../../runtime/renderers/signalTimelineRendererAdapter';
 
 // Column definitions
 type ColumnId = 'label' | 'name' | 'duration' | 'resolution' | 'fps' | 'container' | 'codec' | 'audio' | 'bitrate' | 'size';
@@ -1563,181 +1563,7 @@ export function MediaPanel() {
       return;
     }
 
-    // Handle composition drag
-    if (item.type === 'composition') {
-      const comp = item as Composition;
-      // Don't allow dragging comp into itself (check active comp)
-      // Exception: in slot grid view, dragging active comp to a slot is fine
-      const inSlotView = useTimelineStore.getState().slotGridProgress > 0.5;
-      if (comp.id === activeCompositionId && !inSlotView) {
-        e.preventDefault();
-        return;
-      }
-      setExternalDragPayload({
-        kind: 'composition',
-        id: comp.id,
-        duration: comp.timelineData?.duration ?? comp.duration ?? 5,
-        hasAudio: true,
-        isAudio: false,
-        isVideo: true,
-      });
-      e.dataTransfer.setData('application/x-composition-id', comp.id);
-      e.dataTransfer.effectAllowed = 'copyMove';
-      if (e.currentTarget instanceof HTMLElement) {
-        e.dataTransfer.setDragImage(e.currentTarget, 10, 10);
-      }
-      return;
-    }
-
-    // Handle text item drag
-    if (item.type === 'text') {
-      setExternalDragPayload({
-        kind: 'text',
-        id: item.id,
-        duration: item.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-      });
-      e.dataTransfer.setData('application/x-text-item-id', item.id);
-      e.dataTransfer.effectAllowed = 'copyMove';
-      if (e.currentTarget instanceof HTMLElement) {
-        e.dataTransfer.setDragImage(e.currentTarget, 10, 10);
-      }
-      return;
-    }
-
-    // Handle solid item drag
-    if (item.type === 'solid') {
-      setExternalDragPayload({
-        kind: 'solid',
-        id: item.id,
-        duration: item.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-      });
-      e.dataTransfer.setData('application/x-solid-item-id', item.id);
-      e.dataTransfer.effectAllowed = 'copyMove';
-      if (e.currentTarget instanceof HTMLElement) {
-        e.dataTransfer.setDragImage(e.currentTarget, 10, 10);
-      }
-      return;
-    }
-
-    // Handle mesh item drag
-    if (item.type === 'model' && 'meshType' in item) {
-      const meshItem = item as import('../../stores/mediaStore/types').MeshItem;
-      setExternalDragPayload({
-        kind: 'mesh',
-        id: item.id,
-        duration: meshItem.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-        meshType: meshItem.meshType,
-      });
-      e.dataTransfer.setData('application/x-mesh-item-id', item.id);
-      e.dataTransfer.effectAllowed = 'copyMove';
-      if (e.currentTarget instanceof HTMLElement) {
-        e.dataTransfer.setDragImage(e.currentTarget, 10, 10);
-      }
-      return;
-    }
-
-    // Handle camera item drag
-    if (item.type === 'camera') {
-      const cameraItem = item as CameraItem;
-      setExternalDragPayload({
-        kind: 'camera',
-        id: item.id,
-        duration: cameraItem.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-      });
-      e.dataTransfer.setData('application/x-camera-item-id', item.id);
-      e.dataTransfer.effectAllowed = 'copyMove';
-      if (e.currentTarget instanceof HTMLElement) {
-        e.dataTransfer.setDragImage(e.currentTarget, 10, 10);
-      }
-      return;
-    }
-
-    if (item.type === 'splat-effector') {
-      setExternalDragPayload({
-        kind: 'splat-effector',
-        id: item.id,
-        duration: item.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-      });
-      e.dataTransfer.setData('application/x-splat-effector-item-id', item.id);
-      e.dataTransfer.effectAllowed = 'copyMove';
-      if (e.currentTarget instanceof HTMLElement) {
-        e.dataTransfer.setDragImage(e.currentTarget, 10, 10);
-      }
-      return;
-    }
-
-    if (item.type === 'math-scene') {
-      setExternalDragPayload({
-        kind: 'math-scene',
-        id: item.id,
-        duration: item.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-      });
-      e.dataTransfer.setData('application/x-math-scene-item-id', item.id);
-      e.dataTransfer.effectAllowed = 'copyMove';
-      if (e.currentTarget instanceof HTMLElement) {
-        e.dataTransfer.setDragImage(e.currentTarget, 10, 10);
-      }
-      return;
-    }
-
-    if (item.type === 'motion-shape') {
-      const motionShape = item as MotionShapeItem;
-      setExternalDragPayload({
-        kind: 'motion-shape',
-        id: item.id,
-        duration: motionShape.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-        primitive: motionShape.primitive,
-      });
-      e.dataTransfer.setData('application/x-motion-shape-item-id', item.id);
-      e.dataTransfer.effectAllowed = 'copyMove';
-      if (e.currentTarget instanceof HTMLElement) {
-        e.dataTransfer.setDragImage(e.currentTarget, 10, 10);
-      }
-      return;
-    }
-
-    if (item.type === 'signal') {
-      const plan = createSignalTimelineAdapterPlan(item as SignalAssetItem);
-      setExternalDragPayload({
-        kind: 'signal',
-        id: item.id,
-        duration: plan.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-      });
-      e.dataTransfer.setData('application/x-signal-asset-id', item.id);
-      e.dataTransfer.effectAllowed = 'copyMove';
-      if (e.currentTarget instanceof HTMLElement) {
-        e.dataTransfer.setDragImage(e.currentTarget, 10, 10);
-      }
-      return;
-    }
-
-    // Handle media file drag
-    const mediaFile = item as MediaFile;
-    if (mediaFile.isImporting || mediaNeedsRelink(mediaFile)) {
+    if (isImportedMediaFileItem(item) && (item.isImporting || mediaNeedsRelink(item))) {
       // File still importing or truly unresolved - only allow internal move
       e.dataTransfer.effectAllowed = 'move';
       if (e.currentTarget instanceof HTMLElement) {
@@ -1746,26 +1572,18 @@ export function MediaPanel() {
       return;
     }
 
-    // Set the media file ID so Timeline can look it up
-    const fileName = mediaFile.file?.name ?? mediaFile.name;
-    const isAudioOnly =
-      mediaFile.type === 'audio' ||
-      mediaFile.file?.type.startsWith('audio/') ||
-      /\.(mp3|wav|ogg|aac|m4a|flac|wma|aiff|alac|opus)$/i.test(fileName);
-    setExternalDragPayload({
-      kind: 'media-file',
-      id: mediaFile.id,
-      duration: mediaFile.duration,
-      hasAudio: mediaFile.type === 'image' ? false : isAudioOnly ? true : mediaFile.hasAudio,
-      isAudio: isAudioOnly,
-      isVideo: !isAudioOnly,
-      file: mediaFile.file,
+    const payload = createExternalDragPayloadForProjectItem(item, {
+      activeCompositionId,
+      slotGridProgress: useTimelineStore.getState().slotGridProgress,
     });
-    e.dataTransfer.setData('application/x-media-file-id', mediaFile.id);
-    // Mark audio-only files so timeline can restrict drop targets to audio tracks
-    if (isAudioOnly) {
-      e.dataTransfer.setData('application/x-media-is-audio', 'true');
+
+    if (!payload) {
+      e.preventDefault();
+      return;
     }
+
+    setExternalDragPayload(payload);
+    applyExternalDragPayloadToDataTransfer(e.dataTransfer, payload);
     e.dataTransfer.effectAllowed = 'copyMove';
 
     // Set drag image
@@ -3154,130 +2972,14 @@ export function MediaPanel() {
     moveToFolder(normalizedMovingIds, targetGroupId);
   }, [mediaBoardItems, mediaBoardItemsById, mediaBoardLayout.groups, mediaBoardPlacementsById, moveToFolder, setMediaBoardLayouts]);
 
-  const getMediaBoardExternalDragPayload = useCallback((item: MediaBoardItem): ExternalDragPayload | null => {
+  const getMediaBoardExternalDragPayload = useCallback((item: MediaBoardItem) => {
     if (isMediaBoardFolder(item)) return null;
 
-    if (item.type === 'composition') {
-      const comp = item as Composition;
-      const inSlotView = useTimelineStore.getState().slotGridProgress > 0.5;
-      if (comp.id === activeCompositionId && !inSlotView) return null;
-      return {
-        kind: 'composition',
-        id: comp.id,
-        duration: comp.timelineData?.duration ?? comp.duration ?? 5,
-        hasAudio: true,
-        isAudio: false,
-        isVideo: true,
-      };
-    }
-
-    if (item.type === 'text') {
-      return {
-        kind: 'text',
-        id: item.id,
-        duration: item.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-      };
-    }
-
-    if (item.type === 'solid') {
-      return {
-        kind: 'solid',
-        id: item.id,
-        duration: item.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-      };
-    }
-
-    if (item.type === 'model' && 'meshType' in item) {
-      return {
-        kind: 'mesh',
-        id: item.id,
-        duration: item.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-        meshType: item.meshType,
-      };
-    }
-
-    if (item.type === 'camera') {
-      return {
-        kind: 'camera',
-        id: item.id,
-        duration: item.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-      };
-    }
-
-    if (item.type === 'splat-effector') {
-      return {
-        kind: 'splat-effector',
-        id: item.id,
-        duration: item.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-      };
-    }
-
-    if (item.type === 'math-scene') {
-      return {
-        kind: 'math-scene',
-        id: item.id,
-        duration: item.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-      };
-    }
-
-    if (item.type === 'motion-shape') {
-      return {
-        kind: 'motion-shape',
-        id: item.id,
-        duration: item.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-        primitive: item.primitive,
-      };
-    }
-
-    if (item.type === 'signal') {
-      const plan = createSignalTimelineAdapterPlan(item as SignalAssetItem);
-      return {
-        kind: 'signal',
-        id: item.id,
-        duration: plan.duration,
-        hasAudio: false,
-        isAudio: false,
-        isVideo: true,
-      };
-    }
-
-    if (isImportedMediaFileItem(item) && item.file && !item.isImporting) {
-      const isAudioOnly =
-        item.file.type.startsWith('audio/') ||
-        /\.(mp3|wav|ogg|aac|m4a|flac|wma|aiff|alac|opus)$/i.test(item.file.name);
-      return {
-        kind: 'media-file',
-        id: item.id,
-        duration: item.duration,
-        hasAudio: item.type === 'image' ? false : isAudioOnly ? true : item.hasAudio,
-        isAudio: isAudioOnly,
-        isVideo: !isAudioOnly,
-        file: item.file,
-      };
-    }
-
-    return null;
+    return createExternalDragPayloadForProjectItem(item, {
+      activeCompositionId,
+      requireMediaFileObject: true,
+      slotGridProgress: useTimelineStore.getState().slotGridProgress,
+    });
   }, [activeCompositionId]);
 
   const startMediaBoardNodeMoveGesture = useCallback((e: React.MouseEvent, item: MediaBoardItem) => {

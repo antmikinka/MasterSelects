@@ -474,11 +474,13 @@ Each composition stores its own resolution (width/height) in the project file:
 
 ### Actions
 ```typescript
-saveNamedLayout()      // View -> Layouts
-loadSavedLayout()      // View -> Layouts
-setDefaultSavedLayout()// View -> Layouts
-saveLayoutAsDefault()  // View -> Layouts
-resetLayout()          // View -> Layouts
+saveNamedLayout()          // View -> Layouts; stores dock layout, timeline focus, and track heights
+saveCurrentNamedLayout()   // View -> Layouts; overwrites the active named layout
+loadSavedLayout()          // View -> Layouts; restores layout with a 500ms dock transition
+setDefaultSavedLayout()    // View -> Layouts
+toggleFavoriteSavedLayout()// View -> Layouts, center header quick switcher
+saveLayoutAsDefault()      // View -> Layouts; stores dock layout, timeline focus, and track heights
+resetLayout()              // View -> Layouts
 ```
 
 ---

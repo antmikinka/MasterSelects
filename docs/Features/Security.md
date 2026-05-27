@@ -56,6 +56,7 @@ The `.keys.enc` export/import path remains disabled. The previous implementation
 | Key | Service | Storage |
 |-----|---------|---------|
 | `openai` | OpenAI API | Encrypted IndexedDB |
+| `anthropic` | Anthropic API | Encrypted IndexedDB |
 | `assemblyai` | AssemblyAI | Encrypted IndexedDB |
 | `deepgram` | Deepgram | Encrypted IndexedDB |
 | `piapi` | PiAPI gateway | Encrypted IndexedDB |

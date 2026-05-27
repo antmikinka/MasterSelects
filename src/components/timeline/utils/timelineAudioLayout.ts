@@ -8,9 +8,9 @@ const AUDIO_MODE_MIN_BASE_HEIGHT: Record<TimelineAudioDisplayMode, number> = {
 };
 
 const AUDIO_FOCUS_MIN_BASE_HEIGHT: Record<TimelineAudioDisplayMode, number> = {
-  compact: 96,
-  detailed: 144,
-  spectral: 180,
+  compact: 20,
+  detailed: 20,
+  spectral: 20,
 };
 
 const AUDIO_FOCUS_VIDEO_CONTEXT_HEIGHT = 32;

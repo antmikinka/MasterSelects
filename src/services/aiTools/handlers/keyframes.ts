@@ -30,6 +30,7 @@ export async function handleGetKeyframes(
         id: kf.id,
         property: kf.property,
         value: kf.value,
+        pathValue: kf.pathValue,
         time: kf.time,
         easing: normalizeEasingType(kf.easing, 'linear'),
         rotationInterpolation: kf.rotationInterpolation,

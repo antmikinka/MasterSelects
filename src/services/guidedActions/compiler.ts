@@ -232,7 +232,11 @@ function normalizeOptions(options?: GuidedToolCompileOptions): NormalizedCompile
 }
 
 function countExecutionActions(actions: GuidedAction[]): number {
-  return actions.filter((action) => action.type === 'executeTool').length;
+  return actions.filter(isSemanticExecutionAction).length;
+}
+
+function isSemanticExecutionAction(action: GuidedAction): boolean {
+  return action.type === 'executeTool' || action.type === 'drawMaskPath';
 }
 
 function sumBy<T>(items: T[], pick: (item: T) => number): number {

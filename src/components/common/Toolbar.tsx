@@ -82,20 +82,26 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
     togglePanelType,
     saveLayoutAsDefault,
     saveNamedLayout,
+    saveCurrentNamedLayout,
     loadSavedLayout,
     savedLayouts,
     defaultSavedLayoutId,
+    activeSavedLayoutId,
     setDefaultSavedLayout,
+    toggleFavoriteSavedLayout,
   } = useDockStore(useShallow(s => ({
     resetLayout: s.resetLayout,
     isPanelTypeVisible: s.isPanelTypeVisible,
     togglePanelType: s.togglePanelType,
     saveLayoutAsDefault: s.saveLayoutAsDefault,
     saveNamedLayout: s.saveNamedLayout,
+    saveCurrentNamedLayout: s.saveCurrentNamedLayout,
     loadSavedLayout: s.loadSavedLayout,
     savedLayouts: s.savedLayouts,
     defaultSavedLayoutId: s.defaultSavedLayoutId,
+    activeSavedLayoutId: s.activeSavedLayoutId,
     setDefaultSavedLayout: s.setDefaultSavedLayout,
+    toggleFavoriteSavedLayout: s.toggleFavoriteSavedLayout,
   })));
   const accountCredits = useAccountStore((s) => s.creditBalance);
   const accountSession = useAccountStore((s) => s.session);
@@ -555,6 +561,12 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
       return right.updatedAt - left.updatedAt;
     });
   }, [defaultSavedLayoutId, savedLayouts]);
+  const favoriteSavedLayouts = useMemo(() => {
+    return sortedSavedLayouts.filter((savedLayout) => savedLayout.favorite === true);
+  }, [sortedSavedLayouts]);
+  const activeSavedLayout = useMemo(() => {
+    return savedLayouts.find((savedLayout) => savedLayout.id === activeSavedLayoutId) ?? null;
+  }, [activeSavedLayoutId, savedLayouts]);
 
   const handleSaveNamedLayout = useCallback(() => {
     const name = window.prompt('Save current layout as:', 'New Layout');
@@ -566,6 +578,13 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
     closeMenu();
   }, [saveNamedLayout]);
 
+  const handleSaveCurrentNamedLayout = useCallback(() => {
+    const savedLayout = saveCurrentNamedLayout();
+    if (savedLayout) {
+      closeMenu();
+    }
+  }, [saveCurrentNamedLayout]);
+
   const handleLoadSavedLayout = useCallback((layoutId: string) => {
     loadSavedLayout(layoutId);
     closeMenu();
@@ -575,6 +594,10 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
     setDefaultSavedLayout(layoutId);
     closeMenu();
   }, [setDefaultSavedLayout]);
+
+  const handleToggleFavoriteSavedLayout = useCallback((layoutId: string) => {
+    toggleFavoriteSavedLayout(layoutId);
+  }, [toggleFavoriteSavedLayout]);
 
   return (
     <div className="toolbar">
@@ -902,6 +925,15 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
                   <button className="menu-option" onClick={handleSaveNamedLayout}>
                     <span>Save Current Layout...</span>
                   </button>
+                  <button
+                    className="menu-option"
+                    onClick={handleSaveCurrentNamedLayout}
+                    disabled={!activeSavedLayout}
+                    title={activeSavedLayout ? `Overwrite ${activeSavedLayout.name}` : 'Load or save a named layout first'}
+                  >
+                    <span>Save to Current Layout</span>
+                    {activeSavedLayout && <span className="menu-hint">{activeSavedLayout.name}</span>}
+                  </button>
                   <button className="menu-option" onClick={() => { saveLayoutAsDefault(); closeMenu(); }}>
                     <span>Set Current as Default</span>
                   </button>
@@ -915,15 +947,30 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
                   ) : (
                     sortedSavedLayouts.map((savedLayout) => {
                       const isDefaultLayout = savedLayout.id === defaultSavedLayoutId;
+                      const isActiveLayout = savedLayout.id === activeSavedLayoutId;
+                      const isFavoriteLayout = savedLayout.favorite === true;
+                      const layoutHint = [
+                        isActiveLayout ? 'Current' : null,
+                        isDefaultLayout ? 'Default' : null,
+                      ].filter(Boolean).join(' / ');
                       return (
                         <div key={savedLayout.id} className="menu-layout-row">
                           <button
-                            className={`menu-option menu-layout-load ${isDefaultLayout ? 'checked' : ''}`}
+                            className={`menu-layout-favorite-btn ${isFavoriteLayout ? 'active' : ''}`}
+                            onClick={() => handleToggleFavoriteSavedLayout(savedLayout.id)}
+                            title={isFavoriteLayout ? 'Remove from header switcher' : 'Show in header switcher'}
+                            type="button"
+                            aria-label={`${isFavoriteLayout ? 'Unfavorite' : 'Favorite'} ${savedLayout.name}`}
+                          >
+                            {isFavoriteLayout ? '★' : '☆'}
+                          </button>
+                          <button
+                            className={`menu-option menu-layout-load ${isDefaultLayout ? 'checked' : ''} ${isActiveLayout ? 'current' : ''}`}
                             onClick={() => handleLoadSavedLayout(savedLayout.id)}
                             title={savedLayout.name}
                           >
                             <span className="menu-layout-name">{savedLayout.name}</span>
-                            {isDefaultLayout && <span className="menu-hint">Default</span>}
+                            {layoutHint && <span className="menu-hint">{layoutHint}</span>}
                           </button>
                           <button
                             className={`menu-layout-default-btn ${isDefaultLayout ? 'active' : ''}`}
@@ -1029,7 +1076,23 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
       <div className="toolbar-spacer" />
 
       {/* Center */}
-      <div className="toolbar-center" />
+      <div className="toolbar-center">
+        {favoriteSavedLayouts.length > 0 && (
+          <div className="toolbar-layout-switcher" aria-label="Favorite layouts">
+            {favoriteSavedLayouts.map((savedLayout) => (
+              <button
+                key={savedLayout.id}
+                className={`toolbar-layout-switch ${savedLayout.id === activeSavedLayoutId ? 'active' : ''}`}
+                onClick={() => loadSavedLayout(savedLayout.id)}
+                title={`Load ${savedLayout.name}`}
+                type="button"
+              >
+                {savedLayout.name}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Spacer */}
       <div className="toolbar-spacer" />

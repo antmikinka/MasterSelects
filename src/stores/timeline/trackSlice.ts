@@ -52,6 +52,10 @@ function clampTargetLufs(value: number): number {
   return Math.max(-36, Math.min(-5, value));
 }
 
+function clampTrackHeight(value: number): number {
+  return Math.max(MIN_TRACK_HEIGHT, Math.min(MAX_TRACK_HEIGHT, value));
+}
+
 function normalizeAudioSends(sends: TrackAudioState['sends'] | undefined): AudioSendState[] | undefined {
   if (!sends || sends.length === 0) return undefined;
 
@@ -647,22 +651,27 @@ export const createTrackSlice: SliceCreator<TrackActions> = (set, get) => ({
   setTrackHeight: (id, height) => {
     const { tracks } = get();
     set({
-      tracks: tracks.map(t => t.id === id ? { ...t, height: Math.max(MIN_TRACK_HEIGHT, Math.min(MAX_TRACK_HEIGHT, height)) } : t),
+      tracks: tracks.map(t => t.id === id ? { ...t, height: clampTrackHeight(height) } : t),
     });
   },
 
-  scaleTracksOfType: (type, delta) => {
+  scaleTracksOfType: (type, delta, baselineHeight = MIN_TRACK_HEIGHT) => {
     const { tracks } = get();
     const tracksOfType = tracks.filter(t => t.type === type);
 
     if (tracksOfType.length === 0) return;
 
+    const effectiveBaselineHeight = clampTrackHeight(
+      Number.isFinite(baselineHeight) ? baselineHeight : MIN_TRACK_HEIGHT,
+    );
+    const getEffectiveHeight = (track: TimelineTrack) => Math.max(track.height, effectiveBaselineHeight);
+
     // Find the max height among tracks of this type
-    const maxHeight = Math.max(...tracksOfType.map(t => t.height));
+    const maxHeight = Math.max(...tracksOfType.map(getEffectiveHeight));
 
     // First call: sync all to max height (if they differ)
     // Subsequent calls: scale uniformly
-    const allSameHeight = tracksOfType.every(t => t.height === maxHeight);
+    const allSameHeight = tracksOfType.every(t => getEffectiveHeight(t) === maxHeight);
 
     if (!allSameHeight && delta !== 0) {
       // Sync all to max height first
@@ -673,7 +682,7 @@ export const createTrackSlice: SliceCreator<TrackActions> = (set, get) => ({
       });
     } else {
       // All already synced, scale uniformly
-      const newHeight = Math.max(MIN_TRACK_HEIGHT, Math.min(MAX_TRACK_HEIGHT, maxHeight + delta));
+      const newHeight = clampTrackHeight(maxHeight + delta);
       set({
         tracks: tracks.map(t =>
           t.type === type ? { ...t, height: newHeight } : t

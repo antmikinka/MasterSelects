@@ -17,6 +17,7 @@ export interface GuidedCursorState {
   visible: boolean;
   position: GuidedPoint | null;
   clicking: boolean;
+  transitionMs?: number;
 }
 
 export interface GuidedCalloutState {
@@ -41,6 +42,12 @@ export interface GuidedPreviewPathState {
   durationMs?: number;
 }
 
+export interface GuidedDragGhostState {
+  label: string;
+  mediaType?: string;
+  thumbnailUrl?: string;
+}
+
 export interface GuidedDiagnosticEntry {
   id: string;
   sessionId: string;
@@ -53,6 +60,8 @@ interface GuidedActionStoreState {
   activeSession: GuidedSessionSnapshot | null;
   currentStep: GuidedScheduledAction | null;
   cursor: GuidedCursorState;
+  dragGhost: GuidedDragGhostState | null;
+  lastUserPointerPosition: GuidedPoint | null;
   spotlight: GuidedTargetRef | null;
   callout: GuidedCalloutState | null;
   highlights: GuidedHighlightState[];
@@ -65,6 +74,8 @@ interface GuidedActionStoreState {
   setCurrentStep: (step: GuidedScheduledAction | null) => void;
   completeCurrentStep: () => void;
   setCursor: (cursor: Partial<GuidedCursorState>) => void;
+  setDragGhost: (ghost: GuidedDragGhostState | null) => void;
+  setLastUserPointerPosition: (position: GuidedPoint) => void;
   setSpotlight: (target: GuidedTargetRef | null) => void;
   setCallout: (callout: GuidedCalloutState | null) => void;
   addHighlight: (highlight: Omit<GuidedHighlightState, 'id' | 'createdAt'>) => string;
@@ -90,6 +101,8 @@ export const useGuidedActionStore = create<GuidedActionStoreState>()(
     activeSession: null,
     currentStep: null,
     cursor: INITIAL_CURSOR,
+    dragGhost: null,
+    lastUserPointerPosition: null,
     spotlight: null,
     callout: null,
     highlights: [],
@@ -99,12 +112,25 @@ export const useGuidedActionStore = create<GuidedActionStoreState>()(
     eventLog: [],
 
     startSession: (session) => {
+      const state = get();
+      const previousPosition = state.lastUserPointerPosition ?? state.cursor.position;
       set({
         activeSession: session,
         currentStep: null,
-        cursor: INITIAL_CURSOR,
+        cursor: shouldPrimeCursorForSession(session, previousPosition)
+          ? {
+              visible: true,
+              position: previousPosition,
+              clicking: false,
+              transitionMs: 0,
+            }
+          : {
+              ...INITIAL_CURSOR,
+              position: previousPosition,
+            },
         spotlight: null,
         callout: null,
+        dragGhost: null,
         highlights: [],
         previewPaths: [],
         targetResolutions: {},
@@ -128,6 +154,14 @@ export const useGuidedActionStore = create<GuidedActionStoreState>()(
           ...cursor,
         },
       }));
+    },
+
+    setDragGhost: (ghost) => {
+      set({ dragGhost: ghost });
+    },
+
+    setLastUserPointerPosition: (position) => {
+      set({ lastUserPointerPosition: position });
     },
 
     setSpotlight: (target) => {
@@ -235,7 +269,11 @@ export const useGuidedActionStore = create<GuidedActionStoreState>()(
         return {
           activeSession: finishedSession,
           currentStep: null,
-          cursor: INITIAL_CURSOR,
+          cursor: {
+            ...INITIAL_CURSOR,
+            position: state.cursor.position,
+          },
+          dragGhost: null,
           spotlight: null,
           callout: null,
         };
@@ -246,7 +284,11 @@ export const useGuidedActionStore = create<GuidedActionStoreState>()(
       set({
         activeSession: null,
         currentStep: null,
-        cursor: INITIAL_CURSOR,
+        cursor: {
+          ...INITIAL_CURSOR,
+          position: get().cursor.position,
+        },
+        dragGhost: null,
         spotlight: null,
         callout: null,
         highlights: [],
@@ -258,6 +300,26 @@ export const useGuidedActionStore = create<GuidedActionStoreState>()(
 );
 
 export type GuidedActionStoreApi = typeof useGuidedActionStore;
+
+function shouldPrimeCursorForSession(
+  session: GuidedSessionSnapshot,
+  previousPosition: GuidedPoint | null,
+): previousPosition is GuidedPoint {
+  if (!previousPosition) {
+    return false;
+  }
+
+  if (session.context.visualizationMode === 'off' || session.context.animationBudget.disabled) {
+    return false;
+  }
+
+  return session.plan.actions.some(({ action }) => (
+    action.type === 'moveCursorTo'
+    || action.type === 'dragCursor'
+    || action.type === 'clickVisual'
+    || action.type === 'doubleClickVisual'
+  ));
+}
 export type { GuidedSessionPlan };
 
 function stripElementFromResolution(
