@@ -877,7 +877,7 @@ function normalizeItemFolderParents<T extends StoreItemWithParent>(
   return repairedCount > 0 ? normalized : items;
 }
 
-const FLASHBOARD_SERVICES = new Set<FlashBoardService>(['piapi', 'kieai', 'cloud', 'elevenlabs', 'suno']);
+const FLASHBOARD_SERVICES = new Set<FlashBoardService>(['piapi', 'kieai', 'evolink', 'cloud', 'elevenlabs', 'suno']);
 const FLASHBOARD_OUTPUT_TYPES = new Set<FlashBoardOutputType>(['video', 'image', 'audio']);
 const FLASHBOARD_MEDIA_TYPES = new Set<FlashBoardMediaType>(['video', 'image', 'audio']);
 

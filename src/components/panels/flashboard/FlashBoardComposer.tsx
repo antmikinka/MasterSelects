@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, type CSSProperties } from 'react';
 import { useFlashBoardStore } from '../../../stores/flashboardStore';
 import type {
   FlashBoardComposerReferenceRole,
@@ -10,6 +10,9 @@ import {
   DEFAULT_ELEVENLABS_MODEL_ID,
   DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
   DEFAULT_ELEVENLABS_VOICE_SETTINGS,
+  DEFAULT_FLASHBOARD_MODEL_VERSION,
+  DEFAULT_FLASHBOARD_PROVIDER_ID,
+  DEFAULT_FLASHBOARD_SERVICE,
 } from '../../../stores/flashboardStore/defaults';
 import { selectActiveBoard } from '../../../stores/flashboardStore/selectors';
 import { useMediaStore } from '../../../stores/mediaStore';
@@ -38,6 +41,11 @@ import {
 } from '../../../services/sunoService';
 import { getCatalogEntries } from '../../../services/flashboard/FlashBoardModelCatalog';
 import { getCatalogEntryPriceEstimate, getFlashBoardPriceEstimate } from '../../../services/flashboard/FlashBoardPricing';
+import {
+  FLASHBOARD_PROMPT_REFINER_MODEL,
+  parseSunoPromptRefinement,
+  streamRefineFlashBoardPrompt,
+} from '../../../services/flashboard/FlashBoardPromptRefiner';
 import type { CatalogEntry } from '../../../services/flashboard/types';
 import { FileTypeIcon } from '../media/FileTypeIcon';
 
@@ -53,11 +61,21 @@ type PopoverType =
   | 'voiceSettings'
   | 'sunoModel'
   | 'sunoMode'
-  | 'sunoDetails'
   | 'sunoTuning'
   | null;
 type NumberVoiceSettingKey = 'speed' | 'stability' | 'similarityBoost' | 'style';
-type NumberSunoSettingKey = 'styleWeight' | 'weirdnessConstraint' | 'audioWeight';
+type ModelCategoryId = 'image' | 'video' | 'voice' | 'music';
+type ComposerReferenceRoleTarget = FlashBoardComposerReferenceRole;
+
+const INLINE_SUBMENU_POPOVERS = new Set<PopoverType>([
+  'model',
+  'aspect',
+  'duration',
+  'imageSize',
+  'mode',
+  'sunoModel',
+  'sunoMode',
+]);
 
 interface ComposerReferenceBadge {
   key: string;
@@ -78,12 +96,69 @@ interface FlashBoardComposerProps {
   serviceScope?: CatalogEntry['service'];
 }
 
+interface SunoPromptSnapshot {
+  prompt: string;
+  style: string;
+  negativeTags: string;
+}
+
 const MAX_MULTI_SHOTS = 5;
+const MULTI_SHOT_PANEL_EXIT_MS = 190;
 const MEDIA_FILE_DRAG_MIME = 'application/x-media-file-id';
 const MEDIA_PANEL_ITEM_DRAG_MIME = 'application/x-media-panel-item';
+const REFERENCE_AUTO_SCROLL_EDGE_PX = 58;
+const REFERENCE_AUTO_SCROLL_MAX_PX_PER_FRAME = 8;
+const MODEL_CATEGORIES: Array<{ id: ModelCategoryId; label: string }> = [
+  { id: 'image', label: 'Image' },
+  { id: 'video', label: 'Video' },
+  { id: 'voice', label: 'Voice' },
+  { id: 'music', label: 'Music' },
+];
 
 function isReferenceableMediaType(type: string | undefined): type is 'image' | 'video' | 'audio' {
   return type === 'image' || type === 'video' || type === 'audio';
+}
+
+function isInlineSubmenuPopover(type: PopoverType): boolean {
+  return INLINE_SUBMENU_POPOVERS.has(type);
+}
+
+function renderModelCategoryIcon(categoryId: ModelCategoryId) {
+  switch (categoryId) {
+    case 'image':
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="2.5" y="3" width="11" height="10" rx="2" />
+          <circle cx="6" cy="6.25" r="1.15" />
+          <path d="m4 11 3.1-3.1 2 2L10.5 8.5 13 11" />
+        </svg>
+      );
+    case 'video':
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <rect x="2.3" y="4.2" width="8.8" height="7.6" rx="1.7" />
+          <path d="m11.1 6.4 2.6-1.45v6.1L11.1 9.6" />
+          <path d="M4.4 4.2 5.6 2.5M8.2 4.2 9.4 2.5" />
+        </svg>
+      );
+    case 'voice':
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M8 2.4a2 2 0 0 0-2 2v3.1a2 2 0 0 0 4 0V4.4a2 2 0 0 0-2-2Z" />
+          <path d="M3.8 7.2a4.2 4.2 0 0 0 8.4 0M8 11.4v2.2M5.7 13.6h4.6" />
+        </svg>
+      );
+    case 'music':
+      return (
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M10.4 2.7v7.2a1.9 1.9 0 1 1-1.2-1.75" />
+          <path d="M10.4 3.2 13 4v2.15l-2.6-.8" />
+          <circle cx="5.1" cy="11.3" r="1.75" />
+        </svg>
+      );
+    default:
+      return null;
+  }
 }
 
 const ELEVENLABS_OUTPUT_FORMAT_LABELS: Record<ElevenLabsMp3OutputFormat, string> = {
@@ -120,20 +195,45 @@ interface ElevenLabsModelOption {
   modelRates?: ElevenLabsModelRates;
 }
 
-function getServiceLabel(service: CatalogEntry['service']): string {
-  switch (service) {
+function getModelCategory(entry: CatalogEntry | undefined): ModelCategoryId {
+  if (!entry) {
+    return 'video';
+  }
+
+  if (entry.service === 'suno' || entry.providerId === SUNO_PROVIDER_ID) {
+    return 'music';
+  }
+
+  if (entry.service === 'elevenlabs' || (entry.outputType === 'audio' && entry.supportsTextToAudio)) {
+    return 'voice';
+  }
+
+  if (
+    entry.outputType === 'image'
+    || (entry.supportsTextToImage && !entry.supportsTextToVideo && !entry.supportsImageToVideo)
+  ) {
+    return 'image';
+  }
+
+  return 'video';
+}
+
+function getModelSourceLabel(entry: CatalogEntry): string {
+  switch (entry.service) {
     case 'kieai':
       return 'Kie.ai';
+    case 'evolink':
+      return 'EvoLink';
     case 'piapi':
       return 'PiAPI';
     case 'cloud':
       return 'Cloud';
     case 'elevenlabs':
-      return 'Audio';
+      return 'ElevenLabs';
     case 'suno':
       return 'Suno';
     default:
-      return service;
+      return entry.service;
   }
 }
 
@@ -146,7 +246,7 @@ function getProviderDisplayName(entry: CatalogEntry): string {
     return 'Suno Music';
   }
 
-  return entry.name.replace(' (Kie.ai)', '');
+  return entry.name.replace(' (Kie.ai)', '').replace(' (EvoLink)', '');
 }
 
 function clampSunoWeight(value: number | undefined, fallback: number): number {
@@ -173,6 +273,15 @@ function getSunoPromptLimit(version: string, customMode: boolean): number {
 
 function getSunoStyleLimit(version: string): number {
   return version === 'V4' ? 200 : 1000;
+}
+
+function deriveSunoTitle(prompt: string): string {
+  const firstLine = prompt
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  const candidate = firstLine || prompt.trim() || 'Untitled song';
+  return candidate.replace(/\s+/g, ' ').slice(0, 80);
 }
 
 function normalizeVoiceSettings(settings: FlashBoardVoiceSettings | undefined): Required<FlashBoardVoiceSettings> {
@@ -390,6 +499,20 @@ function appendReferenceMediaFileIds(currentIds: string[], nextIds: string[]): s
   return result;
 }
 
+function moveMediaFileIdToReferences(currentIds: string[], mediaFileId: string, maxReferenceImages?: number): string[] {
+  const nextIds = [...currentIds.filter((id) => id !== mediaFileId), mediaFileId];
+  const limitedIds = clampReferenceMediaFileIds(nextIds, maxReferenceImages);
+
+  if (limitedIds.includes(mediaFileId)) {
+    return limitedIds;
+  }
+
+  return clampReferenceMediaFileIds(
+    [mediaFileId, ...currentIds.filter((id) => id !== mediaFileId)],
+    maxReferenceImages,
+  );
+}
+
 export function FlashBoardComposer({
   initialProviderId,
   initialService,
@@ -405,9 +528,14 @@ export function FlashBoardComposer({
   const queueNode = useFlashBoardStore((s) => s.queueNode);
   const setHoveredComposerReference = useFlashBoardStore((s) => s.setHoveredComposerReference);
   const mediaFiles = useMediaStore((s) => s.files);
+  const openAiApiKey = useSettingsStore((s) => s.apiKeys.openai);
   const kieAiApiKey = useSettingsStore((s) => s.apiKeys.kieai);
+  const evolinkApiKey = useSettingsStore((s) => s.apiKeys.evolink);
   const elevenLabsApiKey = useSettingsStore((s) => s.apiKeys.elevenlabs);
+  const openSettings = useSettingsStore((s) => s.openSettings);
+  const hasOpenAiKey = openAiApiKey.trim().length > 0;
   const hasKieAiKey = kieAiApiKey.trim().length > 0;
+  const hasEvolinkKey = evolinkApiKey.trim().length > 0;
   const hasElevenLabsKey = elevenLabsApiKey.trim().length > 0;
   const accountSession = useAccountStore((s) => s.session);
   const hostedAIEnabled = useAccountStore((s) => s.hostedAIEnabled);
@@ -416,6 +544,9 @@ export function FlashBoardComposer({
   const catalog = useMemo(() => getCatalogEntries(), []);
   const visibleCatalog = useMemo(
     () => catalog.filter((entry) => {
+      if (entry.service === 'cloud') {
+        return false;
+      }
       if (serviceScope && entry.service !== serviceScope) {
         return false;
       }
@@ -426,29 +557,60 @@ export function FlashBoardComposer({
     }),
     [allowedServices, catalog, serviceScope],
   );
-  const serviceOptions = useMemo(
-    () => Array.from(new Set(visibleCatalog.map((entry) => entry.service))),
+  const modelEntriesByCategory = useMemo(
+    () => visibleCatalog.reduce<Record<ModelCategoryId, CatalogEntry[]>>((groups, entry) => {
+      groups[getModelCategory(entry)].push(entry);
+      return groups;
+    }, {
+      image: [],
+      video: [],
+      voice: [],
+      music: [],
+    }),
     [visibleCatalog],
   );
+  const availableModelCategories = useMemo(
+    () => MODEL_CATEGORIES.filter((category) => modelEntriesByCategory[category.id].length > 0),
+    [modelEntriesByCategory],
+  );
   const initialEntry = useMemo(
-    () => (
-      visibleCatalog.find((entry) => {
-        const serviceMatches = (serviceScope ?? initialService ?? entry.service) === entry.service;
-        const providerMatches = !initialProviderId || entry.providerId === initialProviderId;
-        return serviceMatches && providerMatches;
-      }) ?? visibleCatalog[0]
-    ),
+    () => {
+      const explicitService = serviceScope ?? initialService;
+      const hasExplicitTarget = Boolean(explicitService || initialProviderId);
+
+      if (hasExplicitTarget) {
+        return visibleCatalog.find((entry) => {
+          const serviceMatches = !explicitService || explicitService === entry.service;
+          const providerMatches = !initialProviderId || entry.providerId === initialProviderId;
+          return serviceMatches && providerMatches;
+        }) ?? visibleCatalog[0];
+      }
+
+      return visibleCatalog.find((entry) => (
+        entry.service === DEFAULT_FLASHBOARD_SERVICE
+        && entry.providerId === DEFAULT_FLASHBOARD_PROVIDER_ID
+      )) ?? visibleCatalog[0];
+    },
     [initialProviderId, initialService, serviceScope, visibleCatalog],
   );
 
   const [popover, setPopover] = useState<PopoverType>(null);
+  const [closingPopover, setClosingPopover] = useState<PopoverType>(null);
+  const [activeModelCategory, setActiveModelCategory] = useState<ModelCategoryId>(() => getModelCategory(initialEntry));
   const popoverRef = useRef<HTMLDivElement>(null);
+  const referenceStripRef = useRef<HTMLDivElement>(null);
+  const referencePointerPositionRef = useRef<{ clientX: number; clientY: number } | null>(null);
+  const referenceAutoScrollFrameRef = useRef<number | null>(null);
+  const referenceAutoScrollVelocityRef = useRef(0);
+  const promptRefineAbortRef = useRef<AbortController | null>(null);
+  const promptInputRef = useRef<HTMLTextAreaElement>(null);
+  const appliedInitialTargetRef = useRef<string | null>(null);
 
   const [service, setService] = useState<CatalogEntry['service']>(
-    initialEntry?.service ?? serviceScope ?? initialService ?? 'kieai',
+    initialEntry?.service ?? serviceScope ?? initialService ?? DEFAULT_FLASHBOARD_SERVICE,
   );
-  const [providerId, setProviderId] = useState(initialProviderId ?? initialEntry?.providerId ?? '');
-  const [version, setVersion] = useState(initialVersion ?? initialEntry?.versions[0] ?? DEFAULT_ELEVENLABS_MODEL_ID);
+  const [providerId, setProviderId] = useState(initialEntry?.providerId ?? initialProviderId ?? '');
+  const [version, setVersion] = useState(initialVersion ?? initialEntry?.versions[0] ?? DEFAULT_FLASHBOARD_MODEL_VERSION);
   const [mode, setMode] = useState('std');
   const [prompt, setPrompt] = useState('');
   const [duration, setDuration] = useState(5);
@@ -456,6 +618,8 @@ export function FlashBoardComposer({
   const [imageSize, setImageSize] = useState('1K');
   const [generateAudio, setGenerateAudio] = useState(false);
   const [multiShots, setMultiShots] = useState(false);
+  const [renderMultiShotPanel, setRenderMultiShotPanel] = useState(false);
+  const [isMultiShotPanelClosing, setIsMultiShotPanelClosing] = useState(false);
   const [multiPrompt, setMultiPrompt] = useState<FlashBoardMultiShotPrompt[]>([]);
   const [voiceId, setVoiceId] = useState(composer.voiceId ?? '');
   const [voiceName, setVoiceName] = useState(composer.voiceName ?? '');
@@ -470,7 +634,7 @@ export function FlashBoardComposer({
   const [sunoCustomMode, setSunoCustomMode] = useState(composer.sunoCustomMode ?? DEFAULT_SUNO_CUSTOM_MODE);
   const [sunoInstrumental, setSunoInstrumental] = useState(composer.sunoInstrumental ?? DEFAULT_SUNO_INSTRUMENTAL);
   const [sunoStyle, setSunoStyle] = useState(composer.sunoStyle ?? '');
-  const [sunoTitle, setSunoTitle] = useState(composer.sunoTitle ?? '');
+  const [sunoTitle] = useState(composer.sunoTitle ?? '');
   const [sunoNegativeTags, setSunoNegativeTags] = useState(composer.sunoNegativeTags ?? '');
   const [sunoVocalGender, setSunoVocalGender] = useState<FlashBoardSunoVocalGender | ''>(
     composer.sunoVocalGender ?? '',
@@ -493,11 +657,29 @@ export function FlashBoardComposer({
   const [elevenLabsVoicesError, setElevenLabsVoicesError] = useState<string | null>(null);
   const [voiceRefreshNonce, setVoiceRefreshNonce] = useState(0);
   const [isReferenceDragOver, setIsReferenceDragOver] = useState(false);
+  const [isRefiningPrompt, setIsRefiningPrompt] = useState(false);
+  const [promptRefineError, setPromptRefineError] = useState<string | null>(null);
+  const [promptBeforeAiRewrite, setPromptBeforeAiRewrite] = useState<string | null>(null);
+  const [sunoBeforeAiRewrite, setSunoBeforeAiRewrite] = useState<SunoPromptSnapshot | null>(null);
 
   const selectedEntry = useMemo(
     () => visibleCatalog.find((e) => e.service === service && e.providerId === providerId),
     [providerId, service, visibleCatalog],
   );
+  const modelButtonLabel = selectedEntry ? getProviderDisplayName(selectedEntry) : 'Model';
+  const selectedModelCategory = getModelCategory(selectedEntry);
+  const effectiveModelCategory = modelEntriesByCategory[activeModelCategory].length > 0
+    ? activeModelCategory
+    : availableModelCategories[0]?.id ?? selectedModelCategory;
+  const activeModelEntries = modelEntriesByCategory[effectiveModelCategory] ?? [];
+  const renderedPopover = popover ?? closingPopover;
+  const popoverHostClassName = `fb-pill-group ${closingPopover && !popover ? 'is-closing' : popover ? 'is-opening' : ''}`;
+  const inlineSubmenuVisible = isInlineSubmenuPopover(renderedPopover);
+  const inlineSubmenuStateClassName = inlineSubmenuVisible
+    ? closingPopover && !popover
+      ? 'has-inline-submenu is-inline-submenu-closing'
+      : 'has-inline-submenu is-inline-submenu-opening'
+    : '';
   const isAudioMode = selectedEntry?.outputType === 'audio' || service === 'elevenlabs' || service === 'suno';
   const isSunoMode = selectedEntry?.providerId === SUNO_PROVIDER_ID || service === 'suno';
   const isElevenLabsMode = isAudioMode && !isSunoMode;
@@ -519,7 +701,6 @@ export function FlashBoardComposer({
   const sunoModeButtonLabel = sunoCustomMode
     ? sunoInstrumental ? 'Custom inst.' : 'Custom song'
     : sunoInstrumental ? 'Simple inst.' : 'Simple song';
-  const sunoDetailsButtonLabel = sunoTitle.trim() || sunoStyle.trim() || 'Song details';
   const sunoTuningChanged = sunoStyleWeight !== DEFAULT_SUNO_STYLE_WEIGHT
     || sunoWeirdnessConstraint !== DEFAULT_SUNO_WEIRDNESS_CONSTRAINT
     || sunoAudioWeight !== DEFAULT_SUNO_AUDIO_WEIGHT
@@ -527,8 +708,8 @@ export function FlashBoardComposer({
   const supportsAudio = !isAudioMode && selectedEntry?.supportsGenerateAudio === true;
   const supportsMultiShot = !isAudioMode && selectedEntry?.supportsMultiShot === true;
   const normalizedMultiPrompt = useMemo(
-    () => multiShots ? rebalanceMultiPrompts(multiPrompt, duration) : [],
-    [duration, multiPrompt, multiShots],
+    () => rebalanceMultiPrompts(multiPrompt, duration),
+    [duration, multiPrompt],
   );
   const effectiveGenerateAudio = !isAudioMode && supportsAudio && (generateAudio || multiShots);
   const effectivePrompt = useMemo(() => {
@@ -597,10 +778,6 @@ export function FlashBoardComposer({
       }
 
       if (sunoCustomMode) {
-        if (!sunoTitle.trim()) {
-          return 'Add a Suno song title.';
-        }
-
         if (!sunoStyle.trim()) {
           return 'Add a Suno style.';
         }
@@ -659,10 +836,24 @@ export function FlashBoardComposer({
     selectedElevenLabsCharacterLimit,
     sunoCustomMode,
     sunoStyle,
-    sunoTitle,
     version,
     voiceId,
   ]);
+  const backendValidationError = useMemo(() => {
+    if (service === 'kieai' && !hasKieAiKey) {
+      return 'Add a Kie.ai API key in Settings to generate with Kie.ai.';
+    }
+
+    if (service === 'evolink' && !hasEvolinkKey) {
+      return 'Add an EvoLink API key in Settings to generate with EvoLink.';
+    }
+
+    if (service === 'cloud' && !isHostedAudioMode && !accountSession?.authenticated) {
+      return 'Sign in to use MasterSelects Cloud generation.';
+    }
+
+    return null;
+  }, [accountSession?.authenticated, hasEvolinkKey, hasKieAiKey, isHostedAudioMode, service]);
   const currentPrice = useMemo(() => (
     selectedEntry
       ? getFlashBoardPriceEstimate({
@@ -692,6 +883,10 @@ export function FlashBoardComposer({
     service,
     version,
   ]);
+  const generateActionLabel = isSunoMode ? 'Compose' : isAudioMode ? 'Speak' : 'Generate';
+  const generateButtonLabel = currentPrice
+    ? `${generateActionLabel} - ${currentPrice.compactLabel}`
+    : generateActionLabel;
   const maxReferenceMedia = selectedEntry?.maxReferenceMedia ?? selectedEntry?.maxReferenceImages;
   const effectiveReferenceMediaFileIds = useMemo(
     () => clampReferenceMediaFileIds(composer.referenceMediaFileIds ?? [], maxReferenceMedia),
@@ -699,8 +894,11 @@ export function FlashBoardComposer({
   );
   const canGenerate = Boolean(board && selectedEntry && effectivePrompt)
     && !multiShotValidationError
-    && !audioValidationError;
+    && !audioValidationError
+    && !backendValidationError;
   const canAddShot = multiShots && normalizedMultiPrompt.length < Math.min(MAX_MULTI_SHOTS, Math.max(1, duration));
+  const supportsTimelineReferenceRoles = !isAudioMode && selectedEntry?.supportsImageToVideo === true;
+  const supportsEndFrameReference = supportsTimelineReferenceRoles && !multiShots;
   const mediaFilesById = useMemo(
     () => new Map(mediaFiles.map((file) => [file.id, file])),
     [mediaFiles],
@@ -761,11 +959,39 @@ export function FlashBoardComposer({
 
     return badges;
   }, [composer.endMediaFileId, composer.startMediaFileId, effectiveReferenceMediaFileIds, mediaFilesById]);
+  const hasPromptRefineInput = isSunoMode
+    ? Boolean(prompt.trim() || sunoStyle.trim() || sunoNegativeTags.trim())
+    : Boolean(prompt.trim() || composerReferenceBadges.length > 0);
+  const promptRefineTitle = !hasOpenAiKey
+    ? 'Add an OpenAI API key in Settings to refine prompts'
+    : !hasPromptRefineInput
+      ? isSunoMode
+        ? 'Add lyrics, style, or a song idea first'
+        : 'Add a prompt or reference image first'
+      : isSunoMode
+        ? `Write Suno lyrics and style with ${FLASHBOARD_PROMPT_REFINER_MODEL}`
+        : `Refine prompt with ${FLASHBOARD_PROMPT_REFINER_MODEL}`;
+
+  useEffect(() => {
+    if (!promptRefineError?.startsWith('Add ')) {
+      return;
+    }
+
+    if (hasPromptRefineInput) {
+      setPromptRefineError(null);
+    }
+  }, [hasPromptRefineInput, promptRefineError]);
 
   useEffect(() => {
     if (!initialEntry) {
       return;
     }
+
+    const initialTargetKey = `${initialEntry.service}:${initialEntry.providerId}:${initialVersion ?? ''}`;
+    if (appliedInitialTargetRef.current === initialTargetKey) {
+      return;
+    }
+    appliedInitialTargetRef.current = initialTargetKey;
 
     let cancelled = false;
     queueMicrotask(() => {
@@ -780,15 +1006,19 @@ export function FlashBoardComposer({
           : initialEntry.versions[0] ?? '';
       setVersion(nextVersion);
 
-      if (!initialEntry.modes.includes(mode)) {
-        setMode(initialEntry.modes[0] ?? 'std');
-      }
-      if (!initialEntry.durations.includes(duration) && initialEntry.durations.length > 0) {
-        setDuration(initialEntry.durations[0] ?? 5);
-      }
-      if (!initialEntry.aspectRatios.includes(aspectRatio) && initialEntry.aspectRatios.length > 0) {
-        setAspectRatio(initialEntry.aspectRatios[0] ?? '16:9');
-      }
+      setMode((current) => (
+        initialEntry.modes.includes(current) ? current : initialEntry.modes[0] ?? 'std'
+      ));
+      setDuration((current) => (
+        initialEntry.durations.length > 0 && !initialEntry.durations.includes(current)
+          ? initialEntry.durations[0] ?? 5
+          : current
+      ));
+      setAspectRatio((current) => (
+        initialEntry.aspectRatios.length > 0 && !initialEntry.aspectRatios.includes(current)
+          ? initialEntry.aspectRatios[0] ?? '16:9'
+          : current
+      ));
       if (initialEntry.imageSizes?.length) {
         setImageSize((current) => (
           initialEntry.imageSizes?.includes(current)
@@ -801,7 +1031,7 @@ export function FlashBoardComposer({
     return () => {
       cancelled = true;
     };
-  }, [aspectRatio, duration, initialEntry, initialVersion, mode]);
+  }, [initialEntry, initialVersion]);
 
   useEffect(() => {
     if (!selectedEntry) {
@@ -818,7 +1048,6 @@ export function FlashBoardComposer({
 
       if ((isAudioMode || !supportsMultiShot || selectedEntry.outputType === 'image') && multiShots) {
         setMultiShots(false);
-        setMultiPrompt([]);
       }
     });
 
@@ -851,6 +1080,28 @@ export function FlashBoardComposer({
       cancelled = true;
     };
   }, [duration, generateAudio, multiShots]);
+
+  useEffect(() => {
+    if (multiShots) {
+      setRenderMultiShotPanel(true);
+      setIsMultiShotPanelClosing(false);
+      return;
+    }
+
+    if (!renderMultiShotPanel) {
+      setIsMultiShotPanelClosing(false);
+      return;
+    }
+
+    setIsMultiShotPanelClosing(true);
+    const timeoutId = window.setTimeout(() => {
+      setRenderMultiShotPanel(false);
+      setIsMultiShotPanelClosing(false);
+      setMultiPrompt([]);
+    }, MULTI_SHOT_PANEL_EXIT_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [multiShots, renderMultiShotPanel]);
 
   useEffect(() => {
     if (!selectedEntry) {
@@ -1110,15 +1361,43 @@ export function FlashBoardComposer({
   ]);
 
   useEffect(() => {
+    if (popover === 'model') {
+      setActiveModelCategory(selectedModelCategory);
+    }
+  }, [popover, selectedModelCategory]);
+
+  const closePopover = useCallback((popoverToClose?: PopoverType) => {
+    const currentPopover = popoverToClose ?? popover;
+    if (!currentPopover) {
+      return;
+    }
+
+    setClosingPopover(currentPopover);
+    setPopover(null);
+  }, [popover]);
+
+  useEffect(() => {
+    if (!closingPopover || popover) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setClosingPopover(null);
+    }, 540);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [closingPopover, popover]);
+
+  useEffect(() => {
     if (!popover) return;
     const handler = (e: MouseEvent) => {
       if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-        setPopover(null);
+        closePopover();
       }
     };
     window.addEventListener('mousedown', handler);
     return () => window.removeEventListener('mousedown', handler);
-  }, [popover]);
+  }, [closePopover, popover]);
 
   const handleProviderChange = useCallback((newService: CatalogEntry['service'], newId: string) => {
     setService(newService);
@@ -1169,9 +1448,10 @@ export function FlashBoardComposer({
         sunoAudioWeight: nextIsSuno ? sunoAudioWeight : undefined,
       });
     }
-    setPopover(null);
+    closePopover();
   }, [
     aspectRatio,
+    closePopover,
     composer.endMediaFileId,
     composer.referenceMediaFileIds,
     composer.startMediaFileId,
@@ -1229,7 +1509,7 @@ export function FlashBoardComposer({
       sunoCustomMode: requestIsSuno ? sunoCustomMode : undefined,
       sunoInstrumental: requestIsSuno ? sunoInstrumental : undefined,
       sunoStyle: requestIsSuno ? sunoStyle.trim() : undefined,
-      sunoTitle: requestIsSuno ? sunoTitle.trim() : undefined,
+      sunoTitle: requestIsSuno ? sunoTitle.trim() || deriveSunoTitle(effectivePrompt) : undefined,
       sunoNegativeTags: requestIsSuno ? sunoNegativeTags.trim() || undefined : undefined,
       sunoVocalGender: requestIsSuno ? sunoVocalGender || undefined : undefined,
       sunoStyleWeight: requestIsSuno ? sunoStyleWeight : undefined,
@@ -1240,7 +1520,6 @@ export function FlashBoardComposer({
       referenceMediaFileIds: requestIsAudio ? [] : effectiveReferenceMediaFileIds,
     });
     queueNode(node.id);
-    setPrompt('');
   }, [
     aspectRatio,
     board,
@@ -1279,6 +1558,199 @@ export function FlashBoardComposer({
     voiceSettings,
   ]);
 
+  const handleRefinePrompt = useCallback(async () => {
+    if (isAudioMode && !isSunoMode) {
+      return;
+    }
+
+    closePopover();
+
+    if (!hasOpenAiKey) {
+      setPromptRefineError('Add an OpenAI API key in Settings to refine prompts.');
+      openSettings();
+      return;
+    }
+
+    if (!selectedEntry) {
+      setPromptRefineError('Choose a generation model before refining the prompt.');
+      return;
+    }
+
+    const hasRefineInput = isSunoMode
+      ? Boolean(prompt.trim() || sunoStyle.trim() || sunoNegativeTags.trim())
+      : Boolean(prompt.trim() || composerReferenceBadges.length > 0);
+
+    if (!hasRefineInput) {
+      setPromptRefineError(isSunoMode ? 'Add lyrics, style, or a song idea first.' : 'Add a prompt or reference image first.');
+      return;
+    }
+
+    setIsRefiningPrompt(true);
+    setPromptRefineError(null);
+
+    const previousPrompt = prompt;
+    const previousSunoPrompt: SunoPromptSnapshot = {
+      prompt,
+      style: sunoStyle,
+      negativeTags: sunoNegativeTags,
+    };
+    let streamedPrompt = '';
+    let streamedSunoFields = false;
+    promptRefineAbortRef.current?.abort();
+    const abortController = new AbortController();
+    promptRefineAbortRef.current = abortController;
+    setPromptBeforeAiRewrite(previousPrompt);
+    setSunoBeforeAiRewrite(isSunoMode ? previousSunoPrompt : null);
+    if (isSunoMode) {
+      setPrompt('');
+      setSunoStyle('');
+      setSunoNegativeTags('');
+      setSunoCustomMode(true);
+    } else {
+      setPrompt('');
+    }
+
+    try {
+      const refinedPrompt = await streamRefineFlashBoardPrompt(
+        {
+          apiKey: openAiApiKey,
+          prompt,
+          entry: selectedEntry,
+          service,
+          providerId,
+          version,
+          mode,
+          duration,
+          aspectRatio,
+          imageSize,
+          generateAudio: effectiveGenerateAudio,
+          multiShots,
+          sunoStyle,
+          sunoNegativeTags,
+          sunoInstrumental,
+          sunoCustomMode,
+          sunoVocalGender: sunoVocalGender || undefined,
+          sunoStyleWeight,
+          sunoWeirdnessConstraint,
+          sunoAudioWeight,
+          references: isSunoMode ? [] : composerReferenceBadges.map((badge) => {
+            const mediaFile = mediaFilesById.get(badge.mediaFileId);
+            return {
+              role: badge.role,
+              label: badge.role === 'start' ? 'START' : badge.role === 'end' ? 'END' : badge.roleLabel,
+              displayName: badge.displayName,
+              mediaType: mediaFile?.type ?? badge.mediaType,
+              file: mediaFile?.file,
+              url: badge.previewUrl ?? mediaFile?.url,
+              thumbnailUrl: badge.thumbnailUrl,
+            };
+          }),
+        },
+        {
+          signal: abortController.signal,
+          onDelta: (_delta, fullText) => {
+            streamedPrompt = fullText;
+            if (isSunoMode) {
+              const parsed = parseSunoPromptRefinement(fullText);
+              if (parsed.lyrics !== undefined) {
+                setPrompt(parsed.lyrics);
+                streamedSunoFields = true;
+              }
+              if (parsed.style !== undefined) {
+                setSunoStyle(parsed.style);
+                streamedSunoFields = true;
+              }
+              if (parsed.negativeTags !== undefined) {
+                setSunoNegativeTags(parsed.negativeTags);
+                streamedSunoFields = true;
+              }
+            } else {
+              setPrompt(fullText);
+            }
+          },
+        },
+      );
+
+      if (isSunoMode) {
+        const parsed = parseSunoPromptRefinement(refinedPrompt);
+        if (parsed.lyrics || parsed.style || parsed.negativeTags) {
+          setPrompt(parsed.lyrics ?? '');
+          setSunoStyle(parsed.style ?? '');
+          setSunoNegativeTags(parsed.negativeTags ?? '');
+          setSunoCustomMode(true);
+        } else {
+          setPrompt(refinedPrompt);
+        }
+      } else {
+        setPrompt(refinedPrompt);
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return;
+      }
+
+      if (isSunoMode && (!streamedPrompt.trim() || !streamedSunoFields)) {
+        setPrompt(previousSunoPrompt.prompt);
+        setSunoStyle(previousSunoPrompt.style);
+        setSunoNegativeTags(previousSunoPrompt.negativeTags);
+      } else if (!streamedPrompt.trim()) {
+        setPrompt(previousPrompt);
+      }
+      setPromptRefineError(error instanceof Error ? error.message : 'Failed to refine prompt.');
+    } finally {
+      if (promptRefineAbortRef.current === abortController) {
+        promptRefineAbortRef.current = null;
+      }
+      setIsRefiningPrompt(false);
+    }
+  }, [
+    aspectRatio,
+    closePopover,
+    composerReferenceBadges,
+    duration,
+    effectiveGenerateAudio,
+    hasOpenAiKey,
+    imageSize,
+    isAudioMode,
+    isSunoMode,
+    mediaFilesById,
+    mode,
+    multiShots,
+    openAiApiKey,
+    openSettings,
+    prompt,
+    providerId,
+    selectedEntry,
+    service,
+    sunoAudioWeight,
+    sunoCustomMode,
+    sunoInstrumental,
+    sunoNegativeTags,
+    sunoStyle,
+    sunoStyleWeight,
+    sunoVocalGender,
+    sunoWeirdnessConstraint,
+    version,
+  ]);
+
+  const handleRestorePromptBeforeAiRewrite = useCallback(() => {
+    if (promptBeforeAiRewrite === null && sunoBeforeAiRewrite === null) {
+      return;
+    }
+
+    promptRefineAbortRef.current?.abort();
+    if (isSunoMode && sunoBeforeAiRewrite) {
+      setPrompt(sunoBeforeAiRewrite.prompt);
+      setSunoStyle(sunoBeforeAiRewrite.style);
+      setSunoNegativeTags(sunoBeforeAiRewrite.negativeTags);
+    } else if (promptBeforeAiRewrite !== null) {
+      setPrompt(promptBeforeAiRewrite);
+    }
+    setPromptBeforeAiRewrite(null);
+    setSunoBeforeAiRewrite(null);
+    setPromptRefineError(null);
+  }, [isSunoMode, promptBeforeAiRewrite, sunoBeforeAiRewrite]);
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       handleGenerate();
@@ -1286,8 +1758,19 @@ export function FlashBoardComposer({
   }, [handleGenerate]);
 
   const togglePopover = useCallback((type: PopoverType) => {
-    setPopover((prev) => prev === type ? null : type);
-  }, []);
+    if (!type) {
+      closePopover();
+      return;
+    }
+
+    if (popover === type) {
+      closePopover(type);
+      return;
+    }
+
+    setClosingPopover(null);
+    setPopover(type);
+  }, [closePopover, popover]);
 
   const handleAudioToggle = useCallback(() => {
     if (!supportsAudio || multiShots) {
@@ -1312,8 +1795,6 @@ export function FlashBoardComposer({
             ? rebalanceMultiPrompts(existing, duration)
             : createDefaultMultiPrompts(duration)
         ));
-      } else {
-        setMultiPrompt([]);
       }
 
       return next;
@@ -1360,6 +1841,240 @@ export function FlashBoardComposer({
       referenceMediaFileIds: effectiveReferenceMediaFileIds.filter((id) => id !== badge.mediaFileId),
     });
   }, [effectiveReferenceMediaFileIds, setHoveredComposerReference, updateComposer]);
+
+  const handleComposerReferenceRoleChange = useCallback((
+    badge: ComposerReferenceBadge,
+    role: ComposerReferenceRoleTarget,
+  ) => {
+    if (role !== 'reference' && !supportsTimelineReferenceRoles) {
+      return;
+    }
+
+    if (role === 'end' && !supportsEndFrameReference) {
+      return;
+    }
+
+    const mediaFileId = badge.mediaFileId;
+    let nextReferenceMediaFileIds = effectiveReferenceMediaFileIds.filter((id) => id !== mediaFileId);
+    const patch: Partial<typeof composer> = {};
+
+    if (role === 'reference') {
+      nextReferenceMediaFileIds = moveMediaFileIdToReferences(
+        nextReferenceMediaFileIds,
+        mediaFileId,
+        maxReferenceMedia,
+      );
+
+      if (composer.startMediaFileId === mediaFileId) {
+        patch.startMediaFileId = undefined;
+      }
+      if (composer.endMediaFileId === mediaFileId) {
+        patch.endMediaFileId = undefined;
+      }
+    } else if (role === 'start') {
+      if (composer.startMediaFileId && composer.startMediaFileId !== mediaFileId) {
+        nextReferenceMediaFileIds = moveMediaFileIdToReferences(
+          nextReferenceMediaFileIds,
+          composer.startMediaFileId,
+          maxReferenceMedia,
+        );
+      }
+
+      patch.startMediaFileId = mediaFileId;
+      if (composer.endMediaFileId === mediaFileId) {
+        patch.endMediaFileId = undefined;
+      }
+    } else {
+      if (composer.endMediaFileId && composer.endMediaFileId !== mediaFileId) {
+        nextReferenceMediaFileIds = moveMediaFileIdToReferences(
+          nextReferenceMediaFileIds,
+          composer.endMediaFileId,
+          maxReferenceMedia,
+        );
+      }
+
+      patch.endMediaFileId = mediaFileId;
+      if (composer.startMediaFileId === mediaFileId) {
+        patch.startMediaFileId = undefined;
+      }
+    }
+
+    updateComposer({
+      ...patch,
+      referenceMediaFileIds: clampReferenceMediaFileIds(nextReferenceMediaFileIds, maxReferenceMedia),
+    });
+
+    setHoveredComposerReference({ mediaFileId, role });
+  }, [
+    composer.endMediaFileId,
+    composer.startMediaFileId,
+    effectiveReferenceMediaFileIds,
+    maxReferenceMedia,
+    setHoveredComposerReference,
+    supportsEndFrameReference,
+    supportsTimelineReferenceRoles,
+    updateComposer,
+  ]);
+
+  const applyReferenceCardFocus = useCallback((strip: HTMLDivElement, clientX: number, clientY: number) => {
+    const cards = strip.querySelectorAll<HTMLElement>('.fb-reference-card');
+
+    cards.forEach((card) => {
+      const rect = card.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const normalizedX = (clientX - centerX) / Math.max(1, rect.width * 0.82);
+      const normalizedY = (clientY - centerY) / Math.max(1, rect.height * 0.82);
+      const distance = Math.hypot(normalizedX, normalizedY);
+      const focus = Math.max(0, 1 - distance);
+      const easedFocus = Math.pow(focus, 1.35);
+
+      card.style.setProperty('--fb-reference-focus', easedFocus.toFixed(3));
+      card.style.zIndex = easedFocus > 0 ? String(10 + Math.round(easedFocus * 90)) : '';
+    });
+  }, []);
+
+  const stopReferenceAutoScroll = useCallback(() => {
+    referenceAutoScrollVelocityRef.current = 0;
+
+    if (referenceAutoScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(referenceAutoScrollFrameRef.current);
+      referenceAutoScrollFrameRef.current = null;
+    }
+  }, []);
+
+  const ensureReferenceAutoScroll = useCallback(() => {
+    if (referenceAutoScrollFrameRef.current !== null) {
+      return;
+    }
+
+    const tick = () => {
+      const strip = referenceStripRef.current;
+      const velocity = referenceAutoScrollVelocityRef.current;
+
+      if (!strip || Math.abs(velocity) < 0.1) {
+        referenceAutoScrollFrameRef.current = null;
+        referenceAutoScrollVelocityRef.current = 0;
+        return;
+      }
+
+      const maxScrollLeft = Math.max(0, strip.scrollWidth - strip.clientWidth);
+      const nextScrollLeft = Math.max(0, Math.min(maxScrollLeft, strip.scrollLeft + velocity));
+
+      if (nextScrollLeft === strip.scrollLeft) {
+        referenceAutoScrollFrameRef.current = null;
+        referenceAutoScrollVelocityRef.current = 0;
+        return;
+      }
+
+      strip.scrollLeft = nextScrollLeft;
+
+      const pointerPosition = referencePointerPositionRef.current;
+      if (pointerPosition) {
+        applyReferenceCardFocus(strip, pointerPosition.clientX, pointerPosition.clientY);
+      }
+
+      referenceAutoScrollFrameRef.current = window.requestAnimationFrame(tick);
+    };
+
+    referenceAutoScrollFrameRef.current = window.requestAnimationFrame(tick);
+  }, [applyReferenceCardFocus]);
+
+  const updateReferenceAutoScroll = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const strip = event.currentTarget;
+    const computedStyle = window.getComputedStyle(strip);
+    const isVerticalStrip = computedStyle.flexDirection === 'column' || computedStyle.overflowX === 'hidden';
+    const maxScrollLeft = Math.max(0, strip.scrollWidth - strip.clientWidth);
+
+    if (isVerticalStrip || maxScrollLeft <= 1) {
+      stopReferenceAutoScroll();
+      return;
+    }
+
+    const rect = strip.getBoundingClientRect();
+    const edgeSize = Math.min(REFERENCE_AUTO_SCROLL_EDGE_PX, Math.max(32, rect.width * 0.22));
+    const leftDistance = event.clientX - rect.left;
+    const rightDistance = rect.right - event.clientX;
+    let velocity = 0;
+
+    if (leftDistance < edgeSize) {
+      const strength = Math.max(0, Math.min(1, (edgeSize - leftDistance) / edgeSize));
+      velocity = -REFERENCE_AUTO_SCROLL_MAX_PX_PER_FRAME * Math.pow(strength, 1.35);
+    } else if (rightDistance < edgeSize) {
+      const strength = Math.max(0, Math.min(1, (edgeSize - rightDistance) / edgeSize));
+      velocity = REFERENCE_AUTO_SCROLL_MAX_PX_PER_FRAME * Math.pow(strength, 1.35);
+    }
+
+    if ((velocity < 0 && strip.scrollLeft <= 0) || (velocity > 0 && strip.scrollLeft >= maxScrollLeft - 1)) {
+      velocity = 0;
+    }
+
+    referenceAutoScrollVelocityRef.current = velocity;
+
+    if (velocity === 0) {
+      stopReferenceAutoScroll();
+    } else {
+      ensureReferenceAutoScroll();
+    }
+  }, [ensureReferenceAutoScroll, stopReferenceAutoScroll]);
+
+  const updateReferenceCardFocus = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    referencePointerPositionRef.current = {
+      clientX: event.clientX,
+      clientY: event.clientY,
+    };
+
+    applyReferenceCardFocus(event.currentTarget, event.clientX, event.clientY);
+    updateReferenceAutoScroll(event);
+  }, [applyReferenceCardFocus, updateReferenceAutoScroll]);
+
+  const resetReferenceCardFocus = useCallback((event?: React.PointerEvent<HTMLDivElement>) => {
+    referencePointerPositionRef.current = null;
+    const strip = event?.currentTarget ?? referenceStripRef.current;
+    if (!strip) {
+      return;
+    }
+
+    strip.querySelectorAll<HTMLElement>('.fb-reference-card').forEach((card) => {
+      card.style.setProperty('--fb-reference-focus', '0');
+      card.style.zIndex = '';
+    });
+  }, []);
+
+  const handleReferenceStripPointerLeave = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    resetReferenceCardFocus(event);
+    stopReferenceAutoScroll();
+  }, [resetReferenceCardFocus, stopReferenceAutoScroll]);
+
+  useEffect(() => () => {
+    stopReferenceAutoScroll();
+  }, [stopReferenceAutoScroll]);
+
+  useEffect(() => () => {
+    promptRefineAbortRef.current?.abort();
+  }, []);
+
+  const resizePromptInput = useCallback((textarea: HTMLTextAreaElement | null) => {
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = 'auto';
+
+    const computedStyle = window.getComputedStyle(textarea);
+    const minHeight = Number.parseFloat(computedStyle.minHeight);
+    const maxHeight = Number.parseFloat(computedStyle.maxHeight);
+    const lowerBound = Number.isFinite(minHeight) ? minHeight : 0;
+    const upperBound = Number.isFinite(maxHeight) ? maxHeight : textarea.scrollHeight;
+    const nextHeight = Math.ceil(Math.max(lowerBound, Math.min(textarea.scrollHeight, upperBound)));
+
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > nextHeight + 1 ? 'auto' : 'hidden';
+  }, []);
+
+  useLayoutEffect(() => {
+    resizePromptInput(promptInputRef.current);
+  }, [isAudioMode, multiShots, prompt, resizePromptInput]);
 
   const getReferenceMediaFileIdsFromTransfer = useCallback((dataTransfer: DataTransfer): string[] => {
     const externalDragPayload = getExternalDragPayload();
@@ -1460,22 +2175,6 @@ export function FlashBoardComposer({
     setVoiceSettings({ ...DEFAULT_ELEVENLABS_VOICE_SETTINGS });
   }, []);
 
-  const handleSunoSettingNumberChange = useCallback((key: NumberSunoSettingKey, value: string) => {
-    const nextValue = Number(value);
-    if (!Number.isFinite(nextValue)) {
-      return;
-    }
-
-    const clamped = clampSunoWeight(nextValue, 0);
-    if (key === 'styleWeight') {
-      setSunoStyleWeight(clamped);
-    } else if (key === 'weirdnessConstraint') {
-      setSunoWeirdnessConstraint(clamped);
-    } else {
-      setSunoAudioWeight(clamped);
-    }
-  }, []);
-
   const resetSunoTuning = useCallback(() => {
     setSunoVocalGender('');
     setSunoStyleWeight(DEFAULT_SUNO_STYLE_WEIGHT);
@@ -1485,9 +2184,14 @@ export function FlashBoardComposer({
 
   if (!board) return null;
 
+  const composerStyle = composerReferenceBadges.length > 0
+    ? ({ '--fb-reference-strip-width': `${Math.max(80, composerReferenceBadges.length * 80 + 4)}px` } as CSSProperties)
+    : undefined;
+
   return (
     <div
-      className={`fb-bubble ${composerReferenceBadges.length > 0 ? 'has-references' : ''} ${isReferenceDragOver ? 'reference-drop-active' : ''}`}
+      className={`fb-bubble ${composerReferenceBadges.length > 0 ? 'has-references' : ''} ${isReferenceDragOver ? 'reference-drop-active' : ''} ${isRefiningPrompt ? 'is-refining-prompt' : ''}`}
+      style={composerStyle}
       onKeyDown={handleKeyDown}
       onMouseDown={(e) => e.stopPropagation()}
       onDragOver={handleReferenceDragOver}
@@ -1496,7 +2200,13 @@ export function FlashBoardComposer({
     >
       <div className={`fb-bubble-main ${composerReferenceBadges.length > 0 ? 'has-references' : ''}`}>
         {composerReferenceBadges.length > 0 && (
-          <div className="fb-reference-strip" aria-label="AI prompt references">
+          <div
+            ref={referenceStripRef}
+            className={`fb-reference-strip ${composerReferenceBadges.length <= 3 ? 'is-loose' : ''}`}
+            aria-label="AI prompt references"
+            onPointerMove={updateReferenceCardFocus}
+            onPointerLeave={handleReferenceStripPointerLeave}
+          >
             {composerReferenceBadges.map((badge) => (
               <div
                 key={badge.key}
@@ -1514,6 +2224,47 @@ export function FlashBoardComposer({
                 >
                   &times;
                 </button>
+                {supportsTimelineReferenceRoles && (
+                  <div className="fb-reference-role-actions" aria-label={`Role for ${badge.displayName}`}>
+                    <button
+                      className={`fb-reference-role-button ${badge.role === 'start' ? 'active' : ''}`}
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleComposerReferenceRoleChange(badge, 'start');
+                      }}
+                      title="Use as start frame"
+                      aria-pressed={badge.role === 'start'}
+                    >
+                      IN
+                    </button>
+                    <button
+                      className={`fb-reference-role-button ${badge.role === 'reference' ? 'active' : ''}`}
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleComposerReferenceRoleChange(badge, 'reference');
+                      }}
+                      title="Use as regular reference"
+                      aria-pressed={badge.role === 'reference'}
+                    >
+                      REF
+                    </button>
+                    <button
+                      className={`fb-reference-role-button ${badge.role === 'end' ? 'active' : ''}`}
+                      type="button"
+                      disabled={!supportsEndFrameReference}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleComposerReferenceRoleChange(badge, 'end');
+                      }}
+                      title={supportsEndFrameReference ? 'Use as end frame' : 'End frames are unavailable in multi-shot mode'}
+                      aria-pressed={badge.role === 'end'}
+                    >
+                      OUT
+                    </button>
+                  </div>
+                )}
                 <div className="fb-reference-preview">
                   {badge.thumbnailUrl ? (
                     <img src={badge.thumbnailUrl} alt="" draggable={false} />
@@ -1531,24 +2282,109 @@ export function FlashBoardComposer({
           </div>
         )}
 
-        <div className="fb-bubble-prompt">
-          <div className="fb-bubble-row">
-            <textarea
-              className="fb-bubble-input"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder={
-                isSunoMode
-                  ? 'Describe the song, mood, lyrics, or background music...'
-                  : isAudioMode
-                  ? 'Text to speak...'
-                  : multiShots
-                    ? 'Overall scene or style (optional when using multishot)...'
-                    : 'Describe what to generate...'
-              }
-              rows={isAudioMode ? 2 : multiShots ? 3 : 2}
-            />
-            <button className="fb-bubble-close" onClick={() => setPrompt('')} title="Clear">&times;</button>
+        <div className={`fb-bubble-prompt ${isRefiningPrompt ? 'is-refining' : ''}`}>
+          <div className={`fb-bubble-row ${isSunoMode ? 'fb-bubble-row-suno' : ''}`}>
+            {isSunoMode ? (
+              <div className="fb-suno-prompt-grid">
+                <label className="fb-suno-prompt-field fb-suno-prompt-field-lyrics">
+                  <span>Lyrics</span>
+                  <textarea
+                    ref={promptInputRef}
+                    className="fb-bubble-input fb-suno-input fb-suno-lyrics-input"
+                    value={prompt}
+                    onInput={(event) => resizePromptInput(event.currentTarget)}
+                    onChange={(e) => {
+                      setPrompt(e.target.value);
+                      setPromptRefineError(null);
+                    }}
+                    placeholder="Lyrics, song idea, mood, or background music..."
+                    rows={3}
+                  />
+                </label>
+                <label className="fb-suno-prompt-field">
+                  <span>Style</span>
+                  <textarea
+                    className="fb-bubble-input fb-suno-input"
+                    value={sunoStyle}
+                    onChange={(e) => {
+                      setSunoStyle(e.target.value);
+                      setPromptRefineError(null);
+                      if (e.target.value.trim()) {
+                        setSunoCustomMode(true);
+                      }
+                    }}
+                    placeholder="cinematic synthwave, ambient piano..."
+                    maxLength={getSunoStyleLimit(version)}
+                    rows={2}
+                  />
+                </label>
+                <label className="fb-suno-prompt-field">
+                  <span>Negative</span>
+                  <textarea
+                    className="fb-bubble-input fb-suno-input"
+                    value={sunoNegativeTags}
+                    onChange={(e) => {
+                      setSunoNegativeTags(e.target.value);
+                      setPromptRefineError(null);
+                    }}
+                    placeholder="distorted vocals, harsh noise..."
+                    maxLength={500}
+                    rows={2}
+                  />
+                </label>
+              </div>
+            ) : (
+              <textarea
+                ref={promptInputRef}
+                className="fb-bubble-input"
+                value={prompt}
+                onInput={(event) => resizePromptInput(event.currentTarget)}
+                onChange={(e) => {
+                  setPrompt(e.target.value);
+                  setPromptRefineError(null);
+                }}
+                placeholder={
+                  isAudioMode
+                    ? 'Text to speak...'
+                    : multiShots
+                      ? 'Overall scene or style (optional when using multishot)...'
+                      : 'Describe what to generate...'
+                }
+                rows={isAudioMode ? 2 : multiShots ? 3 : 2}
+              />
+            )}
+            {(promptBeforeAiRewrite !== null || sunoBeforeAiRewrite !== null) && (
+              <button
+                className="fb-bubble-rewind"
+                type="button"
+                onClick={handleRestorePromptBeforeAiRewrite}
+                title="Restore prompt before AI rewrite"
+                aria-label="Restore prompt before AI rewrite"
+              >
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+                  <path d="M6.2 4.1H2.8V.8" />
+                  <path d="M3 4.1A6 6 0 1 1 2.2 9" />
+                  <path d="M8 5.2v3.1l2.1 1.2" />
+                </svg>
+              </button>
+            )}
+            <button
+              className="fb-bubble-close"
+              type="button"
+              onClick={() => {
+                setPrompt('');
+                if (isSunoMode) {
+                  setSunoStyle('');
+                  setSunoNegativeTags('');
+                }
+                setPromptBeforeAiRewrite(null);
+                setSunoBeforeAiRewrite(null);
+                setPromptRefineError(null);
+              }}
+              title="Clear"
+            >
+              &times;
+            </button>
           </div>
 
           {effectiveReferenceMediaFileIds.length > 0 && (
@@ -1560,8 +2396,8 @@ export function FlashBoardComposer({
         </div>
       </div>
 
-      {!isAudioMode && multiShots && (
-        <div className="fb-multishot-panel">
+      {!isAudioMode && renderMultiShotPanel && (
+        <div className={`fb-multishot-panel ${isMultiShotPanelClosing ? 'is-closing' : 'is-opening'}`}>
           <div className="fb-multishot-header">
             <span>Shots</span>
             <span className={`fb-multishot-total ${multiShotValidationError ? 'error' : ''}`}>
@@ -1628,299 +2464,278 @@ export function FlashBoardComposer({
         <div className="fb-audio-warning compact">{audioValidationError}</div>
       )}
 
-      <div className="fb-bubble-bar">
-        <div className="fb-pill-group" ref={popoverRef}>
-          <button className="fb-pill" onClick={() => togglePopover('model')} title="Model">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-          </button>
-          {isElevenLabsMode && (
-            <>
-              <button
-                className={`fb-pill ${popover === 'audioModel' ? 'active' : ''}`}
-                onClick={() => togglePopover('audioModel')}
-                title="ElevenLabs text-to-speech model"
-              >
-                {audioModelButtonLabel}
-              </button>
-              <button
-                className={`fb-pill ${popover === 'voice' ? 'active' : ''}`}
-                onClick={() => togglePopover('voice')}
-                title="Voice"
-              >
-                {audioVoiceButtonLabel}
-              </button>
-              <button
-                className={`fb-pill ${popover === 'audioOutput' ? 'active' : ''}`}
-                onClick={() => togglePopover('audioOutput')}
-                title="Output"
-              >
-                {audioOutputButtonLabel}
-              </button>
-              <button
-                className={`fb-pill ${popover === 'voiceSettings' || voiceSettingsChanged ? 'active' : ''}`}
-                onClick={() => togglePopover('voiceSettings')}
-                title="Voice settings"
-              >
-                Settings
-              </button>
-            </>
-          )}
-          {isSunoMode && (
-            <>
-              <button
-                className={`fb-pill ${popover === 'sunoModel' ? 'active' : ''}`}
-                onClick={() => togglePopover('sunoModel')}
-                title="Suno model"
-              >
-                {sunoModelButtonLabel}
-              </button>
-              <button
-                className={`fb-pill ${popover === 'sunoMode' ? 'active' : ''}`}
-                onClick={() => togglePopover('sunoMode')}
-                title="Suno generation mode"
-              >
-                {sunoModeButtonLabel}
-              </button>
-              <button
-                className={`fb-pill ${popover === 'sunoDetails' ? 'active' : ''}`}
-                onClick={() => togglePopover('sunoDetails')}
-                title="Suno song details"
-              >
-                {sunoDetailsButtonLabel}
-              </button>
-              <button
-                className={`fb-pill ${popover === 'sunoTuning' || sunoTuningChanged ? 'active' : ''}`}
-                onClick={() => togglePopover('sunoTuning')}
-                title="Suno tuning"
-              >
-                Tuning
-              </button>
-            </>
-          )}
-          {!isAudioMode && selectedEntry && selectedEntry.aspectRatios.length > 0 && (
-            <button className={`fb-pill ${popover === 'aspect' ? 'active' : ''}`} onClick={() => togglePopover('aspect')}>
-              {aspectRatio}
-            </button>
-          )}
-          {!isAudioMode && selectedEntry && selectedEntry.durations.length > 0 && (
-            <button className={`fb-pill ${popover === 'duration' ? 'active' : ''}`} onClick={() => togglePopover('duration')}>
-              {duration}s
-            </button>
-          )}
-          {!isAudioMode && selectedEntry?.supportsTextToImage && selectedEntry.imageSizes?.length ? (
-            <button className={`fb-pill ${popover === 'imageSize' ? 'active' : ''}`} onClick={() => togglePopover('imageSize')}>
-              {imageSize}
-            </button>
-          ) : null}
-          {!isAudioMode && selectedEntry && selectedEntry.modes.length > 1 && (
-            <button className={`fb-pill ${popover === 'mode' ? 'active' : ''}`} onClick={() => togglePopover('mode')}>
-              {mode}
-            </button>
-          )}
-          {supportsAudio && (
-            <button className={`fb-pill ${effectiveGenerateAudio ? 'active' : ''}`} onClick={handleAudioToggle} title={multiShots ? 'Required for multishot' : 'Generate sound'}>
-              {multiShots ? 'Sound req.' : 'Sound'}
-            </button>
-          )}
-          {supportsMultiShot && (
-            <button className={`fb-pill ${multiShots ? 'active' : ''}`} onClick={handleMultiShotToggle} title="Split the generation into multiple shots">
-              Multi-shot
-            </button>
-          )}
+      {backendValidationError && (
+        <div className="fb-audio-warning compact">{backendValidationError}</div>
+      )}
 
-          {popover === 'model' && (
+      {promptRefineError && (
+        <div className="fb-audio-warning compact">{promptRefineError}</div>
+      )}
+
+      <div className={`fb-bubble-bar ${inlineSubmenuStateClassName}`}>
+        <div className="fb-control-stack">
+          <div className={popoverHostClassName} ref={popoverRef}>
+            <button className="fb-pill" onClick={() => togglePopover('model')} title={`Model: ${modelButtonLabel}`}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+            </button>
+            {isElevenLabsMode && (
+              <>
+                <button
+                  className={`fb-pill ${popover === 'audioModel' ? 'active' : ''}`}
+                  onClick={() => togglePopover('audioModel')}
+                  title="ElevenLabs text-to-speech model"
+                >
+                  {audioModelButtonLabel}
+                </button>
+                <button
+                  className={`fb-pill ${popover === 'voice' ? 'active' : ''}`}
+                  onClick={() => togglePopover('voice')}
+                  title="Voice"
+                >
+                  {audioVoiceButtonLabel}
+                </button>
+                <button
+                  className={`fb-pill ${popover === 'audioOutput' ? 'active' : ''}`}
+                  onClick={() => togglePopover('audioOutput')}
+                  title="Output"
+                >
+                  {audioOutputButtonLabel}
+                </button>
+                <button
+                  className={`fb-pill ${popover === 'voiceSettings' || voiceSettingsChanged ? 'active' : ''}`}
+                  onClick={() => togglePopover('voiceSettings')}
+                  title="Voice settings"
+                >
+                  Settings
+                </button>
+              </>
+            )}
+            {isSunoMode && (
+              <>
+                <button
+                  className={`fb-pill ${popover === 'sunoModel' ? 'active' : ''}`}
+                  onClick={() => togglePopover('sunoModel')}
+                  title="Suno model"
+                >
+                  {sunoModelButtonLabel}
+                </button>
+                <button
+                  className={`fb-pill ${popover === 'sunoMode' ? 'active' : ''}`}
+                  onClick={() => togglePopover('sunoMode')}
+                  title="Suno generation mode"
+                >
+                  {sunoModeButtonLabel}
+                </button>
+                <button
+                  className={`fb-pill ${popover === 'sunoTuning' || sunoTuningChanged ? 'active' : ''}`}
+                  onClick={() => togglePopover('sunoTuning')}
+                  title="Suno tuning"
+                >
+                  Tuning
+                </button>
+              </>
+            )}
+            {!isAudioMode && selectedEntry && selectedEntry.aspectRatios.length > 0 && (
+              <button className={`fb-pill ${popover === 'aspect' ? 'active' : ''}`} onClick={() => togglePopover('aspect')}>
+                {aspectRatio}
+              </button>
+            )}
+            {!isAudioMode && selectedEntry && selectedEntry.durations.length > 0 && (
+              <button className={`fb-pill ${popover === 'duration' ? 'active' : ''}`} onClick={() => togglePopover('duration')}>
+                {duration}s
+              </button>
+            )}
+            {!isAudioMode && selectedEntry?.supportsTextToImage && selectedEntry.imageSizes?.length ? (
+              <button className={`fb-pill ${popover === 'imageSize' ? 'active' : ''}`} onClick={() => togglePopover('imageSize')}>
+                {imageSize}
+              </button>
+            ) : null}
+            {!isAudioMode && selectedEntry && selectedEntry.modes.length > 1 && (
+              <button className={`fb-pill ${popover === 'mode' ? 'active' : ''}`} onClick={() => togglePopover('mode')}>
+                {mode}
+              </button>
+            )}
+            {supportsAudio && (
+              <button className={`fb-pill ${effectiveGenerateAudio ? 'active' : ''}`} onClick={handleAudioToggle} title={multiShots ? 'Required for multishot' : 'Generate sound'}>
+                {multiShots ? 'Sound req.' : 'Sound'}
+              </button>
+            )}
+            {supportsMultiShot && (
+              <button className={`fb-pill ${multiShots ? 'active' : ''}`} onClick={handleMultiShotToggle} title="Split the generation into multiple shots">
+                Multi-shot
+              </button>
+            )}
+            {(!isAudioMode || isSunoMode) && (
+              <button
+                className={`fb-pill fb-pill-icon fb-prompt-refine ${isRefiningPrompt ? 'active is-loading' : ''}`}
+                type="button"
+                onClick={handleRefinePrompt}
+                disabled={isRefiningPrompt}
+                title={isRefiningPrompt ? 'Refining prompt...' : promptRefineTitle}
+                aria-label="Refine prompt"
+              >
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.45" aria-hidden="true">
+                  <path d="M5.5 12.5 13 5" />
+                  <path d="m10.8 3.2 2 2" />
+                  <path d="M2.8 1.6 3.3 3l1.5.5-1.5.5-.5 1.4L2.3 4 1 3.5 2.3 3l.5-1.4Z" />
+                  <path d="m11.8 9.7.4 1.1 1.1.4-1.1.4-.4 1.1-.4-1.1-1.1-.4 1.1-.4.4-1.1Z" />
+                </svg>
+              </button>
+            )}
+
+          {renderedPopover === 'model' && (
             <div className="fb-popover fb-popover-model">
               <div className="fb-popover-title">Model</div>
-              {serviceOptions.map((svc) => {
-                const providers = visibleCatalog.filter((e) => e.service === svc);
-                if (providers.length === 0) return null;
-                return (
-                  <div key={svc} className="fb-popover-group">
-                    {(serviceOptions.length > 1 || providers.length > 1) && (
-                      <div className="fb-popover-label">{getServiceLabel(svc)}</div>
-                    )}
-                    <div className="fb-popover-pills">
-                      {providers.map((p) => {
-                        const estimate = getCatalogEntryPriceEstimate(p, {
-                          duration,
-                          imageSize,
-                          mode,
-                          generateAudio: p.supportsGenerateAudio ? effectiveGenerateAudio : false,
-                          multiShots: p.supportsMultiShot ? multiShots : false,
-                        });
+              <div className="fb-model-category-tabs" role="tablist" aria-label="Model categories">
+                {availableModelCategories.map((category) => (
+                  <button
+                    key={category.id}
+                    className={`fb-model-category-tab category-${category.id} ${effectiveModelCategory === category.id ? 'active' : ''}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={effectiveModelCategory === category.id}
+                    onClick={() => setActiveModelCategory(category.id)}
+                  >
+                    {renderModelCategoryIcon(category.id)}
+                    <span className="fb-model-category-label">{category.label}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="fb-model-list">
+                <div className="fb-popover-pills">
+                  {activeModelEntries.map((p) => {
+                    const estimate = getCatalogEntryPriceEstimate(p, {
+                      duration,
+                      imageSize,
+                      mode,
+                      generateAudio: p.supportsGenerateAudio ? effectiveGenerateAudio : false,
+                      multiShots: p.supportsMultiShot ? multiShots : false,
+                    });
+                    const sourceLabel = getModelSourceLabel(p);
+                    const metaLabel = [sourceLabel, estimate?.compactLabel].filter(Boolean).join(' - ');
 
-                        return (
-                          <button
-                            key={`${p.service}-${p.providerId}`}
-                            className={`fb-popover-pill ${service === svc && providerId === p.providerId ? 'active' : ''}`}
-                            onClick={() => handleProviderChange(svc, p.providerId)}
-                          >
-                            <span className="fb-popover-pill-label">{getProviderDisplayName(p)}</span>
-                            {estimate && <span className="fb-popover-pill-meta">{estimate.compactLabel}</span>}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
+                    return (
+                      <button
+                        key={`${p.service}-${p.providerId}`}
+                        className={`fb-popover-pill ${service === p.service && providerId === p.providerId ? 'active' : ''}`}
+                        type="button"
+                        title={`${getProviderDisplayName(p)} via ${sourceLabel}`}
+                        onClick={() => handleProviderChange(p.service, p.providerId)}
+                      >
+                        <span className="fb-popover-pill-label">{getProviderDisplayName(p)}</span>
+                        {metaLabel && <span className="fb-popover-pill-meta">{metaLabel}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           )}
 
-          {popover === 'sunoModel' && isSunoMode && (
+          {renderedPopover === 'sunoModel' && isSunoMode && (
             <div className="fb-popover fb-popover-audio">
               <div className="fb-popover-title">Suno Model</div>
-              <label className="fb-audio-popover-field">
-                <span>Music model</span>
-                <select
-                  className="fb-pill-select"
-                  value={normalizeSunoModel(version)}
-                  onChange={(e) => setVersion(normalizeSunoModel(e.target.value))}
-                >
-                  {SUNO_MODEL_IDS.map((model) => (
-                    <option key={model} value={model}>
-                      {SUNO_MODEL_LABELS[model] ?? model}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="fb-audio-model-meta">
-                {sunoCustomMode
-                  ? `${getSunoPromptLimit(version, true).toLocaleString()} prompt chars, ${getSunoStyleLimit(version).toLocaleString()} style chars`
-                  : 'Simple prompt mode supports up to 500 characters.'}
+              <div className="fb-popover-pills">
+                {SUNO_MODEL_IDS.map((model) => (
+                  <button
+                    key={model}
+                    className={`fb-popover-pill ${normalizeSunoModel(version) === model ? 'active' : ''}`}
+                    type="button"
+                    onClick={() => {
+                      setVersion(model);
+                      closePopover('sunoModel');
+                    }}
+                  >
+                    <span className="fb-popover-pill-label">{SUNO_MODEL_LABELS[model] ?? model}</span>
+                  </button>
+                ))}
               </div>
             </div>
           )}
 
-          {popover === 'sunoMode' && isSunoMode && (
+          {renderedPopover === 'sunoMode' && isSunoMode && (
             <div className="fb-popover fb-popover-audio">
               <div className="fb-popover-title">Suno Mode</div>
-              <div className="fb-audio-actions">
-                <label className="fb-pill-check">
-                  <input
-                    type="checkbox"
-                    checked={sunoCustomMode}
-                    onChange={(e) => setSunoCustomMode(e.target.checked)}
-                  />
-                  <span>Custom mode</span>
-                </label>
-                <label className="fb-pill-check">
-                  <input
-                    type="checkbox"
-                    checked={sunoInstrumental}
-                    onChange={(e) => setSunoInstrumental(e.target.checked)}
-                  />
-                  <span>Instrumental</span>
-                </label>
-              </div>
-              <div className="fb-audio-model-meta">
-                {sunoCustomMode
-                  ? 'Custom mode uses the main prompt plus explicit title and style fields.'
-                  : 'Simple mode lets Suno infer lyrics, style, and structure from the prompt.'}
-              </div>
-            </div>
-          )}
-
-          {popover === 'sunoDetails' && isSunoMode && (
-            <div className="fb-popover fb-popover-audio">
-              <div className="fb-popover-title">Song Details</div>
-              <div className="fb-audio-popover-grid">
-                <label className="fb-audio-popover-field">
-                  <span>Title</span>
-                  <input
-                    className="fb-pill-input"
-                    value={sunoTitle}
-                    onChange={(e) => setSunoTitle(e.target.value)}
-                    placeholder="Optional in simple mode"
-                    maxLength={80}
-                  />
-                </label>
-                <label className="fb-audio-popover-field">
-                  <span>Style</span>
-                  <input
-                    className="fb-pill-input"
-                    value={sunoStyle}
-                    onChange={(e) => setSunoStyle(e.target.value)}
-                    placeholder="cinematic synthwave, ambient piano..."
-                    maxLength={getSunoStyleLimit(version)}
-                  />
-                </label>
-                <label className="fb-audio-popover-field">
-                  <span>Negative tags</span>
-                  <input
-                    className="fb-pill-input"
-                    value={sunoNegativeTags}
-                    onChange={(e) => setSunoNegativeTags(e.target.value)}
-                    placeholder="distorted vocals, harsh noise..."
-                    maxLength={500}
-                  />
-                </label>
-              </div>
-            </div>
-          )}
-
-          {popover === 'sunoTuning' && isSunoMode && (
-            <div className="fb-popover fb-popover-audio">
-              <div className="fb-popover-title">Suno Tuning</div>
-              <div className="fb-audio-popover-grid">
-                <label className="fb-audio-popover-field">
-                  <span>Style weight {sunoStyleWeight.toFixed(2)}</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={sunoStyleWeight}
-                    onChange={(e) => handleSunoSettingNumberChange('styleWeight', e.target.value)}
-                  />
-                </label>
-                <label className="fb-audio-popover-field">
-                  <span>Weirdness {sunoWeirdnessConstraint.toFixed(2)}</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={sunoWeirdnessConstraint}
-                    onChange={(e) => handleSunoSettingNumberChange('weirdnessConstraint', e.target.value)}
-                  />
-                </label>
-                <label className="fb-audio-popover-field">
-                  <span>Audio weight {sunoAudioWeight.toFixed(2)}</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={sunoAudioWeight}
-                    onChange={(e) => handleSunoSettingNumberChange('audioWeight', e.target.value)}
-                  />
-                </label>
-                <label className="fb-audio-popover-field">
-                  <span>Vocal gender</span>
-                  <select
-                    className="fb-pill-select"
-                    value={sunoVocalGender}
-                    onChange={(e) => setSunoVocalGender(e.target.value as FlashBoardSunoVocalGender | '')}
+              <div className="fb-popover-pills">
+                {[
+                  { label: 'Simple song', customMode: false, instrumental: false },
+                  { label: 'Simple inst.', customMode: false, instrumental: true },
+                  { label: 'Custom song', customMode: true, instrumental: false },
+                  { label: 'Custom inst.', customMode: true, instrumental: true },
+                ].map((option) => (
+                  <button
+                    key={`${option.customMode}-${option.instrumental}`}
+                    className={`fb-popover-pill ${sunoCustomMode === option.customMode && sunoInstrumental === option.instrumental ? 'active' : ''}`}
+                    type="button"
+                    onClick={() => {
+                      setSunoCustomMode(option.customMode);
+                      setSunoInstrumental(option.instrumental);
+                      closePopover('sunoMode');
+                    }}
                   >
-                    <option value="">Auto</option>
-                    {Object.entries(SUNO_VOCAL_GENDER_LABELS).map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <div className="fb-audio-actions">
-                <button className="fb-pill" type="button" onClick={resetSunoTuning}>
-                  Reset tuning
-                </button>
+                    <span className="fb-popover-pill-label">{option.label}</span>
+                  </button>
+                ))}
               </div>
             </div>
           )}
 
-          {popover === 'audioModel' && isElevenLabsMode && (
+          {renderedPopover === 'sunoTuning' && isSunoMode && (
+            <div className="fb-popover fb-popover-audio fb-popover-suno-tuning">
+              <div className="fb-popover-title">Suno Tuning</div>
+              <div className="fb-suno-tuning-panel">
+                {[
+                  { key: 'style', label: 'Style weight', value: sunoStyleWeight, onChange: setSunoStyleWeight },
+                  { key: 'weirdness', label: 'Weirdness', value: sunoWeirdnessConstraint, onChange: setSunoWeirdnessConstraint },
+                  { key: 'audio', label: 'Audio weight', value: sunoAudioWeight, onChange: setSunoAudioWeight },
+                ].map((control) => (
+                  <label className="fb-suno-tuning-row" key={control.key}>
+                    <span>
+                      <strong>{control.label}</strong>
+                      <em>{control.value.toFixed(2)}</em>
+                    </span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={control.value}
+                      onChange={(event) => control.onChange(Number(event.target.value))}
+                    />
+                  </label>
+                ))}
+                <div className="fb-suno-gender-row" aria-label="Singer gender">
+                  <button
+                    className={`fb-popover-pill ${sunoVocalGender === '' ? 'active' : ''}`}
+                    type="button"
+                    onClick={() => setSunoVocalGender('')}
+                  >
+                    <span className="fb-popover-pill-label">Auto vocal</span>
+                  </button>
+                  {Object.entries(SUNO_VOCAL_GENDER_LABELS).map(([value, label]) => (
+                    <button
+                      key={value}
+                      className={`fb-popover-pill ${sunoVocalGender === value ? 'active' : ''}`}
+                      type="button"
+                      onClick={() => setSunoVocalGender(value as FlashBoardSunoVocalGender)}
+                    >
+                      <span className="fb-popover-pill-label">{label}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="fb-suno-tuning-actions">
+                  <button className="fb-popover-pill" type="button" onClick={resetSunoTuning}>
+                    <span className="fb-popover-pill-label">Reset</span>
+                  </button>
+                  <button className="fb-popover-pill active" type="button" onClick={() => closePopover('sunoTuning')}>
+                    <span className="fb-popover-pill-label">Done</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {renderedPopover === 'audioModel' && isElevenLabsMode && (
             <div className="fb-popover fb-popover-audio">
               <div className="fb-popover-title">ElevenLabs Model</div>
               <label className="fb-audio-popover-field">
@@ -1947,7 +2762,7 @@ export function FlashBoardComposer({
             </div>
           )}
 
-          {popover === 'voice' && isElevenLabsMode && (
+          {renderedPopover === 'voice' && isElevenLabsMode && (
             <div className="fb-popover fb-popover-voice">
               <div className="fb-voice-picker">
                 <div className="fb-voice-picker-header">
@@ -2027,7 +2842,7 @@ export function FlashBoardComposer({
             </div>
           )}
 
-          {popover === 'audioOutput' && isElevenLabsMode && (
+          {renderedPopover === 'audioOutput' && isElevenLabsMode && (
             <div className="fb-popover fb-popover-audio">
               <div className="fb-popover-title">Output</div>
               <div className="fb-audio-popover-grid">
@@ -2063,7 +2878,7 @@ export function FlashBoardComposer({
             </div>
           )}
 
-          {popover === 'voiceSettings' && isElevenLabsMode && (
+          {renderedPopover === 'voiceSettings' && isElevenLabsMode && (
             <div className="fb-popover fb-popover-audio">
               <div className="fb-popover-title">Voice Settings</div>
               <div className="fb-audio-popover-grid">
@@ -2131,7 +2946,7 @@ export function FlashBoardComposer({
             </div>
           )}
 
-          {popover === 'aspect' && selectedEntry && (
+          {renderedPopover === 'aspect' && selectedEntry && (
             <div className="fb-popover">
               <div className="fb-popover-title">Aspect Ratio</div>
               <div className="fb-popover-pills">
@@ -2139,7 +2954,7 @@ export function FlashBoardComposer({
                   <button
                     key={ar}
                     className={`fb-popover-pill ${aspectRatio === ar ? 'active' : ''}`}
-                    onClick={() => { setAspectRatio(ar); setPopover(null); }}
+                    onClick={() => { setAspectRatio(ar); closePopover(); }}
                   >
                     <span className="fb-popover-pill-label">{ar}</span>
                   </button>
@@ -2148,7 +2963,7 @@ export function FlashBoardComposer({
             </div>
           )}
 
-          {popover === 'duration' && selectedEntry && (
+          {renderedPopover === 'duration' && selectedEntry && (
             <div className="fb-popover">
               <div className="fb-popover-title">Duration</div>
               <div className="fb-popover-pills">
@@ -2168,7 +2983,7 @@ export function FlashBoardComposer({
                     <button
                       key={d}
                       className={`fb-popover-pill ${duration === d ? 'active' : ''}`}
-                      onClick={() => { setDuration(d); setPopover(null); }}
+                      onClick={() => { setDuration(d); closePopover(); }}
                     >
                       <span className="fb-popover-pill-label">{d}s</span>
                       {estimate && <span className="fb-popover-pill-meta">{estimate.compactLabel}</span>}
@@ -2179,7 +2994,7 @@ export function FlashBoardComposer({
             </div>
           )}
 
-          {popover === 'imageSize' && selectedEntry?.imageSizes?.length ? (
+          {renderedPopover === 'imageSize' && selectedEntry?.imageSizes?.length ? (
             <div className="fb-popover">
               <div className="fb-popover-title">Image Size</div>
               <div className="fb-popover-pills">
@@ -2199,7 +3014,7 @@ export function FlashBoardComposer({
                     <button
                       key={size}
                       className={`fb-popover-pill ${imageSize === size ? 'active' : ''}`}
-                      onClick={() => { setImageSize(size); setPopover(null); }}
+                      onClick={() => { setImageSize(size); closePopover(); }}
                     >
                       <span className="fb-popover-pill-label">{size}</span>
                       {estimate && <span className="fb-popover-pill-meta">{estimate.compactLabel}</span>}
@@ -2210,7 +3025,7 @@ export function FlashBoardComposer({
             </div>
           ) : null}
 
-          {popover === 'mode' && selectedEntry && (
+          {renderedPopover === 'mode' && selectedEntry && (
             <div className="fb-popover">
               <div className="fb-popover-title">Mode</div>
               <div className="fb-popover-pills">
@@ -2230,7 +3045,7 @@ export function FlashBoardComposer({
                     <button
                       key={m}
                       className={`fb-popover-pill ${mode === m ? 'active' : ''}`}
-                      onClick={() => { setMode(m); setPopover(null); }}
+                      onClick={() => { setMode(m); closePopover(); }}
                     >
                       <span className="fb-popover-pill-label">{m}</span>
                       {estimate && <span className="fb-popover-pill-meta">{estimate.compactLabel}</span>}
@@ -2240,17 +3055,32 @@ export function FlashBoardComposer({
               </div>
             </div>
           )}
+          </div>
+          <div className="fb-selected-model-label" title={modelButtonLabel}>
+            {modelButtonLabel}
+          </div>
         </div>
 
         <button
           className="fb-generate"
           disabled={!canGenerate}
           onClick={handleGenerate}
-          title={currentPrice ? `${currentPrice.fullLabel} (Ctrl+Enter)` : 'Generate (Ctrl+Enter)'}
+          title={currentPrice ? `${currentPrice.fullLabel} (Ctrl+Enter)` : `${generateActionLabel} (Ctrl+Enter)`}
         >
-          {currentPrice
-            ? `\u25B6 Generate \u00B7 ${currentPrice.compactLabel}`
-            : isSunoMode ? '\u25B6 Compose' : isAudioMode ? '\u25B6 Speak' : '\u25B6 Generate'}
+          <svg
+            className="fb-generate-icon"
+            viewBox="0 0 16 16"
+            width="14"
+            height="14"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            aria-hidden="true"
+          >
+            <path d="M8 1.5 9.2 5 13 6.2 9.2 7.4 8 11 6.8 7.4 3 6.2 6.8 5 8 1.5Z" />
+            <path d="m12.4 10.4.5 1.4 1.5.5-1.5.5-.5 1.4-.5-1.4-1.5-.5 1.5-.5.5-1.4Z" />
+          </svg>
+          <span>{generateButtonLabel}</span>
         </button>
       </div>
     </div>

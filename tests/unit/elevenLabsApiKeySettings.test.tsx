@@ -15,6 +15,7 @@ describe('ElevenLabs API key settings UI', () => {
         deepgram: '',
         piapi: '',
         kieai: '',
+        evolink: '',
         elevenlabs: '',
         youtube: '',
         klingAccessKey: '',
@@ -34,5 +35,17 @@ describe('ElevenLabs API key settings UI', () => {
     fireEvent.change(input, { target: { value: 'el-api-key' } });
 
     expect(onKeyChange).toHaveBeenCalledWith('elevenlabs', 'el-api-key');
+  });
+
+  it('renders an EvoLink row and reports changes through the settings save path', () => {
+    const onKeyChange = vi.fn();
+
+    render(<ApiKeysSettings localKeys={{ evolink: '' }} onKeyChange={onKeyChange} />);
+
+    const input = screen.getByPlaceholderText('Enter EvoLink API key...');
+
+    fireEvent.change(input, { target: { value: 'ev-api-key' } });
+
+    expect(onKeyChange).toHaveBeenCalledWith('evolink', 'ev-api-key');
   });
 });

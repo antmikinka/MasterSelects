@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { getCatalogEntries } from '../../src/services/flashboard/FlashBoardModelCatalog';
 import { getFlashBoardPriceEstimate } from '../../src/services/flashboard/FlashBoardPricing';
 import {
+  EVOLINK_NANO_BANANA_2_MODEL,
+  EVOLINK_NANO_BANANA_2_PROVIDER_ID,
+} from '../../src/services/evolinkService';
+import {
   DEFAULT_ELEVENLABS_MODEL_ID,
   DEFAULT_ELEVENLABS_OUTPUT_FORMAT,
   DEFAULT_ELEVENLABS_VOICE_SETTINGS,
@@ -15,6 +19,32 @@ import {
 import type { FlashBoardNode } from '../../src/stores/flashboardStore/types';
 
 describe('FlashBoard audio catalog contract', () => {
+  it('exposes EvoLink Nano Banana 2 as an image provider', () => {
+    const entry = getCatalogEntries().find((candidate) => candidate.providerId === EVOLINK_NANO_BANANA_2_PROVIDER_ID);
+
+    expect(entry).toMatchObject({
+      service: 'evolink',
+      providerId: EVOLINK_NANO_BANANA_2_PROVIDER_ID,
+      outputType: 'image',
+      supportsTextToImage: true,
+      supportsTextToVideo: false,
+      supportsImageToVideo: false,
+      versions: [EVOLINK_NANO_BANANA_2_MODEL],
+      maxReferenceImages: 14,
+    });
+  });
+
+  it('does not invent a local EvoLink cost estimate when provider pricing is credit-account based', () => {
+    expect(
+      getFlashBoardPriceEstimate({
+        providerId: EVOLINK_NANO_BANANA_2_PROVIDER_ID,
+        service: 'evolink',
+        outputType: 'image',
+        imageSize: '2K',
+      }),
+    ).toBeNull();
+  });
+
   it('exposes ElevenLabs as an audio generation provider', () => {
     const entry = getCatalogEntries().find((candidate) => candidate.providerId === 'elevenlabs-tts');
 

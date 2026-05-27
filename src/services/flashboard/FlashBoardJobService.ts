@@ -9,6 +9,7 @@ import { useSettingsStore } from '../../stores/settingsStore';
 import { useMediaStore } from '../../stores/mediaStore';
 import { createThumbnail } from '../../stores/mediaStore/helpers/thumbnailHelpers';
 import { getCatalogEntry } from './FlashBoardModelCatalog';
+import { getFlashBoardImageProvider } from './FlashBoardImageProviders';
 import {
   DEFAULT_ELEVENLABS_SPEECH_OUTPUT_FORMAT,
   ELEVENLABS_MP3_MIME_TYPE,
@@ -73,6 +74,7 @@ class FlashBoardJobService {
   private running: RunningJob[] = [];
   private maxConcurrent = 3;
   private maxConcurrentKieAi = 1;
+  private maxConcurrentEvolink = 1;
   private maxConcurrentElevenLabs = 2;
   private onUpdate: JobUpdateCallback | null = null;
 
@@ -125,6 +127,10 @@ class FlashBoardJobService {
     if (service === 'kieai') {
       const kieaiRunning = this.running.filter(r => r.service === 'kieai').length;
       if (kieaiRunning >= this.maxConcurrentKieAi) return false;
+    }
+    if (service === 'evolink') {
+      const evolinkRunning = this.running.filter(r => r.service === 'evolink').length;
+      if (evolinkRunning >= this.maxConcurrentEvolink) return false;
     }
     if (service === 'elevenlabs') {
       const elevenLabsRunning = this.running.filter(r => r.service === 'elevenlabs').length;
@@ -229,12 +235,15 @@ class FlashBoardJobService {
     try {
       this.onUpdate?.(nodeId, { status: 'processing' });
 
-      const { piapi, kieai, elevenlabs } = useSettingsStore.getState().apiKeys;
+      const { piapi, kieai, evolink, elevenlabs } = useSettingsStore.getState().apiKeys;
       if (request.service === 'piapi') {
         piApiService.setApiKey(piapi);
       }
       if (request.service === 'kieai') {
         kieAiService.setApiKey(kieai);
+      }
+      if (request.service === 'evolink') {
+        getFlashBoardImageProvider('evolink')?.setApiKey?.(evolink);
       }
       if (request.service === 'suno') {
         sunoService.setApiKey(kieai);
@@ -367,8 +376,9 @@ class FlashBoardJobService {
       }
 
       if (request.outputType === 'image' || request.providerId === 'nano-banana-2') {
-        if (request.service !== 'kieai' && request.service !== 'cloud') {
-          throw new Error(`${request.providerId} is currently only supported via Kie.ai or MasterSelects Cloud`);
+        const imageProvider = getFlashBoardImageProvider(request.service);
+        if (!imageProvider) {
+          throw new Error(`${request.providerId} is not available through ${request.service}`);
         }
 
         const catalogEntry = getCatalogEntry(request.service, request.providerId);
@@ -383,23 +393,14 @@ class FlashBoardJobService {
           visualReferenceMediaFileIds.map((mediaFileId) => this.resolveReferenceImage(mediaFileId))
         )).filter((imageUrl): imageUrl is string => Boolean(imageUrl));
 
-        const remoteTaskId = request.service === 'cloud'
-          ? await cloudAiService.createTextToImage({
-              provider: request.providerId,
-              prompt: request.prompt,
-              aspectRatio: request.aspectRatio,
-              resolution: request.imageSize,
-              outputFormat: 'png',
-              imageInputs: referenceImageInputs.length > 0 ? referenceImageInputs : undefined,
-            })
-          : await kieAiService.createTextToImage({
-              provider: request.providerId,
-              prompt: request.prompt,
-              aspectRatio: request.aspectRatio,
-              resolution: request.imageSize,
-              outputFormat: 'png',
-              imageInputs: referenceImageInputs.length > 0 ? referenceImageInputs : undefined,
-            });
+        const remoteTaskId = await imageProvider.createTextToImage({
+          provider: request.providerId,
+          prompt: request.prompt,
+          aspectRatio: request.aspectRatio,
+          resolution: request.imageSize,
+          outputFormat: 'png',
+          imageInputs: referenceImageInputs.length > 0 ? referenceImageInputs : undefined,
+        });
 
         this.running.push({
           nodeId,
@@ -409,23 +410,14 @@ class FlashBoardJobService {
         });
         this.onUpdate?.(nodeId, { status: 'processing', remoteTaskId });
 
-        const result = request.service === 'cloud'
-          ? await cloudAiService.pollTaskUntilComplete(
-              remoteTaskId,
-              (task) => {
-                if (abortController.signal.aborted) throw new Error('Canceled');
-                this.onUpdate?.(nodeId, { status: 'processing', progress: task.progress, remoteTaskId });
-              },
-              5000,
-            )
-          : await kieAiService.pollImageTaskUntilComplete(
-              remoteTaskId,
-              (task) => {
-                if (abortController.signal.aborted) throw new Error('Canceled');
-                this.onUpdate?.(nodeId, { status: 'processing', progress: task.progress, remoteTaskId });
-              },
-              5000,
-            );
+        const result = await imageProvider.pollImageTaskUntilComplete(
+          remoteTaskId,
+          (task) => {
+            if (abortController.signal.aborted) throw new Error('Canceled');
+            this.onUpdate?.(nodeId, { status: 'processing', progress: task.progress, remoteTaskId });
+          },
+          5000,
+        );
 
         this.running = this.running.filter(r => r.nodeId !== nodeId);
         if (result.status === 'completed' && (result.imageUrl || result.videoUrl)) {

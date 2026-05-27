@@ -9,6 +9,9 @@ import {
 
 export const DEFAULT_ELEVENLABS_MODEL_ID = 'eleven_multilingual_v2';
 export const DEFAULT_ELEVENLABS_OUTPUT_FORMAT = 'mp3_44100_128';
+export const DEFAULT_FLASHBOARD_SERVICE = 'kieai';
+export const DEFAULT_FLASHBOARD_PROVIDER_ID = 'nano-banana-2';
+export const DEFAULT_FLASHBOARD_MODEL_VERSION = '3.1';
 
 export const DEFAULT_ELEVENLABS_VOICE_SETTINGS: Required<FlashBoardVoiceSettings> = {
   speed: 1,
@@ -22,6 +25,10 @@ export function createDefaultFlashBoardComposer(): FlashBoardComposerState {
   return {
     draftNodeId: null,
     isOpen: false,
+    service: DEFAULT_FLASHBOARD_SERVICE,
+    providerId: DEFAULT_FLASHBOARD_PROVIDER_ID,
+    version: DEFAULT_FLASHBOARD_MODEL_VERSION,
+    outputType: 'image',
     generateAudio: false,
     multiShots: false,
     multiPrompt: [],

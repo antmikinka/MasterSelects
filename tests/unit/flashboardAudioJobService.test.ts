@@ -26,6 +26,7 @@ describe('FlashBoardJobService ElevenLabs audio jobs', () => {
         deepgram: '',
         piapi: '',
         kieai: '',
+        evolink: '',
         elevenlabs: 'eleven-key',
         youtube: '',
         klingAccessKey: '',

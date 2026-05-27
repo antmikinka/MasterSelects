@@ -1,0 +1,225 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  FLASHBOARD_PROMPT_REFINER_MODEL,
+  buildFlashBoardPromptRefinerInstructions,
+  buildFlashBoardPromptRefinerStreamingUserText,
+  buildFlashBoardPromptRefinerUserText,
+  extractRefinedPromptFromOpenAIResponse,
+  parseOpenAIStreamFrame,
+  parseSunoPromptRefinement,
+} from '../../src/services/flashboard/FlashBoardPromptRefiner';
+import type { CatalogEntry } from '../../src/services/flashboard/types';
+
+const nanoBananaEntry: CatalogEntry = {
+  service: 'kieai',
+  providerId: 'nano-banana-2',
+  name: 'Nano Banana 2',
+  description: 'Image generation with references',
+  versions: ['3.1'],
+  modes: [],
+  durations: [],
+  aspectRatios: ['16:9'],
+  supportsTextToVideo: false,
+  supportsImageToVideo: false,
+  supportsTextToImage: true,
+  supportsGenerateAudio: false,
+  supportsMultiShot: false,
+  imageSizes: ['1K'],
+  maxReferenceImages: 14,
+  maxReferenceMedia: 14,
+  outputType: 'image',
+};
+
+const klingEntry: CatalogEntry = {
+  service: 'kieai',
+  providerId: 'kling-3.0',
+  name: 'Kling 3.0',
+  description: 'Video generation',
+  versions: ['latest'],
+  modes: ['std'],
+  durations: [5],
+  aspectRatios: ['16:9'],
+  supportsTextToVideo: true,
+  supportsImageToVideo: true,
+  supportsGenerateAudio: true,
+  supportsMultiShot: true,
+  maxReferenceMedia: 3,
+  outputType: 'video',
+};
+
+const sunoEntry: CatalogEntry = {
+  service: 'suno',
+  providerId: 'suno-music',
+  name: 'Suno Music',
+  description: 'Music generation',
+  versions: ['V5'],
+  modes: [],
+  durations: [],
+  aspectRatios: [],
+  supportsTextToVideo: false,
+  supportsImageToVideo: false,
+  supportsTextToAudio: true,
+  outputType: 'audio',
+};
+
+describe('FlashBoardPromptRefiner', () => {
+  it('uses GPT-5.5 as the prompt refiner model', () => {
+    expect(FLASHBOARD_PROMPT_REFINER_MODEL).toBe('gpt-5.5');
+  });
+
+  it('builds image-model guidance for Nano Banana reference prompts', () => {
+    const instructions = buildFlashBoardPromptRefinerInstructions({
+      entry: nanoBananaEntry,
+      service: nanoBananaEntry.service,
+      providerId: nanoBananaEntry.providerId,
+      version: '3.1',
+      generateAudio: false,
+      multiShots: false,
+    });
+
+    expect(instructions).toContain('Nano Banana 2');
+    expect(instructions).toContain('single still-image generation prompt');
+    expect(instructions).toContain('reference-aware');
+    expect(instructions).toContain('REF labels');
+  });
+
+  it('builds video-model guidance for Kling with sound and multishot context', () => {
+    const instructions = buildFlashBoardPromptRefinerInstructions({
+      entry: klingEntry,
+      service: klingEntry.service,
+      providerId: klingEntry.providerId,
+      version: 'latest',
+      generateAudio: true,
+      multiShots: true,
+    });
+
+    expect(instructions).toContain('Kling-style');
+    expect(instructions).toContain('Multi-shot is enabled');
+    expect(instructions).toContain('Sound generation is enabled');
+  });
+
+  it('includes selected generation settings and reference labels in user text', () => {
+    const userText = buildFlashBoardPromptRefinerUserText({
+      prompt: 'mach es dramatischer',
+      entry: nanoBananaEntry,
+      service: nanoBananaEntry.service,
+      providerId: nanoBananaEntry.providerId,
+      mode: 'std',
+      duration: 5,
+      aspectRatio: '16:9',
+      imageSize: '2K',
+      generateAudio: false,
+      multiShots: false,
+    }, [
+      { role: 'reference', label: 'REF 1', displayName: 'portrait.png' },
+    ]);
+
+    expect(userText).toContain('mach es dramatischer');
+    expect(userText).toContain('Aspect ratio: 16:9');
+    expect(userText).toContain('Image size: 2K');
+    expect(userText).toContain('REF 1');
+    expect(userText).toContain('portrait.png');
+  });
+
+  it('uses plain prompt text instructions for streamed refinements', () => {
+    const userText = buildFlashBoardPromptRefinerStreamingUserText({
+      prompt: 'mach es dramatischer',
+      entry: nanoBananaEntry,
+      service: nanoBananaEntry.service,
+      providerId: nanoBananaEntry.providerId,
+      mode: 'std',
+      duration: 5,
+      aspectRatio: '16:9',
+      imageSize: '2K',
+      generateAudio: false,
+      multiShots: false,
+    }, []);
+
+    expect(userText).toContain('Return the final refined English prompt text only');
+    expect(userText).not.toContain('Return JSON');
+  });
+
+  it('builds structured Suno guidance for lyrics, style, and negative tags', () => {
+    const instructions = buildFlashBoardPromptRefinerInstructions({
+      entry: sunoEntry,
+      service: sunoEntry.service,
+      providerId: sunoEntry.providerId,
+      version: 'V5',
+      generateAudio: false,
+      multiShots: false,
+      sunoInstrumental: false,
+    });
+
+    expect(instructions).toContain('Suno Prompt Refiner');
+    expect(instructions).toContain('LYRICS:');
+    expect(instructions).toContain('STYLE:');
+    expect(instructions).toContain('NEGATIVE:');
+  });
+
+  it('includes current Suno fields in streamed refinement text', () => {
+    const userText = buildFlashBoardPromptRefinerStreamingUserText({
+      prompt: 'song about traffic jam turning into a tree house',
+      entry: sunoEntry,
+      service: sunoEntry.service,
+      providerId: sunoEntry.providerId,
+      mode: '',
+      duration: 5,
+      aspectRatio: '',
+      imageSize: '',
+      generateAudio: false,
+      multiShots: false,
+      sunoStyle: 'indie folk, warm male vocal',
+      sunoNegativeTags: 'distorted vocals',
+      sunoInstrumental: false,
+      sunoCustomMode: true,
+      sunoVocalGender: 'm',
+      sunoStyleWeight: 0.65,
+      sunoWeirdnessConstraint: 0.35,
+      sunoAudioWeight: 0.65,
+    }, []);
+
+    expect(userText).toContain('Current lyrics / song idea');
+    expect(userText).toContain('indie folk');
+    expect(userText).toContain('Return exactly three labelled sections');
+  });
+
+  it('parses labelled Suno prompt refinements', () => {
+    expect(parseSunoPromptRefinement([
+      'LYRICS:',
+      'Verse line',
+      'STYLE: alt-pop, soft vocal',
+      'NEGATIVE: clipping, harsh noise',
+    ].join('\n'))).toEqual({
+      lyrics: 'Verse line',
+      style: 'alt-pop, soft vocal',
+      negativeTags: 'clipping, harsh noise',
+    });
+  });
+
+  it('parses streamed Responses text delta events', () => {
+    expect(parseOpenAIStreamFrame('event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"A cinematic"}')).toEqual({
+      type: 'response.output_text.delta',
+      delta: 'A cinematic',
+    });
+  });
+
+  it('extracts the refined prompt from output_text JSON', () => {
+    expect(extractRefinedPromptFromOpenAIResponse({
+      output_text: '{"prompt":"A refined cinematic prompt."}',
+    })).toBe('A refined cinematic prompt.');
+  });
+
+  it('extracts the refined prompt from Responses output content', () => {
+    expect(extractRefinedPromptFromOpenAIResponse({
+      output: [
+        {
+          type: 'message',
+          content: [
+            { type: 'output_text', text: '{"prompt":"A detailed product render prompt."}' },
+          ],
+        },
+      ],
+    })).toBe('A detailed product render prompt.');
+  });
+});

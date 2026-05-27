@@ -150,7 +150,7 @@ export function FlashBoardContextMenu({ x, y, node, boardId, canvasPosition, onC
     && !isAlreadyAssignedAsImageReference
   );
   const composerTargetLabel = composerCatalogEntry
-    ? composerCatalogEntry.name.replace(' (Kie.ai)', '')
+    ? composerCatalogEntry.name.replace(' (Kie.ai)', '').replace(' (EvoLink)', '')
     : 'current composer';
   const imageReferenceTargetLabel = selectedImageTarget ? selectedReferenceTargetLabel : composerTargetLabel;
   const videoReferenceTargetLabel = selectedVideoTarget ? selectedReferenceTargetLabel : composerTargetLabel;

@@ -7,7 +7,7 @@ export interface FlashBoardStoreState {
   hoveredComposerReference: FlashBoardHoveredComposerReference | null;
 }
 
-export type FlashBoardService = 'piapi' | 'kieai' | 'cloud' | 'elevenlabs' | 'suno';
+export type FlashBoardService = 'piapi' | 'kieai' | 'evolink' | 'cloud' | 'elevenlabs' | 'suno';
 export type FlashBoardOutputType = 'video' | 'image' | 'audio';
 export type FlashBoardMediaType = 'video' | 'image' | 'audio';
 export type FlashBoardSunoVocalGender = 'm' | 'f';

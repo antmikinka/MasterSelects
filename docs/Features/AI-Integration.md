@@ -132,10 +132,13 @@ The old dock-level AI Generative tab is deprecated and removed from default and 
 
 ### FlashBoard Prompt Mode
 - Compact prompt composer for video, image, and audio generation
-- Active IN / OUT / REF assignments appear as removable media cards around the prompt box
+- Active IN / OUT / REF assignments appear as removable media cards around the prompt box; image-to-video cards expose inline `IN`, `REF`, and `OUT` role controls
+- Compact setting buttons such as model, aspect ratio, duration, image size, and mode open as inline submenus: the standard control row slides out, submenu pills stagger in, and the default row returns after selection
+- Reference cards use pointer-proximity magnification in the compact Media tray, with previews scaling visually outside the tray without changing the prompt box height; crowded trays switch the reference cards into a vertical scroll strip
 - Media Panel image, video, and audio files can be referenced by right-clicking them or dragging them onto the expanded prompt composer
-- Nano Banana 2 accepts up to 14 ordered reference images; Kie.ai Seedance 2.0 accepts multimodal image/video/audio references and sends audio references as `reference_audio_urls` for lip-sync / performance timing; the composer labels generic references as `REF 1`, `REF 2`, ... so prompts can refer to them explicitly
+- Nano Banana 2 accepts up to 14 ordered reference images through Kie.ai or EvoLink; Kie.ai Seedance 2.0 accepts multimodal image/video/audio references and sends audio references as `reference_audio_urls` for lip-sync / performance timing; the composer labels generic references as `REF 1`, `REF 2`, ... so prompts can refer to them explicitly
 - Seedance 2.0 cannot combine strict `first_frame_url` / `last_frame_url` with multimodal references in the same Kie.ai request, so IN / OUT cards are converted to image references when REF media is present
+- The wand button in the composer refines the current prompt with GPT-5.5 through the OpenAI Responses API. It sends the current draft plus prepared reference images, applies selected-model-specific prompt guidance, streams the returned English prompt into the prompt box, keeps a one-step restore button for the pre-AI prompt, and shows a rainbow active state while the refinement is running.
 - Queued and running generations appear as Media Panel preview cards with output type, status, elapsed timer, prompt, metadata, and progress when the provider reports it
 - The tray reuses the FlashBoard queue/import runtime without showing the full node canvas
 
@@ -146,13 +149,16 @@ The current generator stack is no longer best described as "PiAPI as one unified
 | Backend | Where it is used | Notes |
 |---------|------------------|-------|
 | `Kie.ai` | FlashBoard | Current provider list comes from `getKieAiProviders()`; user-supplied key in Settings |
+| `EvoLink` | FlashBoard image generation | User-supplied key in Settings; Nano Banana 2 uses EvoLink's async `gemini-3.1-flash-image-preview` task flow with up to 14 reference images |
 | `MasterSelects Cloud` | FlashBoard when hosted access is available | Hosted credits/account flow; the tray resolves to hosted Kling when no local Kie key is present; FlashBoard can also use hosted ElevenLabs speech via `/api/ai/audio` |
 | `ElevenLabs` | FlashBoard audio generation | User-supplied key in Settings; text-to-speech output imports as durable audio media |
 | `Suno` | FlashBoard music generation | Uses Kie.ai's Suno API with the user-supplied Kie.ai key; generated music imports as durable audio media |
+| `OpenAI` | FlashBoard prompt refinement | User-supplied OpenAI key in Settings; reference images are resized in-browser and sent to the Responses API with `store: false` |
 | `PiAPI` | Legacy compatibility and some catalog/pricing metadata | Still present in older history/key migration paths and FlashBoard pricing/catalog helpers, but not the primary runtime path the current panel describes |
 
 The practical rule for the current branch is:
-- The Media generator tray can select Kie.ai, hosted cloud, hosted ElevenLabs speech, BYO ElevenLabs, and Suno music from the compact FlashBoard composer.
+- The Media generator tray can select Kie.ai, EvoLink, hosted cloud, hosted ElevenLabs speech, BYO ElevenLabs, and Suno music from the compact FlashBoard composer.
+- Image generation providers implement the shared FlashBoard image-provider adapter, so adding another async image service is a catalog entry plus a provider adapter instead of another hardcoded job-service branch.
 - ElevenLabs-only access opens the composer on the audio text-to-speech target.
 - Service/provider labels in the tray reflect that active backend instead of a permanent PiAPI abstraction layer.
 - BYO ElevenLabs keys are stored through the same encrypted local API-key path as the other provider keys and are not persisted in Zustand localStorage. Hosted ElevenLabs uses the Cloudflare `ELEVENLABS_API_KEY` secret and charges logged-in users by hosted credits.

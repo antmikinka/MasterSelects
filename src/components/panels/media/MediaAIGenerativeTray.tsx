@@ -1,18 +1,18 @@
-import { useCallback, useMemo, type SyntheticEvent } from 'react';
-import { getKieAiProviders } from '../../../services/kieAiService';
-import type { CatalogEntry } from '../../../services/flashboard/types';
-import { DEFAULT_ELEVENLABS_MODEL_ID } from '../../../stores/flashboardStore/defaults';
-import { useAccountStore } from '../../../stores/accountStore';
-import { useSettingsStore } from '../../../stores/settingsStore';
+import { useCallback, type SyntheticEvent } from 'react';
+import {
+  DEFAULT_FLASHBOARD_MODEL_VERSION,
+  DEFAULT_FLASHBOARD_PROVIDER_ID,
+  DEFAULT_FLASHBOARD_SERVICE,
+} from '../../../stores/flashboardStore/defaults';
 import { FlashBoardComposer } from '../flashboard/FlashBoardComposer';
 import { useFlashBoardRuntime } from '../flashboard/useFlashBoardRuntime';
 import { MediaAIGenerationQueue } from './MediaAIGenerationQueue';
 import '../flashboard/FlashBoard.css';
 import './MediaAIGenerativeTray.css';
 
-const MEDIA_GENERATIVE_SERVICES: Array<'kieai' | 'cloud' | 'elevenlabs' | 'suno'> = [
+const MEDIA_GENERATIVE_SERVICES: Array<'kieai' | 'evolink' | 'elevenlabs' | 'suno'> = [
   'kieai',
-  'cloud',
+  'evolink',
   'elevenlabs',
   'suno',
 ];
@@ -28,35 +28,6 @@ export function MediaAIGenerativeTray({
 }: MediaAIGenerativeTrayProps) {
   useFlashBoardRuntime({ enableKeyboardDelete: false });
 
-  const apiKeys = useSettingsStore((s) => s.apiKeys);
-  const accountSession = useAccountStore((s) => s.session);
-  const providers = useMemo(() => getKieAiProviders(), []);
-  const selectedProvider = providers[0]?.id || 'kling-3.0';
-  const selectedVersion = providers[0]?.versions[0] || '3.0';
-  const hasHostedCloudAccess = Boolean(accountSession?.authenticated);
-  const hasKieAiKey = (apiKeys.kieai ?? '').trim().length > 0;
-  const hasElevenLabsKey = (apiKeys.elevenlabs ?? '').trim().length > 0;
-
-  const initialService: CatalogEntry['service'] = hasKieAiKey
-    ? 'kieai'
-    : hasHostedCloudAccess
-      ? 'cloud'
-      : hasElevenLabsKey
-        ? 'elevenlabs'
-        : 'kieai';
-  const initialProviderId =
-    initialService === 'cloud'
-      ? 'cloud-kling'
-      : initialService === 'elevenlabs'
-        ? 'elevenlabs-tts'
-        : selectedProvider;
-  const initialVersion =
-    initialService === 'cloud'
-      ? 'latest'
-      : initialService === 'elevenlabs'
-        ? DEFAULT_ELEVENLABS_MODEL_ID
-        : selectedVersion;
-
   const stopEvent = useCallback((event: SyntheticEvent) => {
     event.stopPropagation();
   }, []);
@@ -64,7 +35,6 @@ export function MediaAIGenerativeTray({
   if (!expanded) {
     return (
       <div className="media-ai-tray media-ai-tray-collapsed" onMouseDown={stopEvent} onClick={stopEvent}>
-        <MediaAIGenerationQueue />
         <button
           className="media-ai-tray-launch"
           type="button"
@@ -95,9 +65,9 @@ export function MediaAIGenerativeTray({
         </svg>
       </button>
       <FlashBoardComposer
-        initialProviderId={initialProviderId}
-        initialService={initialService}
-        initialVersion={initialVersion}
+        initialProviderId={DEFAULT_FLASHBOARD_PROVIDER_ID}
+        initialService={DEFAULT_FLASHBOARD_SERVICE}
+        initialVersion={DEFAULT_FLASHBOARD_MODEL_VERSION}
         allowedServices={MEDIA_GENERATIVE_SERVICES}
       />
     </div>

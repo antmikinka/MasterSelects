@@ -619,6 +619,8 @@ export function DockTabPane({ group }: DockTabPaneProps) {
                 onMouseEnter={() => handlePanelTabMouseEnter(panel)}
                 onMouseLeave={() => handlePanelTabMouseLeave(panel.id)}
                 title={panel.type === 'clip-properties' ? selectedSlotName || selectedClipName || panel.title : panel.title}
+                data-guided-panel-tab={panel.type}
+                data-guided-target={`panel-tab:${panel.type}`}
               >
                 <span className="dock-tab-title">{tabTitle}{WIP_PANEL_TYPES.includes(panel.type) && <span className="menu-wip-badge">🐛</span>}</span>
               </div>
@@ -632,6 +634,8 @@ export function DockTabPane({ group }: DockTabPaneProps) {
         className={`dock-panel-content ${isActivePanelMaximized ? 'is-maximized-content' : ''}`}
         style={{ '--panel-zoom': panelZoom } as React.CSSProperties}
         onMouseEnter={handlePaneMouseEnter}
+        data-guided-panel={activePanel?.type}
+        data-panel-type={activePanel?.type}
       >
         <div className={`dock-panel-content-inner ${activePanel ? `dock-panel-content-inner--${activePanel.type}` : ''}`}>
           {activePanel && <DockPanelContent panel={activePanel} />}

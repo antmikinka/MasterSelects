@@ -48,6 +48,7 @@ export function ApiKeysSettings({ localKeys, onKeyChange }: ApiKeysSettingsProps
     deepgram: false,
     piapi: false,
     kieai: false,
+    evolink: false,
     elevenlabs: false,
     youtube: false,
   });
@@ -107,7 +108,7 @@ export function ApiKeysSettings({ localKeys, onKeyChange }: ApiKeysSettingsProps
       </div>
 
       <div className="settings-group">
-        <div className="settings-group-title">AI Video Generation</div>
+        <div className="settings-group-title">AI Media Generation</div>
 
         <ApiKeyRow
           label="PiAPI API Key"
@@ -131,6 +132,18 @@ export function ApiKeysSettings({ localKeys, onKeyChange }: ApiKeysSettingsProps
           show={showKeys.kieai}
           onToggle={() => toggleShowKey('kieai')}
           onChange={(v) => onKeyChange('kieai', v)}
+        />
+
+        <ApiKeyRow
+          label="EvoLink API Key"
+          provider="evolink"
+          value={getKey('evolink')}
+          placeholder="Enter EvoLink API key..."
+          linkUrl="https://evolink.ai"
+          linkText="Get API Key"
+          show={showKeys.evolink}
+          onToggle={() => toggleShowKey('evolink')}
+          onChange={(v) => onKeyChange('evolink', v)}
         />
       </div>
       <div className="settings-group">

@@ -82,6 +82,8 @@ export function FloatingPanel({ floating }: FloatingPanelProps) {
   return (
     <div
       className={`floating-panel ${isDragging ? 'dragging' : ''} ${isResizing ? 'resizing' : ''}`}
+      data-guided-panel={floating.panel.type}
+      data-panel-type={floating.panel.type}
       style={{
         left: floating.position.x,
         top: floating.position.y,

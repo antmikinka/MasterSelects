@@ -140,7 +140,7 @@ export const createNodeSlice = (set: Set, get: Get): NodeSliceActions => ({
           status: 'queued' as const,
           error: undefined,
           progress: undefined,
-          startedAt: now,
+          startedAt: undefined,
           completedAt: undefined,
         },
         updatedAt: now,
@@ -158,11 +158,18 @@ export const createNodeSlice = (set: Set, get: Get): NodeSliceActions => ({
   },
 
   updateNodeJob: (nodeId: string, patch: Partial<FlashBoardJobState>): void => {
+    const now = Date.now();
     set((state) => ({
       boards: findAndUpdateNode(state.boards, nodeId, (node) => ({
         ...node,
-        job: { ...node.job, ...patch } as FlashBoardJobState,
-        updatedAt: Date.now(),
+        job: {
+          ...node.job,
+          ...patch,
+          startedAt: patch.status === 'processing' && node.job?.status !== 'processing'
+            ? now
+            : patch.startedAt ?? node.job?.startedAt,
+        } as FlashBoardJobState,
+        updatedAt: now,
       })),
     }));
   },

@@ -151,6 +151,10 @@ export function getFlashBoardPriceEstimate(input: FlashBoardPricingInput): Flash
     return null;
   }
 
+  if (input.service === 'evolink') {
+    return null;
+  }
+
   if (input.service === 'cloud') {
     if (input.outputType === 'image' || input.providerId === 'nano-banana-2') {
       return buildHostedImageEstimate(input);

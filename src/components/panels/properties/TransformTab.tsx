@@ -90,7 +90,12 @@ function LabeledValue({
   keyframeToggle?: ReactNode;
 } & ComponentProps<typeof DraggableNumber>) {
   return (
-    <div className={`labeled-value ${keyframeToggle ? 'with-keyframe-toggle' : ''}`}>
+    <div
+      className={`labeled-value ${keyframeToggle ? 'with-keyframe-toggle' : ''}`}
+      data-guided-property={midiTarget?.property}
+      data-guided-clip-id={midiTarget?.clipId}
+      data-guided-target={midiTarget ? `property:${midiTarget.property}` : undefined}
+    >
       {keyframeToggle}
       <MIDIParameterLabel as="span" className="labeled-value-label" target={midiTarget}>
         {label}
@@ -114,7 +119,12 @@ function RotationValue({ label, degrees, onChange, onDragStart, onDragEnd, midiT
   const remainder = degrees - revolutions * 360;
 
   return (
-    <div className={`labeled-value rotation-value-ae ${keyframeToggle ? 'with-keyframe-toggle' : ''}`}>
+    <div
+      className={`labeled-value rotation-value-ae ${keyframeToggle ? 'with-keyframe-toggle' : ''}`}
+      data-guided-property={midiTarget?.property}
+      data-guided-clip-id={midiTarget?.clipId}
+      data-guided-target={midiTarget ? `property:${midiTarget.property}` : undefined}
+    >
       {keyframeToggle}
       <MIDIParameterLabel as="span" className="labeled-value-label" target={midiTarget}>
         {label}
@@ -462,7 +472,11 @@ export function TransformTab({
   }, [clip, clipId, threeDEffectorsEnabled, updateClip]);
 
   return (
-    <div className="properties-tab-content transform-tab-compact">
+    <div
+      className="properties-tab-content transform-tab-compact"
+      data-guided-properties-tab="transform"
+      data-guided-target="properties-tab:transform"
+    >
       <div className="properties-section">
         {usesCameraControls && (
           <div

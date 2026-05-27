@@ -38,6 +38,13 @@ function TabLoading() {
   return <div className="properties-tab-loading">Loading...</div>;
 }
 
+function getGuidedPropertiesTabAttributes(tab: PropertiesTab) {
+  return {
+    'data-guided-properties-tab': tab,
+    'data-guided-target': `properties-tab:${tab}`,
+  };
+}
+
 export function PropertiesPanel() {
   // Reactive data - subscribe to specific values only
   const clips = useTimelineStore(state => state.clips);
@@ -297,17 +304,17 @@ export function PropertiesPanel() {
           </>
         ) : isCameraClip ? (
           <>
-            <button className={`tab-btn ${activeTab === 'transform' ? 'active' : ''}`} onClick={() => setActiveTab('transform')}>Transform</button>
+            <button className={`tab-btn ${activeTab === 'transform' ? 'active' : ''}`} {...getGuidedPropertiesTabAttributes('transform')} onClick={() => setActiveTab('transform')}>Transform</button>
           </>
         ) : isMathSceneClip ? (
           <>
             <button className={`tab-btn ${activeTab === 'math' ? 'active' : ''}`} onClick={() => setActiveTab('math')}>Math</button>
-            <button className={`tab-btn ${activeTab === 'transform' ? 'active' : ''}`} onClick={() => setActiveTab('transform')}>Transform</button>
+            <button className={`tab-btn ${activeTab === 'transform' ? 'active' : ''}`} {...getGuidedPropertiesTabAttributes('transform')} onClick={() => setActiveTab('transform')}>Transform</button>
             <button className={`tab-btn ${activeTab === 'color' ? 'active' : ''}`} onClick={() => setActiveTab('color')}>Color</button>
             <button className={`tab-btn ${activeTab === 'effects' ? 'active' : ''}`} onClick={() => setActiveTab('effects')}>
               Effects {visualEffects.length > 0 && <span className="badge">{visualEffects.length}</span>}
             </button>
-            <button className={`tab-btn ${activeTab === 'masks' ? 'active' : ''}`} onClick={() => setActiveTab('masks')}>
+            <button className={`tab-btn ${activeTab === 'masks' ? 'active' : ''}`} {...getGuidedPropertiesTabAttributes('masks')} onClick={() => setActiveTab('masks')}>
               Masks {selectedClip.masks && selectedClip.masks.length > 0 && <span className="badge">{selectedClip.masks.length}</span>}
             </button>
           </>
@@ -319,7 +326,7 @@ export function PropertiesPanel() {
             <button className={`tab-btn ${activeTab === 'effects' ? 'active' : ''}`} onClick={() => setActiveTab('effects')}>
               Effects {visualEffects.length > 0 && <span className="badge">{visualEffects.length}</span>}
             </button>
-            <button className={`tab-btn ${activeTab === 'masks' ? 'active' : ''}`} onClick={() => setActiveTab('masks')}>
+            <button className={`tab-btn ${activeTab === 'masks' ? 'active' : ''}`} {...getGuidedPropertiesTabAttributes('masks')} onClick={() => setActiveTab('masks')}>
               Masks {selectedClip.masks && selectedClip.masks.length > 0 && <span className="badge">{selectedClip.masks.length}</span>}
             </button>
           </>
@@ -354,7 +361,7 @@ export function PropertiesPanel() {
                 {vectorAnimationTabLabel}
               </button>
             )}
-            <button className={`tab-btn ${activeTab === 'transform' ? 'active' : ''}`} onClick={() => setActiveTab('transform')}>Transform</button>
+            <button className={`tab-btn ${activeTab === 'transform' ? 'active' : ''}`} {...getGuidedPropertiesTabAttributes('transform')} onClick={() => setActiveTab('transform')}>Transform</button>
             {!isSplatEffectorClip && (
               <button className={`tab-btn ${activeTab === 'color' ? 'active' : ''}`} onClick={() => setActiveTab('color')}>Color</button>
             )}
@@ -376,7 +383,7 @@ export function PropertiesPanel() {
             <button className={`tab-btn ${activeTab === 'effects' ? 'active' : ''}`} onClick={() => setActiveTab('effects')}>
               Effects {visualEffects.length > 0 && <span className="badge">{visualEffects.length}</span>}
             </button>
-            <button className={`tab-btn ${activeTab === 'masks' ? 'active' : ''}`} onClick={() => setActiveTab('masks')}>
+            <button className={`tab-btn ${activeTab === 'masks' ? 'active' : ''}`} {...getGuidedPropertiesTabAttributes('masks')} onClick={() => setActiveTab('masks')}>
               Masks {selectedClip.masks && selectedClip.masks.length > 0 && <span className="badge">{selectedClip.masks.length}</span>}
             </button>
             {!isSolidClip && !isVectorAnimationClip && (

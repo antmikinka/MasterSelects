@@ -1967,12 +1967,17 @@ export function Timeline() {
               }}
               className={`timeline-track-stack timeline-tracks ${clipDrag ? 'dragging-clip' : ''} ${marquee ? 'marquee-selecting' : ''} ${isExporting ? 'export-locked' : ''}`}
               data-ai-id="timeline-tracks"
+              data-guided-target="timeline-tracks"
+              data-guided-timeline-origin-x={TRACK_HEADER_WIDTH}
+              data-guided-timeline-scroll-x={scrollX}
+              data-guided-timeline-zoom={zoom}
               onDragOver={(e) => e.preventDefault()}
               onDragLeave={handleContainerDragLeave}
             >
               <div
                 ref={timelineRef}
                 className="timeline-lane-reference"
+                data-guided-target="timeline-lane-reference"
                 style={{ left: TRACK_HEADER_WIDTH }}
                 aria-hidden="true"
               />

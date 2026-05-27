@@ -1,4 +1,4 @@
-// AI Generative panel - AI generation via Kie.ai, MasterSelects Cloud, ElevenLabs, and Suno.
+// AI Generative panel - AI generation via Kie.ai, EvoLink, MasterSelects Cloud, ElevenLabs, and Suno.
 // Classic mode supports video. Board mode is the shared video/image/audio workspace.
 
 import { Component, type ReactNode, useState, useCallback, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
@@ -26,6 +26,11 @@ import {
   getKieAiProviders,
   getKieAiProvider,
 } from '../../services/kieAiService';
+import {
+  EVOLINK_NANO_BANANA_2_MODEL,
+  EVOLINK_NANO_BANANA_2_PROVIDER_ID,
+  evolinkService,
+} from '../../services/evolinkService';
 import { getFlashBoardPriceEstimate } from '../../services/flashboard/FlashBoardPricing';
 import { DEFAULT_ELEVENLABS_MODEL_ID } from '../../stores/flashboardStore/defaults';
 import { captureCurrentPreviewFrameDataUrl } from '../../services/previewFrameCapture';
@@ -35,7 +40,7 @@ import './AIVideoPanel.css';
 
 type GenerationType = 'text-to-video' | 'image-to-video';
 type PanelTab = 'generate' | 'history';
-const AI_GENERATIVE_BOARD_SERVICES: Array<'kieai' | 'cloud' | 'elevenlabs' | 'suno'> = ['kieai', 'cloud', 'elevenlabs', 'suno'];
+const AI_GENERATIVE_BOARD_SERVICES: Array<'kieai' | 'evolink' | 'elevenlabs' | 'suno'> = ['kieai', 'evolink', 'elevenlabs', 'suno'];
 
 interface FlashBoardErrorBoundaryProps {
   children: ReactNode;
@@ -203,16 +208,22 @@ export function AIVideoPanel() {
 
   // Get current provider config
   const currentProvider = getKieAiProvider(selectedProvider) || providers[0];
-  const boardService = apiKeys.kieai ? 'kieai' : hasHostedCloudAccess ? 'cloud' : apiKeys.elevenlabs ? 'elevenlabs' : 'kieai';
+  const boardService = apiKeys.kieai
+    ? 'kieai'
+    : apiKeys.evolink
+      ? 'evolink'
+      : apiKeys.elevenlabs
+        ? 'elevenlabs'
+        : 'kieai';
   const boardProviderId =
-    boardService === 'cloud'
-      ? 'cloud-kling'
+    boardService === 'evolink'
+      ? EVOLINK_NANO_BANANA_2_PROVIDER_ID
       : boardService === 'elevenlabs'
         ? 'elevenlabs-tts'
         : selectedProvider;
   const boardVersion =
-    boardService === 'cloud'
-      ? 'latest'
+    boardService === 'evolink'
+      ? EVOLINK_NANO_BANANA_2_MODEL
       : boardService === 'elevenlabs'
         ? DEFAULT_ELEVENLABS_MODEL_ID
         : selectedVersion;
@@ -255,16 +266,18 @@ export function AIVideoPanel() {
 
   // Check if API credentials are available for the selected service
   const hasClassicGenerationAccess = Boolean(apiKeys.kieai || hasHostedCloudAccess);
-  const hasGenerationAccess = Boolean(apiKeys.kieai || apiKeys.elevenlabs || hasHostedCloudAccess);
+  const hasGenerationAccess = Boolean(apiKeys.kieai || apiKeys.evolink || apiKeys.elevenlabs || hasHostedCloudAccess);
 
   // Fetch account balance
   const fetchAccountBalance = useCallback(async () => {
     setIsLoadingBalance(true);
     try {
-      let service: typeof cloudAiService | typeof kieAiService | null = null;
+      let service: typeof cloudAiService | typeof kieAiService | typeof evolinkService | null = null;
 
       if (apiKeys.kieai) {
         service = kieAiService;
+      } else if (apiKeys.evolink) {
+        service = evolinkService;
       } else if (hasHostedCloudAccess) {
         service = cloudAiService;
       }
@@ -281,15 +294,18 @@ export function AIVideoPanel() {
     } finally {
       setIsLoadingBalance(false);
     }
-  }, [apiKeys.kieai, hasHostedCloudAccess]);
+  }, [apiKeys.evolink, apiKeys.kieai, hasHostedCloudAccess]);
 
   // Set API key when it changes and fetch balance
   useEffect(() => {
     if (apiKeys.kieai) {
       kieAiService.setApiKey(apiKeys.kieai);
     }
+    if (apiKeys.evolink) {
+      evolinkService.setApiKey(apiKeys.evolink);
+    }
     fetchAccountBalance();
-  }, [apiKeys.kieai, fetchAccountBalance]);
+  }, [apiKeys.evolink, apiKeys.kieai, fetchAccountBalance]);
 
   // Update version when provider changes
   useEffect(() => {
@@ -650,7 +666,7 @@ export function AIVideoPanel() {
   const currentPriceEstimate = getFlashBoardPriceEstimate({
     service: boardService,
     providerId: boardProviderId,
-    outputType: boardService === 'elevenlabs' ? 'audio' : 'video',
+    outputType: boardService === 'elevenlabs' ? 'audio' : boardService === 'evolink' ? 'image' : 'video',
     mode,
     duration,
     generateAudio,
@@ -665,7 +681,7 @@ export function AIVideoPanel() {
             <span className="no-key-icon">🎬</span>
             <p>Sign in or add an API key to use AI Generative</p>
             <span className="no-key-hint">
-              Board mode supports Kie.ai, MasterSelects Cloud, ElevenLabs speech, and Suno music generation.
+              Board mode supports Kie.ai, EvoLink, MasterSelects Cloud, ElevenLabs speech, and Suno music generation.
             </span>
             <div className="no-key-actions">
               <button className="btn-settings" onClick={openAuthDialog}>

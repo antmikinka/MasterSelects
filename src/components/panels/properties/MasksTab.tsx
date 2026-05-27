@@ -135,6 +135,7 @@ function IconButton({
   title,
   active,
   disabled,
+  guidedTarget,
   className = '',
   onClick,
 }: {
@@ -142,6 +143,7 @@ function IconButton({
   title: string;
   active?: boolean;
   disabled?: boolean;
+  guidedTarget?: string;
   className?: string;
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
@@ -152,6 +154,8 @@ function IconButton({
       title={title}
       disabled={disabled}
       onClick={onClick}
+      data-guided-mask-tool={guidedTarget}
+      data-guided-target={guidedTarget ? `mask-toolbar:${guidedTarget}` : undefined}
     >
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
         <MaskIcon name={icon} />
@@ -627,25 +631,32 @@ export function MasksTab({ clipId, masks }: MasksTabProps) {
   const activeMaskFeatherQualityProperty = activeMask ? createMaskNumericProperty(activeMask.id, 'featherQuality') : null;
 
   return (
-    <div className="properties-tab-content masks-tab">
+    <div
+      className="properties-tab-content masks-tab"
+      data-guided-properties-tab="masks"
+      data-guided-target="properties-tab:masks"
+    >
       <div className="mask-toolbar">
         <div className="mask-toolbar-group">
           <IconButton
             icon="pen"
             title={`Pen Tool (${registry.getLabel('mask.pen')})`}
             active={maskEditMode === 'drawingPen'}
+            guidedTarget="pen"
             onClick={() => startDrawMode('drawingPen')}
           />
           <IconButton
             icon="rect"
             title={`Draw Rectangle (${registry.getLabel('mask.rectangle')})`}
             active={maskEditMode === 'drawingRect'}
+            guidedTarget="rectangle"
             onClick={() => startDrawMode('drawingRect')}
           />
           <IconButton
             icon="ellipse"
             title={`Draw Ellipse (${registry.getLabel('mask.ellipse')})`}
             active={maskEditMode === 'drawingEllipse'}
+            guidedTarget="ellipse"
             onClick={() => startDrawMode('drawingEllipse')}
           />
           <IconButton
@@ -653,6 +664,7 @@ export function MasksTab({ clipId, masks }: MasksTabProps) {
             title={`Edit Path (${registry.getLabel('mask.edit')})`}
             active={maskEditMode === 'editing'}
             disabled={!activeMask}
+            guidedTarget="edit"
             onClick={() => {
               if (!activeMask) return;
               setActiveMask(clipId, activeMask.id);

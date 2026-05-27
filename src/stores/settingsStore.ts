@@ -55,12 +55,26 @@ export type GPUPowerPreference = 'high-performance' | 'low-power';
 
 export type AIProvider = 'openai' | 'lemonade';
 
+export type GuidedActionReplayVisualizationMode = 'off' | 'concise' | 'full';
+export type GuidedActionReplayCompressionMode = 'none' | 'family' | 'aggressive';
+
+export const DEFAULT_GUIDED_ACTION_REPLAY_BUDGET_MS = 3000;
+export const MAX_GUIDED_ACTION_REPLAY_BUDGET_MS = 10000;
+
+function clampGuidedActionReplayBudgetMs(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_GUIDED_ACTION_REPLAY_BUDGET_MS;
+  }
+  return Math.max(0, Math.min(MAX_GUIDED_ACTION_REPLAY_BUDGET_MS, Math.round(value)));
+}
+
 export interface APIKeys {
   openai: string;
   assemblyai: string;
   deepgram: string;
   piapi: string;  // PiAPI key for AI video generation (Kling, Luma, etc.)
   kieai: string;  // Kie.ai key for Kling 3.0 and Nano Banana 2
+  evolink: string; // EvoLink key for Nano Banana 2 fallback image generation
   elevenlabs: string; // ElevenLabs key for AI audio generation
   youtube: string; // YouTube Data API v3 key (optional, Invidious works without)
   // Legacy Kling keys (deprecated, use piapi instead)
@@ -117,6 +131,9 @@ interface SettingsState {
   lemonadeEndpoint: string;
   lemonadeModel: string;
   aiSystemPromptOverrides: Partial<Record<AIProvider, string>>;
+  guidedActionReplayVisualizationMode: GuidedActionReplayVisualizationMode;
+  guidedActionReplayBudgetMs: number;
+  guidedActionReplayCompressionMode: GuidedActionReplayCompressionMode;
 
   // Media import settings
   copyMediaToProject: boolean;  // Copy imported files to project Raw/ folder
@@ -177,6 +194,9 @@ interface SettingsState {
   setLemonadeEndpoint: (endpoint: string) => void;
   setLemonadeModel: (model: string) => void;
   setAiSystemPromptOverride: (provider: AIProvider, prompt: string) => void;
+  setGuidedActionReplayVisualizationMode: (mode: GuidedActionReplayVisualizationMode) => void;
+  setGuidedActionReplayBudgetMs: (budgetMs: number) => void;
+  setGuidedActionReplayCompressionMode: (mode: GuidedActionReplayCompressionMode) => void;
   setCopyMediaToProject: (enabled: boolean) => void;
   setHasCompletedSetup: (completed: boolean) => void;
   setHasSeenTutorial: (seen: boolean) => void;
@@ -225,6 +245,7 @@ export const useSettingsStore = create<SettingsState>()(
         deepgram: '',
         piapi: '',
         kieai: '',
+        evolink: '',
         elevenlabs: '',
         youtube: '',
         klingAccessKey: '',
@@ -249,6 +270,9 @@ export const useSettingsStore = create<SettingsState>()(
       lemonadeEndpoint: DEFAULT_LEMONADE_ENDPOINT,
       lemonadeModel: DEFAULT_LEMONADE_MODEL,
       aiSystemPromptOverrides: {},
+      guidedActionReplayVisualizationMode: 'concise' as GuidedActionReplayVisualizationMode,
+      guidedActionReplayBudgetMs: DEFAULT_GUIDED_ACTION_REPLAY_BUDGET_MS,
+      guidedActionReplayCompressionMode: 'family' as GuidedActionReplayCompressionMode,
       copyMediaToProject: true, // Copy imported files to Raw/ folder by default
       hasCompletedSetup: false, // Show welcome overlay on first run
       hasSeenTutorial: false, // Show tutorial on first run
@@ -375,6 +399,18 @@ export const useSettingsStore = create<SettingsState>()(
           }
           return { aiSystemPromptOverrides: overrides };
         });
+      },
+
+      setGuidedActionReplayVisualizationMode: (mode) => {
+        set({ guidedActionReplayVisualizationMode: mode });
+      },
+
+      setGuidedActionReplayBudgetMs: (budgetMs) => {
+        set({ guidedActionReplayBudgetMs: clampGuidedActionReplayBudgetMs(budgetMs) });
+      },
+
+      setGuidedActionReplayCompressionMode: (mode) => {
+        set({ guidedActionReplayCompressionMode: mode });
       },
 
       setCopyMediaToProject: (enabled) => {
@@ -544,6 +580,9 @@ export const useSettingsStore = create<SettingsState>()(
         lemonadeEndpoint: state.lemonadeEndpoint,
         lemonadeModel: state.lemonadeModel,
         aiSystemPromptOverrides: state.aiSystemPromptOverrides,
+        guidedActionReplayVisualizationMode: state.guidedActionReplayVisualizationMode,
+        guidedActionReplayBudgetMs: state.guidedActionReplayBudgetMs,
+        guidedActionReplayCompressionMode: state.guidedActionReplayCompressionMode,
         copyMediaToProject: state.copyMediaToProject,
         hasCompletedSetup: state.hasCompletedSetup,
         hasSeenTutorial: state.hasSeenTutorial,

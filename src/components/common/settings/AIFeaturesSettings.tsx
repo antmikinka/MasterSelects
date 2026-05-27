@@ -1,5 +1,10 @@
 import { useState, useCallback } from 'react';
-import { useSettingsStore } from '../../../stores/settingsStore';
+import {
+  MAX_GUIDED_ACTION_REPLAY_BUDGET_MS,
+  useSettingsStore,
+  type GuidedActionReplayCompressionMode,
+  type GuidedActionReplayVisualizationMode,
+} from '../../../stores/settingsStore';
 import { useMatAnyoneStore, type MatAnyoneSetupStatus } from '../../../stores/matanyoneStore';
 import {
   checkLemonadeHealth,
@@ -70,11 +75,17 @@ export function AIFeaturesSettings({ embedded }: AIFeaturesSettingsProps = {}) {
     aiProvider,
     lemonadeEndpoint,
     lemonadeModel,
+    guidedActionReplayVisualizationMode,
+    guidedActionReplayBudgetMs,
+    guidedActionReplayCompressionMode,
     setMatAnyoneEnabled,
     setMatAnyonePythonPath,
     setAiProvider,
     setLemonadeEndpoint,
     setLemonadeModel,
+    setGuidedActionReplayVisualizationMode,
+    setGuidedActionReplayBudgetMs,
+    setGuidedActionReplayCompressionMode,
   } = useSettingsStore();
 
   const {
@@ -219,6 +230,68 @@ export function AIFeaturesSettings({ embedded }: AIFeaturesSettingsProps = {}) {
             </button>
           </div>
         </div>
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group-title">AI Replay</div>
+
+        <label className="settings-row">
+          <span className="settings-label">Replay View</span>
+          <select
+            className="settings-select"
+            value={guidedActionReplayVisualizationMode}
+            onChange={(e) => setGuidedActionReplayVisualizationMode(e.target.value as GuidedActionReplayVisualizationMode)}
+          >
+            <option value="concise">Concise</option>
+            <option value="full">Full</option>
+            <option value="off">Off</option>
+          </select>
+        </label>
+
+        <label className="settings-row">
+          <span className="settings-label">Animation Budget</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 230, justifyContent: 'flex-end' }}>
+            <input
+              type="range"
+              min={0}
+              max={MAX_GUIDED_ACTION_REPLAY_BUDGET_MS}
+              step={250}
+              value={guidedActionReplayBudgetMs}
+              onChange={(e) => setGuidedActionReplayBudgetMs(Number(e.target.value))}
+              className="custom-theme-slider"
+              style={{ width: 132 }}
+              disabled={guidedActionReplayVisualizationMode === 'off'}
+            />
+            <input
+              type="number"
+              min={0}
+              max={MAX_GUIDED_ACTION_REPLAY_BUDGET_MS}
+              step={250}
+              value={guidedActionReplayBudgetMs}
+              onChange={(e) => setGuidedActionReplayBudgetMs(Number(e.target.value))}
+              className="settings-input settings-input-number"
+              disabled={guidedActionReplayVisualizationMode === 'off'}
+            />
+            <span style={{ fontSize: 10, color: 'var(--text-secondary)', width: 20 }}>ms</span>
+          </div>
+        </label>
+
+        <label className="settings-row">
+          <span className="settings-label">Compression</span>
+          <select
+            className="settings-select"
+            value={guidedActionReplayCompressionMode}
+            onChange={(e) => setGuidedActionReplayCompressionMode(e.target.value as GuidedActionReplayCompressionMode)}
+            disabled={guidedActionReplayVisualizationMode === 'off' || guidedActionReplayBudgetMs === 0}
+          >
+            <option value="family">Grouped</option>
+            <option value="none">None</option>
+            <option value="aggressive">Aggressive</option>
+          </select>
+        </label>
+        <p className="settings-hint">
+          0 ms keeps execution checks but skips visual animation.
+        </p>
       </div>
 
       {/* MatAnyone2 Section */}

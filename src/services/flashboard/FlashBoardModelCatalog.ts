@@ -1,5 +1,9 @@
 import { getVideoProviders } from '../piApiService';
 import { getKieAiProviders } from '../kieAiService';
+import {
+  EVOLINK_NANO_BANANA_2_MODEL,
+  EVOLINK_NANO_BANANA_2_PROVIDER_ID,
+} from '../evolinkService';
 import type { CatalogEntry } from './types';
 import { DEFAULT_ELEVENLABS_MODEL_ID } from '../../stores/flashboardStore/defaults';
 import { DEFAULT_SUNO_MODEL_ID, SUNO_MODEL_IDS, SUNO_PROVIDER_ID } from '../sunoService';
@@ -53,6 +57,26 @@ export function getCatalogEntries(): CatalogEntry[] {
     modes: [],
     durations: [],
     aspectRatios: ['1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'],
+    supportsTextToVideo: false,
+    supportsImageToVideo: false,
+    supportsTextToImage: true,
+    supportsGenerateAudio: false,
+    supportsMultiShot: false,
+    imageSizes: ['1K', '2K', '4K'],
+    maxReferenceImages: 14,
+    maxReferenceMedia: 14,
+    outputType: 'image',
+  });
+
+  entries.push({
+    service: 'evolink',
+    providerId: EVOLINK_NANO_BANANA_2_PROVIDER_ID,
+    name: 'Nano Banana 2 (EvoLink)',
+    description: 'Image generation via EvoLink with up to 14 ordered reference images',
+    versions: [EVOLINK_NANO_BANANA_2_MODEL],
+    modes: [],
+    durations: [],
+    aspectRatios: ['auto', '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'],
     supportsTextToVideo: false,
     supportsImageToVideo: false,
     supportsTextToImage: true,

@@ -20,6 +20,7 @@ import { IndexedDBErrorDialog } from './components/common/IndexedDBErrorDialog';
 import { LinuxVulkanWarning } from './components/common/LinuxVulkanWarning';
 import { ProjectLoadProgressOverlay } from './components/common/ProjectLoadProgressOverlay';
 import { PricingDialog } from './components/common/PricingDialog';
+import { GuidedActionOverlay } from './components/guidedActions/GuidedActionOverlay';
 import { TutorialOverlay } from './components/common/TutorialOverlay';
 import { TutorialCampaignDialog } from './components/common/TutorialCampaignDialog';
 import { InteractiveTutorialOverlay } from './components/common/tutorial/InteractiveTutorialOverlay';
@@ -366,6 +367,7 @@ function App() {
       <LinuxVulkanWarning />
       <Toolbar onOpenChangelog={() => setShowChangelog(true)} onOpenSplash={() => setShowSplash(true)} />
       <DockContainer />
+      <GuidedActionOverlay />
       <ProjectLoadProgressOverlay />
       {showWelcome && (
         <WelcomeOverlay onComplete={handleWelcomeComplete} noFadeOnClose />

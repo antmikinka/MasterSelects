@@ -1,0 +1,643 @@
+import type {
+  GuidedAction,
+  GuidedPoint,
+  GuidedRect,
+  GuidedTargetMissingReason,
+  GuidedTargetRef,
+  GuidedTargetResolution,
+  GuidedTargetResolver,
+} from '../types';
+import { type GuidedTargetRegistry } from '../targetRegistry';
+import { useTimelineStore } from '../../../stores/timeline';
+
+type ElementTargetKind =
+  | 'dom'
+  | 'button'
+  | 'dropdown'
+  | 'dropdownOption'
+  | 'maskEdge'
+  | 'maskHandle'
+  | 'menuItem'
+  | 'maskToolbarButton'
+  | 'maskVertex'
+  | 'mediaItem'
+  | 'panel'
+  | 'panelEdge'
+  | 'propertiesTab'
+  | 'propertyControl'
+  | 'timelineClip'
+  | 'timelineFadeHandle'
+  | 'timelineKeyframe'
+  | 'timelineMarker'
+  | 'timelineTrimHandle';
+
+const ELEMENT_TARGET_KINDS = new Set<string>([
+  'dom',
+  'button',
+  'dropdown',
+  'dropdownOption',
+  'maskEdge',
+  'maskHandle',
+  'menuItem',
+  'maskToolbarButton',
+  'maskVertex',
+  'mediaItem',
+  'panel',
+  'panelEdge',
+  'propertiesTab',
+  'propertyControl',
+  'timelineClip',
+  'timelineFadeHandle',
+  'timelineKeyframe',
+  'timelineMarker',
+  'timelineTrimHandle',
+]);
+
+const PREVIEW_CONTAINER_SELECTORS = [
+  '[data-guided-target="preview"]',
+  '[data-guided-panel="preview"]',
+  '.preview-canvas-wrapper',
+  '.preview-container',
+  '.preview-panel',
+];
+
+const TIMELINE_SURFACE_SELECTORS = [
+  '[data-guided-target="timeline-tracks"]',
+  '[data-ai-id="timeline-tracks"]',
+  '.timeline-track-stack.timeline-tracks',
+  '.timeline-tracks',
+];
+
+const TIMELINE_LANE_REFERENCE_SELECTORS = [
+  '[data-guided-target="timeline-lane-reference"]',
+  '.timeline-lane-reference',
+];
+
+const TIMELINE_HEADER_WIDTH_FALLBACK = 210;
+const TIMELINE_TIME_TARGET_WIDTH = 8;
+const TIMELINE_TIME_TARGET_HEIGHT = 28;
+
+export function registerDomGuidedTargetResolvers(registry: GuidedTargetRegistry): () => void {
+  const unregisterElementTargets = [...ELEMENT_TARGET_KINDS].map((kind) => (
+    registry.registerResolver(kind as ElementTargetKind, resolveElementBackedTarget, `dom-${kind}`)
+  ));
+  const unregisterPreviewPoint = registry.registerResolver('previewPoint', resolvePreviewPointTarget, 'dom-preview-point');
+  const unregisterPreviewVertex = registry.registerResolver('previewPathVertex', resolvePreviewPointTarget, 'dom-preview-path-vertex');
+  const unregisterTimelineTime = registry.registerResolver('timelineTime', resolveTimelineTimeTarget, 'dom-timeline-time');
+
+  return () => {
+    unregisterElementTargets.forEach((unregister) => unregister());
+    unregisterPreviewPoint();
+    unregisterPreviewVertex();
+    unregisterTimelineTime();
+  };
+}
+
+export const resolveElementBackedTarget: GuidedTargetResolver = (
+  target,
+  _context,
+) => {
+  if (!ELEMENT_TARGET_KINDS.has(target.kind)) {
+    return null;
+  }
+
+  const element = findElementForTarget(target);
+  if (!element) {
+    return missingElementTarget(target);
+  }
+
+  return resolutionFromElement(target, element);
+};
+
+export const resolvePreviewPointTarget: GuidedTargetResolver = (
+  target,
+  _context,
+) => {
+  if (target.kind !== 'previewPoint' && target.kind !== 'previewPathVertex') {
+    return null;
+  }
+
+  const preview = findFirstElement(PREVIEW_CONTAINER_SELECTORS);
+  if (!preview) {
+    return {
+      status: 'missing',
+      target,
+      reason: 'not-mounted',
+      message: 'Preview surface is not mounted',
+      suggestedAction: { type: 'focusPanel', panel: 'preview' },
+    };
+  }
+
+  const base = resolutionFromElement({ kind: 'panel', panel: 'preview' }, preview);
+  if (base.status === 'missing' || !base.rect) {
+    return {
+      ...base,
+      target,
+      suggestedAction: { type: 'focusPanel', panel: 'preview' },
+    };
+  }
+
+  const x = clamp01(target.x);
+  const y = clamp01(target.y);
+  const point = {
+    x: base.rect.x + base.rect.width * x,
+    y: base.rect.y + base.rect.height * y,
+  };
+
+  return {
+    status: 'resolved',
+    target,
+    rect: {
+      x: point.x - 4,
+      y: point.y - 4,
+      width: 8,
+      height: 8,
+    },
+    point,
+    center: point,
+    element: preview,
+  };
+};
+
+export const resolveTimelineTimeTarget: GuidedTargetResolver = (
+  target,
+  _context,
+) => {
+  if (target.kind !== 'timelineTime') {
+    return null;
+  }
+
+  const timelineSurface = findFirstElement(TIMELINE_SURFACE_SELECTORS);
+  if (!timelineSurface) {
+    return {
+      status: 'missing',
+      target,
+      reason: 'panel-hidden',
+      message: 'Timeline surface is not mounted',
+      suggestedAction: { type: 'focusPanel', panel: 'timeline' },
+    };
+  }
+
+  const surfaceRect = rectFromElement(timelineSurface);
+  if (surfaceRect.width <= 0 || surfaceRect.height <= 0) {
+    return {
+      status: 'missing',
+      target,
+      reason: 'not-mounted',
+      message: 'Timeline surface has no visible layout box',
+      suggestedAction: { type: 'focusPanel', panel: 'timeline' },
+    };
+  }
+
+  if (!Number.isFinite(target.time)) {
+    return {
+      status: 'missing',
+      target,
+      reason: 'entity-not-found',
+      message: 'Timeline time target is not finite',
+    };
+  }
+
+  const trackElement = target.trackId
+    ? findTimelineTrackElement(timelineSurface, target.trackId)
+    : null;
+  if (target.trackId && !trackElement) {
+    return {
+      status: 'missing',
+      target,
+      reason: 'entity-not-found',
+      message: `Timeline track "${target.trackId}" is not mounted`,
+      suggestedAction: { type: 'focusPanel', panel: 'timeline' },
+    };
+  }
+
+  const { zoom, scrollX } = useTimelineStore.getState();
+  const effectiveZoom = Number.isFinite(zoom) && zoom > 0
+    ? zoom
+    : readNumberAttribute(timelineSurface, 'data-guided-timeline-zoom') ?? 50;
+  const effectiveScrollX = Number.isFinite(scrollX)
+    ? scrollX
+    : readNumberAttribute(timelineSurface, 'data-guided-timeline-scroll-x') ?? 0;
+  const originX = resolveTimelineContentOriginX(timelineSurface, surfaceRect);
+  const x = originX + target.time * effectiveZoom - effectiveScrollX;
+  const y = resolveTimelineTimeY(timelineSurface, surfaceRect, trackElement);
+  const point = { x, y };
+  const rect = {
+    x: point.x - TIMELINE_TIME_TARGET_WIDTH / 2,
+    y: point.y - TIMELINE_TIME_TARGET_HEIGHT / 2,
+    width: TIMELINE_TIME_TARGET_WIDTH,
+    height: TIMELINE_TIME_TARGET_HEIGHT,
+  };
+
+  const viewportRight = surfaceRect.x + surfaceRect.width;
+  const viewportBottom = surfaceRect.y + surfaceRect.height;
+  const isOutsideTimelineViewport = point.x < originX
+    || point.x > viewportRight
+    || point.y < surfaceRect.y
+    || point.y > viewportBottom;
+
+  if (isOutsideTimelineViewport || isOffscreen(rect)) {
+    return {
+      status: 'missing',
+      target,
+      reason: 'offscreen',
+      message: 'Timeline time target is outside the visible timeline viewport',
+      suggestedAction: {
+        type: 'scrollIntoView',
+        target,
+        block: 'center',
+      },
+    };
+  }
+
+  return {
+    status: 'resolved',
+    target,
+    rect,
+    point,
+    center: point,
+    element: trackElement ?? timelineSurface,
+  };
+};
+
+export function resolveTargetFromElement(
+  target: GuidedTargetRef,
+  element: Element,
+): GuidedTargetResolution {
+  return resolutionFromElement(target, element);
+}
+
+function findElementForTarget(target: GuidedTargetRef): Element | null {
+  switch (target.kind) {
+    case 'dom':
+      return findFirstElement([
+        `[data-guided-target="${escapeAttr(target.id)}"]`,
+        `#${escapeCssIdentifier(target.id)}`,
+      ]);
+    case 'button':
+      return findFirstElement([
+        `[data-guided-target="button:${escapeAttr(target.id)}"]`,
+        `[data-guided-button="${escapeAttr(target.id)}"]`,
+        `[data-guided-target="${escapeAttr(target.id)}"]`,
+      ]);
+    case 'dropdown':
+      return findFirstElement([
+        `[data-guided-target="dropdown:${escapeAttr(target.id)}"]`,
+        `[data-guided-dropdown="${escapeAttr(target.id)}"]`,
+        `[data-guided-target="${escapeAttr(target.id)}"]`,
+      ]);
+    case 'dropdownOption':
+      return findFirstElement([
+        `[data-guided-target="dropdown-option:${escapeAttr(target.dropdownId)}:${escapeAttr(target.value)}"]`,
+        `[data-guided-dropdown-option="${escapeAttr(target.dropdownId)}:${escapeAttr(target.value)}"]`,
+        `[data-guided-dropdown="${escapeAttr(target.dropdownId)}"] [data-guided-option="${escapeAttr(target.value)}"]`,
+      ]);
+    case 'menuItem':
+      return findFirstElement([
+        `[data-guided-target="menu-item:${escapeAttr(target.menuId)}:${escapeAttr(target.itemId)}"]`,
+        `[data-guided-menu-item="${escapeAttr(target.menuId)}:${escapeAttr(target.itemId)}"]`,
+        `[data-guided-menu="${escapeAttr(target.menuId)}"] [data-guided-item="${escapeAttr(target.itemId)}"]`,
+      ]);
+    case 'maskToolbarButton':
+      return findFirstElement([
+        `[data-guided-target="mask-toolbar:${escapeAttr(target.button)}"]`,
+        `[data-guided-mask-tool="${escapeAttr(target.button)}"]`,
+      ]);
+    case 'maskVertex':
+      return findFirstElement([
+        target.vertexId
+          ? `[data-guided-target="mask-vertex:${escapeAttr(target.maskId)}:${escapeAttr(target.vertexId)}"]`
+          : '',
+        target.vertexId
+          ? `[data-guided-mask-vertex="${escapeAttr(target.maskId)}:${escapeAttr(target.vertexId)}"]`
+          : '',
+        typeof target.index === 'number'
+          ? `[data-guided-target="mask-vertex:${escapeAttr(target.maskId)}:index:${escapeAttr(String(target.index))}"]`
+          : '',
+        typeof target.index === 'number'
+          ? `[data-guided-mask-vertex-index="${escapeAttr(target.maskId)}:${escapeAttr(String(target.index))}"]`
+          : '',
+      ]);
+    case 'maskHandle':
+      return findFirstElement([
+        target.vertexId
+          ? `[data-guided-target="mask-handle:${escapeAttr(target.maskId)}:${escapeAttr(target.vertexId)}:${escapeAttr(target.handle)}"]`
+          : '',
+        target.vertexId
+          ? `[data-guided-mask-handle="${escapeAttr(target.maskId)}:${escapeAttr(target.vertexId)}:${escapeAttr(target.handle)}"]`
+          : '',
+        typeof target.index === 'number'
+          ? `[data-guided-target="mask-handle:${escapeAttr(target.maskId)}:index:${escapeAttr(String(target.index))}:${escapeAttr(target.handle)}"]`
+          : '',
+        typeof target.index === 'number'
+          ? `[data-guided-mask-handle-index="${escapeAttr(target.maskId)}:${escapeAttr(String(target.index))}:${escapeAttr(target.handle)}"]`
+          : '',
+      ]);
+    case 'maskEdge':
+      return findFirstElement([
+        `[data-guided-target="mask-edge:${escapeAttr(target.maskId)}:${escapeAttr(String(target.fromIndex))}:${escapeAttr(String(target.toIndex))}"]`,
+        `[data-guided-mask-edge="${escapeAttr(target.maskId)}:${escapeAttr(String(target.fromIndex))}:${escapeAttr(String(target.toIndex))}"]`,
+      ]);
+    case 'mediaItem':
+      return findFirstElement([
+        `[data-guided-target="media-item:${escapeAttr(target.itemId)}"]`,
+        `[data-media-item-id="${escapeAttr(target.itemId)}"]`,
+        `[data-item-id="${escapeAttr(target.itemId)}"]`,
+      ]);
+    case 'panel':
+      return findFirstElement([
+        `[data-guided-panel="${escapeAttr(target.panel)}"]`,
+        `[data-panel-type="${escapeAttr(target.panel)}"]`,
+        `.dock-panel-content-inner--${escapeCssIdentifier(target.panel)}`,
+      ]);
+    case 'panelEdge':
+      return findFirstElement([
+        `[data-guided-panel-edge="${escapeAttr(target.groupId)}:${escapeAttr(target.edge)}"]`,
+        `[data-guided-split-id="${escapeAttr(target.groupId)}"][data-guided-edge="${escapeAttr(target.edge)}"]`,
+      ]);
+    case 'propertiesTab':
+      return findFirstElement([
+        `[data-guided-target="properties-tab:${escapeAttr(target.tab)}"]`,
+        `[data-guided-properties-tab="${escapeAttr(target.tab)}"]`,
+      ]);
+    case 'propertyControl':
+      return findFirstElement([
+        target.clipId
+          ? `[data-guided-property="${escapeAttr(target.property)}"][data-guided-clip-id="${escapeAttr(target.clipId)}"]`
+          : '',
+        `[data-guided-target="property:${escapeAttr(target.property)}"]`,
+        `[data-guided-property="${escapeAttr(target.property)}"]`,
+      ]);
+    case 'timelineClip':
+      return findFirstElement([
+        `[data-guided-target="timeline-clip:${escapeAttr(target.clipId)}"]`,
+        `[data-clip-id="${escapeAttr(target.clipId)}"]`,
+      ]);
+    case 'timelineTrimHandle':
+      return findFirstElement([
+        `[data-guided-target="timeline-trim:${escapeAttr(target.clipId)}:${escapeAttr(target.edge)}"]`,
+        `[data-clip-id="${escapeAttr(target.clipId)}"] [data-guided-trim-edge="${escapeAttr(target.edge)}"]`,
+      ]);
+    case 'timelineFadeHandle':
+      return findFirstElement([
+        `[data-guided-target="timeline-fade:${escapeAttr(target.clipId)}:${escapeAttr(target.edge)}"]`,
+        `[data-clip-id="${escapeAttr(target.clipId)}"] [data-guided-fade-edge="${escapeAttr(target.edge)}"]`,
+      ]);
+    case 'timelineMarker':
+      return findFirstElement([
+        `[data-guided-target="timeline-marker:${escapeAttr(target.markerId)}"]`,
+        `[data-marker-id="${escapeAttr(target.markerId)}"]`,
+      ]);
+    case 'timelineKeyframe':
+      return findFirstElement([
+        `[data-guided-target="timeline-keyframe:${escapeAttr(target.clipId)}:${escapeAttr(target.keyframeId)}"]`,
+        `[data-clip-id="${escapeAttr(target.clipId)}"] [data-keyframe-id="${escapeAttr(target.keyframeId)}"]`,
+      ]);
+    case 'previewPoint':
+    case 'previewPathVertex':
+    case 'timelineTime':
+      return null;
+  }
+}
+
+function resolutionFromElement(target: GuidedTargetRef, element: Element): GuidedTargetResolution {
+  const rect = rectFromElement(element);
+  if (rect.width <= 0 || rect.height <= 0) {
+    return {
+      status: 'missing',
+      target,
+      reason: 'not-mounted',
+      message: 'Guided target has no visible layout box',
+    };
+  }
+
+  if (isOffscreen(rect)) {
+    return {
+      status: 'missing',
+      target,
+      reason: 'offscreen',
+      message: 'Guided target is outside the viewport',
+      suggestedAction: {
+        type: 'scrollIntoView',
+        target,
+        block: 'center',
+      },
+    };
+  }
+
+  return {
+    status: 'resolved',
+    target,
+    rect,
+    center: centerOfRect(rect),
+    element,
+  };
+}
+
+function missingElementTarget(target: GuidedTargetRef): GuidedTargetResolution {
+  const suggestedAction = getSuggestedActionForMissingTarget(target);
+  return {
+    status: 'missing',
+    target,
+    reason: getMissingReason(target),
+    message: `Guided target "${target.kind}" is not mounted`,
+    suggestedAction,
+  };
+}
+
+function getSuggestedActionForMissingTarget(target: GuidedTargetRef): GuidedAction | undefined {
+  switch (target.kind) {
+    case 'panel':
+      return { type: 'focusPanel', panel: target.panel };
+    case 'propertiesTab':
+    case 'propertyControl':
+    case 'maskToolbarButton':
+    case 'maskEdge':
+    case 'maskHandle':
+    case 'maskVertex':
+      return { type: 'focusPanel', panel: 'clip-properties' };
+    case 'timelineClip':
+    case 'timelineFadeHandle':
+    case 'timelineKeyframe':
+    case 'timelineMarker':
+    case 'timelineTime':
+    case 'timelineTrimHandle':
+      return { type: 'focusPanel', panel: 'timeline' };
+    case 'mediaItem':
+      return { type: 'focusPanel', panel: 'media' };
+    case 'button':
+    case 'dom':
+    case 'dropdown':
+    case 'dropdownOption':
+    case 'menuItem':
+    case 'panelEdge':
+    case 'previewPoint':
+    case 'previewPathVertex':
+      return undefined;
+  }
+}
+
+function getMissingReason(target: GuidedTargetRef): GuidedTargetMissingReason {
+  switch (target.kind) {
+    case 'panel':
+    case 'propertiesTab':
+    case 'propertyControl':
+    case 'maskToolbarButton':
+    case 'mediaItem':
+      return 'panel-hidden';
+    case 'maskEdge':
+    case 'maskHandle':
+    case 'maskVertex':
+      return 'entity-not-found';
+    case 'timelineClip':
+    case 'timelineFadeHandle':
+    case 'timelineKeyframe':
+    case 'timelineMarker':
+    case 'timelineTrimHandle':
+      return 'entity-not-found';
+    case 'timelineTime':
+      return 'panel-hidden';
+    case 'button':
+    case 'dom':
+    case 'dropdown':
+    case 'dropdownOption':
+    case 'menuItem':
+    case 'panelEdge':
+    case 'previewPoint':
+    case 'previewPathVertex':
+      return 'not-mounted';
+  }
+}
+
+function findFirstElement(selectors: string[]): Element | null {
+  for (const selector of selectors) {
+    if (!selector) {
+      continue;
+    }
+    const element = document.querySelector(selector);
+    if (element) {
+      return element;
+    }
+  }
+  return null;
+}
+
+function findTimelineTrackElement(timelineSurface: Element, trackId: string): Element | null {
+  const selectors = [
+    `[data-guided-track-id="${escapeAttr(trackId)}"]`,
+    `[data-track-id="${escapeAttr(trackId)}"]`,
+  ];
+  for (const selector of selectors) {
+    const element = timelineSurface.querySelector(selector) ?? document.querySelector(selector);
+    if (element) {
+      return element;
+    }
+  }
+  return null;
+}
+
+function resolveTimelineContentOriginX(timelineSurface: Element, surfaceRect: GuidedRect): number {
+  const originElement = findFirstDescendant(timelineSurface, TIMELINE_LANE_REFERENCE_SELECTORS);
+  if (originElement) {
+    const originRect = rectFromElement(originElement);
+    if (Number.isFinite(originRect.x) && originRect.x > 0) {
+      return originRect.x;
+    }
+  }
+
+  const originOffset = readNumberAttribute(timelineSurface, 'data-guided-timeline-origin-x')
+    ?? TIMELINE_HEADER_WIDTH_FALLBACK;
+  return surfaceRect.x + originOffset;
+}
+
+function resolveTimelineTimeY(
+  timelineSurface: Element,
+  surfaceRect: GuidedRect,
+  trackElement: Element | null,
+): number {
+  const rowElement = trackElement?.querySelector('.track-clip-row') ?? trackElement;
+  if (rowElement) {
+    const rowRect = rectFromElement(rowElement);
+    if (rowRect.height > 0) {
+      return rowRect.y + rowRect.height / 2;
+    }
+  }
+
+  const firstTrack = findFirstDescendant(timelineSurface, [
+    '[data-guided-track-id] .track-clip-row',
+    '[data-track-id] .track-clip-row',
+    '[data-guided-track-id]',
+    '[data-track-id]',
+  ]);
+  if (firstTrack) {
+    const firstTrackRect = rectFromElement(firstTrack);
+    if (firstTrackRect.height > 0) {
+      return firstTrackRect.y + firstTrackRect.height / 2;
+    }
+  }
+
+  return surfaceRect.y + Math.min(32, surfaceRect.height / 2);
+}
+
+function findFirstDescendant(root: Element, selectors: string[]): Element | null {
+  for (const selector of selectors) {
+    if (!selector) {
+      continue;
+    }
+    const element = root.querySelector(selector);
+    if (element) {
+      return element;
+    }
+  }
+  return null;
+}
+
+function readNumberAttribute(element: Element, attribute: string): number | null {
+  const raw = element.getAttribute(attribute);
+  if (raw === null || raw.trim() === '') {
+    return null;
+  }
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+function rectFromElement(element: Element): GuidedRect {
+  const rect = element.getBoundingClientRect();
+  return {
+    x: rect.left,
+    y: rect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function centerOfRect(rect: GuidedRect): GuidedPoint {
+  return {
+    x: rect.x + rect.width / 2,
+    y: rect.y + rect.height / 2,
+  };
+}
+
+function isOffscreen(rect: GuidedRect): boolean {
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+  return rect.x + rect.width < 0
+    || rect.y + rect.height < 0
+    || rect.x > viewportWidth
+    || rect.y > viewportHeight;
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0.5;
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
+function escapeAttr(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function escapeCssIdentifier(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, (character) => `\\${character}`);
+}

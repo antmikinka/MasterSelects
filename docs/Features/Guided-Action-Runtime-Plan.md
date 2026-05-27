@@ -506,6 +506,14 @@ Each stream below is intended to be owned by a different agent. Agents should av
 - `src/services/guidedActions/index.ts`
 - `src/stores/guidedActionStore.ts`
 
+**Implementation status, 2026-05-26**
+
+- Initial Stream A foundation exists in the owner-scope files above.
+- The scheduler normalizes animation budgets to the `0s` to `10s` range, scales planned durations, classifies tool calls by choreography family, and compresses repeated same-family visual actions.
+- The runtime supports one active session, injected target resolvers, injected semantic action handlers, cancellation/skip, missing-target diagnostics, and instant mode that runs semantic actions without cursor/spotlight/callout visuals.
+- The transient `guidedActionStore` tracks session snapshots, current step, cursor, spotlight, callout, highlights, target resolutions, diagnostics, and runtime events for future overlay components.
+- Focused coverage is in `tests/unit/guidedActionsScheduler.test.ts` and `tests/unit/guidedActionRuntime.test.ts`.
+
 **Responsibilities**
 
 - Define shared types.
@@ -559,6 +567,13 @@ Each stream below is intended to be owned by a different agent. Agents should av
 - Render a synthetic cursor that is visually distinct from the OS cursor.
 - Provide visible Cancel/Skip affordance for locked replay sessions.
 
+**Implementation status, 2026-05-26**
+
+- Initial global overlay components exist in `src/components/guidedActions/` and are mounted from `src/App.tsx`.
+- The overlay renders cursor, click ripple, spotlight, target highlight, callout, step HUD, locked input shield, target-only segmented shield, and Cancel/Skip controls.
+- DOM resolver registration is wired from the overlay effect so visual sessions can resolve app targets without each caller registering browser-specific resolvers.
+- Focused React coverage is in `tests/unit/GuidedActionOverlay.test.tsx`.
+
 **Must not do**
 
 - Do not perform edits.
@@ -596,6 +611,16 @@ Each stream below is intended to be owned by a different agent. Agents should av
 - Resolve preview normalized points into viewport points.
 - Provide geometry providers for timeline time/track positions, preview normalized points, Properties controls, and offscreen/virtual surfaces.
 
+**Implementation status, 2026-05-26**
+
+- DOM-backed resolvers exist in `src/services/guidedActions/targetResolvers/domTargets.ts`.
+- The first resolver slice supports major element-backed target refs, structured missing reasons, panel-focus suggestions, offscreen detection, and normalized preview point mapping.
+- `timelineTime` now resolves from the visible Timeline surface using stable Timeline instrumentation, current zoom/scroll state, header offset, and optional track-row geometry.
+- Mask editing overlays now expose stable Guided SVG targets for mask vertices, bezier handles, and edge hit areas; the DOM resolver supports `maskVertex`, `maskHandle`, and `maskEdge`.
+- Initial UI instrumentation covers dock panel containers/tabs, floating panels, properties tab surfaces, transform controls, mask toolbar buttons, and the common Transform/Masks property-tab buttons.
+- Focused resolver coverage is in `tests/unit/guidedDomTargets.test.ts`.
+- Remaining Stream C work includes richer timeline geometry providers and media/effect stack instrumentation.
+
 **Must not do**
 
 - Do not run guided sessions.
@@ -631,6 +656,15 @@ Each stream below is intended to be owned by a different agent. Agents should av
 - Normalize nested `executeBatch.actions[]` into visible substeps.
 - Annotate compiled actions with family/group metadata for scheduler compression.
 - Add state confirmations for important edits.
+
+**Implementation status, 2026-05-27**
+
+- Initial compiler entry points exist in `src/services/guidedActions/compiler.ts`.
+- Tool-family choreography lives under `src/services/guidedActions/choreography/` and covers the initial timeline, transform, mask, effects, keyframe, media, preview, and generic fallback paths.
+- `executeBatch` is normalized into visible nested substeps while preserving one outer batch execution point by default; inline sub-executions are available through compiler options for future adapters.
+- Timeline-edit choreography now reveals and points at virtual `timelineTime` targets before semantic execution, so split/move style actions can replay visible timeline-time intent.
+- Compiled actions are annotated with action families and include a single `executeTool` point for normal tool calls plus validation actions where the current contract supports them.
+- Focused coverage is in `tests/unit/guidedActionCompiler.test.ts`.
 
 **Initial tool coverage**
 
@@ -697,6 +731,15 @@ Each stream below is intended to be owned by a different agent. Agents should av
 - Enforce `SurfaceExecutionPolicy` for every surface action.
 - Avoid native dropdown dependence by supporting ghost menus or controlled app popovers where native `<select>` cannot be addressed reliably.
 
+**Implementation status, 2026-05-27**
+
+- `src/services/guidedActions/surfaceInteractionDriver.ts` provides default runtime handlers for high-level UI actions: panel focus, Properties tab navigation, clip selection, visual playhead updates, scroll-to-target, panel resize, button/dropdown/menu-like clicks, text input, and preview path drawing.
+- The runtime installs these handlers by default while still allowing injected handlers to override behavior for tests or specialized tools.
+- Surface execution policies are explicit: button/dropdown/type/resize interactions default to `visualOnly`; `persistUi` and `transientUi` are the UI-state execution paths. Semantic edits still belong in `executeTool`.
+- Virtual `timelineTime` scroll actions now adjust Timeline `scrollX` through the store before follow-up cursor movement resolves the target.
+- The guided overlay can now render transient preview paths so mask/path tutorials can show canvas point placement without mutating mask state.
+- Focused coverage is in `tests/unit/guidedSurfaceInteractionDriver.test.ts` and the overlay path assertion in `tests/unit/GuidedActionOverlay.test.tsx`.
+
 **Must not do**
 
 - Do not use raw DOM event simulation as the default source of truth for semantic edits.
@@ -741,6 +784,14 @@ Each stream below is intended to be owned by a different agent. Agents should av
 - Make `0s` instant mode set all legacy stagger/feedback delays to zero.
 - Return deterministic results for cancellation and abort.
 
+**Implementation status, 2026-05-27**
+
+- Initial semantic adapter exists in `src/services/guidedActions/semanticExecutionAdapter.ts`.
+- The adapter exposes a runtime `executeTool` action handler, preserves caller context and session id, forwards abort signals, and maps instant/legacy-off guided execution to `staggerBudgetMs: 0`.
+- `executeAITool` now accepts optional execution options without changing its existing call contract.
+- `executeBatch` has a reusable `executeBatchCore` with before/after hooks, injected tool execution, shared stagger budget, and deterministic cancellation results while history batching remains in `aiTools/index.ts`.
+- Focused coverage is in `tests/unit/guidedSemanticExecutionAdapter.test.ts` and `tests/unit/aiToolBatchCore.test.ts`.
+
 **Must not do**
 
 - Do not execute `executeBatch.actions[]` as separate public `executeAITool` calls.
@@ -779,6 +830,16 @@ Each stream below is intended to be owned by a different agent. Agents should av
 - Add settings gate for guided visualization: off, concise, full.
 - Plan guided sessions per `sendMessage` tool transaction, not only per individual assistant response, because OpenAI can emit multiple tool calls and tool-call turns.
 - Keep Lemonade's smaller tool subset and one-tool-context behavior in mind.
+
+**Implementation status, 2026-05-27**
+
+- `executeAITool` now routes chat-originated tool calls through the guided compiler, runtime, and semantic adapter when both `flags.guidedActionsRuntime` and `flags.guidedActionsAIReplay` are enabled.
+- DevBridge, console, native-helper, and internal callers stay on the direct execution path by default; explicit guided opt-in remains available through execution options for future tooling.
+- The guided route prevents recursion via `guidedSessionId`, returns the original semantic `ToolResult`, and uses `guidedAnimationBudgetMs: 0` for instant no-overlay execution in tests.
+- `AIChatPanel` creates one guided replay budget controller per send-message transaction, so multiple assistant tool calls draw from the same configured animation budget instead of each receiving a fresh full budget.
+- Multiple approved assistant tool calls are now executed through one grouped Guided session via `executeAIToolCalls`; the chat still appends one model-visible tool result per original `tool_call_id` in the same order.
+- `executeBatch` remains one outer semantic execution point while compiled substeps can be shown visually.
+- Focused coverage is in `tests/unit/guidedAIToolIntegration.test.ts`.
 
 **Must not do**
 
@@ -822,6 +883,14 @@ Each stream below is intended to be owned by a different agent. Agents should av
 - Reuse existing tutorial campaign picker.
 - Migrate static spotlight campaigns through an adapter first, then add real interactive campaigns.
 
+**Implementation status, 2026-05-27**
+
+- `src/services/guidedActions/scenarios/tutorialScenarioCompiler.ts` defines the shared scenario format and compiles demo, guided-user, and assist-style steps into normal guided runtime actions.
+- `InteractiveTutorialOverlay` now starts a guided runtime session instead of being a tutorial-only overlay stub.
+- `interactiveCampaigns.ts` contains the first feature-flagged guided-user campaign; it waits for store validation that any timeline clip is selected.
+- Guided-user scenarios strip semantic execution actions from tool choreography and advance through `waitForUserAction`, while demo scenarios can execute semantic tools through the runtime.
+- Focused coverage is in `tests/unit/guidedTutorialScenarioCompiler.test.ts`.
+
 **Must not do**
 
 - Do not create a separate tutorial-only cursor system.
@@ -861,6 +930,14 @@ Each stream below is intended to be owned by a different agent. Agents should av
   - media item imported
 - Provide polling and event-based validation helpers.
 
+**Implementation status, 2026-05-27**
+
+- `src/services/guidedActions/scenarios/validation.ts` now validates guided state checks against Timeline and Media store state without DOM reads for semantic state.
+- Covered checks include selected clips, properties tab reader hooks, playhead time, transform values, masks, active masks, effects, keyframes, imported media, target-reader hooks, and pass-through custom confirmations.
+- `clipTransformMatches` supports explicit `valueSpace: 'toolPixels'` so AI `setTransform` arguments validate correctly against the normalized Timeline transform state.
+- `GuidedActionRuntime` now executes `confirmState` as a real validation step and `waitForUserAction` as a polling wait with cancellation/timeout handling.
+- Focused coverage is in `tests/unit/guidedValidation.test.ts` and runtime validation assertions in `tests/unit/guidedActionRuntime.test.ts`.
+
 **Must not do**
 
 - Do not read DOM for semantic validation when store state exists.
@@ -891,6 +968,13 @@ Each stream below is intended to be owned by a different agent. Agents should av
 - Provide a way to record user-visible semantic actions later.
 - Support export/import of guided scenarios for tutorials.
 - Provide debug dump of compiled guided actions.
+
+**Implementation status, 2026-05-27**
+
+- `src/services/guidedActions/scenarios/recording.ts` provides scenario serialization and compact compiled-action inspection for developer/debug tooling.
+- The inspection path works for both authored scenarios and individual AI tool calls, so developers can review action type, target kind, validation kind, family, label, and execution tool without rendering the app.
+- The current layer deliberately records/inspects semantic guided actions, not raw pointer movement.
+- Focused coverage is in `tests/unit/guidedTutorialScenarioCompiler.test.ts`.
 
 **Must not do**
 
@@ -1158,12 +1242,15 @@ Add a user-facing setting under AI or Tutorials:
 
 Persistence notes:
 
-- Store this in `settingsStore` with the other AI/tutorial settings.
-- Prefer a dedicated `AI & Guidance` or `Tutorials` settings section instead of burying these controls under General.
+- `settingsStore` persists `guidedActionReplayVisualizationMode`, `guidedActionReplayBudgetMs`, and `guidedActionReplayCompressionMode`.
+- The current UI exposes these controls in Preferences -> General -> AI Features -> AI Replay. A dedicated `AI & Guidance` or `Tutorials` settings section can replace this once the broader settings taxonomy is split.
 - The setting applies to a whole AI response, not each tool call.
 - `executeBatch`, multiple assistant tool calls, and compound tools all share the same configured budget.
 - The default should be long enough to explain simple actions without making batch edits feel slow, for example `3s`.
+- `0s` budget is normalized to `visualizationMode: off`; semantic execution and validations still run, but the overlay, HUD, cursor, and input shield do not render.
 - The UI should show the zero state clearly as `Instant / no animation`.
+- Explicit `AIToolExecutionOptions` values still override the persisted defaults for dev bridge, tests, and scripted scenarios.
+- `createGuidedReplayBudgetController` is the current bridge between persisted settings and chat execution; each tool call reserves a slice of the remaining transaction budget and then consumes the runtime's planned duration.
 
 Add a developer feature flag for staged integration:
 

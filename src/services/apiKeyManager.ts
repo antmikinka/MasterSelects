@@ -12,7 +12,7 @@ const STORE_NAME = 'api-keys';
 const ENCRYPTION_KEY_ID = 'encryption-key';
 
 // Supported API key types
-export type ApiKeyType = 'openai' | 'assemblyai' | 'deepgram' | 'piapi' | 'kieai' | 'elevenlabs' | 'youtube' | 'klingAccessKey' | 'klingSecretKey';
+export type ApiKeyType = 'openai' | 'assemblyai' | 'deepgram' | 'piapi' | 'kieai' | 'evolink' | 'elevenlabs' | 'youtube' | 'klingAccessKey' | 'klingSecretKey';
 
 // Key IDs for each API key type (stored in IndexedDB)
 const KEY_IDS: Record<ApiKeyType, string> = {
@@ -21,6 +21,7 @@ const KEY_IDS: Record<ApiKeyType, string> = {
   deepgram: 'deepgram-api-key',
   piapi: 'piapi-api-key',
   kieai: 'kieai-api-key',
+  evolink: 'evolink-api-key',
   elevenlabs: 'elevenlabs-api-key',
   youtube: 'youtube-api-key',
   klingAccessKey: 'kling-access-key',
@@ -250,6 +251,7 @@ class ApiKeyManager {
       deepgram: '',
       piapi: '',
       kieai: '',
+      evolink: '',
       elevenlabs: '',
       youtube: '',
       klingAccessKey: '',

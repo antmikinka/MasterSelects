@@ -640,7 +640,7 @@ export function MaskOverlay({ canvasWidth, canvasHeight, displayWidth, displayHe
     const verts = activeMask.vertices;
     const posX = activeMask.position?.x || 0;
     const posY = activeMask.position?.y || 0;
-    const segments: Array<{ d: string; idA: string; idB: string }> = [];
+    const segments: Array<{ d: string; idA: string; idB: string; fromIndex: number; toIndex: number }> = [];
     const pointFor = (point: { x: number; y: number }) => projectMaskPoint({ x: point.x + posX, y: point.y + posY });
 
     for (let i = 1; i < verts.length; i++) {
@@ -654,6 +654,8 @@ export function MaskOverlay({ canvasWidth, canvasHeight, displayWidth, displayHe
         d: `M ${prevPoint.x} ${prevPoint.y} C ${cp1.x},${cp1.y} ${cp2.x},${cp2.y} ${currPoint.x},${currPoint.y}`,
         idA: prev.id,
         idB: curr.id,
+        fromIndex: i - 1,
+        toIndex: i,
       });
     }
 
@@ -668,6 +670,8 @@ export function MaskOverlay({ canvasWidth, canvasHeight, displayWidth, displayHe
         d: `M ${lastPoint.x} ${lastPoint.y} C ${cp1.x},${cp1.y} ${cp2.x},${cp2.y} ${firstPoint.x},${firstPoint.y}`,
         idA: last.id,
         idB: first.id,
+        fromIndex: verts.length - 1,
+        toIndex: 0,
       });
     }
 
@@ -1100,10 +1104,14 @@ export function MaskOverlay({ canvasWidth, canvasHeight, displayWidth, displayHe
       )}
 
       {/* Edge hit areas */}
-      {maskEditMode === 'editing' && edgeSegments.map((seg) => {
+      {maskEditMode === 'editing' && activeMask && edgeSegments.map((seg) => {
         const edgeKey = `${seg.idA}-${seg.idB}`;
         return (
-          <g key={`edge-${edgeKey}`}>
+          <g
+            key={`edge-${edgeKey}`}
+            data-guided-target={`mask-edge:${activeMask.id}:${seg.fromIndex}:${seg.toIndex}`}
+            data-guided-mask-edge={`${activeMask.id}:${seg.fromIndex}:${seg.toIndex}`}
+          >
             {hoveredEdgeKey === edgeKey && (
               <path
                 d={seg.d}
@@ -1121,6 +1129,8 @@ export function MaskOverlay({ canvasWidth, canvasHeight, displayWidth, displayHe
               strokeWidth="12"
               cursor="move"
               pointerEvents="stroke"
+              data-guided-target={`mask-edge:${activeMask.id}:${seg.fromIndex}:${seg.toIndex}`}
+              data-guided-mask-edge={`${activeMask.id}:${seg.fromIndex}:${seg.toIndex}`}
               onMouseEnter={() => setHoveredEdgeKey(edgeKey)}
               onMouseLeave={() => setHoveredEdgeKey(null)}
               onMouseDown={(e) => handleEdgeMouseDown(e, seg.idA, seg.idB)}
@@ -1160,6 +1170,9 @@ export function MaskOverlay({ canvasWidth, canvasHeight, displayWidth, displayHe
               strokeWidth="1"
               cursor="move"
               className="mask-handle-point"
+              data-guided-target={`mask-handle:${activeMask.id}:${vertex.id}:in`}
+              data-guided-mask-handle={`${activeMask.id}:${vertex.id}:in`}
+              data-guided-mask-handle-index={`${activeMask.id}:${index}:in`}
               onMouseDown={(e) => handleVertexMouseDown(e, vertex.id, 'handleIn')}
             />
 
@@ -1181,6 +1194,9 @@ export function MaskOverlay({ canvasWidth, canvasHeight, displayWidth, displayHe
               strokeWidth="1"
               cursor="move"
               className="mask-handle-point"
+              data-guided-target={`mask-handle:${activeMask.id}:${vertex.id}:out`}
+              data-guided-mask-handle={`${activeMask.id}:${vertex.id}:out`}
+              data-guided-mask-handle-index={`${activeMask.id}:${index}:out`}
               onMouseDown={(e) => handleVertexMouseDown(e, vertex.id, 'handleOut')}
             />
           </g>
@@ -1200,7 +1216,13 @@ export function MaskOverlay({ canvasWidth, canvasHeight, displayWidth, displayHe
           activeMask.vertices.length >= 3;
 
         return (
-          <g key={vertex.id} className={`mask-vertex-group ${isSelected ? 'selected' : ''} ${isHovered ? 'hovered' : ''} ${handleMode}`}>
+          <g
+            key={vertex.id}
+            className={`mask-vertex-group ${isSelected ? 'selected' : ''} ${isHovered ? 'hovered' : ''} ${handleMode}`}
+            data-guided-target={`mask-vertex:${activeMask.id}:${vertex.id}`}
+            data-guided-mask-vertex={`${activeMask.id}:${vertex.id}`}
+            data-guided-mask-vertex-index={`${activeMask.id}:${index}`}
+          >
             {(isSelected || isHovered || isClosableFirst) && (
               <circle
                 cx={vertex.x}
@@ -1223,6 +1245,9 @@ export function MaskOverlay({ canvasWidth, canvasHeight, displayWidth, displayHe
               strokeWidth={isClosableFirst ? '2' : '1'}
               cursor={isClosableFirst ? 'crosshair' : 'move'}
               className={`mask-vertex-point ${isSelected ? 'selected' : ''}`}
+              data-guided-target={`mask-vertex:${activeMask.id}:${vertex.id}`}
+              data-guided-mask-vertex={`${activeMask.id}:${vertex.id}`}
+              data-guided-mask-vertex-index={`${activeMask.id}:${index}`}
               onMouseEnter={() => setHoveredVertexId(vertex.id)}
               onMouseLeave={() => setHoveredVertexId(null)}
               onMouseDown={isClosableFirst

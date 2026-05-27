@@ -3,7 +3,13 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useSettingsStore, type AIProvider } from '../../stores/settingsStore';
 import { useAccountStore } from '../../stores/accountStore';
-import { AI_TOOLS, executeAITool, getQuickTimelineSummary, getToolPolicy } from '../../services/aiTools';
+import {
+  AI_TOOLS,
+  createGuidedReplayBudgetController,
+  executeAIToolCalls,
+  getQuickTimelineSummary,
+  getToolPolicy,
+} from '../../services/aiTools';
 import { cloudAiService } from '../../services/cloudAiService';
 import type { ToolPolicyEntry } from '../../services/aiTools';
 import {
@@ -724,6 +730,7 @@ export function AIChatPanel() {
     const userContent = input.trim();
     const transientMessageIds = new Set<string>();
     const executedToolResults: ExecutedToolResult[] = [];
+    const guidedReplayBudgetController = createGuidedReplayBudgetController();
     const userMessage: Message = {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -882,12 +889,22 @@ export function AIChatPanel() {
           })),
         });
 
-        // Execute each tool call
+        // Execute tool calls
         // IMPORTANT: Always add a tool result for every tool_call to keep
         // the conversation valid for the OpenAI API. If a tool crashes,
         // we still send an error result back.
-        for (const toolCall of toolCalls) {
-          setCurrentToolAction(`Executing: ${toolCall.name}`);
+        const preparedToolCalls: Array<{
+          args: Record<string, unknown>;
+          result?: ModelToolResult;
+          toolCall: ToolCall;
+        }> = [];
+
+        for (let toolCallIndex = 0; toolCallIndex < toolCalls.length; toolCallIndex++) {
+          const toolCall = toolCalls[toolCallIndex];
+          if (!toolCall) {
+            continue;
+          }
+          setCurrentToolAction(`Preparing: ${toolCall.name}`);
 
           let args: Record<string, unknown> = {};
           try {
@@ -911,21 +928,53 @@ export function AIChatPanel() {
 
             if (!approved) {
               result = { success: false, error: 'User denied tool execution' };
+              preparedToolCalls.push({ toolCall, args, result });
             } else {
-              try {
-                result = await executeAITool(toolCall.name, args, 'chat');
-              } catch (toolErr) {
-                result = { success: false, error: toolErr instanceof Error ? toolErr.message : String(toolErr) };
-              }
+              preparedToolCalls.push({ toolCall, args });
             }
           } else {
-            try {
-              result = await executeAITool(toolCall.name, args, 'chat');
-            } catch (toolErr) {
-              result = { success: false, error: toolErr instanceof Error ? toolErr.message : String(toolErr) };
+            preparedToolCalls.push({ toolCall, args });
+          }
+        }
+
+        const executableToolCalls = preparedToolCalls.filter((entry) => !entry.result);
+        const executedResultsByToolCallId = new Map<string, ModelToolResult>();
+        if (executableToolCalls.length > 0) {
+          setCurrentToolAction(executableToolCalls.length === 1
+            ? `Executing: ${executableToolCalls[0]?.toolCall.name ?? 'tool'}`
+            : `Executing ${executableToolCalls.length} tools`);
+
+          try {
+            const groupedResults = await executeAIToolCalls(
+              executableToolCalls.map((entry) => ({
+                id: entry.toolCall.id,
+                tool: entry.toolCall.name,
+                args: entry.args,
+              })),
+              'chat',
+              { guidedReplayBudgetController },
+            );
+            for (const groupedResult of groupedResults) {
+              if (groupedResult.id) {
+                executedResultsByToolCallId.set(groupedResult.id, groupedResult.result);
+              }
+            }
+          } catch (toolErr) {
+            const errorResult = {
+              success: false,
+              error: toolErr instanceof Error ? toolErr.message : String(toolErr),
+            };
+            for (const entry of executableToolCalls) {
+              executedResultsByToolCallId.set(entry.toolCall.id, errorResult);
             }
           }
+        }
 
+        for (const preparedToolCall of preparedToolCalls) {
+          const { toolCall } = preparedToolCall;
+          const result = preparedToolCall.result
+            ?? executedResultsByToolCallId.get(toolCall.id)
+            ?? { success: false, error: 'Tool execution did not return a result' };
           const modelToolResultContent = formatToolResultForApi(
             result,
             aiProvider === 'lemonade'

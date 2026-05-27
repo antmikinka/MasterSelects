@@ -7,6 +7,7 @@
  * Uses direct import of executeAITool (not window.aiTools) to enforce 'devBridge' caller context.
  */
 import { executeAITool, AI_TOOLS, getQuickTimelineSummary } from './index';
+import type { AIToolExecutionOptions } from './types';
 import { useTimelineStore } from '../../stores/timeline';
 import { useMediaStore } from '../../stores/mediaStore';
 import { useDockStore } from '../../stores/dockStore';
@@ -19,6 +20,7 @@ import { loadProjectToStores } from '../project/projectLoad';
 const tabId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
   ? crypto.randomUUID()
   : `tab-${Math.random().toString(36).slice(2, 10)}`;
+const BRIDGE_GUIDED_OPTIONS_ARG = '__guidedOptions';
 
 function getTabPriorityDelayMs(isTargetedRequest = false): number {
   if (typeof document === 'undefined') return 0;
@@ -29,6 +31,81 @@ function getTabPriorityDelayMs(isTargetedRequest = false): number {
   if (!isVisible) return isTargetedRequest ? 500 : -1;
   if (hasFocus) return 0;
   return 150;
+}
+
+function resolveBridgeToolExecution(
+  args: unknown,
+  options: unknown,
+): { args: Record<string, unknown>; options: AIToolExecutionOptions } {
+  const normalizedArgs = isRecord(args) ? args : {};
+  const inlineOptions = normalizedArgs[BRIDGE_GUIDED_OPTIONS_ARG];
+  const toolArgs = { ...normalizedArgs };
+  delete toolArgs[BRIDGE_GUIDED_OPTIONS_ARG];
+
+  return {
+    args: toolArgs,
+    options: sanitizeBridgeToolOptions(mergeBridgeOptions(inlineOptions, options)),
+  };
+}
+
+function mergeBridgeOptions(inlineOptions: unknown, hmrOptions: unknown): unknown {
+  if (isRecord(inlineOptions) || isRecord(hmrOptions)) {
+    return {
+      ...(isRecord(inlineOptions) ? inlineOptions : {}),
+      ...(isRecord(hmrOptions) ? hmrOptions : {}),
+    };
+  }
+  return hmrOptions ?? inlineOptions;
+}
+
+function sanitizeBridgeToolOptions(options: unknown): AIToolExecutionOptions {
+  if (!isRecord(options)) {
+    return {};
+  }
+
+  const sanitized: AIToolExecutionOptions = {};
+
+  if (typeof options.guidedReplay === 'boolean') {
+    sanitized.guidedReplay = options.guidedReplay;
+  }
+
+  if (typeof options.guidedAnimationBudgetMs === 'number' && Number.isFinite(options.guidedAnimationBudgetMs)) {
+    sanitized.guidedAnimationBudgetMs = clampGuidedReplayBudgetMs(options.guidedAnimationBudgetMs);
+  }
+
+  if (isGuidedVisualizationMode(options.guidedVisualizationMode)) {
+    sanitized.guidedVisualizationMode = options.guidedVisualizationMode;
+  }
+
+  if (isGuidedCompressionMode(options.guidedCompressionMode)) {
+    sanitized.guidedCompressionMode = options.guidedCompressionMode;
+  }
+
+  if (isGuidedLegacyFeedback(options.guidedLegacyFeedback)) {
+    sanitized.guidedLegacyFeedback = options.guidedLegacyFeedback;
+  }
+
+  return sanitized;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isGuidedVisualizationMode(value: unknown): value is NonNullable<AIToolExecutionOptions['guidedVisualizationMode']> {
+  return value === 'off' || value === 'concise' || value === 'full';
+}
+
+function isGuidedCompressionMode(value: unknown): value is NonNullable<AIToolExecutionOptions['guidedCompressionMode']> {
+  return value === 'none' || value === 'family' || value === 'aggressive';
+}
+
+function isGuidedLegacyFeedback(value: unknown): value is NonNullable<AIToolExecutionOptions['guidedLegacyFeedback']> {
+  return value === 'native' || value === 'bridge' || value === 'off';
+}
+
+function clampGuidedReplayBudgetMs(value: number): number {
+  return Math.max(0, Math.min(10000, Math.round(value)));
 }
 
 function collectDebugState(scope: string = 'all') {
@@ -267,6 +344,7 @@ if (import.meta.hot) {
     requestId: string;
     tool: string;
     args: Record<string, unknown>;
+    options?: unknown;
     targetTabId?: string | null;
   }) => {
     if (data.targetTabId && data.targetTabId !== tabId) {
@@ -288,7 +366,8 @@ if (import.meta.hot) {
       } else if (data.tool === '_status') {
         result = { success: true, data: getQuickTimelineSummary() };
       } else {
-        result = await executeAITool(data.tool, data.args, 'devBridge');
+        const execution = resolveBridgeToolExecution(data.args, data.options);
+        result = await executeAITool(data.tool, execution.args, 'devBridge', execution.options);
       }
 
       import.meta.hot!.send('ai-tools:result', {

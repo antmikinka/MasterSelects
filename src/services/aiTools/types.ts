@@ -9,6 +9,39 @@ export interface ToolResult {
   error?: string;
 }
 
+export interface GuidedReplayBudgetController {
+  compression: 'none' | 'family' | 'aggressive';
+  consumeBudgetMs: (plannedMs: number) => void;
+  getRemainingBudgetMs: () => number;
+  reserveBudgetMs: (remainingCallsInGroup?: number) => number;
+}
+
+export interface AIToolCallExecution {
+  id?: string;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+export interface AIToolCallExecutionResult {
+  id?: string;
+  tool: string;
+  result: ToolResult;
+}
+
+export interface AIToolExecutionOptions {
+  signal?: AbortSignal;
+  staggerBudgetMs?: number;
+  guidedSessionId?: string;
+  legacyFeedback?: 'native' | 'bridge' | 'off';
+  guidedAnimationBudgetMs?: number;
+  guidedCompressionMode?: 'none' | 'family' | 'aggressive';
+  guidedLegacyFeedback?: 'native' | 'bridge' | 'off';
+  guidedReplayBudgetController?: GuidedReplayBudgetController;
+  guidedReplayRemainingCalls?: number;
+  guidedReplay?: boolean;
+  guidedVisualizationMode?: 'off' | 'concise' | 'full';
+}
+
 // Tools that modify the timeline or media (need history tracking)
 export const MODIFYING_TOOLS = new Set([
   'splitClip', 'splitClipEvenly', 'splitClipAtTimes', 'reorderClips', 'deleteClip', 'deleteClips', 'moveClip', 'trimClip',

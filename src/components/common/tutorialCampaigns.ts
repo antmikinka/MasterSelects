@@ -1,4 +1,5 @@
 import type { PanelType } from '../../types/dock';
+import { flags } from '../../engine/featureFlags';
 
 // === Campaign Step ===
 export interface CampaignStep {
@@ -586,12 +587,16 @@ const interactiveCampaignsCompat: TutorialCampaign[] = INTERACTIVE_CAMPAIGNS.map
   icon: c.icon,
   category: c.category,
   interactive: true,
-  steps: [], // Steps are handled by the interactive runner, not the passive overlay
+  steps: c.steps.map(step => ({
+    title: step.title,
+    description: step.body ?? '',
+    tooltipPosition: 'bottom' as const,
+  })),
 }));
 
 export const TUTORIAL_CAMPAIGNS: TutorialCampaign[] = [
   // Basics (interactive first)
-  ...interactiveCampaignsCompat,
+  ...(flags.guidedActionsTutorials ? interactiveCampaignsCompat : []),
   interfaceOverview,
   timelineControls,
   previewPlayback,

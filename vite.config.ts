@@ -228,6 +228,8 @@ const KIEAI_PROXY_ALLOWED_ENDPOINTS = new Set([
   '/api/v1/jobs/createTask',
   '/api/v1/jobs/recordInfo',
 ]);
+const EVOLINK_PROXY_BASE_URL = 'https://api.evolink.ai';
+const EVOLINK_PROXY_UPLOAD_URL = 'https://files-api.evolink.ai/api/v1/files/upload/stream';
 
 function writeJsonResponse(res: ServerResponse, statusCode: number, payload: unknown): void {
   res.statusCode = statusCode;
@@ -237,6 +239,12 @@ function writeJsonResponse(res: ServerResponse, statusCode: number, payload: unk
 
 function getByoKieAiKey(req: IncomingMessage): string | null {
   const raw = req.headers['x-kieai-api-key'];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function getByoEvolinkKey(req: IncomingMessage): string | null {
+  const raw = req.headers['x-evolink-api-key'];
   const value = Array.isArray(raw) ? raw[0] : raw;
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
@@ -287,6 +295,31 @@ function resolveAllowedKieAiProxyUrl(endpoint: unknown): URL | null {
     const base = new URL(KIEAI_PROXY_BASE_URL);
 
     if (target.origin !== base.origin || !KIEAI_PROXY_ALLOWED_ENDPOINTS.has(target.pathname)) {
+      return null;
+    }
+
+    return target;
+  } catch {
+    return null;
+  }
+}
+
+function isAllowedEvolinkProxyPath(pathname: string): boolean {
+  return pathname === '/v1/images/generations'
+    || pathname === '/v1/credits'
+    || /^\/v1\/tasks\/[^/]+$/.test(pathname);
+}
+
+function resolveAllowedEvolinkProxyUrl(endpoint: unknown): URL | null {
+  if (typeof endpoint !== 'string' || !endpoint.trim()) {
+    return null;
+  }
+
+  try {
+    const target = new URL(endpoint, EVOLINK_PROXY_BASE_URL);
+    const base = new URL(EVOLINK_PROXY_BASE_URL);
+
+    if (target.origin !== base.origin || !isAllowedEvolinkProxyPath(target.pathname)) {
       return null;
     }
 
@@ -412,6 +445,122 @@ function kieAiByoProxy(): Plugin {
           writeJsonResponse(res, 502, {
             error: 'kieai_upload_proxy_failed',
             message: error instanceof Error ? error.message : 'Failed to upload to Kie.ai',
+          });
+        }
+      });
+
+      server.middlewares.use('/api/evolink/byo/request', async (req, res) => {
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          res.setHeader('Allow', 'POST, OPTIONS');
+          res.end('Method not allowed');
+          return;
+        }
+
+        if (!isSameOriginDevRequest(req)) {
+          writeJsonResponse(res, 403, { error: 'invalid_origin' });
+          return;
+        }
+
+        const apiKey = getByoEvolinkKey(req);
+        if (!apiKey) {
+          writeJsonResponse(res, 401, { error: 'missing_evolink_key' });
+          return;
+        }
+
+        let body: { body?: unknown; endpoint?: unknown; method?: unknown };
+        try {
+          body = JSON.parse(await readRequestBody(req)) as typeof body;
+        } catch (error) {
+          writeJsonResponse(res, 400, {
+            error: 'invalid_json',
+            message: error instanceof Error ? error.message : 'Invalid JSON body',
+          });
+          return;
+        }
+
+        const target = resolveAllowedEvolinkProxyUrl(body.endpoint);
+        const method = body.method === 'POST' ? 'POST' : body.method === 'GET' ? 'GET' : null;
+        if (!target || !method) {
+          writeJsonResponse(res, 400, { error: 'invalid_evolink_proxy_request' });
+          return;
+        }
+
+        try {
+          const upstream = await fetch(target, {
+            method,
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: method === 'POST' && body.body !== undefined ? JSON.stringify(body.body) : undefined,
+          });
+          const responseBody = await upstream.arrayBuffer();
+
+          res.statusCode = upstream.status;
+          res.setHeader('Content-Type', upstream.headers.get('Content-Type') ?? 'application/json; charset=utf-8');
+          res.end(Buffer.from(responseBody));
+        } catch (error) {
+          writeJsonResponse(res, 502, {
+            error: 'evolink_proxy_failed',
+            message: error instanceof Error ? error.message : 'Failed to reach EvoLink',
+          });
+        }
+      });
+
+      server.middlewares.use('/api/evolink/byo/upload', async (req, res) => {
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          res.setHeader('Allow', 'POST, OPTIONS');
+          res.end('Method not allowed');
+          return;
+        }
+
+        if (!isSameOriginDevRequest(req)) {
+          writeJsonResponse(res, 403, { error: 'invalid_origin' });
+          return;
+        }
+
+        const apiKey = getByoEvolinkKey(req);
+        const contentType = req.headers['content-type'];
+        if (!apiKey || typeof contentType !== 'string') {
+          writeJsonResponse(res, apiKey ? 400 : 401, {
+            error: apiKey ? 'missing_content_type' : 'missing_evolink_key',
+          });
+          return;
+        }
+
+        try {
+          const upstream = await fetch(EVOLINK_PROXY_UPLOAD_URL, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              'Content-Type': contentType,
+            },
+            body: req,
+            duplex: 'half',
+          } as RequestInit & { duplex: 'half' });
+          const responseBody = await upstream.arrayBuffer();
+
+          res.statusCode = upstream.status;
+          res.setHeader('Content-Type', upstream.headers.get('Content-Type') ?? 'application/json; charset=utf-8');
+          res.end(Buffer.from(responseBody));
+        } catch (error) {
+          writeJsonResponse(res, 502, {
+            error: 'evolink_upload_proxy_failed',
+            message: error instanceof Error ? error.message : 'Failed to upload to EvoLink',
           });
         }
       });
@@ -798,7 +947,13 @@ function aiToolsBridge(): Plugin {
         req.on('data', (chunk: Buffer) => body += chunk.toString());
         req.on('end', () => {
           try {
-            const { tool, args = {}, timeoutMs, targetTabId: requestedTargetTabId } = JSON.parse(body);
+            const {
+              tool,
+              args = {},
+              options,
+              timeoutMs,
+              targetTabId: requestedTargetTabId,
+            } = JSON.parse(body);
             if (!tool) {
               res.statusCode = 400;
               res.setHeader('Content-Type', 'application/json');
@@ -821,7 +976,7 @@ function aiToolsBridge(): Plugin {
               }, requestTimeoutMs);
 
               pendingRequests.set(requestId, { resolve, timer });
-              server.hot.send('ai-tools:execute', { requestId, tool, args, targetTabId });
+              server.hot.send('ai-tools:execute', { requestId, tool, args, options, targetTabId });
             });
 
             resultPromise.then((result) => {

@@ -8,6 +8,7 @@ const emptyKeys: APIKeys = {
   deepgram: '',
   piapi: '',
   kieai: '',
+  evolink: '',
   elevenlabs: '',
   youtube: '',
   klingAccessKey: '',
@@ -93,6 +94,17 @@ describe('ElevenLabs settings store API key wiring', () => {
     expect(useSettingsStore.getState().apiKeys.elevenlabs).toBe('el-api-key');
     expect(storeKeyByType).toHaveBeenCalledWith('elevenlabs', 'el-api-key');
     expect(saveKeysFile).not.toHaveBeenCalled();
+  });
+
+  it('stores EvoLink keys through the encrypted apiKeyManager path', async () => {
+    const { useSettingsStore, storeKeyByType } = await importSettingsStoreWithMocks();
+
+    useSettingsStore.getState().setApiKey('evolink', 'ev-api-key');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useSettingsStore.getState().apiKeys.evolink).toBe('ev-api-key');
+    expect(storeKeyByType).toHaveBeenCalledWith('evolink', 'ev-api-key');
   });
 
   it('loads ElevenLabs keys from encrypted storage into settings state', async () => {
