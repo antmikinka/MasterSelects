@@ -22,6 +22,19 @@ describe('dock panel configs', () => {
     expect(SCOPE_PANEL_TYPES).not.toContain(panelType);
   });
 
+  it('registers History as a stable core panel', () => {
+    const panelType: PanelType = 'history';
+
+    expect(PANEL_CONFIGS[panelType]).toMatchObject({
+      type: 'history',
+      title: 'History',
+      closable: false,
+    });
+    expect(WIP_PANEL_TYPES).not.toContain(panelType);
+    expect(AI_PANEL_TYPES).not.toContain(panelType);
+    expect(SCOPE_PANEL_TYPES).not.toContain(panelType);
+  });
+
   it('keeps the old AI Generative panel only as a migration target', () => {
     expect(DEPRECATED_PANEL_TYPES).toContain('ai-video');
     expect(AI_PANEL_TYPES).not.toContain('ai-video');

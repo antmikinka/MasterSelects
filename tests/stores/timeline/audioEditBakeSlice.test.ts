@@ -30,6 +30,8 @@ vi.mock('../../../src/services/audio/ClipAudioRenderService', () => ({
 
 vi.mock('../../../src/services/audio/timelineWaveformPyramidCache', () => ({
   generateTimelineWaveformAnalysisForFile: mocks.generateTimelineWaveformAnalysisForFile,
+  mapSourceWaveformPreviewProgress: (progress: number) => Math.round(Math.max(0, Math.min(70, progress)) / 70 * 20),
+  mapSourceWaveformPyramidProgress: (progress: { percent: number }) => Math.round(20 + Math.max(0, Math.min(100, progress.percent)) / 100 * 79),
 }));
 
 vi.mock('../../../src/stores/mediaStore', () => ({

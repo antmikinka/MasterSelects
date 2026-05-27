@@ -47,6 +47,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P0',
     availability: 'enabled',
     mutatesTimeline: false,
+    shortcutActionId: 'tool.trackSelectForward',
   }),
   tool({
     id: 'track-select-backward',
@@ -57,6 +58,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P1',
     availability: 'enabled',
     mutatesTimeline: false,
+    shortcutActionId: 'tool.trackSelectBackward',
   }),
   tool({
     id: 'track-select-forward-all',
@@ -67,6 +69,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P0',
     availability: 'enabled',
     mutatesTimeline: false,
+    shortcutActionId: 'tool.trackSelectForwardAll',
   }),
   tool({
     id: 'range-select',
@@ -77,6 +80,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P1',
     availability: 'enabled',
     mutatesTimeline: false,
+    shortcutActionId: 'tool.rangeSelect',
   }),
   tool({
     id: 'blade',
@@ -87,7 +91,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P0',
     availability: 'enabled',
     mutatesTimeline: true,
-    shortcutActionId: 'tool.cutToggle',
+    shortcutActionId: 'tool.blade',
   }),
   tool({
     id: 'blade-all-tracks',
@@ -98,6 +102,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P0',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'tool.bladeAllTracks',
   }),
   tool({
     id: 'split-at-playhead',
@@ -119,6 +124,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P0',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.splitAllAtPlayhead',
   }),
   tool({
     id: 'trim-start-to-playhead',
@@ -129,6 +135,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P0',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.trimStartToPlayhead',
   }),
   tool({
     id: 'trim-end-to-playhead',
@@ -139,6 +146,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P0',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.trimEndToPlayhead',
   }),
   tool({
     id: 'ripple-trim-start-to-playhead',
@@ -149,6 +157,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P1',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.rippleTrimStartToPlayhead',
   }),
   tool({
     id: 'ripple-trim-end-to-playhead',
@@ -159,6 +168,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P1',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.rippleTrimEndToPlayhead',
   }),
   tool({
     id: 'ripple-delete',
@@ -169,6 +179,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P0',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.rippleDelete',
   }),
   tool({
     id: 'delete-gap',
@@ -179,6 +190,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P0',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.deleteGap',
   }),
   tool({
     id: 'lift-range',
@@ -189,6 +201,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P1',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.liftRange',
   }),
   tool({
     id: 'extract-range',
@@ -199,6 +212,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P1',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.extractRange',
   }),
   tool({
     id: 'edge-trim',
@@ -209,6 +223,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P0',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'tool.edgeTrim',
   }),
   tool({
     id: 'ripple-trim',
@@ -219,6 +234,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P1',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'tool.rippleTrim',
   }),
   tool({
     id: 'rolling-edit',
@@ -229,6 +245,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P1',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'tool.rollingEdit',
   }),
   tool({
     id: 'slip',
@@ -239,6 +256,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P1',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'tool.slip',
   }),
   tool({
     id: 'slide',
@@ -249,6 +267,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P2',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'tool.slide',
   }),
   tool({
     id: 'rate-stretch',
@@ -259,6 +278,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P2',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'tool.rateStretch',
   }),
   tool({
     id: 'position-overwrite',
@@ -269,6 +289,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P1',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'tool.positionOverwrite',
   }),
   tool({
     id: 'insert',
@@ -279,6 +300,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P1',
     availability: 'requires-source',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.insertSource',
     disabledReason: 'Select a source first.',
   }),
   tool({
@@ -290,6 +312,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P1',
     availability: 'requires-source',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.overwriteSource',
     disabledReason: 'Select a source first.',
   }),
   tool({
@@ -301,6 +324,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P2',
     availability: 'requires-source',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.replaceSource',
     disabledReason: 'Select a source first.',
   }),
   tool({
@@ -312,6 +336,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P2',
     availability: 'requires-source',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.fitToFillSource',
     disabledReason: 'Select a source first.',
   }),
   tool({
@@ -323,6 +348,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P2',
     availability: 'requires-source',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.appendSourceAtEnd',
     disabledReason: 'Select a source first.',
   }),
   tool({
@@ -334,6 +360,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P2',
     availability: 'requires-source',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.placeSourceOnTop',
     disabledReason: 'Select a source first.',
   }),
   tool({
@@ -345,6 +372,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P2',
     availability: 'requires-source',
     mutatesTimeline: true,
+    shortcutActionId: 'edit.rippleOverwriteSource',
     disabledReason: 'Select a source first.',
   }),
   tool({
@@ -356,6 +384,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P2',
     availability: 'enabled',
     mutatesTimeline: false,
+    shortcutActionId: 'tool.hand',
   }),
   tool({
     id: 'zoom',
@@ -366,6 +395,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P2',
     availability: 'enabled',
     mutatesTimeline: false,
+    shortcutActionId: 'tool.zoom',
   }),
   tool({
     id: 'marker',
@@ -409,6 +439,7 @@ export const TIMELINE_TOOL_DEFINITIONS: TimelineToolDefinition[] = [
     priority: 'P1',
     availability: 'enabled',
     mutatesTimeline: true,
+    shortcutActionId: 'tool.penKeyframe',
   }),
 ];
 

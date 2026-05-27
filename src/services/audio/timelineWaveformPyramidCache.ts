@@ -8,6 +8,7 @@ import { AudioArtifactStore } from './AudioArtifactStore';
 import type { AudioArtifactRef } from './audioArtifactTypes';
 import {
   WaveformPyramidGenerator,
+  createWaveformPyramidAnalyzerVersion,
   type WaveformPyramidGenerationProgress,
 } from './WaveformPyramidGenerator';
 import {
@@ -37,7 +38,24 @@ export interface GenerateTimelineWaveformAnalysisOptions {
 
 const DEFAULT_LEGACY_SAMPLES_PER_SECOND = 50;
 const DEFAULT_PYRAMID_TIMEOUT_MS = 120_000;
+export const SOURCE_WAVEFORM_PREVIEW_SAMPLES_PER_SECOND = 160;
+export const SOURCE_WAVEFORM_MAX_PREVIEW_SAMPLES = 32000;
+const SOURCE_WAVEFORM_PREVIEW_PROGRESS_MAX = 20;
 const timelineWaveformPyramidCache = new Map<string, TimelineWaveformPyramid>();
+interface TimelineWaveformAnalysisProgressListener {
+  onProgress?: GenerateTimelineWaveformAnalysisOptions['onProgress'];
+  onPyramidProgress?: GenerateTimelineWaveformAnalysisOptions['onPyramidProgress'];
+}
+
+interface ActiveTimelineWaveformAnalysisJob {
+  promise: Promise<TimelineWaveformAnalysisResult>;
+  listeners: Set<TimelineWaveformAnalysisProgressListener>;
+  previewProgress?: number;
+  previewWaveform?: number[];
+  pyramidProgress?: WaveformPyramidGenerationProgress;
+}
+
+const activeTimelineWaveformAnalysisJobs = new Map<string, ActiveTimelineWaveformAnalysisJob>();
 const log = Logger.create('TimelineWaveformPyramid');
 
 interface LegacyWaveformPreview {
@@ -144,6 +162,70 @@ function abortSignalPromise(signal: AbortSignal): Promise<never> {
       reject(signal.reason ?? new DOMException('Audio waveform generation cancelled', 'AbortError'));
     }, { once: true });
   });
+}
+
+export function mapSourceWaveformPreviewProgress(progress: number): number {
+  if (!Number.isFinite(progress)) return 0;
+  const normalizedPreview = Math.max(0, Math.min(70, progress)) / 70;
+  return Math.round(normalizedPreview * SOURCE_WAVEFORM_PREVIEW_PROGRESS_MAX);
+}
+
+export function mapSourceWaveformPyramidProgress(progress: WaveformPyramidGenerationProgress): number {
+  if (progress.phase === 'complete') return 99;
+  if (progress.phase === 'queued') return SOURCE_WAVEFORM_PREVIEW_PROGRESS_MAX;
+
+  const normalizedPyramid = Math.max(0, Math.min(100, progress.percent)) / 100;
+  const mapped = SOURCE_WAVEFORM_PREVIEW_PROGRESS_MAX
+    + normalizedPyramid * (99 - SOURCE_WAVEFORM_PREVIEW_PROGRESS_MAX);
+  return Math.max(SOURCE_WAVEFORM_PREVIEW_PROGRESS_MAX, Math.min(99, Math.round(mapped)));
+}
+
+function getTimelineWaveformAnalysisJobKey(
+  file: File,
+  options: GenerateTimelineWaveformAnalysisOptions,
+): string {
+  return [
+    options.includePyramid === false ? 'preview' : 'pyramid',
+    options.mediaFileId ?? 'no-media-id',
+    options.clipAudioStateHash ?? 'source',
+    file.name,
+    file.size,
+    file.lastModified,
+    options.samplesPerSecond ?? DEFAULT_LEGACY_SAMPLES_PER_SECOND,
+    options.maxPreviewSamples ?? 'default',
+  ].join(':');
+}
+
+function replayTimelineWaveformAnalysisProgress(
+  activeJob: ActiveTimelineWaveformAnalysisJob,
+  listener: TimelineWaveformAnalysisProgressListener,
+): void {
+  if (activeJob.previewProgress !== undefined && activeJob.previewWaveform) {
+    listener.onProgress?.(activeJob.previewProgress, activeJob.previewWaveform);
+  }
+  if (activeJob.pyramidProgress) {
+    listener.onPyramidProgress?.(activeJob.pyramidProgress);
+  }
+}
+
+function addTimelineWaveformAnalysisListener(
+  activeJob: ActiveTimelineWaveformAnalysisJob,
+  options: GenerateTimelineWaveformAnalysisOptions,
+): () => void {
+  const listener: TimelineWaveformAnalysisProgressListener = {
+    onProgress: options.onProgress,
+    onPyramidProgress: options.onPyramidProgress,
+  };
+
+  if (!listener.onProgress && !listener.onPyramidProgress) {
+    return () => undefined;
+  }
+
+  activeJob.listeners.add(listener);
+  replayTimelineWaveformAnalysisProgress(activeJob, listener);
+  return () => {
+    activeJob.listeners.delete(listener);
+  };
 }
 
 function createPyramidTimeoutSignal(
@@ -256,6 +338,89 @@ export async function generateTimelineWaveformAnalysisForFile(
   file: File,
   options: GenerateTimelineWaveformAnalysisOptions = {},
 ): Promise<TimelineWaveformAnalysisResult> {
+  const jobKey = getTimelineWaveformAnalysisJobKey(file, options);
+  const activeJob = activeTimelineWaveformAnalysisJobs.get(jobKey);
+  if (activeJob) {
+    const disposeListener = addTimelineWaveformAnalysisListener(activeJob, options);
+    const result = await (options.signal
+      ? Promise.race([activeJob.promise, abortSignalPromise(options.signal)])
+      : activeJob.promise).finally(disposeListener);
+    options.onProgress?.(100, result.waveform);
+    return result;
+  }
+
+  const nextJob: ActiveTimelineWaveformAnalysisJob = {
+    promise: Promise.resolve({ waveform: [] }),
+    listeners: new Set(),
+  };
+  addTimelineWaveformAnalysisListener(nextJob, options);
+
+  const wrappedOptions: GenerateTimelineWaveformAnalysisOptions = {
+    ...options,
+    onProgress: (progress, partialWaveform) => {
+      nextJob.previewProgress = progress;
+      nextJob.previewWaveform = partialWaveform;
+      nextJob.listeners.forEach(listener => listener.onProgress?.(progress, partialWaveform));
+    },
+    onPyramidProgress: (progress) => {
+      nextJob.pyramidProgress = progress;
+      nextJob.listeners.forEach(listener => listener.onPyramidProgress?.(progress));
+    },
+  };
+
+  nextJob.promise = generateTimelineWaveformAnalysisForFileUncached(file, wrappedOptions)
+    .finally(() => {
+      activeTimelineWaveformAnalysisJobs.delete(jobKey);
+      nextJob.listeners.clear();
+    });
+  activeTimelineWaveformAnalysisJobs.set(jobKey, nextJob);
+  return nextJob.promise;
+}
+
+async function findReusableSourceWaveformPyramid(input: {
+  store: AudioArtifactStore;
+  mediaFileId: string;
+  sourceFingerprint: string;
+  clipAudioStateHash?: string;
+  sampleRate: number;
+  duration: number;
+}): Promise<{
+  pyramid: TimelineWaveformPyramid;
+  audioAnalysisRefs: MediaFileAudioAnalysisRefs;
+} | null> {
+  const analyzerVersion = createWaveformPyramidAnalyzerVersion();
+  const candidates = await input.store.listAnalysisArtifacts(input.mediaFileId, 'waveform-pyramid');
+  const artifact = candidates.find(candidate => (
+    candidate.stale !== true
+    && candidate.sourceFingerprint === input.sourceFingerprint
+    && candidate.clipAudioStateHash === input.clipAudioStateHash
+    && candidate.sampleRate === input.sampleRate
+    && Math.abs(candidate.duration - input.duration) < 0.000001
+    && candidate.analyzerVersion === analyzerVersion
+    && Boolean(candidate.metadata?.waveformManifest)
+  ));
+
+  const manifest = artifact?.metadata?.waveformManifest as WaveformPyramidManifest | undefined;
+  if (!artifact || !manifest) return null;
+
+  const pyramid = await readTimelineWaveformPyramid(manifest, input.store);
+  primeTimelineWaveformPyramidCache([
+    artifact.id,
+    artifact.manifestRef.artifactId,
+  ], pyramid);
+
+  return {
+    pyramid,
+    audioAnalysisRefs: {
+      waveformPyramidId: artifact.manifestRef.artifactId,
+    },
+  };
+}
+
+async function generateTimelineWaveformAnalysisForFileUncached(
+  file: File,
+  options: GenerateTimelineWaveformAnalysisOptions = {},
+): Promise<TimelineWaveformAnalysisResult> {
   const audioContext = new AudioContext();
   throwIfAborted(options.signal);
   const arrayBuffer = await file.arrayBuffer();
@@ -279,7 +444,25 @@ export async function generateTimelineWaveformAnalysisForFile(
       const hash = await sha256ArrayBuffer(arrayBuffer);
       throwIfAborted(options.signal);
       const mediaFileId = options.mediaFileId ?? `file:${file.name}:${file.size}:${file.lastModified}`;
+      const sourceFingerprint = `sha256:${hash}`;
       const store = createCurrentAudioArtifactStore();
+      const reusable = await findReusableSourceWaveformPyramid({
+        store,
+        mediaFileId,
+        sourceFingerprint,
+        clipAudioStateHash: options.clipAudioStateHash,
+        sampleRate: audioBuffer.sampleRate,
+        duration: audioBuffer.duration,
+      });
+      if (reusable) {
+        options.onProgress?.(100, preview.waveform);
+        return {
+          ...preview,
+          pyramid: reusable.pyramid,
+          audioAnalysisRefs: reusable.audioAnalysisRefs,
+        };
+      }
+
       const generator = new WaveformPyramidGenerator({ artifactStore: store });
       const pyramidSignal = createPyramidTimeoutSignal(
         options.signal,
@@ -287,7 +470,7 @@ export async function generateTimelineWaveformAnalysisForFile(
       );
       const generation = generator.generate({
         mediaFileId,
-        sourceFingerprint: `sha256:${hash}`,
+        sourceFingerprint,
         buffer: audioBuffer,
         clipAudioStateHash: options.clipAudioStateHash,
         decoderId: 'browser-audio-context',

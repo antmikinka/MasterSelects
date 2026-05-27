@@ -14,6 +14,7 @@ import type { ProjectAudioState } from '../../../types/audio';
 import type { ProjectFlashBoardState } from '../../../stores/flashboardStore/types';
 import type { ExportStoreData } from '../../../stores/exportStore';
 import type { TimelineAudioDisplayMode, TimelineTrackFocusMode } from '../../../stores/timeline/types';
+import type { ProjectHistoryState } from '../../../types/history';
 import type {
   CameraItem,
   LabelColor,
@@ -127,6 +128,7 @@ export interface ProjectUIState {
   lastSeenChangelogVersion?: string | null;
   midi?: ProjectMIDIState;
   exportState?: ExportStoreData;
+  history?: ProjectHistoryState;
 }
 
 export interface ProjectFile {

@@ -1,5 +1,6 @@
 import type { CallerContext, ToolResult } from '../aiTools/types';
 import type { PanelType } from '../../types/dock';
+import type { TimelineToolGroupId, TimelineToolId } from '../../stores/timeline/types';
 
 export type { CallerContext, ToolResult } from '../aiTools/types';
 
@@ -15,6 +16,13 @@ export type GuidedVisualizationMode = 'off' | 'concise' | 'full';
 export type GuidedCompressionMode = 'none' | 'family' | 'aggressive';
 export type GuidedLegacyFeedbackMode = 'off' | 'bridge' | 'native';
 export type GuidedTone = 'neutral' | 'primary' | 'success' | 'warning' | 'danger';
+export type GuidedMouseButton = 'left' | 'right' | 'middle';
+
+export interface GuidedInputGesture {
+  label: string;
+  detail?: string;
+  kind: 'mouse-left' | 'mouse-right' | 'mouse-middle' | 'keyboard' | 'shortcut';
+}
 
 export type SurfaceExecutionPolicy =
   | 'visualOnly'
@@ -136,13 +144,15 @@ export type GuidedAction =
   | (GuidedActionBase & { type: 'resolveTarget'; target: GuidedTargetRef; required?: boolean })
   | (GuidedActionBase & { type: 'moveCursorTo'; target: GuidedTargetRef; durationMs?: number })
   | (GuidedActionBase & { type: 'dragCursor'; from: GuidedTargetRef; to: GuidedTargetRef; durationMs?: number })
-  | (GuidedActionBase & { type: 'clickVisual'; target?: GuidedTargetRef })
-  | (GuidedActionBase & { type: 'doubleClickVisual'; target?: GuidedTargetRef })
+  | (GuidedActionBase & { type: 'clickVisual'; target?: GuidedTargetRef; button?: GuidedMouseButton; gestureLabel?: string; gestureDetail?: string })
+  | (GuidedActionBase & { type: 'doubleClickVisual'; target?: GuidedTargetRef; button?: GuidedMouseButton; gestureLabel?: string; gestureDetail?: string })
+  | (GuidedActionBase & { type: 'showInputGesture'; gesture: GuidedInputGesture })
   | (GuidedActionBase & { type: 'highlightTarget'; target: GuidedTargetRef; tone?: GuidedTone; durationMs?: number })
   | (GuidedActionBase & { type: 'spotlight'; target: GuidedTargetRef | null })
   | (GuidedActionBase & { type: 'callout'; title: string; body?: string; target?: GuidedTargetRef })
   | (GuidedActionBase & { type: 'scrollIntoView'; target: GuidedTargetRef; block?: 'start' | 'center' | 'end' | 'nearest' })
   | (GuidedActionBase & { type: 'focusPanel'; panel: PanelType })
+  | (GuidedActionBase & { type: 'openTimelineToolGroupVisual'; groupId: TimelineToolGroupId; targetToolId?: TimelineToolId; target?: GuidedTargetRef; button?: GuidedMouseButton; gestureLabel?: string; gestureDetail?: string })
   | (GuidedActionBase & { type: 'resizePanel'; groupId: string; ratio: number; visualTarget?: GuidedTargetRef; policy?: SurfaceExecutionPolicy })
   | (GuidedActionBase & { type: 'openPropertiesTab'; tab: string })
   | (GuidedActionBase & { type: 'pressButton'; target: GuidedTargetRef; policy?: SurfaceExecutionPolicy })
@@ -153,6 +163,7 @@ export type GuidedAction =
   | (GuidedActionBase & { type: 'drawMaskPath'; clipId: string; vertices: GuidedMaskPathVertexInput[]; close?: boolean; mask?: GuidedMaskCreateOptions; policy?: SurfaceExecutionPolicy })
   | (GuidedActionBase & { type: 'selectClip'; clipId: string })
   | (GuidedActionBase & { type: 'setPlayheadVisual'; time: number })
+  | (GuidedActionBase & { type: 'setTimelineToolVisual'; toolId: TimelineToolId })
   | (GuidedActionBase & { type: 'executeTool'; tool: string; args: Record<string, unknown> })
   | (GuidedActionBase & { type: 'confirmState'; check: ValidationCheck })
   | (GuidedActionBase & { type: 'waitForUserAction'; check: ValidationCheck; timeoutMs?: number });

@@ -9,6 +9,7 @@ import {
   TIMELINE_TOOL_GROUP_BY_ID,
   TIMELINE_TOOL_IDS,
 } from '../../src/stores/timeline/toolDefaults';
+import { ACTION_META, PRESETS } from '../../src/services/shortcutPresets';
 
 describe('timeline tool registry', () => {
   it('defines every timeline tool exactly once with icon, group, kind, and mutability', () => {
@@ -42,6 +43,17 @@ describe('timeline tool registry', () => {
         expect(definition).toBeDefined();
         expect(definition.groupId).toBe(group.id);
       }
+    }
+  });
+
+  it('makes every timeline tool individually bindable through the shortcut registry', () => {
+    const actionIds = new Set(ACTION_META.map((action) => action.id));
+    const baseShortcutMap = PRESETS.masterselects.map;
+
+    for (const definition of TIMELINE_TOOL_DEFINITIONS) {
+      expect(definition.shortcutActionId, `${definition.id} shortcutActionId`).toBeTruthy();
+      expect(actionIds.has(definition.shortcutActionId!), `${definition.id} action meta`).toBe(true);
+      expect(baseShortcutMap[definition.shortcutActionId!], `${definition.id} default shortcut entry`).toBeDefined();
     }
   });
 });

@@ -81,6 +81,7 @@ The docs in this folder were re-audited against the current codebase and now tra
 | [Multicam AI](./Multicam-AI.md) | Sync, transcription, multicam analysis, and Anthropic-powered EDL generation |
 | [Debugging](./Debugging.md) | Logger service, runtime monitors, log sync, and AI-facing debug tools |
 | [Playback Debugging](./Playback-Debugging.md) | Focused workflow for preview stalls, drift, and decode/render mismatches |
+| [Codex Usage Monitoring](./Codex-Usage-Monitoring.md) | Local Codex session parser for per-turn token usage, stale-run detection, and Git commit attribution |
 | [Security](./Security.md) | Trust boundaries, bridge auth, allowed roots, secret handling, and limitations |
 | [Hosted AI Setup](../cloudflare-hosted-ai-setup.md) | Cloudflare Pages/API setup for hosted account, billing, and AI routes |
 | [Visitor Notifier](./Visitor-Notifier.md) | Cloudflare visit feed, `/api/visits`, and the Windows tray notifier workflow |

@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react';
 import {
-  MAX_GUIDED_ACTION_REPLAY_BUDGET_MS,
   useSettingsStore,
   type GuidedActionReplayCompressionMode,
   type GuidedActionReplayVisualizationMode,
@@ -17,6 +16,43 @@ import {
 type DirectoryPickerWindow = Window & {
   showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
 };
+
+type ReplayBudgetUnit = 'ms' | 's' | 'min' | 'h';
+
+const REPLAY_BUDGET_UNIT_MS: Record<ReplayBudgetUnit, number> = {
+  ms: 1,
+  s: 1000,
+  min: 60_000,
+  h: 3_600_000,
+};
+
+function getDefaultReplayBudgetUnit(budgetMs: number): ReplayBudgetUnit {
+  if (budgetMs >= REPLAY_BUDGET_UNIT_MS.h && budgetMs % REPLAY_BUDGET_UNIT_MS.h === 0) return 'h';
+  if (budgetMs >= REPLAY_BUDGET_UNIT_MS.min && budgetMs % REPLAY_BUDGET_UNIT_MS.min === 0) return 'min';
+  if (budgetMs >= REPLAY_BUDGET_UNIT_MS.s && budgetMs % REPLAY_BUDGET_UNIT_MS.s === 0) return 's';
+  return 'ms';
+}
+
+function getReplayBudgetStep(unit: ReplayBudgetUnit): number {
+  switch (unit) {
+    case 'h':
+      return 0.01;
+    case 'min':
+      return 0.1;
+    case 's':
+      return 0.25;
+    case 'ms':
+      return 250;
+  }
+}
+
+function formatReplayBudgetValue(budgetMs: number, unit: ReplayBudgetUnit): string {
+  const value = budgetMs / REPLAY_BUDGET_UNIT_MS[unit];
+  if (unit === 'ms' || Number.isInteger(value)) {
+    return String(value);
+  }
+  return String(Number(value.toFixed(3)));
+}
 
 function getStatusLabel(status: MatAnyoneSetupStatus): string {
   switch (status) {
@@ -102,12 +138,24 @@ export function AIFeaturesSettings({ embedded }: AIFeaturesSettingsProps = {}) {
   const [lemonadeStatus, setLemonadeStatus] = useState<'idle' | 'checking' | 'online' | 'offline'>('idle');
   const [lemonadeStatusMessage, setLemonadeStatusMessage] = useState('');
   const [lemonadeModels, setLemonadeModels] = useState<LemonadeModelInfo[]>([]);
+  const [replayBudgetUnit, setReplayBudgetUnit] = useState<ReplayBudgetUnit>(() => (
+    getDefaultReplayBudgetUnit(guidedActionReplayBudgetMs)
+  ));
 
   const isInstalled = setupStatus === 'installed' || setupStatus === 'ready'
     || setupStatus === 'model-needed' || setupStatus === 'starting';
   const isRunning = setupStatus === 'ready';
   const isBusy = setupStatus === 'installing' || setupStatus === 'starting'
     || setupStatus === 'downloading-model';
+  const replayBudgetValue = formatReplayBudgetValue(guidedActionReplayBudgetMs, replayBudgetUnit);
+
+  const handleReplayBudgetValueChange = useCallback((value: string) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return;
+    }
+    setGuidedActionReplayBudgetMs(parsed * REPLAY_BUDGET_UNIT_MS[replayBudgetUnit]);
+  }, [replayBudgetUnit, setGuidedActionReplayBudgetMs]);
 
   const formatVram = useCallback((mb: number | null): string => {
     if (mb === null) return '';
@@ -252,27 +300,27 @@ export function AIFeaturesSettings({ embedded }: AIFeaturesSettingsProps = {}) {
           <span className="settings-label">Animation Budget</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 230, justifyContent: 'flex-end' }}>
             <input
-              type="range"
-              min={0}
-              max={MAX_GUIDED_ACTION_REPLAY_BUDGET_MS}
-              step={250}
-              value={guidedActionReplayBudgetMs}
-              onChange={(e) => setGuidedActionReplayBudgetMs(Number(e.target.value))}
-              className="custom-theme-slider"
-              style={{ width: 132 }}
-              disabled={guidedActionReplayVisualizationMode === 'off'}
-            />
-            <input
               type="number"
               min={0}
-              max={MAX_GUIDED_ACTION_REPLAY_BUDGET_MS}
-              step={250}
-              value={guidedActionReplayBudgetMs}
-              onChange={(e) => setGuidedActionReplayBudgetMs(Number(e.target.value))}
+              step={getReplayBudgetStep(replayBudgetUnit)}
+              value={replayBudgetValue}
+              onChange={(e) => handleReplayBudgetValueChange(e.target.value)}
               className="settings-input settings-input-number"
+              style={{ width: 92 }}
               disabled={guidedActionReplayVisualizationMode === 'off'}
             />
-            <span style={{ fontSize: 10, color: 'var(--text-secondary)', width: 20 }}>ms</span>
+            <select
+              className="settings-select"
+              value={replayBudgetUnit}
+              onChange={(e) => setReplayBudgetUnit(e.target.value as ReplayBudgetUnit)}
+              disabled={guidedActionReplayVisualizationMode === 'off'}
+              style={{ width: 76 }}
+            >
+              <option value="ms">ms</option>
+              <option value="s">sec</option>
+              <option value="min">min</option>
+              <option value="h">hours</option>
+            </select>
           </div>
         </label>
 
@@ -290,7 +338,7 @@ export function AIFeaturesSettings({ embedded }: AIFeaturesSettingsProps = {}) {
           </select>
         </label>
         <p className="settings-hint">
-          0 ms keeps execution checks but skips visual animation.
+          0 keeps execution checks but skips visual animation. Large values are allowed; replay uses the entered total duration.
         </p>
       </div>
 

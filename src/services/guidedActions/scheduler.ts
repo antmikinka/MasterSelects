@@ -10,7 +10,6 @@ import type {
   GuidedTargetRef,
 } from './types';
 
-const MAX_ANIMATION_BUDGET_MS = 10000;
 const DEFAULT_ANIMATION_BUDGET_MS = 3000;
 
 const INSPECT_TOOLS = new Set([
@@ -149,7 +148,7 @@ export function planGuidedActions(
   const compressedNaturalDurationMs = sumBy(planned, (action) => action.compressedDurationMs);
   const scale = budget.disabled || compressedNaturalDurationMs === 0
     ? 0
-    : Math.min(1, budget.totalMs / compressedNaturalDurationMs);
+    : budget.totalMs / compressedNaturalDurationMs;
 
   let startsAtMs = 0;
   for (const action of planned) {
@@ -191,9 +190,11 @@ export function inferGuidedActionFamily(action: GuidedAction): GuidedActionFamil
     case 'resolveTarget':
       return 'validation';
     case 'focusPanel':
+    case 'openTimelineToolGroupVisual':
     case 'openPropertiesTab':
     case 'selectClip':
     case 'setPlayheadVisual':
+    case 'setTimelineToolVisual':
       return 'context';
     case 'resizePanel':
     case 'pressButton':
@@ -205,6 +206,7 @@ export function inferGuidedActionFamily(action: GuidedAction): GuidedActionFamil
     case 'delay':
     case 'clickVisual':
     case 'doubleClickVisual':
+    case 'showInputGesture':
     case 'dragCursor':
     case 'drawMaskPath':
     case 'drawPreviewPath':
@@ -241,6 +243,8 @@ export function getNaturalActionDurationMs(action: GuidedAction): number {
       return 180;
     case 'doubleClickVisual':
       return 260;
+    case 'showInputGesture':
+      return 420;
     case 'highlightTarget':
       return clampDurationMs(action.durationMs ?? 450);
     case 'spotlight':
@@ -251,6 +255,7 @@ export function getNaturalActionDurationMs(action: GuidedAction): number {
       return 300;
     case 'focusPanel':
     case 'openPropertiesTab':
+    case 'openTimelineToolGroupVisual':
       return 180;
     case 'resizePanel':
       return 500;
@@ -265,6 +270,7 @@ export function getNaturalActionDurationMs(action: GuidedAction): number {
       return clampDurationMs(250 + getPathPointCount(action) * 140 + (action.close ? 120 : 0));
     case 'selectClip':
     case 'setPlayheadVisual':
+    case 'setTimelineToolVisual':
       return 180;
     case 'resolveTarget':
     case 'executeTool':
@@ -399,9 +405,12 @@ function getPrimaryTarget(action: GuidedAction): GuidedTargetRef | null {
     case 'drawMaskPath':
     case 'drawPreviewPath':
     case 'focusPanel':
+    case 'openTimelineToolGroupVisual':
     case 'openPropertiesTab':
     case 'selectClip':
     case 'setPlayheadVisual':
+    case 'setTimelineToolVisual':
+    case 'showInputGesture':
     case 'executeTool':
     case 'confirmState':
     case 'waitForUserAction':
@@ -420,7 +429,7 @@ function clampBudgetMs(value: number): number {
   if (!Number.isFinite(value)) {
     return DEFAULT_ANIMATION_BUDGET_MS;
   }
-  return Math.max(0, Math.min(MAX_ANIMATION_BUDGET_MS, Math.round(value)));
+  return Math.max(0, Math.round(value));
 }
 
 function clampDurationMs(value: number): number {

@@ -108,7 +108,7 @@ describe('timeline tool pointer dispatcher', () => {
     const result = dispatchTimelineClipPointerClick(baseContext);
 
     expect(result.handled).toBe(true);
-    expect(result.nextToolId).toBe('select');
+    expect(result.nextToolId).toBeUndefined();
     expect(result.operation).toEqual({
       id: 'blade:clip-1:12',
       type: 'split-at-time',

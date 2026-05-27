@@ -190,8 +190,10 @@ export function GuidedActionOverlay() {
 
       <GuidedCursor
         clicking={cursor.clicking}
+        inputGesture={cursor.inputGesture}
         position={cursor.position}
         transitionMs={cursor.transitionMs}
+        toolId={cursor.toolId}
         visible={cursor.visible}
       />
       {dragGhost && cursor.position && (

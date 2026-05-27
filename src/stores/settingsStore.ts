@@ -59,13 +59,12 @@ export type GuidedActionReplayVisualizationMode = 'off' | 'concise' | 'full';
 export type GuidedActionReplayCompressionMode = 'none' | 'family' | 'aggressive';
 
 export const DEFAULT_GUIDED_ACTION_REPLAY_BUDGET_MS = 3000;
-export const MAX_GUIDED_ACTION_REPLAY_BUDGET_MS = 10000;
 
 function clampGuidedActionReplayBudgetMs(value: number): number {
   if (!Number.isFinite(value)) {
     return DEFAULT_GUIDED_ACTION_REPLAY_BUDGET_MS;
   }
-  return Math.max(0, Math.min(MAX_GUIDED_ACTION_REPLAY_BUDGET_MS, Math.round(value)));
+  return Math.max(0, Math.round(value));
 }
 
 export interface APIKeys {

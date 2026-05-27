@@ -26,6 +26,12 @@ export interface TimelineClipPointerDispatchResult {
   nextToolId?: TimelineToolId;
 }
 
+export interface TimelineToolCursorIconDefinition {
+  paths: string[];
+  hotspotX: number;
+  hotspotY: number;
+}
+
 export function isTimelineBladeTool(toolId: TimelineToolId): toolId is 'blade' | 'blade-all-tracks' {
   return toolId === 'blade' || toolId === 'blade-all-tracks';
 }
@@ -170,20 +176,60 @@ const CURSOR_PATHS = {
   ],
 } satisfies Record<string, string[]>;
 
+const TIMELINE_TOOL_CURSOR_ICONS = {
+  select: undefined,
+  'track-select-forward': { paths: CURSOR_PATHS.trackForward, hotspotX: 19, hotspotY: 16 },
+  'track-select-backward': { paths: CURSOR_PATHS.trackBackward, hotspotX: 5, hotspotY: 16 },
+  'track-select-forward-all': { paths: CURSOR_PATHS.trackForward, hotspotX: 19, hotspotY: 16 },
+  'range-select': { paths: CURSOR_PATHS.range, hotspotX: 16, hotspotY: 16 },
+  blade: { paths: CURSOR_PATHS.blade, hotspotX: 12, hotspotY: 12 },
+  'blade-all-tracks': { paths: CURSOR_PATHS.bladeAllTracks, hotspotX: 12, hotspotY: 12 },
+  'split-at-playhead': { paths: CURSOR_PATHS.blade, hotspotX: 12, hotspotY: 12 },
+  'split-all-at-playhead': { paths: CURSOR_PATHS.bladeAllTracks, hotspotX: 12, hotspotY: 12 },
+  'trim-start-to-playhead': { paths: CURSOR_PATHS.trim, hotspotX: 16, hotspotY: 16 },
+  'trim-end-to-playhead': { paths: CURSOR_PATHS.trim, hotspotX: 16, hotspotY: 16 },
+  'ripple-trim-start-to-playhead': { paths: CURSOR_PATHS.rippleTrim, hotspotX: 16, hotspotY: 16 },
+  'ripple-trim-end-to-playhead': { paths: CURSOR_PATHS.rippleTrim, hotspotX: 16, hotspotY: 16 },
+  'ripple-delete': undefined,
+  'delete-gap': undefined,
+  'lift-range': undefined,
+  'extract-range': undefined,
+  'edge-trim': { paths: CURSOR_PATHS.trim, hotspotX: 16, hotspotY: 16 },
+  'ripple-trim': { paths: CURSOR_PATHS.rippleTrim, hotspotX: 16, hotspotY: 16 },
+  'rolling-edit': { paths: CURSOR_PATHS.rolling, hotspotX: 16, hotspotY: 16 },
+  slip: { paths: CURSOR_PATHS.slip, hotspotX: 16, hotspotY: 16 },
+  slide: { paths: CURSOR_PATHS.slide, hotspotX: 16, hotspotY: 16 },
+  'rate-stretch': { paths: CURSOR_PATHS.stretch, hotspotX: 16, hotspotY: 16 },
+  'position-overwrite': { paths: CURSOR_PATHS.pointer, hotspotX: 6, hotspotY: 5 },
+  insert: undefined,
+  overwrite: undefined,
+  replace: undefined,
+  'fit-to-fill': undefined,
+  'append-at-end': undefined,
+  'place-on-top': undefined,
+  'ripple-overwrite': undefined,
+  hand: { paths: CURSOR_PATHS.hand, hotspotX: 12, hotspotY: 12 },
+  zoom: { paths: CURSOR_PATHS.zoom, hotspotX: 10, hotspotY: 10 },
+  marker: { paths: CURSOR_PATHS.marker, hotspotX: 12, hotspotY: 21 },
+  'in-point': { paths: CURSOR_PATHS.trim, hotspotX: 9, hotspotY: 16 },
+  'out-point': { paths: CURSOR_PATHS.trim, hotspotX: 19, hotspotY: 16 },
+  'pen-keyframe': { paths: CURSOR_PATHS.pen, hotspotX: 5, hotspotY: 20 },
+} satisfies Record<TimelineToolId, TimelineToolCursorIconDefinition | undefined>;
+
 const TIMELINE_TOOL_ICON_CURSORS = {
   select: undefined,
-  'track-select-forward': createIconCursor(CURSOR_PATHS.trackForward, 'e-resize', 19, 16),
-  'track-select-backward': createIconCursor(CURSOR_PATHS.trackBackward, 'w-resize', 5, 16),
-  'track-select-forward-all': createIconCursor(CURSOR_PATHS.trackForward, 'copy', 19, 16),
-  'range-select': createIconCursor(CURSOR_PATHS.range, 'crosshair', 16, 16),
-  blade: createIconCursor(CURSOR_PATHS.blade, 'crosshair', 12, 12),
-  'blade-all-tracks': createIconCursor(CURSOR_PATHS.bladeAllTracks, 'crosshair', 12, 12),
-  'split-at-playhead': createIconCursor(CURSOR_PATHS.blade, 'crosshair', 12, 12),
-  'split-all-at-playhead': createIconCursor(CURSOR_PATHS.bladeAllTracks, 'crosshair', 12, 12),
-  'trim-start-to-playhead': createIconCursor(CURSOR_PATHS.trim, 'ew-resize', 16, 16),
-  'trim-end-to-playhead': createIconCursor(CURSOR_PATHS.trim, 'ew-resize', 16, 16),
-  'ripple-trim-start-to-playhead': createIconCursor(CURSOR_PATHS.rippleTrim, 'ew-resize', 16, 16),
-  'ripple-trim-end-to-playhead': createIconCursor(CURSOR_PATHS.rippleTrim, 'ew-resize', 16, 16),
+  'track-select-forward': createIconCursor(CURSOR_PATHS.trackForward, 'e-resize', TIMELINE_TOOL_CURSOR_ICONS['track-select-forward'].hotspotX, TIMELINE_TOOL_CURSOR_ICONS['track-select-forward'].hotspotY),
+  'track-select-backward': createIconCursor(CURSOR_PATHS.trackBackward, 'w-resize', TIMELINE_TOOL_CURSOR_ICONS['track-select-backward'].hotspotX, TIMELINE_TOOL_CURSOR_ICONS['track-select-backward'].hotspotY),
+  'track-select-forward-all': createIconCursor(CURSOR_PATHS.trackForward, 'copy', TIMELINE_TOOL_CURSOR_ICONS['track-select-forward-all'].hotspotX, TIMELINE_TOOL_CURSOR_ICONS['track-select-forward-all'].hotspotY),
+  'range-select': createIconCursor(CURSOR_PATHS.range, 'crosshair', TIMELINE_TOOL_CURSOR_ICONS['range-select'].hotspotX, TIMELINE_TOOL_CURSOR_ICONS['range-select'].hotspotY),
+  blade: createIconCursor(CURSOR_PATHS.blade, 'crosshair', TIMELINE_TOOL_CURSOR_ICONS.blade.hotspotX, TIMELINE_TOOL_CURSOR_ICONS.blade.hotspotY),
+  'blade-all-tracks': createIconCursor(CURSOR_PATHS.bladeAllTracks, 'crosshair', TIMELINE_TOOL_CURSOR_ICONS['blade-all-tracks'].hotspotX, TIMELINE_TOOL_CURSOR_ICONS['blade-all-tracks'].hotspotY),
+  'split-at-playhead': createIconCursor(CURSOR_PATHS.blade, 'crosshair', TIMELINE_TOOL_CURSOR_ICONS['split-at-playhead'].hotspotX, TIMELINE_TOOL_CURSOR_ICONS['split-at-playhead'].hotspotY),
+  'split-all-at-playhead': createIconCursor(CURSOR_PATHS.bladeAllTracks, 'crosshair', TIMELINE_TOOL_CURSOR_ICONS['split-all-at-playhead'].hotspotX, TIMELINE_TOOL_CURSOR_ICONS['split-all-at-playhead'].hotspotY),
+  'trim-start-to-playhead': createIconCursor(CURSOR_PATHS.trim, 'ew-resize', TIMELINE_TOOL_CURSOR_ICONS['trim-start-to-playhead'].hotspotX, TIMELINE_TOOL_CURSOR_ICONS['trim-start-to-playhead'].hotspotY),
+  'trim-end-to-playhead': createIconCursor(CURSOR_PATHS.trim, 'ew-resize', TIMELINE_TOOL_CURSOR_ICONS['trim-end-to-playhead'].hotspotX, TIMELINE_TOOL_CURSOR_ICONS['trim-end-to-playhead'].hotspotY),
+  'ripple-trim-start-to-playhead': createIconCursor(CURSOR_PATHS.rippleTrim, 'ew-resize', TIMELINE_TOOL_CURSOR_ICONS['ripple-trim-start-to-playhead'].hotspotX, TIMELINE_TOOL_CURSOR_ICONS['ripple-trim-start-to-playhead'].hotspotY),
+  'ripple-trim-end-to-playhead': createIconCursor(CURSOR_PATHS.rippleTrim, 'ew-resize', TIMELINE_TOOL_CURSOR_ICONS['ripple-trim-end-to-playhead'].hotspotX, TIMELINE_TOOL_CURSOR_ICONS['ripple-trim-end-to-playhead'].hotspotY),
   'ripple-delete': undefined,
   'delete-gap': undefined,
   'lift-range': undefined,
@@ -212,6 +258,10 @@ const TIMELINE_TOOL_ICON_CURSORS = {
 
 export function getTimelineToolCursor(toolId: TimelineToolId): string | undefined {
   return TIMELINE_TOOL_ICON_CURSORS[toolId];
+}
+
+export function getTimelineToolCursorIcon(toolId: TimelineToolId): TimelineToolCursorIconDefinition | undefined {
+  return TIMELINE_TOOL_CURSOR_ICONS[toolId];
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -357,6 +407,5 @@ export function dispatchTimelineClipPointerClick(
   return {
     handled: true,
     operation,
-    nextToolId: 'select',
   };
 }

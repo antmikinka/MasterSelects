@@ -186,8 +186,25 @@ async function addMediaSegment(params: {
   await timelineStore.addClip(trackId, file, startTime, duration, media.id);
 
   const createdClips = useTimelineStore.getState().clips.filter((clip) => !beforeIds.has(clip.id));
+  const trimmedClipIds = new Set<string>();
   for (const clip of createdClips) {
-    useTimelineStore.getState().trimClip(clip.id, inPoint, outPoint);
+    if (trimmedClipIds.has(clip.id)) continue;
+    const trimResult = useTimelineStore.getState().applyTimelineEditOperation({
+      id: `torture-segment-trim:${clip.id}:${inPoint}:${outPoint}`,
+      type: 'trim-clip',
+      clipId: clip.id,
+      inPoint,
+      outPoint,
+      includeLinked: true,
+    }, {
+      source: 'ai-tool',
+      historyLabel: 'Torture fixture: trim media segment',
+    });
+    if (!trimResult.success) {
+      throw new Error(trimResult.warnings.map((warning) => warning.message).join(' ') || `Failed to trim fixture segment for ${media.name}`);
+    }
+    trimmedClipIds.add(clip.id);
+    if (clip.linkedClipId) trimmedClipIds.add(clip.linkedClipId);
   }
 
   const visualClip = useTimelineStore.getState().clips.find((clip) =>

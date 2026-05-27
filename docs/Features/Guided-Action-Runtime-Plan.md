@@ -275,7 +275,7 @@ export type GuidedPlaybackMode =
   | 'debug';
 
 export interface GuidedAnimationBudget {
-  totalMs: number;          // Persistent user setting, 0-10000ms.
+  totalMs: number;          // Persistent user setting in ms. 0 disables visual replay; no product max.
   disabled: boolean;        // true when totalMs === 0.
   compression: 'none' | 'family' | 'aggressive';
 }
@@ -364,7 +364,7 @@ Every AI tool should have at least a generic family mapping, but only important 
 
 ### 4.5 Animation Budget And Repeated Action Compression
 
-Guided AI replay must use a total animation budget, not fixed delays per tool. The user setting should be persistent and exposed as a slider from `0s` to `10s`.
+Guided AI replay must use a total animation budget, not fixed delays per tool. The user setting should be persistent, lower-bounded at `0`, and accept long durations such as minutes or hours without a product-level max.
 
 Rules:
 
@@ -509,7 +509,7 @@ Each stream below is intended to be owned by a different agent. Agents should av
 **Implementation status, 2026-05-26**
 
 - Initial Stream A foundation exists in the owner-scope files above.
-- The scheduler normalizes animation budgets to the `0s` to `10s` range, scales planned durations, classifies tool calls by choreography family, and compresses repeated same-family visual actions.
+- The scheduler normalizes animation budgets by lower-bounding them at `0`, scales planned durations to consume the requested total budget, classifies tool calls by choreography family, and compresses repeated same-family visual actions before final scaling.
 - The runtime supports one active session, injected target resolvers, injected semantic action handlers, cancellation/skip, missing-target diagnostics, and instant mode that runs semantic actions without cursor/spotlight/callout visuals.
 - The transient `guidedActionStore` tracks session snapshots, current step, cursor, spotlight, callout, highlights, target resolutions, diagnostics, and runtime events for future overlay components.
 - Focused coverage is in `tests/unit/guidedActionsScheduler.test.ts` and `tests/unit/guidedActionRuntime.test.ts`.
@@ -661,6 +661,8 @@ Each stream below is intended to be owned by a different agent. Agents should av
 
 - Initial compiler entry points exist in `src/services/guidedActions/compiler.ts`.
 - Tool-family choreography lives under `src/services/guidedActions/choreography/` and covers the initial timeline, transform, mask, effects, keyframe, media, preview, and generic fallback paths.
+- Media placement replay now covers `addClipSegment`, `importLocalFiles({ addToTimeline: true })`, and `downloadAndImportVideo`; these flows move the guided cursor toward the Timeline placement target while keeping the semantic tool call as the source of truth.
+- Timeline AI tool calls can be adapted into `TimelineEditOperation` replay descriptors before execution. Split tools use this path first: `splitClip`, `splitClipAtTimes`, and `splitClipEvenly` map to blade-style replay targets, with `splitClipEvenly` deriving all generated cut times from the live clip duration.
 - `executeBatch` is normalized into visible nested substeps while preserving one outer batch execution point by default; inline sub-executions are available through compiler options for future adapters.
 - Timeline-edit choreography now reveals and points at virtual `timelineTime` targets before semantic execution, so split/move style actions can replay visible timeline-time intent.
 - Compiled actions are annotated with action families and include a single `executeTool` point for normal tool calls plus validation actions where the current contract supports them.
@@ -737,6 +739,7 @@ Each stream below is intended to be owned by a different agent. Agents should av
 - The runtime installs these handlers by default while still allowing injected handlers to override behavior for tests or specialized tools.
 - Surface execution policies are explicit: button/dropdown/type/resize interactions default to `visualOnly`; `persistUi` and `transientUi` are the UI-state execution paths. Semantic edits still belong in `executeTool`.
 - Virtual `timelineTime` scroll actions now adjust Timeline `scrollX` through the store before follow-up cursor movement resolves the target.
+- Reveals and menu-open actions must not teleport or click the synthetic cursor. Tool choreography must model visible user order explicitly: move cursor to the category button, click/select the category, open the submenu, move to the tool row, then click the tool. Tool cleanup should use the same visible menu path as tool selection, and then return the cursor to the previous timeline work point instead of silently resetting state.
 - The guided overlay can now render transient preview paths so mask/path tutorials can show canvas point placement without mutating mask state.
 - Focused coverage is in `tests/unit/guidedSurfaceInteractionDriver.test.ts` and the overlay path assertion in `tests/unit/GuidedActionOverlay.test.tsx`.
 
@@ -1224,6 +1227,18 @@ show split glow
 confirm two clips around split time
 ```
 
+### Example: `splitClipEvenly`
+
+```text
+read live clip timing
+derive TimelineEditOperation split-at-times
+focus Timeline
+move cursor to clip
+move cursor through every generated cut point
+execute splitClipEvenly once
+show staggered split glows
+```
+
 ---
 
 ## 10. Settings And Feature Flags
@@ -1233,7 +1248,7 @@ Add a user-facing setting under AI or Tutorials:
 | Setting | Values |
 |---|---|
 | AI action visualization | Off, Concise, Full |
-| AI action animation duration | Persistent slider, `0s` to `10s`; `0s` disables visual replay and runs tools instantly |
+| AI action animation duration | Persistent duration input with units; `0` disables visual replay and runs tools instantly |
 | Repeated action compression | Auto by default; repeated same-family tool calls are accelerated to fit the total duration |
 | Guided cursor speed | Derived from total budget by default; optional Slow, Normal, Fast override for tutorials |
 | Tutorial assist mode | Ask, Auto, Off |
@@ -1322,7 +1337,7 @@ The system is complete when:
 
 - AI chat tool calls can be replayed visually without changing their semantic contract.
 - `executeBatch` actions are visible as understandable substeps and still undo as one unit.
-- A persistent `0s-10s` total animation-duration slider controls the whole AI replay budget.
+- A persistent total animation-duration setting controls the whole AI replay budget. It accepts long durations such as minutes or hours, is not capped at 10s, and stretches or compresses visual steps to use the requested duration.
 - `0s` is instant mode with no overlay or visual delay.
 - Repeated same-family actions are compressed so large batches still finish inside the selected total duration.
 - AI replay uses a visibly synthetic guided cursor and locks normal user input by default.

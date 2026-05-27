@@ -1,5 +1,6 @@
 import { useGuidedActionStore, type GuidedActionStoreApi } from '../../stores/guidedActionStore';
 import { useMediaStore } from '../../stores/mediaStore';
+import { useTimelineStore } from '../../stores/timeline';
 import {
   clearExternalDragPayload,
   createExternalDragPayloadForProjectItem,
@@ -24,6 +25,7 @@ import type {
   GuidedAction,
   GuidedActionType,
   GuidedExecutionContext,
+  GuidedInputGesture,
   GuidedPoint,
   GuidedRuntimeEvent,
   GuidedScheduledAction,
@@ -36,10 +38,10 @@ import type {
   GuidedTargetResolution,
   ToolResult,
 } from './types';
+import type { TimelineToolId } from '../../stores/timeline/types';
 
 type StopStatus = 'cancelled' | 'skipped';
 type ActiveSessionPolicy = 'reject' | 'cancel-existing';
-const REDUCED_MOTION_BUDGET_MS = 250;
 
 interface GuidedRuntimeClock {
   now: () => number;
@@ -143,9 +145,7 @@ export class GuidedActionRuntime {
 
     const sessionId = request.sessionId ?? createGuidedSessionId();
     const controller = new AbortController();
-    const animationBudget = applyReducedMotionBudget(
-      normalizeGuidedAnimationBudget(request.animationBudget),
-    );
+    const animationBudget = normalizeGuidedAnimationBudget(request.animationBudget);
     const visualizationMode = animationBudget.disabled
       ? 'off'
       : request.visualizationMode ?? 'concise';
@@ -331,8 +331,11 @@ export class GuidedActionRuntime {
         this.store.getState().setCursor({
           visible: true,
           position: resolution.center,
+          inputGesture: null,
+          toolId: getActiveGuidedCursorToolId(),
           transitionMs: scheduledAction.plannedDurationMs,
         });
+        clearTimelineToolPreview();
         return resolution;
       }
       case 'dragCursor': {
@@ -348,6 +351,12 @@ export class GuidedActionRuntime {
           visible: true,
           position: resolution.center,
           clicking: true,
+          inputGesture: {
+            kind: 'mouse-left',
+            label: 'LMB hold',
+            detail: action.label,
+          },
+          toolId: getActiveGuidedCursorToolId(),
           transitionMs: scheduledAction.plannedDurationMs,
         });
         this.startGuidedExternalDragPreview(
@@ -375,13 +384,30 @@ export class GuidedActionRuntime {
             visible: true,
             position: resolution.center,
             clicking: true,
+            inputGesture: getClickInputGesture(action),
+            toolId: getActiveGuidedCursorToolId(),
             transitionMs: 0,
           });
+          syncTimelineToolPreviewForTarget(action.target);
           return resolution;
         }
-        this.store.getState().setCursor({ visible: true, clicking: true, transitionMs: 0 });
+        this.store.getState().setCursor({
+          visible: true,
+          clicking: true,
+          inputGesture: getClickInputGesture(action),
+          toolId: getActiveGuidedCursorToolId(),
+          transitionMs: 0,
+        });
         return undefined;
       }
+      case 'showInputGesture':
+        this.store.getState().setCursor({
+          visible: true,
+          inputGesture: action.gesture,
+          toolId: getActiveGuidedCursorToolId(),
+          transitionMs: 0,
+        });
+        return undefined;
       case 'highlightTarget':
         await this.resolveTarget(action.target, context);
         this.store.getState().addHighlight({
@@ -605,6 +631,7 @@ export class GuidedActionRuntime {
     status: Exclude<GuidedSessionStatus, 'idle' | 'running' | 'cancelling'>,
     error?: string,
   ): void {
+    clearTimelineToolPreview();
     this.store.getState().finishSession(sessionId, status, error);
     this.emitEvent({ type: 'session-finished', sessionId, status });
   }
@@ -644,6 +671,70 @@ function createRejectedResult(
   };
 }
 
+function getClickInputGesture(
+  action: Extract<GuidedAction, { type: 'clickVisual' | 'doubleClickVisual' }>,
+): GuidedInputGesture {
+  const button = action.button ?? 'left';
+  const fallbackLabel = button === 'right' ? 'RMB' : button === 'middle' ? 'MMB' : 'LMB';
+  return {
+    kind: button === 'right' ? 'mouse-right' : button === 'middle' ? 'mouse-middle' : 'mouse-left',
+    label: action.gestureLabel ?? fallbackLabel,
+    detail: action.gestureDetail ?? action.label,
+  };
+}
+
+function getActiveGuidedCursorToolId(): TimelineToolId | null {
+  const toolId = useTimelineStore.getState().activeTimelineToolId;
+  return toolId === 'select' ? null : toolId;
+}
+
+function syncTimelineToolPreviewForTarget(target: GuidedTargetRef): void {
+  if (target.kind !== 'timelineTime') {
+    clearTimelineToolPreview();
+    return;
+  }
+
+  const timeline = useTimelineStore.getState();
+  const toolId = timeline.activeTimelineToolId;
+  if (toolId !== 'blade' && toolId !== 'blade-all-tracks') {
+    clearTimelineToolPreview();
+    return;
+  }
+
+  const clip = findClipAtTimelineTarget(target);
+  if (!clip) {
+    clearTimelineToolPreview();
+    return;
+  }
+
+  timeline.setTimelineToolPreview({
+    toolId,
+    plane: toolId === 'blade-all-tracks' ? 'section-scrolled' : 'clip-local',
+    clipId: clip.id,
+    trackId: clip.trackId,
+    time: target.time,
+  });
+}
+
+function findClipAtTimelineTarget(target: Extract<GuidedTargetRef, { kind: 'timelineTime' }>) {
+  const timeline = useTimelineStore.getState();
+  const trackIds = target.trackId
+    ? [target.trackId]
+    : timeline.tracks.map((track) => track.id);
+  const trackIdSet = new Set(trackIds);
+  const epsilon = 0.001;
+
+  return timeline.clips.find((clip) => (
+    trackIdSet.has(clip.trackId)
+    && target.time > clip.startTime + epsilon
+    && target.time < clip.startTime + clip.duration - epsilon
+  ));
+}
+
+function clearTimelineToolPreview(): void {
+  useTimelineStore.getState().setTimelineToolPreview(null);
+}
+
 function isExecutionAction(action: GuidedAction): boolean {
   return action.type === 'executeTool'
     || action.type === 'drawMaskPath'
@@ -675,26 +766,6 @@ function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) {
     throw new GuidedRuntimeAbortError();
   }
-}
-
-function applyReducedMotionBudget(budget: ReturnType<typeof normalizeGuidedAnimationBudget>): ReturnType<typeof normalizeGuidedAnimationBudget> {
-  if (budget.disabled || !prefersReducedGuidedMotion()) {
-    return budget;
-  }
-
-  return {
-    ...budget,
-    compression: 'aggressive',
-    totalMs: Math.min(budget.totalMs, REDUCED_MOTION_BUDGET_MS),
-  };
-}
-
-function prefersReducedGuidedMotion(): boolean {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-    return false;
-  }
-
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 function isToolResult(value: unknown): value is ToolResult {

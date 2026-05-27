@@ -20,6 +20,7 @@ import { IndexedDBErrorDialog } from './components/common/IndexedDBErrorDialog';
 import { LinuxVulkanWarning } from './components/common/LinuxVulkanWarning';
 import { ProjectLoadProgressOverlay } from './components/common/ProjectLoadProgressOverlay';
 import { PricingDialog } from './components/common/PricingDialog';
+import { HistoryActionToast } from './components/common/HistoryActionToast';
 import { GuidedActionOverlay } from './components/guidedActions/GuidedActionOverlay';
 import { TutorialOverlay } from './components/common/TutorialOverlay';
 import { TutorialCampaignDialog } from './components/common/TutorialCampaignDialog';
@@ -66,7 +67,7 @@ function App() {
   useTheme();
 
   // Initialize global undo/redo system
-  useGlobalHistory();
+  const { historyNotice, clearHistoryNotice } = useGlobalHistory();
 
   // Auto-switch panels based on clip selection
   useClipPanelSync();
@@ -430,6 +431,7 @@ function App() {
       <DockContainer />
       <GuidedActionOverlay />
       <ProjectLoadProgressOverlay />
+      <HistoryActionToast notice={historyNotice} onDone={clearHistoryNotice} />
       {showWelcome && (
         <WelcomeOverlay onComplete={handleWelcomeComplete} noFadeOnClose />
       )}

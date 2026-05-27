@@ -18,7 +18,11 @@ vi.mock('../../../src/stores/mediaStore/helpers/importPipeline', () => ({
 }));
 
 vi.mock('../../../src/services/audio/timelineWaveformPyramidCache', () => ({
+  SOURCE_WAVEFORM_MAX_PREVIEW_SAMPLES: 32000,
+  SOURCE_WAVEFORM_PREVIEW_SAMPLES_PER_SECOND: 160,
   generateTimelineWaveformAnalysisForFile: waveformMocks.generateTimelineWaveformAnalysisForFile,
+  mapSourceWaveformPreviewProgress: (progress: number) => Math.round(Math.max(0, Math.min(70, progress)) / 70 * 20),
+  mapSourceWaveformPyramidProgress: (progress: { percent: number }) => Math.round(20 + Math.max(0, Math.min(100, progress.percent)) / 100 * 79),
 }));
 
 vi.mock('../../../src/services/projectFileService', () => ({
@@ -94,6 +98,9 @@ describe('fileImportSlice Signal imports', () => {
         [0.1, 0.7, 1, 0.25],
         [0.05, 0.5, 0.8, 0.2],
       ],
+      audioAnalysisRefs: {
+        waveformPyramidId: 'artifact:waveform-pyramid',
+      },
     });
   });
 
@@ -145,7 +152,7 @@ describe('fileImportSlice Signal imports', () => {
     expect(signalAsset?.artifacts[0]?.storage.kind).toBe('memory');
   });
 
-  it('starts detailed source waveform generation after audio import finalizes', async () => {
+  it('starts persistent source waveform generation after audio import finalizes', async () => {
     const store = createTestStore();
     const file = new File(['audio'], 'voice.wav', { type: 'audio/wav' });
     const mediaFile = {
@@ -167,7 +174,7 @@ describe('fileImportSlice Signal imports', () => {
       file,
       expect.objectContaining({
         mediaFileId: 'test-import-1',
-        includePyramid: false,
+        includePyramid: true,
         samplesPerSecond: 160,
         maxPreviewSamples: 32000,
       }),
@@ -182,6 +189,9 @@ describe('fileImportSlice Signal imports', () => {
         [0.1, 0.7, 1, 0.25],
         [0.05, 0.5, 0.8, 0.2],
       ],
+      audioAnalysisRefs: {
+        waveformPyramidId: 'artifact:waveform-pyramid',
+      },
       waveformProgress: 100,
     });
   });

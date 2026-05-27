@@ -1,8 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { compileGuidedToolCall } from '../../src/services/guidedActions';
+import { DEFAULT_TRANSFORM, useTimelineStore } from '../../src/stores/timeline';
 import type { GuidedAction, GuidedToolCall } from '../../src/services/guidedActions';
+import type { TimelineClip } from '../../src/types';
 
 describe('guided action compiler', () => {
+  afterEach(() => {
+    useTimelineStore.setState({ clips: [] });
+  });
+
   it('compiles selectClips into a visible clip click choreography', () => {
     const toolCall: GuidedToolCall = {
       tool: 'selectClips',
@@ -126,6 +132,13 @@ describe('guided action compiler', () => {
       family: 'timeline-edit',
     }));
     expect(actions).toContainEqual(expect.objectContaining({
+      type: 'clickVisual',
+      target: { kind: 'button', id: 'timeline-tool-group:cut' },
+      button: 'right',
+      gestureLabel: 'RMB',
+      family: 'timeline-edit',
+    }));
+    expect(actions).toContainEqual(expect.objectContaining({
       type: 'setPlayheadVisual',
       time: 12.5,
       family: 'timeline-edit',
@@ -141,9 +154,15 @@ describe('guided action compiler', () => {
       family: 'timeline-edit',
     }));
     expect(actions).toContainEqual(expect.objectContaining({
-      type: 'highlightTarget',
-      target: { kind: 'timelineClip', clipId: 'clip-1' },
+      type: 'clickVisual',
+      target: { kind: 'timelineTime', time: 12.5 },
+      button: 'left',
+      gestureLabel: 'LMB',
       family: 'timeline-edit',
+    }));
+    expect(actions).not.toContainEqual(expect.objectContaining({
+      type: 'highlightTarget',
+      target: { kind: 'timelineTime', time: 12.5 },
     }));
     expect(getExecutionActions(actions)[0]).toEqual(expect.objectContaining({
       type: 'executeTool',
@@ -151,6 +170,193 @@ describe('guided action compiler', () => {
       args: toolCall.args,
       family: 'timeline-edit',
     }));
+  });
+
+  it('derives splitClipEvenly cursor cuts from the live clip timing', () => {
+    useTimelineStore.setState({
+      clips: [
+        createTimelineClip({
+          id: 'clip-even',
+          trackId: 'video-1',
+          startTime: 10,
+          duration: 20,
+          inPoint: 0,
+          outPoint: 20,
+        }),
+      ],
+    });
+    const toolCall: GuidedToolCall = {
+      tool: 'splitClipEvenly',
+      args: {
+        clipId: 'clip-even',
+        parts: 5,
+      },
+    };
+
+    const compiled = compileGuidedToolCall(toolCall);
+    const cutTargets = [14, 18, 22, 26].map((time) => ({ kind: 'timelineTime' as const, trackId: 'video-1', time }));
+    const lastCutClickIndex = compiled.actions.findLastIndex((action) => (
+      action.type === 'clickVisual'
+      && action.target?.kind === 'timelineTime'
+      && action.target.time === 26
+    ));
+    const moveToToolGroupIndex = compiled.actions.findIndex((action) => (
+      action.type === 'moveCursorTo'
+      && action.target.kind === 'button'
+      && action.target.id === 'timeline-tool-group:cut'
+    ));
+    const selectCutCategoryIndex = compiled.actions.findIndex((action) => (
+      action.type === 'clickVisual'
+      && action.target?.kind === 'button'
+      && action.target.id === 'timeline-tool-group:cut'
+      && action.button === 'left'
+      && action.gestureDetail === 'Select category'
+    ));
+    const rightClickToolGroupIndex = compiled.actions.findIndex((action) => (
+      action.type === 'clickVisual'
+      && action.target?.kind === 'button'
+      && action.target.id === 'timeline-tool-group:cut'
+      && action.button === 'right'
+    ));
+    const openToolMenuIndex = compiled.actions.findIndex((action) => (
+      action.type === 'openTimelineToolGroupVisual'
+      && action.groupId === 'cut'
+      && action.targetToolId === 'blade'
+    ));
+    const moveToBladeItemIndex = compiled.actions.findIndex((action) => (
+      action.type === 'moveCursorTo'
+      && action.target.kind === 'button'
+      && action.target.id === 'timeline-tool:blade'
+    ));
+    const selectBladeItemIndex = compiled.actions.findIndex((action) => (
+      action.type === 'clickVisual'
+      && action.target?.kind === 'button'
+      && action.target.id === 'timeline-tool:blade'
+      && action.button === 'left'
+    ));
+    const moveToSelectionToolGroupIndex = compiled.actions.findLastIndex((action) => (
+      action.type === 'moveCursorTo'
+      && action.target.kind === 'button'
+      && action.target.id === 'timeline-tool-group:selection'
+    ));
+    const selectSelectionCategoryIndex = compiled.actions.findLastIndex((action) => (
+      action.type === 'clickVisual'
+      && action.target?.kind === 'button'
+      && action.target.id === 'timeline-tool-group:selection'
+      && action.button === 'left'
+      && action.gestureDetail === 'Select category'
+    ));
+    const rightClickSelectionToolGroupIndex = compiled.actions.findLastIndex((action) => (
+      action.type === 'clickVisual'
+      && action.target?.kind === 'button'
+      && action.target.id === 'timeline-tool-group:selection'
+      && action.button === 'right'
+    ));
+    const openSelectionToolMenuIndex = compiled.actions.findLastIndex((action) => (
+      action.type === 'openTimelineToolGroupVisual'
+      && action.groupId === 'selection'
+      && action.targetToolId === 'select'
+    ));
+    const moveToSelectionItemIndex = compiled.actions.findLastIndex((action) => (
+      action.type === 'moveCursorTo'
+      && action.target.kind === 'button'
+      && action.target.id === 'timeline-tool:select'
+    ));
+    const selectSelectionItemIndex = compiled.actions.findLastIndex((action) => (
+      action.type === 'clickVisual'
+      && action.target?.kind === 'button'
+      && action.target.id === 'timeline-tool:select'
+      && action.button === 'left'
+    ));
+    const setSelectToolIndex = compiled.actions.findLastIndex((action) => (
+      action.type === 'setTimelineToolVisual'
+      && action.toolId === 'select'
+    ));
+    const returnToTimelineIndex = compiled.actions.findLastIndex((action) => (
+      action.type === 'moveCursorTo'
+      && action.target.kind === 'timelineTime'
+      && action.target.time === 26
+    ));
+
+    expect(compiled.diagnostics.supported).toBe(true);
+    expect(compiled.diagnostics.executionActionCount).toBe(4);
+    expect(moveToToolGroupIndex).toBeGreaterThanOrEqual(0);
+    expect(selectCutCategoryIndex).toBeGreaterThan(moveToToolGroupIndex);
+    expect(rightClickToolGroupIndex).toBeGreaterThan(selectCutCategoryIndex);
+    expect(openToolMenuIndex).toBeGreaterThan(rightClickToolGroupIndex);
+    expect(moveToBladeItemIndex).toBeGreaterThan(openToolMenuIndex);
+    expect(selectBladeItemIndex).toBeGreaterThan(moveToBladeItemIndex);
+    expect(moveToSelectionToolGroupIndex).toBeGreaterThan(lastCutClickIndex);
+    expect(selectSelectionCategoryIndex).toBeGreaterThan(moveToSelectionToolGroupIndex);
+    expect(rightClickSelectionToolGroupIndex).toBeGreaterThan(selectSelectionCategoryIndex);
+    expect(openSelectionToolMenuIndex).toBeGreaterThan(rightClickSelectionToolGroupIndex);
+    expect(moveToSelectionItemIndex).toBeGreaterThan(openSelectionToolMenuIndex);
+    expect(selectSelectionItemIndex).toBeGreaterThan(moveToSelectionItemIndex);
+    expect(setSelectToolIndex).toBeGreaterThan(selectSelectionItemIndex);
+    expect(returnToTimelineIndex).toBeGreaterThan(setSelectToolIndex);
+    expect(compiled.actions).toContainEqual(expect.objectContaining({
+      type: 'moveCursorTo',
+      target: { kind: 'timelineClip', clipId: 'clip-even' },
+      family: 'timeline-edit',
+    }));
+    expect(compiled.actions).toContainEqual(expect.objectContaining({
+      type: 'setTimelineToolVisual',
+      toolId: 'blade',
+      family: 'timeline-edit',
+    }));
+    for (const target of cutTargets) {
+      expect(compiled.actions).toContainEqual(expect.objectContaining({
+        type: 'setPlayheadVisual',
+        time: target.time,
+        family: 'timeline-edit',
+      }));
+      expect(compiled.actions).toContainEqual(expect.objectContaining({
+        type: 'moveCursorTo',
+        target,
+        family: 'timeline-edit',
+      }));
+      expect(compiled.actions).toContainEqual(expect.objectContaining({
+        type: 'clickVisual',
+        target,
+        button: 'left',
+        gestureLabel: 'LMB',
+        gestureDetail: 'Cut',
+        family: 'timeline-edit',
+      }));
+      const cutClickIndex = compiled.actions.findIndex((action) => (
+        action.type === 'clickVisual'
+        && action.target?.kind === 'timelineTime'
+        && action.target.time === target.time
+      ));
+      const cutExecuteIndex = compiled.actions.findIndex((action) => (
+        action.type === 'executeTool'
+        && action.tool === 'splitClip'
+        && action.args.splitTime === target.time
+      ));
+      expect(cutExecuteIndex).toBeGreaterThan(cutClickIndex);
+    }
+    expect(compiled.actions).not.toContainEqual(expect.objectContaining({
+      type: 'highlightTarget',
+      target: expect.objectContaining({ kind: 'timelineTime' }),
+    }));
+    expect(lastCutClickIndex).toBeGreaterThan(0);
+    expect(compiled.actions).toContainEqual(expect.objectContaining({
+      type: 'setTimelineToolVisual',
+      toolId: 'select',
+      family: 'timeline-edit',
+    }));
+    expect(getExecutionActions(compiled.actions)).toEqual(cutTargets.map((target) => (
+      expect.objectContaining({
+        type: 'executeTool',
+        tool: 'splitClip',
+        args: expect.objectContaining({
+          clipId: 'clip-even',
+          splitTime: target.time,
+          guidedResolveClipAtTimeTrackId: 'video-1',
+        }),
+        family: 'timeline-edit',
+      })
+    )));
   });
 
   it('compiles setPlayhead into a visible cursor choreography', () => {
@@ -444,6 +650,121 @@ describe('guided action compiler', () => {
     ]);
   });
 
+  it('compiles importLocalFiles with addToTimeline into a timeline placement choreography', () => {
+    const toolCall: GuidedToolCall = {
+      tool: 'importLocalFiles',
+      args: {
+        paths: ['C:/Users/admin/Downloads/source.mp4'],
+        addToTimeline: true,
+        trackId: 'video-3',
+        startTime: 12,
+      },
+    };
+
+    const compiled = compileGuidedToolCall(toolCall);
+    const actions = compiled.actions;
+
+    expect(compiled.diagnostics.supported).toBe(true);
+    expect(compiled.diagnostics.executionActionCount).toBe(1);
+    expect(actions).toContainEqual(expect.objectContaining({
+      type: 'focusPanel',
+      panel: 'media',
+      family: 'media',
+    }));
+    expect(actions).toContainEqual(expect.objectContaining({
+      type: 'dragCursor',
+      from: { kind: 'panel', panel: 'media' },
+      to: { kind: 'timelineTime', trackId: 'video-3', time: 12 },
+      family: 'media',
+    }));
+    expect(actions).toContainEqual(expect.objectContaining({
+      type: 'highlightTarget',
+      target: { kind: 'timelineTime', trackId: 'video-3', time: 12 },
+      tone: 'success',
+      family: 'media',
+    }));
+    expect(getExecutionActions(actions)).toEqual([
+      expect.objectContaining({
+        type: 'executeTool',
+        tool: 'importLocalFiles',
+        args: toolCall.args,
+        family: 'media',
+      }),
+    ]);
+  });
+
+  it('keeps importLocalFiles media-only imports out of the timeline choreography', () => {
+    const toolCall: GuidedToolCall = {
+      tool: 'importLocalFiles',
+      args: {
+        paths: ['C:/Users/admin/Downloads/source.mp4'],
+      },
+    };
+
+    const compiled = compileGuidedToolCall(toolCall);
+
+    expect(compiled.diagnostics.supported).toBe(true);
+    expect(compiled.actions).not.toContainEqual(expect.objectContaining({
+      type: 'dragCursor',
+    }));
+    expect(compiled.actions).not.toContainEqual(expect.objectContaining({
+      target: expect.objectContaining({ kind: 'timelineTime' }),
+    }));
+    expect(getExecutionActions(compiled.actions)).toEqual([
+      expect.objectContaining({
+        type: 'executeTool',
+        tool: 'importLocalFiles',
+        args: toolCall.args,
+        family: 'media',
+      }),
+    ]);
+  });
+
+  it('compiles downloadAndImportVideo into a download-to-timeline choreography', () => {
+    const toolCall: GuidedToolCall = {
+      tool: 'downloadAndImportVideo',
+      args: {
+        url: 'https://example.com/video.mp4',
+        title: 'Reference',
+        startTime: 3,
+      },
+    };
+
+    const compiled = compileGuidedToolCall(toolCall);
+    const actions = compiled.actions;
+
+    expect(compiled.diagnostics.supported).toBe(true);
+    expect(compiled.diagnostics.executionActionCount).toBe(1);
+    expect(actions).toContainEqual(expect.objectContaining({
+      type: 'focusPanel',
+      panel: 'download',
+      family: 'media',
+    }));
+    expect(actions).toContainEqual(expect.objectContaining({
+      type: 'dragCursor',
+      from: { kind: 'panel', panel: 'download' },
+      to: { kind: 'timelineTime', time: 3 },
+      family: 'media',
+    }));
+    const dragIndex = actions.findIndex((action) => action.type === 'dragCursor');
+    const executeIndex = actions.findIndex((action) => action.type === 'executeTool');
+    const highlightIndex = actions.findIndex((action) => (
+      action.type === 'highlightTarget'
+      && action.target.kind === 'timelineTime'
+      && action.tone === 'success'
+    ));
+    expect(executeIndex).toBeGreaterThan(dragIndex);
+    expect(highlightIndex).toBeGreaterThan(executeIndex);
+    expect(getExecutionActions(actions)).toEqual([
+      expect.objectContaining({
+        type: 'executeTool',
+        tool: 'downloadAndImportVideo',
+        args: toolCall.args,
+        family: 'media',
+      }),
+    ]);
+  });
+
   it('uses generic choreography for unsupported tools', () => {
     const compiled = compileGuidedToolCall({
       tool: 'unknownTool',
@@ -467,4 +788,21 @@ describe('guided action compiler', () => {
 
 function getExecutionActions(actions: GuidedAction[]): GuidedAction[] {
   return actions.filter((action) => action.type === 'executeTool');
+}
+
+function createTimelineClip(overrides: Partial<TimelineClip> = {}): TimelineClip {
+  return {
+    id: 'clip-1',
+    trackId: 'video-1',
+    name: 'Clip',
+    file: new File([], 'clip.mp4'),
+    startTime: 0,
+    duration: 5,
+    inPoint: 0,
+    outPoint: 5,
+    source: { type: 'video' },
+    transform: structuredClone(DEFAULT_TRANSFORM),
+    effects: [],
+    ...overrides,
+  };
 }

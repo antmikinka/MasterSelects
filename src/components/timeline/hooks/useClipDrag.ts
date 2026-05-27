@@ -6,7 +6,8 @@ import type { TimelineClip, TimelineTrack } from '../../../types';
 import { isVectorAnimationSourceType } from '../../../types/vectorAnimation';
 import type { ClipDragState } from '../types';
 import { Logger } from '../../../services/logger';
-import type { TimelineToolId } from '../../../stores/timeline/types';
+import { useTimelineStore } from '../../../stores/timeline';
+import type { TimelineClipDragPreview, TimelineToolId } from '../../../stores/timeline/types';
 import type { TimelineEditOperation, TimelineEditResult } from '../../../stores/timeline/editOperations/types';
 
 const log = Logger.create('useClipDrag');
@@ -101,6 +102,61 @@ function clampSlideTimelineDelta(clips: TimelineClip[], clip: TimelineClip, time
   return clamp(timelineDelta, minDelta, maxDelta);
 }
 
+function buildClipDragPreview(
+  drag: ClipDragState,
+  clipMap: Map<string, TimelineClip>,
+): TimelineClipDragPreview | null {
+  if (drag.toolGesture) return null;
+
+  const movingClip = clipMap.get(drag.clipId);
+  const previewStartTime = drag.snappedTime;
+  if (!movingClip || previewStartTime === null) return null;
+
+  const patches: TimelineClipDragPreview['patches'] = {};
+  const movedClipIds = new Set<string>();
+  const timeDelta = previewStartTime - movingClip.startTime;
+  const shouldMoveLinkedOrGrouped = !drag.altKeyPressed;
+
+  const addPatch = (clip: TimelineClip, startTime: number, trackId = clip.trackId) => {
+    patches[clip.id] = { startTime, trackId };
+    movedClipIds.add(clip.id);
+  };
+
+  addPatch(movingClip, previewStartTime, drag.currentTrackId);
+
+  const selectedDragIds = drag.multiSelectClipIds ?? [];
+  if (selectedDragIds.length > 0 && drag.multiSelectTimeDelta !== undefined) {
+    for (const selectedId of selectedDragIds) {
+      const selectedClip = clipMap.get(selectedId);
+      if (!selectedClip || movedClipIds.has(selectedClip.id)) continue;
+      addPatch(selectedClip, selectedClip.startTime + drag.multiSelectTimeDelta);
+    }
+  }
+
+  if (shouldMoveLinkedOrGrouped) {
+    for (const movedId of [...movedClipIds]) {
+      const clip = clipMap.get(movedId);
+      const linkedClip = clip?.linkedClipId ? clipMap.get(clip.linkedClipId) : undefined;
+      if (linkedClip && !movedClipIds.has(linkedClip.id)) {
+        addPatch(linkedClip, linkedClip.startTime + timeDelta);
+      }
+    }
+
+    if (movingClip.linkedGroupId) {
+      for (const clip of clipMap.values()) {
+        if (clip.linkedGroupId !== movingClip.linkedGroupId || movedClipIds.has(clip.id)) continue;
+        addPatch(clip, clip.startTime + timeDelta);
+      }
+    }
+  }
+
+  return Object.keys(patches).length > 0 ? { patches } : null;
+}
+
+function setClipDragPreview(preview: TimelineClipDragPreview | null): void {
+  useTimelineStore.setState({ clipDragPreview: preview });
+}
+
 export function useClipDrag({
   trackLanesRef,
   timelineRef,
@@ -139,6 +195,8 @@ export function useClipDrag({
   useEffect(() => {
     clipMapRef.current = clipMap;
   }, [clipMap]);
+
+  useEffect(() => () => setClipDragPreview(null), []);
 
   // Premiere-style clip drag
   const handleClipMouseDown = useCallback(
@@ -214,6 +272,7 @@ export function useClipDrag({
       };
       setClipDrag(initialDrag);
       clipDragRef.current = initialDrag;
+      setClipDragPreview(buildClipDragPreview(initialDrag, currentClipMap));
 
       const handleMouseMove = (moveEvent: MouseEvent) => {
         const drag = clipDragRef.current;
@@ -244,6 +303,7 @@ export function useClipDrag({
           };
           setClipDrag(newDrag);
           clipDragRef.current = newDrag;
+          setClipDragPreview(buildClipDragPreview(newDrag, clipMapRef.current));
           return;
         }
 
@@ -491,6 +551,7 @@ export function useClipDrag({
         };
         setClipDrag(newDrag);
         clipDragRef.current = newDrag;
+        setClipDragPreview(buildClipDragPreview(newDrag, clipMapRef.current));
       };
 
       const handleMouseUp = (upEvent: MouseEvent) => {
@@ -529,6 +590,7 @@ export function useClipDrag({
             }
             setClipDrag(null);
             clipDragRef.current = null;
+            setClipDragPreview(null);
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
             return;
@@ -619,6 +681,7 @@ export function useClipDrag({
         }
         setClipDrag(null);
         clipDragRef.current = null;
+        setClipDragPreview(null);
         document.removeEventListener('mousemove', handleMouseMove);
         document.removeEventListener('mouseup', handleMouseUp);
       };

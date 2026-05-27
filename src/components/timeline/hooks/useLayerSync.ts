@@ -6,6 +6,7 @@ import type { TimelineClip, TimelineTrack, Layer, Effect, NestedCompositionData,
 import type { VectorAnimationClipSettings } from '../../../types/vectorAnimation';
 import type { ClipDragState } from '../types';
 import { useTimelineStore } from '../../../stores/timeline';
+import { applyClipDragPreview } from '../../../stores/timeline/clipDragPreview';
 import { useMediaStore } from '../../../stores/mediaStore';
 import { engine } from '../../../engine/WebGPUEngine';
 import { proxyFrameCache } from '../../../services/proxyFrameCache';
@@ -342,7 +343,7 @@ export function useLayerSync({
 
     // Try to use RAM Preview cache for instant scrubbing
     // This provides instant access to pre-rendered frames
-    if (ramPreviewRange) {
+    if (!clipDrag && ramPreviewRange) {
       const inRange = playheadPosition >= ramPreviewRange.start && playheadPosition <= ramPreviewRange.end;
       if (inRange) {
         const hit = engine.renderCachedFrame(playheadPosition);
@@ -351,7 +352,7 @@ export function useLayerSync({
         }
         // Cache miss within range - will fall through to regular render
       }
-    } else {
+    } else if (!clipDrag) {
       // No RAM preview range, but still try the cache in case frames were cached during playback
       const hit = engine.renderCachedFrame(playheadPosition);
       if (hit) {
@@ -368,29 +369,40 @@ export function useLayerSync({
     let clipsAtTime = getClipsAtTime(playheadPosition);
 
     if (clipDrag) {
-      const draggedClipId = clipDrag.clipId;
-      const rawPixelX = clipDrag.currentX
-        ? clipDrag.currentX -
-          (timelineRef.current?.getBoundingClientRect().left || 0) +
-          scrollX -
-          clipDrag.grabOffsetX
-        : 0;
-      const tempStartTime =
-        clipDrag.snappedTime ??
-        (clipDrag.currentX ? Math.max(0, rawPixelX / zoom) : null);
+      const dragPreview = useTimelineStore.getState().clipDragPreview;
+      const previewClips = applyClipDragPreview(clips, dragPreview);
 
-      if (tempStartTime !== null) {
-        const modifiedClips = clips.map((c) => {
-          if (c.id === draggedClipId) {
-            return { ...c, startTime: tempStartTime, trackId: clipDrag.currentTrackId };
-          }
-          return c;
-        });
-        clipsAtTime = modifiedClips.filter(
+      if (previewClips !== clips) {
+        clipsAtTime = previewClips.filter(
           (c) =>
             playheadPosition >= c.startTime &&
             playheadPosition < c.startTime + c.duration
         );
+      } else {
+        const draggedClipId = clipDrag.clipId;
+        const rawPixelX = clipDrag.currentX
+          ? clipDrag.currentX -
+            (timelineRef.current?.getBoundingClientRect().left || 0) +
+            scrollX -
+            clipDrag.grabOffsetX
+          : 0;
+        const tempStartTime =
+          clipDrag.snappedTime ??
+          (clipDrag.currentX ? Math.max(0, rawPixelX / zoom) : null);
+
+        if (tempStartTime !== null) {
+          const modifiedClips = clips.map((c) => {
+            if (c.id === draggedClipId) {
+              return { ...c, startTime: tempStartTime, trackId: clipDrag.currentTrackId };
+            }
+            return c;
+          });
+          clipsAtTime = modifiedClips.filter(
+            (c) =>
+              playheadPosition >= c.startTime &&
+              playheadPosition < c.startTime + c.duration
+          );
+        }
       }
     }
 

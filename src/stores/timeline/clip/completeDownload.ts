@@ -10,7 +10,13 @@ import { generateClipId } from '../helpers/idGenerator';
 import { blobUrlManager } from '../helpers/blobUrlManager';
 import { updateClipById } from '../helpers/clipStateHelpers';
 import { Logger } from '../../../services/logger';
-import { generateTimelineWaveformAnalysisForFile } from '../../../services/audio/timelineWaveformPyramidCache';
+import {
+  SOURCE_WAVEFORM_MAX_PREVIEW_SAMPLES,
+  SOURCE_WAVEFORM_PREVIEW_SAMPLES_PER_SECOND,
+  generateTimelineWaveformAnalysisForFile,
+  mapSourceWaveformPreviewProgress,
+  mapSourceWaveformPyramidProgress,
+} from '../../../services/audio/timelineWaveformPyramidCache';
 
 const log = Logger.create('CompleteDownload');
 
@@ -196,9 +202,23 @@ async function generateWaveformAsync(
   try {
     const analysis = await generateTimelineWaveformAnalysisForFile(file, {
       mediaFileId,
-      includePyramid: false,
+      includePyramid: true,
+      samplesPerSecond: SOURCE_WAVEFORM_PREVIEW_SAMPLES_PER_SECOND,
+      maxPreviewSamples: SOURCE_WAVEFORM_MAX_PREVIEW_SAMPLES,
       onProgress: (progress, partialWaveform) => {
-        set({ clips: updateClipById(get().clips, audioClipId, { waveformProgress: progress, waveform: partialWaveform }) });
+        set({
+          clips: updateClipById(get().clips, audioClipId, {
+            waveformProgress: mapSourceWaveformPreviewProgress(progress),
+            waveform: partialWaveform,
+          }),
+        });
+      },
+      onPyramidProgress: (progress) => {
+        set({
+          clips: updateClipById(get().clips, audioClipId, {
+            waveformProgress: mapSourceWaveformPyramidProgress(progress),
+          }),
+        });
       },
     });
     const currentClip = get().clips.find((clip) => clip.id === audioClipId);

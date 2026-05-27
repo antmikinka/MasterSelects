@@ -296,7 +296,7 @@ function resetGuidedActionStore(): void {
   useGuidedActionStore.setState({
     activeSession: null,
     currentStep: null,
-    cursor: { visible: false, position: null, clicking: false },
+    cursor: { visible: false, position: null, clicking: false, inputGesture: null },
     lastUserPointerPosition: null,
     spotlight: null,
     callout: null,

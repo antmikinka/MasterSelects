@@ -16,8 +16,14 @@ describe('guided action scheduler', () => {
       compression: 'family',
     });
 
-    expect(normalizeGuidedAnimationBudget(15000)).toEqual({
-      totalMs: 10000,
+    expect(normalizeGuidedAnimationBudget(15_000)).toEqual({
+      totalMs: 15_000,
+      disabled: false,
+      compression: 'family',
+    });
+
+    expect(normalizeGuidedAnimationBudget(3_600_000)).toEqual({
+      totalMs: 3_600_000,
       disabled: false,
       compression: 'family',
     });
@@ -45,6 +51,18 @@ describe('guided action scheduler', () => {
     expect(plan.diagnostics.naturalDurationMs).toBe(3000);
     expect(plan.diagnostics.scale).toBeCloseTo(1 / 3);
     expect(plan.diagnostics.plannedDurationMs).toBeLessThanOrEqual(1000);
+  });
+
+  it('stretches visual durations to use a larger requested budget', () => {
+    const plan = planGuidedActions([
+      { type: 'moveCursorTo', target: timelineTarget(1), durationMs: 1000 },
+      { type: 'clickVisual', target: timelineTarget(1) },
+    ], { totalMs: 20_000, compression: 'none' });
+
+    expect(plan.diagnostics.naturalDurationMs).toBe(1180);
+    expect(plan.diagnostics.scale).toBeCloseTo(20_000 / 1180);
+    expect(plan.diagnostics.plannedDurationMs).toBeLessThanOrEqual(20_000);
+    expect(plan.diagnostics.plannedDurationMs).toBeGreaterThanOrEqual(19_999);
   });
 
   it('compresses repeated same-family visual actions before scaling', () => {

@@ -1,12 +1,15 @@
 import type { MediaFile } from '../types';
-import { generateTimelineWaveformAnalysisForFile } from '../../../services/audio/timelineWaveformPyramidCache';
+import {
+  SOURCE_WAVEFORM_MAX_PREVIEW_SAMPLES,
+  SOURCE_WAVEFORM_PREVIEW_SAMPLES_PER_SECOND,
+  generateTimelineWaveformAnalysisForFile,
+  mapSourceWaveformPreviewProgress,
+  mapSourceWaveformPyramidProgress,
+} from '../../../services/audio/timelineWaveformPyramidCache';
 import { Logger } from '../../../services/logger';
 import { shouldSkipWaveform } from '../../timeline/helpers/waveformHelpers';
 
 const log = Logger.create('MediaWaveform');
-
-const MEDIA_WAVEFORM_SAMPLES_PER_SECOND = 160;
-const MEDIA_WAVEFORM_MAX_PREVIEW_SAMPLES = 32000;
 
 type MediaWaveformUpdate = Partial<Pick<
   MediaFile,
@@ -75,15 +78,23 @@ export function startMediaFileWaveformGeneration(
     try {
       const analysis = await generateTimelineWaveformAnalysisForFile(file, {
         mediaFileId: mediaFile.id,
-        includePyramid: false,
-        samplesPerSecond: MEDIA_WAVEFORM_SAMPLES_PER_SECOND,
-        maxPreviewSamples: MEDIA_WAVEFORM_MAX_PREVIEW_SAMPLES,
+        includePyramid: true,
+        samplesPerSecond: SOURCE_WAVEFORM_PREVIEW_SAMPLES_PER_SECOND,
+        maxPreviewSamples: SOURCE_WAVEFORM_MAX_PREVIEW_SAMPLES,
         onProgress: (progress, partialWaveform) => {
           const current = resolveMediaFile?.(mediaFile.id);
           if (current && hasReadyWaveform(current)) return;
           updateMediaFile(mediaFile.id, {
             waveform: partialWaveform,
-            waveformProgress: Math.max(0, Math.min(99, progress)),
+            waveformProgress: mapSourceWaveformPreviewProgress(progress),
+            waveformStatus: 'generating',
+          });
+        },
+        onPyramidProgress: (progress) => {
+          const current = resolveMediaFile?.(mediaFile.id);
+          if (current && hasReadyWaveform(current)) return;
+          updateMediaFile(mediaFile.id, {
+            waveformProgress: mapSourceWaveformPyramidProgress(progress),
             waveformStatus: 'generating',
           });
         },

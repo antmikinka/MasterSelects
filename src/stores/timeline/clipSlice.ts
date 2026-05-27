@@ -16,6 +16,8 @@ import { cloneClipNodeGraph } from '../../services/nodeGraph';
 import {
   createCurrentAudioArtifactStore,
   generateTimelineWaveformAnalysisForFile,
+  mapSourceWaveformPreviewProgress,
+  mapSourceWaveformPyramidProgress,
 } from '../../services/audio/timelineWaveformPyramidCache';
 import { audioExtractor } from '../../engine/audio/AudioExtractor';
 import {
@@ -1093,7 +1095,7 @@ export const createClipSlice: SliceCreator<CoreClipActions> = (set, get) => ({
                 clips: updateAudioAnalysisJobProgress(
                   updateClipById(get().clips, clipId, { waveform: partialWaveform }),
                   clipId,
-                  progress,
+                  includePyramid ? mapSourceWaveformPreviewProgress(progress) : progress,
                   'analyzing',
                 ),
               });
@@ -1103,7 +1105,7 @@ export const createClipSlice: SliceCreator<CoreClipActions> = (set, get) => ({
                 clips: updateAudioAnalysisJobProgress(
                   get().clips,
                   clipId,
-                  Math.min(98, Math.round(progress.percent)),
+                  mapSourceWaveformPyramidProgress(progress),
                   progress.phase.startsWith('storing') ? 'storing' : 'analyzing',
                   progress.message,
                 ),

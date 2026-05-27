@@ -6,6 +6,7 @@ import type { FrameContext, ClipTimeInfo } from './types';
 import { LAYER_BUILDER_CONSTANTS } from './types';
 import { useTimelineStore } from '../../stores/timeline';
 import { useMediaStore } from '../../stores/mediaStore';
+import { applyClipDragPreview } from '../../stores/timeline/clipDragPreview';
 import { getPlayheadPosition } from './PlayheadState';
 import type { Composition, MediaFile } from '../../stores/mediaStore/types';
 import { getTrackAudioMuted, getTrackAudioSolo } from '../audio/audioGraphRouteSettings';
@@ -79,13 +80,14 @@ export function createFrameContext(): FrameContext {
   const now = performance.now();
 
   const {
-    clips,
+    clips: storeClips,
     tracks,
     isPlaying,
     isDraggingPlayhead,
     playheadPosition: storePlayheadPosition,
     playbackSpeed,
     masterAudioState,
+    clipDragPreview,
     getInterpolatedTransform,
     getInterpolatedEffects,
     getInterpolatedNodeGraphParams,
@@ -98,6 +100,7 @@ export function createFrameContext(): FrameContext {
   } = timelineState;
 
   const playheadPosition = getPlayheadPosition(storePlayheadPosition);
+  const clips = applyClipDragPreview(storeClips, clipDragPreview);
   const activeCompId = mediaState.activeCompositionId || 'default';
   const proxyEnabled = mediaState.proxyEnabled;
   const frameNumber = Math.floor(playheadPosition * LAYER_BUILDER_CONSTANTS.FRAME_RATE);

@@ -1,18 +1,18 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { getShortcutRegistry } from '../../../services/shortcutRegistry';
 import {
   clearTimelinePlacementCommandPreview,
   hasCurrentTimelinePlacementSource,
-  runTimelinePlacementCommand,
   showTimelinePlacementCommandPreview,
 } from '../../../services/timelinePlacementCommands';
 import { useMediaStore } from '../../../stores/mediaStore';
 import { useTimelineStore } from '../../../stores/timeline';
-import type { TimelineToolGroupId } from '../../../stores/timeline/types';
+import type { TimelineToolGroupId, TimelineToolId } from '../../../stores/timeline/types';
 import type { TimelinePlacementMode } from '../../../stores/timeline/editOperations/types';
 import { TimelineToolButton } from './TimelineToolButton';
 import { TimelineToolFlyout } from './TimelineToolFlyout';
+import { runTimelineToolCommand } from './timelineToolCommands';
 import {
   TIMELINE_TOOL_DEFINITION_BY_ID,
   TIMELINE_TOOL_GROUPS,
@@ -29,11 +29,36 @@ const PLACEMENT_COMMAND_TOOL_IDS = new Set<string>([
   'ripple-overwrite',
 ]);
 
-function isPlacementCommandToolId(toolId: string): toolId is TimelinePlacementMode {
+const TOOL_FLYOUT_OWNER_EVENT = 'timelineToolFlyoutOwnerChanged';
+const TOOL_FLYOUT_OWNER_KEY = '__masterselectsTimelineToolFlyoutOwner';
+
+declare global {
+  interface Window {
+    __masterselectsTimelineToolFlyoutOwner?: string | null;
+  }
+}
+
+function createToolFlyoutOwnerId(): string {
+  return `timeline-tool-palette-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getToolFlyoutOwner(): string | null {
+  if (typeof window === 'undefined') return null;
+  return window[TOOL_FLYOUT_OWNER_KEY] ?? null;
+}
+
+function setToolFlyoutOwner(ownerId: string | null): void {
+  if (typeof window === 'undefined') return;
+  window[TOOL_FLYOUT_OWNER_KEY] = ownerId;
+  window.dispatchEvent(new CustomEvent(TOOL_FLYOUT_OWNER_EVENT, { detail: { ownerId } }));
+}
+
+function isPlacementCommandToolId(toolId: TimelineToolId): toolId is TimelinePlacementMode {
   return PLACEMENT_COMMAND_TOOL_IDS.has(toolId);
 }
 
 export function TimelineToolPalette() {
+  const ownerIdRef = useRef(createToolFlyoutOwnerId());
   const {
     activeTimelineToolId,
     lastTimelineToolByGroup,
@@ -42,17 +67,6 @@ export function TimelineToolPalette() {
     setActiveTimelineTool,
     activateTimelineToolGroup,
     setOpenTimelineToolGroup,
-    splitClipAtPlayhead,
-    splitAllClipsAtTime,
-    rippleDeleteSelection,
-    deleteGapAtTime,
-    trimSelectedClipEdgeToPlayhead,
-    rippleTrimSelectedClipEdgeToPlayhead,
-    liftTimelineRange,
-    extractTimelineRange,
-    addMarker,
-    setInPointAtPlayhead,
-    setOutPointAtPlayhead,
   } = useTimelineStore(useShallow((state) => ({
     activeTimelineToolId: state.activeTimelineToolId,
     lastTimelineToolByGroup: state.lastTimelineToolByGroup,
@@ -61,17 +75,6 @@ export function TimelineToolPalette() {
     setActiveTimelineTool: state.setActiveTimelineTool,
     activateTimelineToolGroup: state.activateTimelineToolGroup,
     setOpenTimelineToolGroup: state.setOpenTimelineToolGroup,
-    splitClipAtPlayhead: state.splitClipAtPlayhead,
-    splitAllClipsAtTime: state.splitAllClipsAtTime,
-    rippleDeleteSelection: state.rippleDeleteSelection,
-    deleteGapAtTime: state.deleteGapAtTime,
-    trimSelectedClipEdgeToPlayhead: state.trimSelectedClipEdgeToPlayhead,
-    rippleTrimSelectedClipEdgeToPlayhead: state.rippleTrimSelectedClipEdgeToPlayhead,
-    liftTimelineRange: state.liftTimelineRange,
-    extractTimelineRange: state.extractTimelineRange,
-    addMarker: state.addMarker,
-    setInPointAtPlayhead: state.setInPointAtPlayhead,
-    setOutPointAtPlayhead: state.setOutPointAtPlayhead,
   })));
   useMediaStore(useShallow((state) => ({
     sourceMonitorFileId: state.sourceMonitorFileId,
@@ -90,8 +93,12 @@ export function TimelineToolPalette() {
     signalAssets: state.signalAssets,
   })));
   const [flyoutAnchorRect, setFlyoutAnchorRect] = useState<DOMRect | null>(null);
+  const [guidedHighlightedToolId, setGuidedHighlightedToolId] = useState<TimelineToolId | null>(null);
+  const [flyoutOwnerId, setFlyoutOwnerId] = useState<string | null>(() => getToolFlyoutOwner());
+  const toolButtonRefs = useRef(new Map<TimelineToolGroupId, HTMLButtonElement>());
   const shortcutRegistry = getShortcutRegistry();
   const hasPlacementSource = hasCurrentTimelinePlacementSource();
+  const ownsFlyout = flyoutOwnerId === ownerIdRef.current;
 
   const openGroup = openTimelineToolGroupId
     ? TIMELINE_TOOL_GROUPS.find((group) => group.id === openTimelineToolGroupId) ?? null
@@ -110,61 +117,74 @@ export function TimelineToolPalette() {
   );
 
   const closeFlyout = useCallback(() => {
+    if (getToolFlyoutOwner() === ownerIdRef.current) {
+      setToolFlyoutOwner(null);
+    }
     setOpenTimelineToolGroup(null);
     setFlyoutAnchorRect(null);
+    setGuidedHighlightedToolId(null);
     clearTimelinePlacementCommandPreview();
   }, [setOpenTimelineToolGroup]);
 
-  const openFlyout = useCallback((groupId: TimelineToolGroupId, anchor: HTMLButtonElement) => {
+  const openFlyout = useCallback((groupId: TimelineToolGroupId, anchor: HTMLButtonElement, highlightedToolId?: TimelineToolId | null) => {
+    setToolFlyoutOwner(ownerIdRef.current);
     setFlyoutAnchorRect(anchor.getBoundingClientRect());
+    setGuidedHighlightedToolId(highlightedToolId ?? null);
     setOpenTimelineToolGroup(groupId);
   }, [setOpenTimelineToolGroup]);
 
+  const registerToolButton = useCallback((groupId: TimelineToolGroupId, button: HTMLButtonElement | null) => {
+    if (button) {
+      toolButtonRefs.current.set(groupId, button);
+      return;
+    }
+    toolButtonRefs.current.delete(groupId);
+  }, []);
+
+  useEffect(() => {
+    const handleFlyoutOwnerChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ ownerId?: string | null }>).detail;
+      const ownerId = detail?.ownerId ?? null;
+      setFlyoutOwnerId(ownerId);
+      if (ownerId !== ownerIdRef.current) {
+        setFlyoutAnchorRect(null);
+        setGuidedHighlightedToolId(null);
+        clearTimelinePlacementCommandPreview();
+      }
+    };
+
+    window.addEventListener(TOOL_FLYOUT_OWNER_EVENT, handleFlyoutOwnerChange);
+    return () => {
+      window.removeEventListener(TOOL_FLYOUT_OWNER_EVENT, handleFlyoutOwnerChange);
+      if (getToolFlyoutOwner() === ownerIdRef.current) {
+        setToolFlyoutOwner(null);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleGuidedOpenToolGroup = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        groupId?: TimelineToolGroupId;
+        targetToolId?: TimelineToolId;
+        anchorElement?: HTMLButtonElement | null;
+      }>).detail;
+      const groupId = detail?.groupId;
+      if (!groupId) return;
+      const anchor = toolButtonRefs.current.get(groupId);
+      if (!anchor) return;
+      if (detail?.anchorElement && detail.anchorElement !== anchor) return;
+      openFlyout(groupId, anchor, detail?.targetToolId ?? null);
+    };
+
+    window.addEventListener('guidedOpenTimelineToolGroup', handleGuidedOpenToolGroup);
+    return () => window.removeEventListener('guidedOpenTimelineToolGroup', handleGuidedOpenToolGroup);
+  }, [openFlyout]);
+
   const runCommand = useCallback((tool: TimelineToolDefinition) => {
     if (isExporting && tool.mutatesTimeline) return;
-    if (tool.id === 'split-at-playhead') {
-      splitClipAtPlayhead();
-    } else if (tool.id === 'split-all-at-playhead') {
-      splitAllClipsAtTime(useTimelineStore.getState().playheadPosition);
-    } else if (tool.id === 'ripple-delete') {
-      rippleDeleteSelection();
-    } else if (tool.id === 'delete-gap') {
-      deleteGapAtTime(useTimelineStore.getState().playheadPosition);
-    } else if (tool.id === 'trim-start-to-playhead') {
-      trimSelectedClipEdgeToPlayhead('start');
-    } else if (tool.id === 'trim-end-to-playhead') {
-      trimSelectedClipEdgeToPlayhead('end');
-    } else if (tool.id === 'ripple-trim-start-to-playhead') {
-      rippleTrimSelectedClipEdgeToPlayhead('start');
-    } else if (tool.id === 'ripple-trim-end-to-playhead') {
-      rippleTrimSelectedClipEdgeToPlayhead('end');
-    } else if (tool.id === 'lift-range') {
-      liftTimelineRange();
-    } else if (tool.id === 'extract-range') {
-      extractTimelineRange();
-    } else if (tool.id === 'marker') {
-      addMarker(useTimelineStore.getState().playheadPosition);
-    } else if (tool.id === 'in-point') {
-      setInPointAtPlayhead();
-    } else if (tool.id === 'out-point') {
-      setOutPointAtPlayhead();
-    } else if (isPlacementCommandToolId(tool.id)) {
-      void runTimelinePlacementCommand(tool.id);
-    }
-  }, [
-    addMarker,
-    deleteGapAtTime,
-    extractTimelineRange,
-    isExporting,
-    liftTimelineRange,
-    rippleDeleteSelection,
-    rippleTrimSelectedClipEdgeToPlayhead,
-    setInPointAtPlayhead,
-    setOutPointAtPlayhead,
-    splitAllClipsAtTime,
-    splitClipAtPlayhead,
-    trimSelectedClipEdgeToPlayhead,
-  ]);
+    runTimelineToolCommand(tool.id);
+  }, [isExporting]);
 
   const selectTool = useCallback((tool: TimelineToolDefinition) => {
     if (tool.availability !== 'enabled') return;
@@ -205,14 +225,16 @@ export function TimelineToolPalette() {
             icon={displayTool.icon}
             onActivate={activateTimelineToolGroup}
             onOpen={openFlyout}
+          onRegister={registerToolButton}
           />
         );
       })}
-      {openGroup && flyoutAnchorRect && (
+      {openGroup && flyoutAnchorRect && ownsFlyout && (
         <TimelineToolFlyout
           anchorRect={flyoutAnchorRect}
           activeToolId={activeTimelineToolId}
           tools={openGroupTools}
+          initialHighlightedToolId={guidedHighlightedToolId}
           isExporting={isExporting}
           onSelect={selectTool}
           onPreview={previewTool}

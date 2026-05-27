@@ -163,6 +163,17 @@ function getTimelineReplayTargets(operation: TimelineEditOperation): TimelineRep
     });
   }
 
+  if (operation.type === 'split-at-times') {
+    for (const splitTime of operation.times) {
+      targets.push({
+        target: timelineTimeTarget(splitTime, trackId),
+        label: `Time ${formatTime(splitTime)}`,
+        tone: getToneForOperation(operation),
+      });
+    }
+    return targets;
+  }
+
   if (typeof time === 'number') {
     targets.push({
       target: timelineTimeTarget(time, trackId),
@@ -196,6 +207,19 @@ function getTimelineReplayPointerPath(
   operation: TimelineEditOperation,
   targets: TimelineReplayTarget[],
 ): TimelineReplayPoint[] {
+  if (operation.type === 'split-at-times') {
+    const clipId = getPrimaryClipId(operation);
+    const trackId = getPrimaryTrackId(operation);
+    return [
+      ...(clipId ? [{ target: clipTarget(clipId), label: `Clip ${clipId}`, durationMs: 260 }] : []),
+      ...operation.times.map((time): TimelineReplayPoint => ({
+        target: timelineTimeTarget(time, trackId),
+        label: `Cut at ${formatTime(time)}`,
+        durationMs: 280,
+      })),
+    ];
+  }
+
   if (
     operation.type === 'trim-edge-to-time' ||
     operation.type === 'ripple-trim-edge-to-time' ||
@@ -260,6 +284,9 @@ function getPrimaryClipId(operation: TimelineEditOperation): string | undefined 
 
 function getPrimaryTrackId(operation: TimelineEditOperation): string | undefined {
   switch (operation.type) {
+    case 'split-at-time':
+    case 'split-at-times':
+      return operation.scope?.trackIds?.[0];
     case 'split-all-at-time':
     case 'select-clips-from-time':
     case 'delete-gap-at-time':

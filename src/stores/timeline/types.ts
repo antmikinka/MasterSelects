@@ -182,6 +182,15 @@ export interface TimelineToolPreview {
 
 export type LastTimelineToolByGroup = Record<TimelineToolGroupId, TimelineToolId>;
 
+export interface TimelineClipDragPreviewPatch {
+  startTime: number;
+  trackId?: string;
+}
+
+export interface TimelineClipDragPreview {
+  patches: Record<string, TimelineClipDragPreviewPatch>;
+}
+
 // Timeline audio display mode. Detailed remains waveform-backed today; spectral
 // reserves the inline image lane used by spectrogram tile artifacts.
 export type TimelineAudioDisplayMode = 'compact' | 'detailed' | 'spectral';
@@ -371,6 +380,7 @@ export interface TimelineState {
   momentaryTimelineToolId: TimelineToolId | null;
   timelineRangeSelection: TimelineRangeSelection | null;
   timelineToolPreview: TimelineToolPreview | null;
+  clipDragPreview: TimelineClipDragPreview | null;
 
   // Timeline markers
   markers: TimelineMarker[];

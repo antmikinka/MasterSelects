@@ -7,6 +7,7 @@ import type { TimelineToolDefinition } from './registry';
 interface TimelineToolFlyoutProps {
   anchorRect: DOMRect;
   activeToolId: TimelineToolId;
+  initialHighlightedToolId?: TimelineToolId | null;
   tools: TimelineToolDefinition[];
   isExporting: boolean;
   onSelect: (tool: TimelineToolDefinition) => void;
@@ -63,6 +64,7 @@ function getFlyoutPosition(anchorRect: DOMRect, toolCount: number): FlyoutPositi
 export function TimelineToolFlyout({
   anchorRect,
   activeToolId,
+  initialHighlightedToolId,
   tools,
   isExporting,
   onSelect,
@@ -79,12 +81,21 @@ export function TimelineToolFlyout({
     [isExporting, tools],
   );
   const activeIndex = Math.max(0, tools.findIndex((tool) => tool.id === activeToolId));
-  const [highlightedIndex, setHighlightedIndex] = useState(activeIndex);
+  const initialHighlightedIndex = initialHighlightedToolId
+    ? tools.findIndex((tool) => tool.id === initialHighlightedToolId)
+    : -1;
+  const [highlightedIndex, setHighlightedIndex] = useState(initialHighlightedIndex >= 0 ? initialHighlightedIndex : activeIndex);
   const position = getFlyoutPosition(anchorRect, tools.length);
 
   useEffect(() => {
     flyoutRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    if (!initialHighlightedToolId) return;
+    const index = tools.findIndex((tool) => tool.id === initialHighlightedToolId);
+    if (index >= 0) setHighlightedIndex(index);
+  }, [initialHighlightedToolId, tools]);
 
   useEffect(() => {
     const tool = tools[highlightedIndex] ?? null;
@@ -157,6 +168,8 @@ export function TimelineToolFlyout({
             type="button"
             role="menuitem"
             className={`timeline-tool-flyout-item ${tool.id === activeToolId ? 'active' : ''} ${index === highlightedIndex ? 'highlighted' : ''}`}
+            data-guided-button={`timeline-tool:${tool.id}`}
+            data-guided-target={`button:timeline-tool:${tool.id}`}
             disabled={disabled}
             title={exportBlocked ? 'Timeline edits are locked during export.' : disabled ? tool.disabledReason : tool.description}
             onMouseEnter={() => setHighlightedIndex(index)}

@@ -37,7 +37,7 @@ describe('dock store saved layouts', () => {
     });
   });
 
-  it('uses the hardcoded video and audio editing layout as the default', () => {
+  it('uses the hardcoded video editing layout as the default', () => {
     const layout = useDockStore.getState().layout;
     expect(layout.floatingPanels).toEqual([]);
     expect(layout.root.kind).toBe('split');
@@ -67,9 +67,69 @@ describe('dock store saved layouts', () => {
 
     expect(panelTypes(leftGroup)).toEqual(['media']);
     expect(panelTypes(previewGroup)).toEqual(['preview']);
-    expect(panelTypes(rightGroup)).toEqual(['clip-properties']);
+    expect(panelTypes(rightGroup)).toEqual(['clip-properties', 'history']);
     expect(rightGroup?.activeIndex).toBe(0);
     expect(panelTypes(timelineGroup)).toEqual(['timeline']);
+  });
+
+  it('activates the history tab when requested from the panels menu', () => {
+    const initialRightGroup = findTabGroup(useDockStore.getState().layout.root, 'right-group');
+    expect(initialRightGroup?.panels[initialRightGroup.activeIndex]?.type).toBe('clip-properties');
+
+    useDockStore.getState().activatePanelType('history');
+
+    const rightGroup = findTabGroup(useDockStore.getState().layout.root, 'right-group');
+    expect(rightGroup?.panels[rightGroup.activeIndex]?.type).toBe('history');
+  });
+
+  it('reopens and activates the history tab after it has been hidden', () => {
+    useDockStore.getState().hidePanelType('history');
+    expect(useDockStore.getState().isPanelTypeVisible('history')).toBe(false);
+
+    useDockStore.getState().activatePanelType('history');
+
+    const rightGroup = findTabGroup(useDockStore.getState().layout.root, 'right-group');
+    expect(rightGroup?.panels.map((panel) => panel.type)).toContain('history');
+    expect(rightGroup?.panels[rightGroup.activeIndex]?.type).toBe('history');
+  });
+
+  it('loads the hardcoded audio editing layout with the timeline above mixer panels', () => {
+    useDockStore.getState().loadSavedLayout(FACTORY_AUDIO_EDIT_LAYOUT_ID);
+
+    const layout = useDockStore.getState().layout;
+    expect(layout.floatingPanels).toEqual([]);
+    expect(layout.root.kind).toBe('split');
+    if (layout.root.kind !== 'split') return;
+
+    expect(layout.root.direction).toBe('vertical');
+    expect(layout.root.ratio).toBeCloseTo(0.61);
+
+    const timelineGroup = findTabGroup(layout.root.children[0], 'timeline-group');
+    expect(panelTypes(timelineGroup)).toEqual(['timeline']);
+
+    const bottom = layout.root.children[1];
+    expect(bottom.kind).toBe('split');
+    if (bottom.kind !== 'split') return;
+
+    expect(bottom.direction).toBe('horizontal');
+    expect(bottom.ratio).toBeCloseTo(0.14);
+
+    const mixerProperties = bottom.children[1];
+    expect(mixerProperties.kind).toBe('split');
+    if (mixerProperties.kind !== 'split') return;
+
+    expect(mixerProperties.direction).toBe('horizontal');
+    expect(mixerProperties.ratio).toBeCloseTo(0.8);
+
+    expect(panelTypes(findTabGroup(bottom.children[0], 'left-group'))).toEqual(['media']);
+    expect(panelTypes(findTabGroup(mixerProperties.children[0], 'audio-mixer-group'))).toEqual(['audio-mixer']);
+    expect(panelTypes(findTabGroup(mixerProperties.children[1], 'right-group'))).toEqual(['clip-properties', 'history']);
+
+    const timeline = useTimelineStore.getState();
+    expect(timeline.audioFocusMode).toBe(true);
+    expect(timeline.trackFocusMode).toBe('audio');
+    expect(timeline.tracks.find((track) => track.type === 'video')?.height).toBe(40);
+    expect(timeline.tracks.find((track) => track.type === 'audio')?.height).toBe(92);
   });
 
   it('keeps the built-in video and audio layouts as default favorites', () => {

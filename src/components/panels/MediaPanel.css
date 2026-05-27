@@ -622,6 +622,28 @@
   font-variant-numeric: tabular-nums;
 }
 
+.media-grid-import-badge,
+.media-grid-waveform-badge {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  background: rgba(0, 0, 0, 0.75);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.media-grid-waveform-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: color-mix(in srgb, var(--danger) 82%, #000 18%);
+  color: var(--text-inverse);
+}
+
 .media-grid-badge {
   position: absolute;
   top: 3px;
@@ -990,7 +1012,8 @@
 }
 
 .media-board-duration,
-.media-board-progress {
+.media-board-progress,
+.media-board-waveform-progress {
   position: absolute;
   right: 6px;
   bottom: 5px;
@@ -1006,6 +1029,16 @@
   left: 6px;
   right: auto;
   color: var(--accent);
+}
+
+.media-board-waveform-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  left: 6px;
+  right: auto;
+  background: color-mix(in srgb, var(--danger) 82%, #000 18%);
+  color: var(--text-inverse);
 }
 
 .media-board-node-timeline-drag {
@@ -1357,6 +1390,84 @@
   font-size: 9px;
   color: var(--warning-light);
   font-weight: bold;
+}
+
+.media-item-import-progress {
+  margin-left: 4px;
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.media-item-import-progress {
+  color: var(--accent);
+}
+
+.media-item-waveform-generating {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.media-item-waveform-generating .waveform-percent {
+  color: var(--danger);
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.waveform-fill-badge {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  overflow: hidden;
+  display: inline-block;
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 14px;
+  text-align: center;
+}
+
+.waveform-fill-bg,
+.waveform-fill-progress {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.waveform-fill-bg {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: color-mix(in srgb, var(--danger) 45%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+.waveform-fill-progress {
+  top: auto;
+  background: var(--danger);
+  color: var(--text-inverse);
+  overflow: hidden;
+  transition: height 0.3s ease-out;
+}
+
+.waveform-progress-mark {
+  min-width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--text-inverse);
+  color: var(--danger);
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .media-folder-children {

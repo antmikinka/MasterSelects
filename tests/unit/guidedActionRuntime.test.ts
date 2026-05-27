@@ -13,7 +13,7 @@ function resetGuidedActionStore(): void {
   useGuidedActionStore.setState({
     activeSession: null,
     currentStep: null,
-    cursor: { visible: false, position: null, clicking: false },
+    cursor: { visible: false, position: null, clicking: false, inputGesture: null },
     lastUserPointerPosition: null,
     spotlight: null,
     callout: null,
@@ -169,6 +169,7 @@ describe('guided action runtime', () => {
       visible: true,
       position: { x: 70, y: 50 },
       clicking: true,
+      inputGesture: { kind: 'mouse-left', label: 'LMB', detail: 'Click target' },
       transitionMs: 0,
     }));
     expect(useGuidedActionStore.getState().currentStep?.action.type).toBe('clickVisual');
@@ -241,7 +242,7 @@ describe('guided action runtime', () => {
     expect(useGuidedActionStore.getState().cursor).toEqual(expect.objectContaining({
       visible: true,
       position: { x: 220, y: 130 },
-      transitionMs: 600,
+      transitionMs: 1000,
     }));
 
     await vi.runAllTimersAsync();
@@ -267,7 +268,7 @@ describe('guided action runtime', () => {
     const runtime = new GuidedActionRuntime({ targetRegistry: registry });
 
     useGuidedActionStore.setState({
-      cursor: { visible: false, position: { x: 20, y: 30 }, clicking: false },
+      cursor: { visible: false, position: { x: 20, y: 30 }, clicking: false, inputGesture: null },
       lastUserPointerPosition: { x: 400, y: 250 },
     });
 
@@ -290,7 +291,7 @@ describe('guided action runtime', () => {
     expect(useGuidedActionStore.getState().cursor).toEqual(expect.objectContaining({
       visible: true,
       position: { x: 220, y: 115 },
-      transitionMs: 600,
+      transitionMs: 1000,
     }));
 
     await vi.runAllTimersAsync();
@@ -455,7 +456,7 @@ describe('guided action runtime', () => {
     expect(result.skippedActions).toBe(1);
   });
 
-  it('caps planned animation when the system prefers reduced motion', async () => {
+  it('does not override the requested replay budget when the system prefers reduced motion', async () => {
     vi.useFakeTimers();
     const originalMatchMedia = window.matchMedia;
     Object.defineProperty(window, 'matchMedia', {
@@ -493,11 +494,11 @@ describe('guided action runtime', () => {
       const result = await resultPromise;
 
       expect(result.status).toBe('completed');
-      expect(result.diagnostics.normalizedBudgetMs).toBe(250);
-      expect(result.diagnostics.plannedDurationMs).toBeLessThanOrEqual(250);
+      expect(result.diagnostics.normalizedBudgetMs).toBe(5000);
+      expect(result.diagnostics.plannedDurationMs).toBe(5000);
       expect(useGuidedActionStore.getState().activeSession?.context.animationBudget).toEqual(expect.objectContaining({
-        compression: 'aggressive',
-        totalMs: 250,
+        compression: 'none',
+        totalMs: 5000,
       }));
     } finally {
       Object.defineProperty(window, 'matchMedia', {

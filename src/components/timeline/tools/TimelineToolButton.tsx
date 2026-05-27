@@ -1,4 +1,4 @@
-import { useRef, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react';
 import type { TimelineToolGroupId } from '../../../stores/timeline/types';
 import type { TimelineToolIcon } from './toolIcons';
 
@@ -10,6 +10,7 @@ interface TimelineToolButtonProps {
   icon: TimelineToolIcon;
   onActivate: (groupId: TimelineToolGroupId) => void;
   onOpen: (groupId: TimelineToolGroupId, anchor: HTMLButtonElement) => void;
+  onRegister?: (groupId: TimelineToolGroupId, button: HTMLButtonElement | null) => void;
 }
 
 const HOLD_TO_OPEN_MS = 350;
@@ -24,9 +25,16 @@ export function TimelineToolButton({
   icon: Icon,
   onActivate,
   onOpen,
+  onRegister,
 }: TimelineToolButtonProps) {
   const holdTimerRef = useRef<number | null>(null);
   const openedByHoldRef = useRef(false);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    onRegister?.(groupId, buttonRef.current);
+    return () => onRegister?.(groupId, null);
+  }, [groupId, onRegister]);
 
   const clearHoldTimer = () => {
     if (holdTimerRef.current !== null) {
@@ -77,9 +85,12 @@ export function TimelineToolButton({
 
   return (
     <button
+      ref={buttonRef}
       type="button"
       className={`timeline-tool-button ${active ? 'active' : ''}`}
       data-tool-group={groupId}
+      data-guided-button={`timeline-tool-group:${groupId}`}
+      data-guided-target={`button:timeline-tool-group:${groupId}`}
       aria-label={label}
       aria-haspopup="menu"
       aria-expanded={active}

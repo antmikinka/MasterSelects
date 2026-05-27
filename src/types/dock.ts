@@ -8,7 +8,7 @@ import type {
 
 // Panel types that can be docked
 // Note: Effects, Transcript, Analysis are now integrated into Properties panel
-export type PanelType = 'preview' | 'multi-preview' | 'timeline' | 'clip-properties' | 'audio-mixer' | 'node-workspace' | 'media' | 'export' | 'midi-mapping' | 'multicam' | 'ai-chat' | 'ai-video' | 'ai-segment' | 'scene-description' | 'youtube' | 'download' | 'transitions' | 'scope-waveform' | 'scope-histogram' | 'scope-vectorscope';
+export type PanelType = 'preview' | 'multi-preview' | 'timeline' | 'clip-properties' | 'history' | 'audio-mixer' | 'node-workspace' | 'media' | 'export' | 'midi-mapping' | 'multicam' | 'ai-chat' | 'ai-video' | 'ai-segment' | 'scene-description' | 'youtube' | 'download' | 'transitions' | 'scope-waveform' | 'scope-histogram' | 'scope-vectorscope';
 
 // Scope panel types for filtering in View menu
 export const SCOPE_PANEL_TYPES: PanelType[] = ['scope-waveform', 'scope-histogram', 'scope-vectorscope'];
@@ -182,6 +182,13 @@ export const PANEL_CONFIGS: Record<PanelType, PanelConfig> = {
     title: 'Properties',
     minWidth: 200,
     minHeight: 150,
+    closable: false,
+  },
+  history: {
+    type: 'history',
+    title: 'History',
+    minWidth: 240,
+    minHeight: 180,
     closable: false,
   },
   'audio-mixer': {

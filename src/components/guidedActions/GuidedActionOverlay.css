@@ -91,7 +91,7 @@
   position: fixed;
   top: 0;
   transition-property: transform;
-  transition-timing-function: cubic-bezier(0.22, 0.74, 0.28, 1);
+  transition-timing-function: cubic-bezier(0.42, 0, 0.18, 1);
   z-index: 10024;
 }
 
@@ -106,7 +106,18 @@
   width: 30px;
 }
 
+.guided-cursor-tool-shape {
+  display: block;
+  filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.65));
+  height: 31px;
+  width: 31px;
+}
+
 .guided-cursor--clicking .guided-cursor-shape {
+  animation: guided-cursor-click 180ms ease-out;
+}
+
+.guided-cursor--clicking .guided-cursor-tool-shape {
   animation: guided-cursor-click 180ms ease-out;
 }
 
@@ -175,6 +186,54 @@
   transform: translate(-4px, -4px);
   width: 26px;
   animation: guided-click-ripple 420ms ease-out forwards;
+}
+
+.guided-cursor--tool .guided-click-ripple {
+  left: var(--guided-cursor-hotspot-x, 12px);
+  top: var(--guided-cursor-hotspot-y, 12px);
+}
+
+.guided-cursor-gesture {
+  align-items: flex-start;
+  animation: guided-cursor-gesture-pop 180ms ease-out;
+  background: rgba(12, 17, 24, 0.96);
+  border: 1px solid rgba(159, 182, 205, 0.42);
+  border-radius: 7px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.38);
+  color: #f7fbff;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  left: 24px;
+  min-width: 86px;
+  padding: 7px 10px;
+  position: absolute;
+  top: 20px;
+  transform-origin: left top;
+}
+
+.guided-cursor-gesture-label {
+  font-size: 17px;
+  font-weight: 750;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.guided-cursor-gesture-detail {
+  color: rgba(216, 226, 238, 0.78);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.guided-cursor-gesture--mouse-right {
+  border-color: rgba(242, 185, 83, 0.7);
+}
+
+.guided-cursor-gesture--keyboard,
+.guided-cursor-gesture--shortcut {
+  border-color: rgba(83, 185, 255, 0.68);
 }
 
 .guided-callout {
@@ -290,6 +349,18 @@
   }
 }
 
+@keyframes guided-cursor-gesture-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(4px) scale(0.92);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .guided-cursor,
   .guided-spotlight,
@@ -298,6 +369,7 @@
   }
 
   .guided-click-ripple,
+  .guided-cursor-gesture,
   .guided-cursor--clicking .guided-cursor-shape {
     animation: none;
   }

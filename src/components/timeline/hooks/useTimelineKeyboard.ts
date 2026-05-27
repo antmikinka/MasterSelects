@@ -7,6 +7,16 @@ import type { Composition } from '../../../stores/mediaStore';
 import { ALL_BLEND_MODES } from '../constants';
 import { getShortcutRegistry } from '../../../services/shortcutRegistry';
 import { useTimelineStore } from '../../../stores/timeline';
+import { TIMELINE_TOOL_DEFINITIONS } from '../tools/registry';
+import { runTimelineToolCommand } from '../tools/timelineToolCommands';
+
+const GROUP_SHORTCUT_ACTIONS = new Set([
+  'tool.selectionGroup',
+  'tool.cutToggle',
+  'tool.trimGroup',
+  'tool.placementGroup',
+  'tool.navigationGroup',
+]);
 
 interface UseTimelineKeyboardProps {
   // Playback
@@ -221,10 +231,11 @@ export function useTimelineKeyboard({
         return;
       }
 
-      // Cut/Razor tool toggle
+      // Cut/Razor group cycling. The legacy toggleCutTool API stays available for
+      // older callers, but the keyboard shortcut follows the grouped-tool model.
       if (registry.matches('tool.cutToggle', e)) {
         e.preventDefault();
-        toggleCutTool();
+        useTimelineStore.getState().cycleTimelineToolGroup('cut', e.shiftKey ? -1 : 1);
         return;
       }
 
@@ -243,6 +254,19 @@ export function useTimelineKeyboard({
       if (registry.matches('tool.navigationGroup', e)) {
         e.preventDefault();
         useTimelineStore.getState().cycleTimelineToolGroup('navigation', e.shiftKey ? -1 : 1);
+        return;
+      }
+
+      for (const tool of TIMELINE_TOOL_DEFINITIONS) {
+        if (!tool.shortcutActionId || GROUP_SHORTCUT_ACTIONS.has(tool.shortcutActionId)) continue;
+        if (!registry.matches(tool.shortcutActionId, e)) continue;
+
+        e.preventDefault();
+        if (tool.kind === 'command') {
+          runTimelineToolCommand(tool.id);
+        } else {
+          useTimelineStore.getState().setActiveTimelineTool(tool.id);
+        }
         return;
       }
 

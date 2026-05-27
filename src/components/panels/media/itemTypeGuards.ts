@@ -33,3 +33,12 @@ export function getItemImportProgress(item: ProjectItem): number | null {
   const progress = Math.round(item.importProgress ?? 0);
   return Math.max(0, Math.min(100, progress));
 }
+
+export function getItemWaveformProgress(item: ProjectItem): number | null {
+  if (!isImportedMediaFileItem(item) || item.waveformStatus !== 'generating') {
+    return null;
+  }
+
+  const progress = Math.round(item.waveformProgress ?? 0);
+  return Math.max(0, Math.min(99, progress));
+}
