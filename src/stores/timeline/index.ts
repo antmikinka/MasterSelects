@@ -239,6 +239,7 @@ export const useTimelineStore = create<TimelineStore>()(
       momentaryTimelineToolId: null as import('./types').TimelineToolId | null,
       timelineRangeSelection: null as import('./types').TimelineRangeSelection | null,
       timelineToolPreview: null as import('./types').TimelineToolPreview | null,
+      clipDragPreview: null as import('./types').TimelineClipDragPreview | null,
 
       // Timeline markers
       markers: [] as import('./types').TimelineMarker[],

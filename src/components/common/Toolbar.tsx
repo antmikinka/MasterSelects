@@ -12,7 +12,7 @@ import {
   isProtectedFactoryDockLayout,
   useDockStore,
 } from '../../stores/dockStore';
-import { PANEL_CONFIGS, AI_PANEL_TYPES, SCOPE_PANEL_TYPES, WIP_PANEL_TYPES, DEPRECATED_PANEL_TYPES, type PanelType } from '../../types/dock';
+import { PANEL_CONFIGS, AI_PANEL_TYPES, SCOPE_PANEL_TYPES, WIP_PANEL_TYPES, DEPRECATED_PANEL_TYPES, type PanelConfig, type PanelType } from '../../types/dock';
 import { useSettingsStore, type AutosaveInterval } from '../../stores/settingsStore';
 import { useRenderTargetStore } from '../../stores/renderTargetStore';
 import { useAccountStore } from '../../stores/accountStore';
@@ -43,14 +43,43 @@ import { openOutputManager } from '../outputManager/OutputManagerBoot';
 type MenuId = 'file' | 'edit' | 'view' | 'output' | 'info' | null;
 
 const VIEW_HIDDEN_PANEL_TYPES = new Set<PanelType>(['youtube', ...DEPRECATED_PANEL_TYPES]);
-const VIEW_CORE_PANEL_TYPES = (Object.keys(PANEL_CONFIGS) as PanelType[])
-  .filter((type) => (
-    !VIEW_HIDDEN_PANEL_TYPES.has(type)
-    && !SCOPE_PANEL_TYPES.includes(type)
-    && !WIP_PANEL_TYPES.includes(type)
-    && !AI_PANEL_TYPES.includes(type)
-  ));
+const VIEW_CORE_PANEL_TYPE_ORDER: PanelType[] = [
+  'preview',
+  'multi-preview',
+  'timeline',
+  'clip-properties',
+  'history',
+  'audio-mixer',
+  'node-workspace',
+  'media',
+  'export',
+  'midi-mapping',
+  'download',
+];
+const VIEW_CORE_PANEL_TYPES = VIEW_CORE_PANEL_TYPE_ORDER.filter((type) => (
+  !VIEW_HIDDEN_PANEL_TYPES.has(type)
+  && !SCOPE_PANEL_TYPES.includes(type)
+  && !WIP_PANEL_TYPES.includes(type)
+  && !AI_PANEL_TYPES.includes(type)
+));
 const VIEW_WIP_ONLY_PANEL_TYPES = WIP_PANEL_TYPES.filter((type) => !AI_PANEL_TYPES.includes(type));
+
+const PANEL_CONFIG_LOOKUP = PANEL_CONFIGS as Partial<Record<PanelType, PanelConfig>>;
+
+function createFallbackPanelConfig(type: PanelType): PanelConfig {
+  return {
+    type,
+    title: type
+      .split('-')
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' '),
+    closable: false,
+  };
+}
+
+function getViewPanelConfig(type: PanelType): PanelConfig {
+  return PANEL_CONFIG_LOOKUP[type] ?? createFallbackPanelConfig(type);
+}
 
 interface ToolbarProps {
   onOpenChangelog?: () => void;
@@ -83,7 +112,8 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
   const {
     resetLayout,
     isPanelTypeVisible,
-    togglePanelType,
+    activatePanelType,
+    hidePanelType,
     saveLayoutAsDefault,
     saveNamedLayout,
     saveCurrentNamedLayout,
@@ -96,7 +126,8 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
   } = useDockStore(useShallow(s => ({
     resetLayout: s.resetLayout,
     isPanelTypeVisible: s.isPanelTypeVisible,
-    togglePanelType: s.togglePanelType,
+    activatePanelType: s.activatePanelType,
+    hidePanelType: s.hidePanelType,
     saveLayoutAsDefault: s.saveLayoutAsDefault,
     saveNamedLayout: s.saveNamedLayout,
     saveCurrentNamedLayout: s.saveCurrentNamedLayout,
@@ -243,7 +274,7 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
       setIsLoading(false);
     } else {
       // Save current project with store synchronization
-      await saveCurrentProject();
+      await saveCurrentProject({ source: 'manual', label: 'Manual save' });
       if (showToast) setShowSavedToast(true);
     }
     setOpenMenu(null);
@@ -474,7 +505,7 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
               });
             }
           } else {
-            saveCurrentProject().then(() => setShowSavedToast(true));
+            saveCurrentProject({ source: 'manual', label: 'Ctrl+S save' }).then(() => setShowSavedToast(true));
           }
         }
         return;
@@ -542,6 +573,15 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
   };
 
   const closeMenu = () => setOpenMenu(null);
+
+  const handleToggleViewPanelType = useCallback((type: PanelType) => {
+    if (isPanelTypeVisible(type)) {
+      hidePanelType(type);
+      return;
+    }
+
+    activatePanelType(type);
+  }, [activatePanelType, hidePanelType, isPanelTypeVisible]);
 
   // Dynamic shortcut labels from registry
   const shortcutLabels = useMemo(() => {
@@ -856,13 +896,13 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
                 <div className="menu-nested-submenu menu-nested-submenu-panels">
                   <span className="menu-sublabel">Core</span>
                   {VIEW_CORE_PANEL_TYPES.map((type) => {
-                    const config = PANEL_CONFIGS[type];
+                    const config = getViewPanelConfig(type);
                     const isVisible = isPanelTypeVisible(type);
                     return (
                       <button
                         key={type}
                         className={`menu-option ${isVisible ? 'checked' : ''}`}
-                        onClick={() => togglePanelType(type)}
+                        onClick={() => handleToggleViewPanelType(type)}
                       >
                         <span>{isVisible ? '✓ ' : '   '}{config.title}</span>
                       </button>
@@ -872,14 +912,14 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
                   <div className="menu-separator" />
                   <span className="menu-sublabel">AI</span>
                   {AI_PANEL_TYPES.map((type) => {
-                    const config = PANEL_CONFIGS[type];
+                    const config = getViewPanelConfig(type);
                     const isWip = WIP_PANEL_TYPES.includes(type);
                     const isVisible = isPanelTypeVisible(type);
                     return (
                       <button
                         key={type}
                         className={`menu-option ${isWip ? 'menu-option-wip' : ''} ${isVisible ? 'checked' : ''}`}
-                        onClick={isWip ? undefined : () => togglePanelType(type)}
+                        onClick={isWip ? undefined : () => handleToggleViewPanelType(type)}
                         disabled={isWip}
                       >
                         <span>{isVisible ? '✓ ' : '   '}{config.title}</span>
@@ -891,13 +931,13 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
                   <div className="menu-separator" />
                   <span className="menu-sublabel">Scopes</span>
                   {SCOPE_PANEL_TYPES.map((type) => {
-                    const config = PANEL_CONFIGS[type];
+                    const config = getViewPanelConfig(type);
                     const isVisible = isPanelTypeVisible(type);
                     return (
                       <button
                         key={type}
                         className={`menu-option ${isVisible ? 'checked' : ''}`}
-                        onClick={() => togglePanelType(type)}
+                        onClick={() => handleToggleViewPanelType(type)}
                       >
                         <span>{isVisible ? '✓ ' : '   '}{config.title}</span>
                       </button>
@@ -909,7 +949,7 @@ export function Toolbar({ onOpenChangelog, onOpenSplash }: ToolbarProps) {
                       <div className="menu-separator" />
                       <span className="menu-sublabel">Work in Progress</span>
                       {VIEW_WIP_ONLY_PANEL_TYPES.map((type) => {
-                        const config = PANEL_CONFIGS[type];
+                        const config = getViewPanelConfig(type);
                         return (
                           <button
                             key={type}

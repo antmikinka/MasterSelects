@@ -1,6 +1,6 @@
 // Global history hook - initializes undo/redo system and keyboard shortcuts
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTimelineStore } from '../stores/timeline';
 import { useMediaStore } from '../stores/mediaStore';
 import { useDockStore } from '../stores/dockStore';
@@ -11,7 +11,10 @@ import type {
   FlashBoardComposerState,
   FlashBoardJobState,
 } from '../stores/flashboardStore';
+import type { Composition } from '../stores/mediaStore/types';
+import type { DockLayout, DockNode, DockPanel, FloatingPanel } from '../types/dock';
 import { getShortcutRegistry } from '../services/shortcutRegistry';
+import { isAIExecutionRunning } from '../services/aiTools/executionState';
 import {
   useHistoryStore,
   initHistoryStoreRefs,
@@ -23,6 +26,12 @@ import {
 import { Logger } from '../services/logger';
 
 const log = Logger.create('History');
+
+export interface HistoryFeedbackNotice {
+  id: number;
+  operation: 'undo' | 'redo';
+  label: string;
+}
 
 // Shallow equality for subscription selectors — prevents callback from firing
 // on unrelated store changes (e.g. playheadPosition updates at 60fps)
@@ -85,12 +94,104 @@ function normalizeFlashBoardComposerForHistory(composer: FlashBoardComposerState
   };
 }
 
+function normalizeCompositionTimelineForHistory(timelineData: Composition['timelineData']) {
+  if (!timelineData) return null;
+
+  const {
+    playheadPosition: _playheadPosition,
+    zoom: _zoom,
+    scrollX: _scrollX,
+    ...undoableTimelineData
+  } = timelineData;
+
+  return undoableTimelineData;
+}
+
+function normalizeCompositionForHistory(
+  composition: Composition,
+  activeCompositionId: string | null
+) {
+  const { timelineData, ...undoableComposition } = composition;
+
+  return {
+    ...undoableComposition,
+    timelineData: composition.id === activeCompositionId
+      ? null
+      : normalizeCompositionTimelineForHistory(timelineData),
+  };
+}
+
+export function createCompositionHistorySignature(
+  compositions: Composition[],
+  activeCompositionId: string | null
+): string {
+  return JSON.stringify(
+    compositions.map((composition) => normalizeCompositionForHistory(composition, activeCompositionId))
+  );
+}
+
+function normalizeDockPanelForHistory(panel: DockPanel) {
+  return {
+    id: panel.id,
+    type: panel.type,
+    title: panel.title,
+  };
+}
+
+function normalizeDockNodeForHistory(node: DockNode): unknown {
+  if (node.kind === 'tab-group') {
+    return {
+      kind: node.kind,
+      id: node.id,
+      panels: node.panels.map(normalizeDockPanelForHistory),
+    };
+  }
+
+  return {
+    kind: node.kind,
+    id: node.id,
+    direction: node.direction,
+    ratio: node.ratio,
+    children: node.children.map(normalizeDockNodeForHistory),
+  };
+}
+
+function normalizeFloatingPanelForHistory(panel: FloatingPanel) {
+  return {
+    id: panel.id,
+    panel: normalizeDockPanelForHistory(panel.panel),
+    position: panel.position,
+    size: panel.size,
+  };
+}
+
+export function createDockLayoutHistorySignature(layout: DockLayout): string {
+  return JSON.stringify({
+    root: normalizeDockNodeForHistory(layout.root),
+    floatingPanels: layout.floatingPanels.map(normalizeFloatingPanelForHistory),
+  });
+}
+
 export function useGlobalHistory() {
   const initialized = useRef(false);
   const lastCaptureTime = useRef(0);
   const pendingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingLabel = useRef('');
   const suppressUntil = useRef(0);
+  const feedbackId = useRef(0);
+  const [historyNotice, setHistoryNotice] = useState<HistoryFeedbackNotice | null>(null);
+
+  const showHistoryNotice = useCallback((notice: Omit<HistoryFeedbackNotice, 'id'>) => {
+    feedbackId.current += 1;
+    setHistoryNotice({ ...notice, id: feedbackId.current });
+  }, []);
+
+  const clearHistoryNotice = useCallback((id?: number) => {
+    setHistoryNotice((current) => {
+      if (id !== undefined && current?.id !== id) return current;
+      return null;
+    });
+  }, []);
 
   // Initialize store references
   useEffect(() => {
@@ -211,6 +312,11 @@ export function useGlobalHistory() {
       (state) => ({
         files: state.files,
         compositions: state.compositions,
+        compositionHistorySignature: createCompositionHistorySignature(
+          state.compositions,
+          state.activeCompositionId
+        ),
+        activeCompositionId: state.activeCompositionId,
         folders: state.folders,
         textItems: state.textItems,
         solidItems: state.solidItems,
@@ -222,7 +328,14 @@ export function useGlobalHistory() {
 
         if (curr.files !== prev.files) {
           debouncedCapture(curr.files.length > prev.files.length ? 'Import file' : 'Remove file');
-        } else if (curr.compositions !== prev.compositions) {
+        } else if (
+          curr.compositions !== prev.compositions &&
+          curr.compositionHistorySignature !== prev.compositionHistorySignature &&
+          createCompositionHistorySignature(
+            curr.compositions,
+            prev.activeCompositionId
+          ) !== prev.compositionHistorySignature
+        ) {
           debouncedCapture('Modify composition');
         } else if (curr.folders !== prev.folders) {
           debouncedCapture('Modify folder');
@@ -244,7 +357,11 @@ export function useGlobalHistory() {
       (state) => state.layout,
       (curr, prev) => {
         if (useHistoryStore.getState().isApplying) return;
-        if (curr !== prev) {
+        if (isAIExecutionRunning()) return;
+        if (
+          curr !== prev &&
+          createDockLayoutHistorySignature(curr) !== createDockLayoutHistorySignature(prev)
+        ) {
           debouncedCapture('Change layout');
         }
       },
@@ -320,24 +437,32 @@ export function useGlobalHistory() {
 
       if (registry.matches('history.undo', e)) {
         e.preventDefault();
-        undo();
+        const result = undo();
+        if (result) {
+          showHistoryNotice(result);
+        }
         return;
       }
 
       if (registry.matches('history.redo', e)) {
         e.preventDefault();
-        redo();
+        const result = redo();
+        if (result) {
+          showHistoryNotice(result);
+        }
         return;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [showHistoryNotice]);
 
   return {
     undo,
     redo,
+    historyNotice,
+    clearHistoryNotice,
     canUndo: useHistoryStore((state) => state.undoStack.length > 0),
     canRedo: useHistoryStore((state) => state.redoStack.length > 0),
   };

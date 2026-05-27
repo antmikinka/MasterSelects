@@ -21,18 +21,25 @@ import { updateClipById } from '../helpers/clipStateHelpers';
 import { detectVideoAudio } from '../helpers/audioDetection';
 import { getMP4MetadataFast, estimateDurationFromFileSize } from '../helpers/mp4MetadataHelper';
 import { Logger } from '../../../services/logger';
-import { generateTimelineWaveformAnalysisForFile } from '../../../services/audio/timelineWaveformPyramidCache';
+import {
+  SOURCE_WAVEFORM_MAX_PREVIEW_SAMPLES,
+  SOURCE_WAVEFORM_PREVIEW_SAMPLES_PER_SECOND,
+  generateTimelineWaveformAnalysisForFile,
+  mapSourceWaveformPreviewProgress,
+  mapSourceWaveformPyramidProgress,
+} from '../../../services/audio/timelineWaveformPyramidCache';
 
 const log = Logger.create('AddVideoClip');
 
 function getCachedMediaWaveform(mediaFileId: string | undefined): Pick<TimelineClip, 'audioState' | 'waveform' | 'waveformChannels' | 'waveformGenerating' | 'waveformProgress'> | null {
   if (!mediaFileId) return null;
   const mediaFile = useMediaStore.getState().files.find((file) => file.id === mediaFileId);
-  if (!mediaFile?.waveform?.length) return null;
+  if (mediaFile?.waveformStatus === 'generating') return null;
+  if (!mediaFile?.waveform?.length && !mediaFile?.audioAnalysisRefs?.waveformPyramidId) return null;
 
   return {
-    waveform: mediaFile.waveform,
-    waveformChannels: mediaFile.waveformChannels,
+    ...(mediaFile.waveform?.length ? { waveform: mediaFile.waveform } : {}),
+    ...(mediaFile.waveformChannels ? { waveformChannels: mediaFile.waveformChannels } : {}),
     ...(mediaFile.audioAnalysisRefs
       ? { audioState: { sourceAnalysisRefs: mediaFile.audioAnalysisRefs } }
       : {}),
@@ -420,11 +427,18 @@ async function loadLinkedAudio(
     try {
       const analysis = await generateTimelineWaveformAnalysisForFile(file, {
         mediaFileId,
-        includePyramid: false,
+        includePyramid: true,
+        samplesPerSecond: SOURCE_WAVEFORM_PREVIEW_SAMPLES_PER_SECOND,
+        maxPreviewSamples: SOURCE_WAVEFORM_MAX_PREVIEW_SAMPLES,
         onProgress: (progress, partialWaveform) => {
           setClips(clips => updateClipById(clips, audioClipId, {
-            waveformProgress: progress,
+            waveformProgress: mapSourceWaveformPreviewProgress(progress),
             waveform: partialWaveform,
+          }));
+        },
+        onPyramidProgress: (progress) => {
+          setClips(clips => updateClipById(clips, audioClipId, {
+            waveformProgress: mapSourceWaveformPyramidProgress(progress),
           }));
         },
       });

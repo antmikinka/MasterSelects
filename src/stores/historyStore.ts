@@ -29,6 +29,13 @@ import type { SignalArtifact, SignalGraph, SignalOperatorDescriptor } from '../s
 import type { TimelineMarker } from './timeline/types';
 import type { DockLayout } from '../types/dock';
 import type {
+  HistoryEventType,
+  HistoryListEntry,
+  HistoryTimelineEvent,
+  ProjectHistoryBranchState,
+  ProjectHistoryState,
+} from '../types/history';
+import type {
   FlashBoard,
   FlashBoardComposerState,
   FlashBoardGenerationMetadata,
@@ -38,6 +45,11 @@ import type { ExportStoreData } from './exportStore';
 import { createDefaultExportStoreData, getExportStoreData } from './exportStore';
 
 const log = Logger.create('History');
+const MAX_HISTORY_EVENT_LOG_SIZE = 500;
+const MAX_HISTORY_BRANCHES = 24;
+const MAX_PERSISTED_HISTORY_SNAPSHOTS = 32;
+const PERSIST_HISTORY_SNAPSHOTS = false;
+const HISTORY_CAPTURE_WARN_MS = 24;
 
 // Snapshot of undoable state from all stores
 interface StateSnapshot {
@@ -95,6 +107,11 @@ interface HistoryState {
   // Undo/redo stacks
   undoStack: StateSnapshot[];
   redoStack: StateSnapshot[];
+  eventLog: HistoryTimelineEvent[];
+  branches: HistoryBranch[];
+  navigationEntries: HistoryListEntry[] | null;
+  navigationSnapshotsByEntryId: Record<string, StateSnapshot>;
+  activeEntryId: string | null;
 
   // Current state (for comparison to avoid duplicate snapshots)
   currentSnapshot: StateSnapshot | null;
@@ -111,10 +128,14 @@ interface HistoryState {
 
   // Actions
   captureSnapshot: (label: string) => void;
-  undo: () => void;
-  redo: () => void;
+  undo: () => HistoryOperationResult | null;
+  redo: () => HistoryOperationResult | null;
   canUndo: () => boolean;
   canRedo: () => boolean;
+  getHistoryEntries: () => HistoryListEntry[];
+  recordEvent: (type: HistoryEventType, label: string) => void;
+  restoreEntry: (entry: HistoryListEntry) => HistoryRestoreResult | null;
+  restoreBranch: (branchId: string, snapshotIndex?: number) => HistoryRestoreResult | null;
 
   // Batch operations
   startBatch: (label: string) => void;
@@ -123,6 +144,32 @@ interface HistoryState {
   // Internal
   setIsApplying: (value: boolean) => void;
   clearHistory: () => void;
+  serializeForProject: () => ProjectHistoryState;
+  hydrateFromProject: (history: ProjectHistoryState | null | undefined) => void;
+}
+
+export interface HistoryOperationResult {
+  operation: 'undo' | 'redo';
+  label: string;
+}
+
+export interface HistoryRestoreResult {
+  operation: 'restore-branch';
+  label: string;
+}
+
+interface HistoryBranch {
+  id: string;
+  label: string;
+  createdAt: number;
+  baseSnapshot: StateSnapshot | null;
+  baseUndoStack: StateSnapshot[];
+  snapshots: StateSnapshot[];
+}
+
+interface HistoryNavigationState {
+  entries: HistoryListEntry[];
+  snapshotsByEntryId: Record<string, StateSnapshot>;
 }
 
 // Store state types for dynamic references
@@ -458,19 +505,304 @@ function cloneMediaFileForHistory(file: MediaFile): MediaFile {
   }
   return cloned;
 }
-// Create snapshot from current state
-function createSnapshot(label: string): StateSnapshot {
-  const timeline = getTimelineState?.() || null;
-  const media = getMediaState?.() || null;
-  const dock = getDockState?.();
-  const flashboard = getFlashBoardState?.() || {
-    activeBoardId: null,
-    boards: [],
-    selectedNodeIds: [],
-    composer: createDefaultFlashBoardComposer(),
-  };
 
-  // Convert Map<string, Keyframe[]> to plain object for cloning
+function createHistoryEntry(
+  snapshot: StateSnapshot,
+  kind: HistoryListEntry['kind'],
+  stackIndex: number
+): HistoryListEntry {
+  return {
+    id: `${kind}:${stackIndex}:${snapshot.timestamp}:${snapshot.label}`,
+    kind,
+    label: snapshot.label,
+    timestamp: snapshot.timestamp,
+    stackIndex,
+  };
+}
+
+function createHistoryEventEntry(event: HistoryTimelineEvent): HistoryListEntry {
+  return {
+    id: event.id,
+    kind: 'event',
+    label: event.label,
+    timestamp: event.timestamp,
+    eventType: event.type,
+    highlighted: event.type === 'manual-save',
+  };
+}
+
+function createHistoryBranchEntries(branch: HistoryBranch): HistoryListEntry[] {
+  const baseStackIndex = branch.baseUndoStack.length + (branch.baseSnapshot ? 1 : 0);
+
+  return branch.snapshots.map((snapshot, index) => ({
+    id: `branch:${branch.id}:${index}:${snapshot.timestamp}:${snapshot.label}`,
+    kind: 'branch',
+    label: snapshot.label || branch.label || 'Alternative branch',
+    timestamp: snapshot.timestamp,
+    stackIndex: index,
+    branchId: branch.id,
+    branchLabel: branch.label,
+    branchIndex: index,
+    branchBaseStackIndex: baseStackIndex,
+    branchBaseTimestamp: branch.baseSnapshot?.timestamp ?? branch.createdAt,
+    branchLength: branch.snapshots.length,
+  }));
+}
+
+function createHistoryEntries(
+  undoStack: StateSnapshot[],
+  currentSnapshot: StateSnapshot | null,
+  redoStack: StateSnapshot[],
+  eventLog: HistoryTimelineEvent[],
+  branches: HistoryBranch[]
+): HistoryListEntry[] {
+  return [
+    ...undoStack.map((snapshot, index) => createHistoryEntry(snapshot, 'undoable', index)),
+    ...(currentSnapshot ? [createHistoryEntry(currentSnapshot, 'current', undoStack.length)] : []),
+    ...redoStack
+      .slice()
+      .reverse()
+      .map((snapshot, index) => createHistoryEntry(snapshot, 'redoable', index)),
+    ...eventLog.filter((event) => event.type !== 'autosave').map(createHistoryEventEntry),
+    ...branches.flatMap(createHistoryBranchEntries),
+  ];
+}
+
+function createHistoryNavigationState(
+  undoStack: StateSnapshot[],
+  currentSnapshot: StateSnapshot | null,
+  redoStack: StateSnapshot[],
+  eventLog: HistoryTimelineEvent[],
+  branches: HistoryBranch[]
+): HistoryNavigationState {
+  const entries = createHistoryEntries(undoStack, currentSnapshot, redoStack, eventLog, branches);
+  const snapshotsByEntryId: Record<string, StateSnapshot> = {};
+
+  undoStack.forEach((snapshot, index) => {
+    const entry = createHistoryEntry(snapshot, 'undoable', index);
+    snapshotsByEntryId[entry.id] = snapshot;
+  });
+
+  if (currentSnapshot) {
+    const entry = createHistoryEntry(currentSnapshot, 'current', undoStack.length);
+    snapshotsByEntryId[entry.id] = currentSnapshot;
+  }
+
+  redoStack
+    .slice()
+    .reverse()
+    .forEach((snapshot, index) => {
+      const entry = createHistoryEntry(snapshot, 'redoable', index);
+      snapshotsByEntryId[entry.id] = snapshot;
+    });
+
+  for (const branch of branches) {
+    for (const entry of createHistoryBranchEntries(branch)) {
+      const index = entry.stackIndex;
+      if (typeof index !== 'number') continue;
+      const snapshot = branch.snapshots[index];
+      if (snapshot) {
+        snapshotsByEntryId[entry.id] = snapshot;
+      }
+    }
+  }
+
+  return { entries, snapshotsByEntryId };
+}
+
+function markActiveHistoryEntry(entries: HistoryListEntry[], activeEntryId: string | null): HistoryListEntry[] {
+  return entries.map((entry) => ({
+    ...entry,
+    active: entry.id === activeEntryId || (!activeEntryId && entry.kind === 'current'),
+  }));
+}
+
+function cloneSnapshotStack(snapshots: StateSnapshot[]): StateSnapshot[] {
+  return snapshots.map((snapshot) => deepClone(snapshot));
+}
+
+function createBranchId(type: string): string {
+  return `branch:${type}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createBranchLabel(snapshots: StateSnapshot[], fallback = 'Alternative branch'): string {
+  const tip = snapshots[snapshots.length - 1];
+  return tip?.label ? `Branch: ${tip.label}` : fallback;
+}
+
+function createBranchFromRedoPath(
+  undoStack: StateSnapshot[],
+  currentSnapshot: StateSnapshot | null,
+  redoStack: StateSnapshot[]
+): HistoryBranch | null {
+  if (!currentSnapshot || redoStack.length === 0) return null;
+
+  const snapshots = cloneSnapshotStack(redoStack.slice().reverse());
+  if (snapshots.length === 0) return null;
+
+  return {
+    id: createBranchId('redo'),
+    label: createBranchLabel(snapshots),
+    createdAt: Date.now(),
+    baseSnapshot: deepClone(currentSnapshot),
+    baseUndoStack: cloneSnapshotStack(undoStack),
+    snapshots,
+  };
+}
+
+function appendHistoryBranch(branches: HistoryBranch[], branch: HistoryBranch | null): HistoryBranch[] {
+  if (!branch || branch.snapshots.length === 0) return branches;
+  return [...branches, branch].slice(-MAX_HISTORY_BRANCHES);
+}
+
+function isStateSnapshot(value: unknown): value is StateSnapshot {
+  if (!value || typeof value !== 'object') return false;
+  const snapshot = value as Partial<StateSnapshot>;
+  return (
+    typeof snapshot.timestamp === 'number' &&
+    typeof snapshot.label === 'string' &&
+    Boolean(snapshot.timeline && typeof snapshot.timeline === 'object') &&
+    Boolean(snapshot.media && typeof snapshot.media === 'object') &&
+    Boolean(snapshot.dock && typeof snapshot.dock === 'object') &&
+    Boolean(snapshot.flashboard && typeof snapshot.flashboard === 'object') &&
+    Boolean(snapshot.export && typeof snapshot.export === 'object')
+  );
+}
+
+function sanitizeHistoryValueForProject(key: string, value: unknown): unknown {
+  if (key === 'file') return undefined;
+  if (
+    (key === 'url' || key === 'thumbnailUrl' || key === 'proxyVideoUrl') &&
+    typeof value === 'string' &&
+    value.startsWith('blob:')
+  ) {
+    return undefined;
+  }
+  if (typeof File !== 'undefined' && value instanceof File) return undefined;
+  if (typeof Element !== 'undefined' && value instanceof Element) return undefined;
+  if (typeof HTMLMediaElement !== 'undefined' && value instanceof HTMLMediaElement) return undefined;
+  if (isBinaryPayload(value)) return undefined;
+  return value;
+}
+
+function cloneHistoryForProject<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value, sanitizeHistoryValueForProject)) as T;
+}
+
+function normalizePersistedSnapshot(value: unknown): StateSnapshot | null {
+  if (!isStateSnapshot(value)) return null;
+  return deepClone(value);
+}
+
+function normalizePersistedSnapshotStack(values: unknown[], maxHistorySize: number): StateSnapshot[] {
+  return values
+    .map(normalizePersistedSnapshot)
+    .filter((snapshot): snapshot is StateSnapshot => snapshot !== null)
+    .slice(-maxHistorySize);
+}
+
+function isHistoryTimelineEvent(value: unknown): value is HistoryTimelineEvent {
+  if (!value || typeof value !== 'object') return false;
+  const event = value as Partial<HistoryTimelineEvent>;
+  return (
+    typeof event.id === 'string' &&
+    typeof event.label === 'string' &&
+    typeof event.timestamp === 'number' &&
+    (event.type === 'manual-save' || event.type === 'autosave' || event.type === 'system')
+  );
+}
+
+function normalizePersistedEventLog(values: unknown): HistoryTimelineEvent[] {
+  if (!Array.isArray(values)) return [];
+  return values
+    .filter(isHistoryTimelineEvent)
+    .filter((event) => event.type !== 'autosave')
+    .slice(-MAX_HISTORY_EVENT_LOG_SIZE);
+}
+
+function isHistoryListEntry(value: unknown): value is HistoryListEntry {
+  if (!value || typeof value !== 'object') return false;
+  const entry = value as Partial<HistoryListEntry>;
+  return (
+    typeof entry.id === 'string' &&
+    typeof entry.kind === 'string' &&
+    typeof entry.label === 'string' &&
+    typeof entry.timestamp === 'number' &&
+    (
+      entry.kind === 'undoable' ||
+      entry.kind === 'current' ||
+      entry.kind === 'redoable' ||
+      entry.kind === 'event' ||
+      entry.kind === 'branch'
+    )
+  );
+}
+
+function normalizePersistedVisibleEntries(values: unknown): HistoryListEntry[] {
+  if (!Array.isArray(values)) return [];
+  return values
+    .filter(isHistoryListEntry)
+    .filter((entry) => entry.eventType !== 'autosave')
+    .slice(-MAX_HISTORY_EVENT_LOG_SIZE);
+}
+
+function isProjectHistoryBranchState(value: unknown): value is ProjectHistoryBranchState {
+  if (!value || typeof value !== 'object') return false;
+  const branch = value as Partial<ProjectHistoryBranchState>;
+  return (
+    typeof branch.id === 'string' &&
+    typeof branch.label === 'string' &&
+    typeof branch.createdAt === 'number' &&
+    Array.isArray(branch.baseUndoStack) &&
+    Array.isArray(branch.snapshots)
+  );
+}
+
+function normalizePersistedBranch(value: unknown, maxHistorySize: number): HistoryBranch | null {
+  if (!isProjectHistoryBranchState(value)) return null;
+
+  const snapshots = normalizePersistedSnapshotStack(value.snapshots, maxHistorySize);
+  if (snapshots.length === 0) return null;
+
+  return {
+    id: value.id,
+    label: value.label,
+    createdAt: value.createdAt,
+    baseSnapshot: normalizePersistedSnapshot(value.baseSnapshot),
+    baseUndoStack: normalizePersistedSnapshotStack(value.baseUndoStack, maxHistorySize),
+    snapshots,
+  };
+}
+
+function normalizePersistedBranches(values: unknown, maxHistorySize: number): HistoryBranch[] {
+  if (!Array.isArray(values)) return [];
+  return values
+    .map((value) => normalizePersistedBranch(value, maxHistorySize))
+    .filter((branch): branch is HistoryBranch => branch !== null)
+    .slice(-MAX_HISTORY_BRANCHES);
+}
+
+function limitSnapshotStackForProject(snapshots: StateSnapshot[], maxHistorySize: number): StateSnapshot[] {
+  return snapshots.slice(-Math.min(maxHistorySize, MAX_PERSISTED_HISTORY_SNAPSHOTS));
+}
+
+function limitBranchForProject(branch: HistoryBranch, maxHistorySize: number): HistoryBranch {
+  return {
+    ...branch,
+    baseSnapshot: branch.baseSnapshot,
+    baseUndoStack: limitSnapshotStackForProject(branch.baseUndoStack, maxHistorySize),
+    snapshots: limitSnapshotStackForProject(branch.snapshots, maxHistorySize),
+  };
+}
+
+function createInitialHistorySnapshot(): StateSnapshot | null {
+  if (!getTimelineState || !getMediaState || !getDockState) return null;
+  return createSnapshot('initial');
+}
+
+function createTimelineSnapshot(): StateSnapshot['timeline'] {
+  const timeline = getTimelineState?.() || null;
+
   const keyframesObj: Record<string, Keyframe[]> = {};
   if (timeline?.clipKeyframes instanceof Map) {
     timeline.clipKeyframes.forEach((kfs: Keyframe[], clipId: string) => {
@@ -479,45 +811,76 @@ function createSnapshot(label: string): StateSnapshot {
   }
 
   return {
+    clips: (timeline?.clips || []).map(cloneClipForHistory),
+    tracks: (timeline?.tracks || []).map(cloneTrackForHistory),
+    selectedClipIds: timeline?.selectedClipIds ? [...timeline.selectedClipIds] : [],
+    zoom: timeline?.zoom || 50,
+    scrollX: timeline?.scrollX || 0,
+    layers: deepClone((timeline?.layers || []).filter(Boolean)),
+    selectedLayerId: timeline?.selectedLayerId || null,
+    clipKeyframes: keyframesObj,
+    markers: deepClone(timeline?.markers || []),
+    masterAudioState: cloneMasterAudioState(timeline?.masterAudioState),
+  };
+}
+
+function createMediaSnapshot(): StateSnapshot['media'] {
+  const media = getMediaState?.() || null;
+
+  return {
+    files: (media?.files || []).map(cloneMediaFileForHistory),
+    compositions: (media?.compositions || []).map(cloneCompositionForHistory),
+    folders: deepClone(media?.folders || []),
+    selectedIds: [...(media?.selectedIds || [])],
+    expandedFolderIds: [...(media?.expandedFolderIds || [])],
+    textItems: deepClone(media?.textItems || []),
+    solidItems: deepClone(media?.solidItems || []),
+    mathSceneItems: deepClone(media?.mathSceneItems || []),
+    motionShapeItems: deepClone(media?.motionShapeItems || []),
+    signalAssets: deepClone(media?.signalAssets || []),
+    signalArtifacts: deepClone(media?.signalArtifacts || []),
+    signalGraphs: deepClone(media?.signalGraphs || []),
+    signalOperators: deepClone(media?.signalOperators || []),
+  };
+}
+
+function createDockSnapshot(): StateSnapshot['dock'] {
+  const dock = getDockState?.();
+  return {
+    layout: deepClone(dock?.layout ?? null),
+  };
+}
+
+function createFlashBoardSnapshot(): StateSnapshot['flashboard'] {
+  const flashboard = getFlashBoardState?.() || {
+    activeBoardId: null,
+    boards: [],
+    selectedNodeIds: [],
+    composer: createDefaultFlashBoardComposer(),
+  };
+
+  return {
+    activeBoardId: flashboard.activeBoardId ?? null,
+    boards: deepClone(flashboard.boards || []),
+    composer: deepClone(flashboard.composer || createDefaultFlashBoardComposer()),
+    generationMetadataByMediaId: deepClone(flashBoardMediaBridge.serializeMetadata()),
+  };
+}
+
+function createExportSnapshot(): ExportStoreData {
+  return deepClone(getExportStoreData(getExportState?.() || createDefaultExportStoreData()));
+}
+
+// Create snapshot from current state
+function createSnapshot(label: string, _previousSnapshot?: StateSnapshot | null): StateSnapshot {
+  return {
     timestamp: Date.now(),
     label,
-    timeline: {
-      clips: (timeline?.clips || []).map(cloneClipForHistory),
-      tracks: (timeline?.tracks || []).map(cloneTrackForHistory),
-      selectedClipIds: timeline?.selectedClipIds ? [...timeline.selectedClipIds] : [],
-      zoom: timeline?.zoom || 50,
-      scrollX: timeline?.scrollX || 0,
-      layers: deepClone((timeline?.layers || []).filter(Boolean)),
-      selectedLayerId: timeline?.selectedLayerId || null,
-      clipKeyframes: keyframesObj,
-      markers: deepClone(timeline?.markers || []),
-      masterAudioState: cloneMasterAudioState(timeline?.masterAudioState),
-    },
-    media: {
-      files: (media?.files || []).map(cloneMediaFileForHistory),
-      compositions: (media?.compositions || []).map(cloneCompositionForHistory),
-      folders: deepClone(media?.folders || []),
-      selectedIds: [...(media?.selectedIds || [])],
-      expandedFolderIds: [...(media?.expandedFolderIds || [])],
-      textItems: deepClone(media?.textItems || []),
-      solidItems: deepClone(media?.solidItems || []),
-      mathSceneItems: deepClone(media?.mathSceneItems || []),
-      motionShapeItems: deepClone(media?.motionShapeItems || []),
-      signalAssets: deepClone(media?.signalAssets || []),
-      signalArtifacts: deepClone(media?.signalArtifacts || []),
-      signalGraphs: deepClone(media?.signalGraphs || []),
-      signalOperators: deepClone(media?.signalOperators || []),
-    },
-    dock: {
-      layout: deepClone(dock?.layout ?? null),
-    },
-    flashboard: {
-      activeBoardId: flashboard.activeBoardId ?? null,
-      boards: deepClone(flashboard.boards || []),
-      composer: deepClone(flashboard.composer || createDefaultFlashBoardComposer()),
-      generationMetadataByMediaId: deepClone(flashBoardMediaBridge.serializeMetadata()),
-    },
-    export: deepClone(getExportStoreData(getExportState?.() || createDefaultExportStoreData())),
+    timeline: createTimelineSnapshot(),
+    media: createMediaSnapshot(),
+    dock: createDockSnapshot(),
+    flashboard: createFlashBoardSnapshot(),
+    export: createExportSnapshot(),
   };
 }
 
@@ -569,9 +932,13 @@ function applySnapshot(snapshot: StateSnapshot) {
     const currentMedia = getMediaState();
     const restoredFiles = (snapshot.media.files || []).filter(Boolean).map((file) => {
       const currentFile = (currentMedia.files || []).find((f) => f?.id === file.id);
+      const clonedFile = cloneMediaFileForHistory(file);
       return {
-        ...cloneMediaFileForHistory(file),
+        ...clonedFile,
         file: currentFile?.file || file.file, // Preserve File reference
+        url: currentFile?.url || clonedFile.url || '',
+        thumbnailUrl: currentFile?.thumbnailUrl || clonedFile.thumbnailUrl,
+        proxyVideoUrl: currentFile?.proxyVideoUrl || clonedFile.proxyVideoUrl,
       };
     });
 
@@ -625,6 +992,11 @@ export const useHistoryStore = create<HistoryState>()(
   subscribeWithSelector((set, get) => ({
     undoStack: [],
     redoStack: [],
+    eventLog: [],
+    branches: [],
+    navigationEntries: null,
+    navigationSnapshotsByEntryId: {},
+    activeEntryId: null,
     currentSnapshot: null,
     maxHistorySize: 50,
     isApplying: false,
@@ -632,7 +1004,7 @@ export const useHistoryStore = create<HistoryState>()(
     batchLabel: null,
 
     captureSnapshot: (label: string) => {
-      const { isApplying, undoStack, currentSnapshot, maxHistorySize, batchId } = get();
+      const { isApplying, undoStack, currentSnapshot, redoStack, branches, maxHistorySize, batchId } = get();
 
       // Don't capture during undo/redo application
       if (isApplying) return;
@@ -640,10 +1012,19 @@ export const useHistoryStore = create<HistoryState>()(
       // If batching, don't create new snapshots until batch ends
       if (batchId !== null) return;
 
-      const newSnapshot = createSnapshot(label);
+      const captureStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const newSnapshot = createSnapshot(label, currentSnapshot);
+      const captureDurationMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - captureStartedAt;
+      if (captureDurationMs > HISTORY_CAPTURE_WARN_MS) {
+        log.warn('Slow history snapshot capture', {
+          label,
+          durationMs: Math.round(captureDurationMs),
+        });
+      }
 
       // Push current state to undo stack (if exists)
       if (currentSnapshot) {
+        const branch = createBranchFromRedoPath(undoStack, currentSnapshot, redoStack);
         const newUndoStack = [...undoStack, currentSnapshot];
         // Limit history size
         if (newUndoStack.length > maxHistorySize) {
@@ -652,17 +1033,29 @@ export const useHistoryStore = create<HistoryState>()(
         set({
           undoStack: newUndoStack,
           redoStack: [], // Clear redo stack on new action
+          branches: appendHistoryBranch(branches, branch),
           currentSnapshot: newSnapshot,
+          navigationEntries: null,
+          navigationSnapshotsByEntryId: {},
+          activeEntryId: null,
         });
       } else {
-        set({ currentSnapshot: newSnapshot });
+        set({
+          undoStack: [],
+          redoStack: [],
+          branches: [],
+          currentSnapshot: newSnapshot,
+          navigationEntries: null,
+          navigationSnapshotsByEntryId: {},
+          activeEntryId: null,
+        });
       }
     },
 
     undo: () => {
       if (isTimelineHistoryLocked()) {
         log.warn('Blocked undo during timeline export');
-        return;
+        return null;
       }
 
       // End any stuck batch first (safety: lost mouseup etc.)
@@ -675,13 +1068,14 @@ export const useHistoryStore = create<HistoryState>()(
 
       // Re-read stacks after flush may have pushed new entries
       const { undoStack, currentSnapshot, redoStack } = get();
-      if (undoStack.length === 0) return;
+      if (undoStack.length === 0) return null;
 
       set({ isApplying: true });
 
       // Pop from undo stack
       const newUndoStack = [...undoStack];
       const previousSnapshot = newUndoStack.pop()!;
+      const undoneLabel = currentSnapshot?.label || previousSnapshot.label;
 
       // Push current to redo stack
       const newRedoStack = currentSnapshot
@@ -695,19 +1089,23 @@ export const useHistoryStore = create<HistoryState>()(
         undoStack: newUndoStack,
         redoStack: newRedoStack,
         currentSnapshot: previousSnapshot,
+        navigationEntries: null,
+        navigationSnapshotsByEntryId: {},
+        activeEntryId: null,
         isApplying: false,
       });
 
       // Suppress auto-captures for 200ms to prevent cascading state changes from re-capturing
       suppressCapturesCallback?.();
 
-      log.debug(`Undo: ${previousSnapshot.label} (stack: ${newUndoStack.length})`);
+      log.debug(`Undo: ${undoneLabel} (stack: ${newUndoStack.length})`);
+      return { operation: 'undo', label: undoneLabel };
     },
 
     redo: () => {
       if (isTimelineHistoryLocked()) {
         log.warn('Blocked redo during timeline export');
-        return;
+        return null;
       }
 
       // End any stuck batch first
@@ -720,7 +1118,7 @@ export const useHistoryStore = create<HistoryState>()(
 
       // Re-read stacks after flush
       const { redoStack, currentSnapshot, undoStack } = get();
-      if (redoStack.length === 0) return;
+      if (redoStack.length === 0) return null;
 
       set({ isApplying: true });
 
@@ -740,6 +1138,9 @@ export const useHistoryStore = create<HistoryState>()(
         undoStack: newUndoStack,
         redoStack: newRedoStack,
         currentSnapshot: nextSnapshot,
+        navigationEntries: null,
+        navigationSnapshotsByEntryId: {},
+        activeEntryId: null,
         isApplying: false,
       });
 
@@ -747,10 +1148,189 @@ export const useHistoryStore = create<HistoryState>()(
       suppressCapturesCallback?.();
 
       log.debug(`Redo: ${nextSnapshot.label} (stack: ${newRedoStack.length})`);
+      return { operation: 'redo', label: nextSnapshot.label };
     },
 
     canUndo: () => get().undoStack.length > 0,
     canRedo: () => get().redoStack.length > 0,
+    getHistoryEntries: () => {
+      const {
+        undoStack,
+        currentSnapshot,
+        redoStack,
+        eventLog,
+        branches,
+        navigationEntries,
+        activeEntryId,
+      } = get();
+      if (navigationEntries) {
+        return markActiveHistoryEntry(navigationEntries, activeEntryId);
+      }
+      return markActiveHistoryEntry(
+        createHistoryEntries(undoStack, currentSnapshot, redoStack, eventLog, branches),
+        activeEntryId
+      );
+    },
+
+    recordEvent: (type, label) => {
+      if (type === 'autosave') return;
+
+      const timestamp = Date.now();
+      const trimmedLabel = label.trim();
+      const event: HistoryTimelineEvent = {
+        id: `event:${type}:${timestamp}:${Math.random().toString(36).slice(2, 8)}`,
+        type,
+        label: trimmedLabel.length > 0 ? trimmedLabel : 'History event',
+        timestamp,
+      };
+
+      set((state) => ({
+        eventLog: [...state.eventLog, event].slice(-MAX_HISTORY_EVENT_LOG_SIZE),
+      }));
+    },
+
+    restoreEntry: (entry) => {
+      if (entry.kind === 'branch' && entry.branchId) {
+        return get().restoreBranch(entry.branchId, entry.stackIndex);
+      }
+      if (entry.kind === 'event' || entry.kind === 'current') {
+        return null;
+      }
+      if (typeof entry.stackIndex !== 'number') {
+        return null;
+      }
+      if (isTimelineHistoryLocked()) {
+        log.warn('Blocked history jump during timeline export');
+        return null;
+      }
+
+      if (get().batchId !== null) {
+        get().endBatch();
+      }
+
+      flushPendingCaptureCallback?.();
+
+      const {
+        undoStack,
+        currentSnapshot,
+        redoStack,
+        eventLog,
+        branches,
+        navigationEntries,
+        navigationSnapshotsByEntryId,
+      } = get();
+      const navigationState = navigationEntries
+        ? { entries: navigationEntries, snapshotsByEntryId: navigationSnapshotsByEntryId }
+        : createHistoryNavigationState(undoStack, currentSnapshot, redoStack, eventLog, branches);
+      let targetSnapshot: StateSnapshot | undefined;
+      let nextUndoStack: StateSnapshot[] = [];
+      let nextRedoStack: StateSnapshot[] = [];
+
+      if (entry.kind === 'undoable') {
+        targetSnapshot = undoStack[entry.stackIndex];
+        nextUndoStack = undoStack.slice(0, entry.stackIndex);
+        nextRedoStack = [
+          ...undoStack.slice(entry.stackIndex + 1),
+          ...(currentSnapshot ? [currentSnapshot] : []),
+          ...redoStack.slice().reverse(),
+        ].reverse();
+      } else if (entry.kind === 'redoable') {
+        const redoPath = redoStack.slice().reverse();
+        targetSnapshot = redoPath[entry.stackIndex];
+        nextUndoStack = [
+          ...undoStack,
+          ...(currentSnapshot ? [currentSnapshot] : []),
+          ...redoPath.slice(0, entry.stackIndex),
+        ];
+        nextRedoStack = redoPath.slice(entry.stackIndex + 1).reverse();
+      }
+
+      if (!targetSnapshot) return null;
+
+      set({ isApplying: true });
+      applySnapshot(targetSnapshot);
+      set({
+        undoStack: cloneSnapshotStack(nextUndoStack),
+        redoStack: cloneSnapshotStack(nextRedoStack),
+        currentSnapshot: deepClone(targetSnapshot),
+        navigationEntries: navigationState.entries,
+        navigationSnapshotsByEntryId: navigationState.snapshotsByEntryId,
+        activeEntryId: entry.id,
+        isApplying: false,
+      });
+
+      suppressCapturesCallback?.();
+
+      log.debug(`Jump to history entry: ${entry.label}`);
+      return { operation: 'restore-branch', label: entry.label };
+    },
+
+    restoreBranch: (branchId, snapshotIndex) => {
+      if (isTimelineHistoryLocked()) {
+        log.warn('Blocked branch restore during timeline export');
+        return null;
+      }
+
+      if (get().batchId !== null) {
+        get().endBatch();
+      }
+
+      flushPendingCaptureCallback?.();
+
+      const {
+        undoStack,
+        currentSnapshot,
+        redoStack,
+        eventLog,
+        branches,
+        navigationEntries,
+        navigationSnapshotsByEntryId,
+      } = get();
+      const branch = branches.find((candidate) => candidate.id === branchId);
+      if (!branch) return null;
+
+      const targetSnapshotIndex = Math.max(
+        0,
+        Math.min(
+          branch.snapshots.length - 1,
+          typeof snapshotIndex === 'number' ? Math.floor(snapshotIndex) : branch.snapshots.length - 1
+        )
+      );
+      const branchPath = [
+        ...branch.baseUndoStack,
+        ...(branch.baseSnapshot ? [branch.baseSnapshot] : []),
+        ...branch.snapshots.slice(0, targetSnapshotIndex + 1),
+      ];
+      const branchTip = branchPath[branchPath.length - 1];
+      if (!branchTip) return null;
+
+      const nextRedoStack = branch.snapshots.slice(targetSnapshotIndex + 1).reverse();
+      const navigationState = navigationEntries
+        ? { entries: navigationEntries, snapshotsByEntryId: navigationSnapshotsByEntryId }
+        : createHistoryNavigationState(undoStack, currentSnapshot, redoStack, eventLog, branches);
+      const activeEntryId = navigationState.entries.find((candidate) => (
+        candidate.kind === 'branch' &&
+        candidate.branchId === branchId &&
+        candidate.stackIndex === targetSnapshotIndex
+      ))?.id ?? null;
+
+      set({ isApplying: true });
+      applySnapshot(branchTip);
+      set({
+        undoStack: cloneSnapshotStack(branchPath.slice(0, -1)),
+        redoStack: cloneSnapshotStack(nextRedoStack),
+        currentSnapshot: deepClone(branchTip),
+        navigationEntries: navigationState.entries,
+        navigationSnapshotsByEntryId: navigationState.snapshotsByEntryId,
+        activeEntryId,
+        isApplying: false,
+      });
+
+      suppressCapturesCallback?.();
+
+      log.debug(`Restore branch: ${branch.label}`);
+      return { operation: 'restore-branch', label: branch.label };
+    },
 
     startBatch: (label: string) => {
       const { batchId, currentSnapshot } = get();
@@ -768,14 +1348,23 @@ export const useHistoryStore = create<HistoryState>()(
     },
 
     endBatch: () => {
-      const { batchId, batchLabel, undoStack, currentSnapshot, maxHistorySize } = get();
+      const { batchId, batchLabel, undoStack, currentSnapshot, redoStack, branches, maxHistorySize } = get();
       if (batchId === null) return;
 
       // Create final snapshot with batch label
-      const finalSnapshot = createSnapshot(batchLabel || 'batch');
+      const captureStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const finalSnapshot = createSnapshot(batchLabel || 'batch', currentSnapshot);
+      const captureDurationMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - captureStartedAt;
+      if (captureDurationMs > HISTORY_CAPTURE_WARN_MS) {
+        log.warn('Slow history batch capture', {
+          label: batchLabel || 'batch',
+          durationMs: Math.round(captureDurationMs),
+        });
+      }
 
       // Push previous state to undo stack
       if (currentSnapshot) {
+        const branch = createBranchFromRedoPath(undoStack, currentSnapshot, redoStack);
         const newUndoStack = [...undoStack, currentSnapshot];
         if (newUndoStack.length > maxHistorySize) {
           newUndoStack.shift();
@@ -783,13 +1372,20 @@ export const useHistoryStore = create<HistoryState>()(
         set({
           undoStack: newUndoStack,
           redoStack: [],
+          branches: appendHistoryBranch(branches, branch),
           currentSnapshot: finalSnapshot,
+          navigationEntries: null,
+          navigationSnapshotsByEntryId: {},
+          activeEntryId: null,
           batchId: null,
           batchLabel: null,
         });
       } else {
         set({
           currentSnapshot: finalSnapshot,
+          navigationEntries: null,
+          navigationSnapshotsByEntryId: {},
+          activeEntryId: null,
           batchId: null,
           batchLabel: null,
         });
@@ -801,8 +1397,116 @@ export const useHistoryStore = create<HistoryState>()(
     clearHistory: () => set({
       undoStack: [],
       redoStack: [],
+      branches: [],
+      navigationEntries: null,
+      navigationSnapshotsByEntryId: {},
+      activeEntryId: null,
       currentSnapshot: null,
     }),
+
+    serializeForProject: () => {
+      const {
+        undoStack,
+        redoStack,
+        currentSnapshot,
+        eventLog,
+        branches,
+        maxHistorySize,
+        navigationEntries,
+        activeEntryId,
+      } = get();
+      const persistentEventLog = eventLog.filter((event) => event.type !== 'autosave');
+      const visibleEntries = markActiveHistoryEntry(
+        navigationEntries ?? createHistoryEntries(undoStack, currentSnapshot, redoStack, eventLog, branches),
+        activeEntryId
+      ).slice(-MAX_HISTORY_EVENT_LOG_SIZE);
+
+      if (!PERSIST_HISTORY_SNAPSHOTS) {
+        return {
+          schemaVersion: 1,
+          undoStack: [],
+          redoStack: [],
+          currentSnapshot: null,
+          eventLog: persistentEventLog.slice(-MAX_HISTORY_EVENT_LOG_SIZE),
+          visibleEntries,
+          branches: [],
+          maxHistorySize,
+        };
+      }
+
+      const persistedMaxHistorySize = Math.min(maxHistorySize, MAX_PERSISTED_HISTORY_SNAPSHOTS);
+
+      return cloneHistoryForProject({
+        schemaVersion: 1,
+        undoStack: limitSnapshotStackForProject(undoStack, maxHistorySize),
+        redoStack: limitSnapshotStackForProject(redoStack, maxHistorySize),
+        currentSnapshot,
+        eventLog: persistentEventLog.slice(-MAX_HISTORY_EVENT_LOG_SIZE),
+        visibleEntries,
+        branches: branches
+          .slice(-MAX_HISTORY_BRANCHES)
+          .map((branch) => limitBranchForProject(branch, maxHistorySize)),
+        maxHistorySize: persistedMaxHistorySize,
+      });
+    },
+
+    hydrateFromProject: (history) => {
+      const maxHistorySize = Math.max(1, Math.floor(history?.maxHistorySize ?? get().maxHistorySize));
+
+      if (!history || history.schemaVersion !== 1) {
+        set({
+          undoStack: [],
+          redoStack: [],
+          eventLog: [],
+          branches: [],
+          currentSnapshot: createInitialHistorySnapshot(),
+          maxHistorySize,
+          navigationEntries: null,
+          navigationSnapshotsByEntryId: {},
+          activeEntryId: null,
+          isApplying: false,
+          batchId: null,
+          batchLabel: null,
+        });
+        return;
+      }
+
+      if (!PERSIST_HISTORY_SNAPSHOTS) {
+        const visibleEntries = normalizePersistedVisibleEntries(history.visibleEntries);
+        const activeEntry = visibleEntries.find((entry) => entry.active);
+
+        set({
+          undoStack: [],
+          redoStack: [],
+          eventLog: normalizePersistedEventLog(history.eventLog),
+          branches: [],
+          currentSnapshot: createInitialHistorySnapshot(),
+          maxHistorySize,
+          navigationEntries: visibleEntries.length > 0 ? visibleEntries : null,
+          navigationSnapshotsByEntryId: {},
+          activeEntryId: activeEntry?.id ?? null,
+          isApplying: false,
+          batchId: null,
+          batchLabel: null,
+        });
+        return;
+      }
+
+      set({
+        undoStack: normalizePersistedSnapshotStack(history.undoStack, maxHistorySize),
+        redoStack: normalizePersistedSnapshotStack(history.redoStack, maxHistorySize),
+        eventLog: normalizePersistedEventLog(history.eventLog),
+        branches: normalizePersistedBranches(history.branches, maxHistorySize),
+        currentSnapshot: normalizePersistedSnapshot(history.currentSnapshot) ?? createInitialHistorySnapshot(),
+        maxHistorySize,
+        navigationEntries: null,
+        navigationSnapshotsByEntryId: {},
+        activeEntryId: null,
+        isApplying: false,
+        batchId: null,
+        batchLabel: null,
+      });
+    },
   }))
 );
 
@@ -812,3 +1516,12 @@ export const undo = () => useHistoryStore.getState().undo();
 export const redo = () => useHistoryStore.getState().redo();
 export const startBatch = (label: string) => useHistoryStore.getState().startBatch(label);
 export const endBatch = () => useHistoryStore.getState().endBatch();
+export const recordHistoryEvent = (type: HistoryEventType, label: string) => {
+  useHistoryStore.getState().recordEvent(type, label);
+};
+export const restoreHistoryEntry = (entry: HistoryListEntry) => useHistoryStore.getState().restoreEntry(entry);
+export const restoreHistoryBranch = (branchId: string, snapshotIndex?: number) => useHistoryStore.getState().restoreBranch(branchId, snapshotIndex);
+export const serializeHistoryStateForProject = () => useHistoryStore.getState().serializeForProject();
+export const hydrateHistoryStateFromProject = (history: ProjectHistoryState | null | undefined) => {
+  useHistoryStore.getState().hydrateFromProject(history);
+};

@@ -4,6 +4,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { engine } from '../engine/WebGPUEngine';
 import { useEngineStore } from '../stores/engineStore';
 import { useTimelineStore } from '../stores/timeline';
+import { applyClipDragPreview } from '../stores/timeline/clipDragPreview';
 import { useMediaStore } from '../stores/mediaStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useSAM2Store, maskToImageData } from '../stores/sam2Store';
@@ -264,7 +265,8 @@ export function useEngine() {
 
   // Helper function to update mask textures - extracted to avoid duplication
   const updateMaskTextures = useCallback((force = false, timelineTime?: number) => {
-    const { clips, playheadPosition, maskDragging, getInterpolatedMasks } = useTimelineStore.getState();
+    const { clips: storeClips, playheadPosition, maskDragging, clipDragPreview, getInterpolatedMasks } = useTimelineStore.getState();
+    const clips = applyClipDragPreview(storeClips, clipDragPreview);
     const effectivePlayheadPosition = timelineTime ?? playheadPosition;
 
     if (maskDragging && !force) {
@@ -477,8 +479,12 @@ export function useEngine() {
           ? playheadState.position
           : useTimelineStore.getState().playheadPosition;
         const timelineState = useTimelineStore.getState();
+        const hasClipDragPreview = timelineState.clipDragPreview != null;
+        const timelineClips = hasClipDragPreview
+          ? applyClipDragPreview(timelineState.clips, timelineState.clipDragPreview)
+          : timelineState.clips;
         const hasActiveTemporalClip = hasActiveContinuousRenderClip(
-          timelineState.clips,
+          timelineClips,
           timelineState.tracks,
           currentPlayhead
         );
@@ -505,7 +511,7 @@ export function useEngine() {
 
         // Try cached RAM Preview frame first (instant scrubbing over pre-rendered frames).
         // Wall-clock driven effects must render live even when the playhead is parked.
-        if (!hasActiveTemporalClip && engine.renderCachedFrame(currentPlayhead)) {
+        if (!hasClipDragPreview && !hasActiveTemporalClip && engine.renderCachedFrame(currentPlayhead)) {
           const syncAudioStart = performance.now();
           layerBuilder.syncAudioElements();
           syncAudioMs += performance.now() - syncAudioStart;
@@ -564,7 +570,7 @@ export function useEngine() {
         const cacheStart = performance.now();
         const { ramPreviewEnabled, addCachedFrame } = useTimelineStore.getState();
         const { isDraggingPlayhead } = useTimelineStore.getState();
-        if (ramPreviewEnabled && !isPlaying && !isDraggingPlayhead && !needsContinuousRender) {
+        if (ramPreviewEnabled && !isPlaying && !isDraggingPlayhead && !needsContinuousRender && !hasClipDragPreview) {
           engine.cacheCompositeFrame(currentPlayhead).then(() => {
             addCachedFrame(currentPlayhead);
           });
@@ -573,7 +579,7 @@ export function useEngine() {
         // Cache active comp output for parent preview texture sharing
         // This allows parent compositions to show the active comp without video conflicts
         const activeCompId = useMediaStore.getState().activeCompositionId;
-        if (activeCompId && !isPlaying && !isDraggingPlayhead && !needsContinuousRender) {
+        if (activeCompId && !isPlaying && !isDraggingPlayhead && !needsContinuousRender && !hasClipDragPreview) {
           engine.cacheActiveCompOutput(activeCompId);
         }
         cacheMs += performance.now() - cacheStart;
@@ -629,6 +635,14 @@ export function useEngine() {
       () => engine.requestRender()
     );
 
+    const unsubClipDragPreview = useTimelineStore.subscribe(
+      (state) => state.clipDragPreview,
+      () => {
+        layerBuilder.invalidateCache();
+        engine.requestRender();
+      }
+    );
+
     // Settings changes (preview quality)
     const unsubSettings = useSettingsStore.subscribe(
       (state) => state.previewQuality,
@@ -664,6 +678,7 @@ export function useEngine() {
       unsubClips();
       unsubTracks();
       unsubLayers();
+      unsubClipDragPreview();
       unsubSettings();
       unsubActiveComp();
       unsubLayerSlots();

@@ -427,6 +427,24 @@ function toolResultFromGuidedSession(
   toolName: string,
   result: GuidedSessionResult,
 ): ToolResult {
+  if (result.toolResults.length > 1) {
+    const succeeded = result.toolResults.filter((entry) => entry.success).length;
+    const failed = result.toolResults.length - succeeded;
+    return {
+      success: result.status === 'completed' && failed === 0,
+      ...(result.status === 'completed' && failed === 0 ? {} : { error: result.error ?? `Guided AI execution ${result.status}` }),
+      data: {
+        guidedSessionId: result.sessionId,
+        tool: toolName,
+        totalActions: result.toolResults.length,
+        succeeded,
+        failed,
+        results: result.toolResults,
+        status: result.status,
+      },
+    };
+  }
+
   const primaryToolResult = result.toolResults[0];
   if (primaryToolResult) {
     return primaryToolResult;

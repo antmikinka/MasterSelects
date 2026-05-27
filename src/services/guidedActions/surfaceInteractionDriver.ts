@@ -2,6 +2,7 @@ import { useGuidedActionStore } from '../../stores/guidedActionStore';
 import { useDockStore } from '../../stores/dockStore';
 import { useTimelineStore } from '../../stores/timeline';
 import { endBatch, startBatch, useHistoryStore } from '../../stores/historyStore';
+import type { TimelineToolId } from '../../stores/timeline/types';
 import type {
   GuidedAction,
   GuidedMaskPathVertexInput,
@@ -39,6 +40,7 @@ export function createSurfaceInteractionHandlers(): GuidedActionHandlerMap {
     drawMaskPath: (action, context) => driver.execute(action, context),
     drawPreviewPath: (action, context) => driver.execute(action, context),
     focusPanel: (action, context) => driver.execute(action, context),
+    openTimelineToolGroupVisual: (action, context) => driver.execute(action, context),
     openDropdown: (action, context) => driver.execute(action, context),
     openPropertiesTab: (action, context) => driver.execute(action, context),
     pressButton: (action, context) => driver.execute(action, context),
@@ -46,6 +48,7 @@ export function createSurfaceInteractionHandlers(): GuidedActionHandlerMap {
     scrollIntoView: (action, context) => driver.execute(action, context),
     selectClip: (action, context) => driver.execute(action, context),
     setPlayheadVisual: (action, context) => driver.execute(action, context),
+    setTimelineToolVisual: (action, context) => driver.execute(action, context),
     typeInto: (action, context) => driver.execute(action, context),
   };
 }
@@ -58,12 +61,16 @@ export class GuidedSurfaceInteractionDriver {
     switch (action.type) {
       case 'focusPanel':
         return this.focusPanel(action.panel);
+      case 'openTimelineToolGroupVisual':
+        return this.openTimelineToolGroup(action, context);
       case 'openPropertiesTab':
         return this.openPropertiesTab(action.tab);
       case 'selectClip':
         return this.selectClip(action.clipId);
       case 'setPlayheadVisual':
         return this.setPlayhead(action.time);
+      case 'setTimelineToolVisual':
+        return this.setTimelineTool(action.toolId);
       case 'scrollIntoView':
         return this.scrollIntoView(action.target, action.block, context);
       case 'resizePanel':
@@ -96,6 +103,45 @@ export class GuidedSurfaceInteractionDriver {
     return success('focusPanel', true, 'implicit');
   }
 
+  private async openTimelineToolGroup(
+    action: Extract<GuidedAction, { type: 'openTimelineToolGroupVisual' }>,
+    context: GuidedActionHandlerContext,
+  ): Promise<GuidedSurfaceInteractionResult> {
+    const target = action.target ?? {
+      kind: 'button' as const,
+      id: `timeline-tool-group:${action.groupId}`,
+    };
+    let anchorElement: HTMLButtonElement | null = null;
+
+    const resolution = await context.resolveTarget(target);
+    if (resolution.status === 'missing') {
+      if (!action.optional) {
+        return fail(
+          'openTimelineToolGroupVisual',
+          resolution.message ?? `Missing timeline tool group target: ${resolution.reason}`,
+          'implicit',
+          context,
+        );
+      }
+      return success('openTimelineToolGroupVisual', false, 'implicit');
+    } else {
+      if (resolution.element instanceof HTMLButtonElement) {
+        anchorElement = resolution.element;
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('guidedOpenTimelineToolGroup', {
+        detail: {
+          groupId: action.groupId,
+          targetToolId: action.targetToolId,
+          anchorElement,
+        },
+      }));
+    }
+    return success('openTimelineToolGroupVisual', true, 'implicit');
+  }
+
   private openPropertiesTab(tab: string): GuidedSurfaceInteractionResult {
     useDockStore.getState().activatePanelType('clip-properties');
     if (typeof window !== 'undefined') {
@@ -114,13 +160,22 @@ export class GuidedSurfaceInteractionDriver {
     return success('setPlayheadVisual', true, 'implicit');
   }
 
+  private setTimelineTool(toolId: Extract<GuidedAction, { type: 'setTimelineToolVisual' }>['toolId']): GuidedSurfaceInteractionResult {
+    const timeline = useTimelineStore.getState();
+    timeline.setActiveTimelineTool(toolId);
+    timeline.setOpenTimelineToolGroup(null);
+    timeline.setTimelineToolPreview(null);
+    useGuidedActionStore.getState().setCursor({ toolId: getGuidedCursorToolId(toolId) });
+    return success('setTimelineToolVisual', true, 'implicit');
+  }
+
   private async scrollIntoView(
     target: GuidedTargetRef,
     block: Extract<GuidedAction, { type: 'scrollIntoView' }>['block'],
     context: GuidedActionHandlerContext,
   ): Promise<GuidedSurfaceInteractionResult> {
     if (target.kind === 'timelineTime') {
-      return this.scrollTimelineTimeIntoView(target, context);
+      return this.scrollTimelineTimeIntoView(target);
     }
 
     const resolution = await requireResolvedTarget(target, context);
@@ -129,13 +184,12 @@ export class GuidedSurfaceInteractionDriver {
     }
 
     resolution.element.scrollIntoView({ block: block ?? 'center', inline: 'nearest' });
-    useGuidedActionStore.getState().setCursor({ visible: true, position: resolution.center });
+    useTimelineStore.getState().setTimelineToolPreview(null);
     return success('scrollIntoView', true, 'implicit');
   }
 
   private async scrollTimelineTimeIntoView(
     target: Extract<GuidedTargetRef, { kind: 'timelineTime' }>,
-    context: GuidedActionHandlerContext,
   ): Promise<GuidedSurfaceInteractionResult> {
     const timeline = useTimelineStore.getState();
     const zoom = Number.isFinite(timeline.zoom) && timeline.zoom > 0 ? timeline.zoom : 50;
@@ -155,11 +209,7 @@ export class GuidedSurfaceInteractionDriver {
     );
 
     timeline.setScrollX(Math.min(desiredScrollX, maxScrollX));
-
-    const resolution = await context.resolveTarget(target);
-    if (resolution.status === 'resolved') {
-      useGuidedActionStore.getState().setCursor({ visible: true, position: resolution.center });
-    }
+    timeline.setTimelineToolPreview(null);
 
     return success('scrollIntoView', true, 'implicit');
   }
@@ -171,7 +221,7 @@ export class GuidedSurfaceInteractionDriver {
     const policy = action.policy ?? 'visualOnly';
     if (action.visualTarget) {
       const resolution = await requireResolvedTarget(action.visualTarget, context);
-      useGuidedActionStore.getState().setCursor({ visible: true, position: resolution.center });
+      useGuidedActionStore.getState().setCursor({ visible: true, position: resolution.center, toolId: getGuidedCursorToolId() });
     }
 
     if (!shouldExecuteUiPolicy(policy)) {
@@ -200,7 +250,13 @@ export class GuidedSurfaceInteractionDriver {
     const normalizedPolicy = policy ?? 'visualOnly';
     const resolution = await requireResolvedTarget(target, context);
     const store = useGuidedActionStore.getState();
-    store.setCursor({ visible: true, position: resolution.center, clicking: true });
+    store.setCursor({
+      visible: true,
+      position: resolution.center,
+      clicking: true,
+      inputGesture: { kind: 'mouse-left', label: 'LMB', detail: actionType },
+      toolId: getGuidedCursorToolId(),
+    });
 
     if (!shouldExecuteUiPolicy(normalizedPolicy)) {
       return success(actionType, false, normalizedPolicy);
@@ -223,7 +279,13 @@ export class GuidedSurfaceInteractionDriver {
   ): Promise<GuidedSurfaceInteractionResult> {
     const normalizedPolicy = policy ?? 'visualOnly';
     const resolution = await requireResolvedTarget(target, context);
-    useGuidedActionStore.getState().setCursor({ visible: true, position: resolution.center, clicking: true });
+    useGuidedActionStore.getState().setCursor({
+      visible: true,
+      position: resolution.center,
+      clicking: true,
+      inputGesture: { kind: 'keyboard', label: 'Type', detail: text.length > 12 ? `${text.slice(0, 12)}...` : text },
+      toolId: getGuidedCursorToolId(),
+    });
 
     if (!shouldExecuteUiPolicy(normalizedPolicy)) {
       return success('typeInto', false, normalizedPolicy);
@@ -544,6 +606,12 @@ function fail(
 
 function shouldExecuteUiPolicy(policy: SurfaceExecutionPolicy): boolean {
   return policy === 'persistUi' || policy === 'transientUi';
+}
+
+function getGuidedCursorToolId(
+  toolId: TimelineToolId = useTimelineStore.getState().activeTimelineToolId,
+): TimelineToolId | null {
+  return toolId === 'select' ? null : toolId;
 }
 
 function isTextInputElement(element: Element | undefined): element is HTMLInputElement | HTMLTextAreaElement {

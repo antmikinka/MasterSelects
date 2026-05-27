@@ -66,7 +66,7 @@ describe('guided replay settings store', () => {
     localStorage.clear();
   });
 
-  it('exposes defaults and clamps the animation budget', async () => {
+  it('exposes defaults and only lower-bounds the animation budget', async () => {
     const { useSettingsStore } = await importSettingsStoreWithMocks();
 
     expect(useSettingsStore.getState().guidedActionReplayVisualizationMode).toBe('concise');
@@ -77,7 +77,7 @@ describe('guided replay settings store', () => {
     expect(useSettingsStore.getState().guidedActionReplayBudgetMs).toBe(0);
 
     useSettingsStore.getState().setGuidedActionReplayBudgetMs(25000);
-    expect(useSettingsStore.getState().guidedActionReplayBudgetMs).toBe(10000);
+    expect(useSettingsStore.getState().guidedActionReplayBudgetMs).toBe(25000);
 
     useSettingsStore.getState().setGuidedActionReplayBudgetMs(Number.NaN);
     expect(useSettingsStore.getState().guidedActionReplayBudgetMs).toBe(3000);

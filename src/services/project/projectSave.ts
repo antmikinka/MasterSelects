@@ -13,6 +13,7 @@ import { useSettingsStore } from '../../stores/settingsStore';
 import { useFlashBoardStore } from '../../stores/flashboardStore';
 import { getExportStoreData, useExportStore } from '../../stores/exportStore';
 import { useMIDIStore } from '../../stores/midiStore';
+import { recordHistoryEvent, serializeHistoryStateForProject } from '../../stores/historyStore';
 import { isProxyFrameCountComplete } from '../../stores/mediaStore/helpers/proxyCompleteness';
 import { buildProjectAudioStateIndex } from '../audio/projectAudioState';
 import { createCurrentAudioArtifactStore } from '../audio/timelineWaveformPyramidCache';
@@ -49,6 +50,11 @@ import type {
 
 const log = Logger.create('ProjectSync');
 let projectStoreSyncDepth = 0;
+
+export interface SaveCurrentProjectOptions {
+  source?: 'manual' | 'autosave';
+  label?: string;
+}
 
 type ProjectSaveClip = SerializableClip & {
   source?: TimelineClip['source'];
@@ -619,6 +625,7 @@ export async function syncStoresToProject(): Promise<void> {
           parameterBindings: midiState.parameterBindings,
         },
         exportState: getExportStoreData(useExportStore.getState()),
+        history: serializeHistoryStateForProject(),
       };
 
       // Save generated media items
@@ -646,7 +653,7 @@ export async function syncStoresToProject(): Promise<void> {
 /**
  * Save current project
  */
-export async function saveCurrentProject(): Promise<boolean> {
+export async function saveCurrentProject(options: SaveCurrentProjectOptions = {}): Promise<boolean> {
   if (!projectFileService.isProjectOpen()) {
     log.error(' No project open');
     return false;
@@ -655,6 +662,13 @@ export async function saveCurrentProject(): Promise<boolean> {
   if (isProjectStoreSyncInProgress()) {
     log.warn('Skipped project save while project stores are being synchronized');
     return false;
+  }
+
+  if (options.source === 'manual') {
+    recordHistoryEvent(
+      'manual-save',
+      options.label ?? 'Manual save'
+    );
   }
 
   await syncStoresToProject();

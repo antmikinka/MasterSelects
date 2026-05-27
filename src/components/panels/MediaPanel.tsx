@@ -8,7 +8,7 @@ import { LABEL_COLORS, getLabelHex } from './media/labelColors';
 import { CompositionSettingsDialog } from './media/CompositionSettingsDialog';
 import { SolidSettingsDialog } from './media/SolidSettingsDialog';
 import { LabelColorPicker } from './media/LabelColorPicker';
-import { getItemImportProgress, isImportedMediaFileItem } from './media/itemTypeGuards';
+import { getItemImportProgress, getItemWaveformProgress, isImportedMediaFileItem } from './media/itemTypeGuards';
 import { handleSubmenuHover, handleSubmenuLeave } from './media/submenuPosition';
 import { collectDroppedMediaFiles, planDroppedMediaImports } from './media/dropImport';
 import { MediaAIGenerativeTray } from './media/MediaAIGenerativeTray';
@@ -1875,6 +1875,7 @@ export function MediaPanel() {
       }
       case 'name': {
         const importProgress = getItemImportProgress(item);
+        const waveformProgress = getItemWaveformProgress(item);
         return (
           <div
             className="media-col media-col-name"
@@ -1926,6 +1927,18 @@ export function MediaPanel() {
                 title={`Importing: ${importProgress}%`}
               >
                 {importProgress}%
+              </span>
+            )}
+            {importProgress === null && waveformProgress !== null && (
+              <span
+                className="media-item-waveform-generating"
+                title={`Generating waveform: ${waveformProgress}%`}
+              >
+                <span className="waveform-fill-badge" aria-hidden="true">
+                  <span className="waveform-fill-bg">W</span>
+                  <span className="waveform-fill-progress" style={{ height: `${waveformProgress}%` }}>W</span>
+                </span>
+                <span className="waveform-percent">{waveformProgress}%</span>
               </span>
             )}
             {'proxyStatus' in item &&
@@ -2131,6 +2144,7 @@ export function MediaPanel() {
     const isDragTarget = isFolder && dragOverFolderId === item.id;
     const isImporting = !!mediaFile?.isImporting;
     const importProgress = getItemImportProgress(item);
+    const waveformProgress = getItemWaveformProgress(item);
 
     // Duration badge: videos + compositions
     const duration = mediaFile?.duration || comp?.duration || ('duration' in item ? item.duration : undefined);
@@ -2175,6 +2189,12 @@ export function MediaPanel() {
             )}
             {importProgress !== null && (
               <span className="media-grid-import-badge">{importProgress}%</span>
+            )}
+            {importProgress === null && waveformProgress !== null && (
+              <span className="media-grid-waveform-badge" title={`Generating waveform: ${waveformProgress}%`}>
+                <span className="waveform-progress-mark">W</span>
+                <span>{waveformProgress}%</span>
+              </span>
             )}
           </div>
           <div className="media-grid-name" title={item.name}>{item.name}</div>

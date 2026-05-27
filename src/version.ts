@@ -1,6 +1,6 @@
 // App version
 // Format: MAJOR.MINOR.PATCH
-export const APP_VERSION = '2.0.1';
+export const APP_VERSION = '2.0.2';
 
 export interface ChangelogNotice {
   type: 'info' | 'warning' | 'success' | 'danger';
@@ -27,8 +27,8 @@ export const FEATURED_VIDEO: {
   title: 'MasterSelects Demo',
   banner: {
     type: 'success',
-    title: 'MasterSelects 2.0.1',
-    message: 'Timeline tool palettes, source monitor in/out workflows, cached audio waveforms, and slot-view controls are now bundled for the 2.0.1 release.',
+    title: 'MasterSelects 2.0.2',
+    message: 'History now has a compact branch graph, undo/redo feedback, persistent visible history metadata, and tighter noise filtering for layout and AI-driven updates.',
     animated: true,
   },
 };
@@ -36,8 +36,8 @@ export const FEATURED_VIDEO: {
 // Build/Platform notice shown at top of changelog (set to null to hide)
 export const BUILD_NOTICE: ChangelogNotice | null = {
   type: 'success',
-  title: 'MasterSelects 2.0.1',
-  message: 'This release consolidates the new Premiere-style timeline tools, compact source monitor transport, layer targeting, and background waveform generation.',
+  title: 'MasterSelects 2.0.2',
+  message: 'This release focuses on editor history, branch navigation, guided AI interaction visibility, and performance-safe project persistence.',
   animated: true,
 };
 

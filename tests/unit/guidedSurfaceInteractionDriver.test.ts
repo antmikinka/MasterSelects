@@ -75,6 +75,15 @@ describe('guided surface interaction driver', () => {
       toJSON: () => ({}),
     });
     document.body.append(surface);
+    useGuidedActionStore.setState({
+      cursor: {
+        visible: true,
+        position: { x: 32, y: 48 },
+        clicking: false,
+        inputGesture: null,
+        toolId: null,
+      },
+    });
 
     const runtime = new GuidedActionRuntime({ targetRegistry: registry });
     const resultPromise = startSurfaceSession(runtime, [
@@ -85,6 +94,7 @@ describe('guided surface interaction driver', () => {
 
     expect(result.status).toBe('completed');
     expect(useTimelineStore.getState().scrollX).toBe(855);
+    expect(useGuidedActionStore.getState().cursor.position).toEqual({ x: 32, y: 48 });
   });
 
   it('keeps button presses visual-only unless a UI execution policy is explicit', async () => {
@@ -110,6 +120,81 @@ describe('guided surface interaction driver', () => {
     await vi.runAllTimersAsync();
     await persisted;
     expect(click).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens timeline tool groups without teleporting or clicking the cursor', async () => {
+    const button = document.createElement('button');
+    document.body.append(button);
+    const target: GuidedTargetRef = { kind: 'button', id: 'timeline-tool-group:cut' };
+    const runtime = new GuidedActionRuntime({
+      targetRegistry: createSingleElementRegistry(target, button),
+    });
+    const openListener = vi.fn();
+    window.addEventListener('guidedOpenTimelineToolGroup', openListener);
+    useGuidedActionStore.setState({
+      cursor: {
+        visible: true,
+        position: { x: 20, y: 25 },
+        clicking: false,
+        inputGesture: null,
+        toolId: null,
+      },
+    });
+
+    try {
+      const resultPromise = startSurfaceSession(runtime, [
+        {
+          type: 'openTimelineToolGroupVisual',
+          groupId: 'cut',
+          targetToolId: 'blade',
+          target,
+        },
+      ]);
+      await vi.runAllTimersAsync();
+      const result = await resultPromise;
+
+      expect(result.status).toBe('completed');
+      expect(openListener).toHaveBeenCalledOnce();
+      expect((openListener.mock.calls[0]?.[0] as CustomEvent).detail).toEqual(expect.objectContaining({
+        groupId: 'cut',
+        targetToolId: 'blade',
+        anchorElement: button,
+      }));
+      expect(useGuidedActionStore.getState().cursor).toEqual(expect.objectContaining({
+        position: { x: 20, y: 25 },
+        clicking: false,
+        inputGesture: null,
+      }));
+    } finally {
+      window.removeEventListener('guidedOpenTimelineToolGroup', openListener);
+    }
+  });
+
+  it('does not open a timeline tool menu when the optional category button is missing', async () => {
+    const runtime = new GuidedActionRuntime({
+      targetRegistry: new GuidedTargetRegistry(),
+    });
+    const openListener = vi.fn();
+    window.addEventListener('guidedOpenTimelineToolGroup', openListener);
+
+    try {
+      const resultPromise = startSurfaceSession(runtime, [
+        {
+          type: 'openTimelineToolGroupVisual',
+          groupId: 'selection',
+          targetToolId: 'select',
+          target: { kind: 'button', id: 'timeline-tool-group:selection' },
+          optional: true,
+        },
+      ]);
+      await vi.runAllTimersAsync();
+      const result = await resultPromise;
+
+      expect(result.status).toBe('completed');
+      expect(openListener).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('guidedOpenTimelineToolGroup', openListener);
+    }
   });
 
   it('draws preview paths through resolved preview points without mutating semantic state', async () => {
@@ -222,7 +307,7 @@ function resetGuidedActionStore(): void {
   useGuidedActionStore.setState({
     activeSession: null,
     currentStep: null,
-    cursor: { visible: false, position: null, clicking: false },
+    cursor: { visible: false, position: null, clicking: false, inputGesture: null },
     dragGhost: null,
     lastUserPointerPosition: null,
     spotlight: null,

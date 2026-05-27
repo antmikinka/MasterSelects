@@ -16,6 +16,7 @@ import type {
   HoveredDockTabTarget,
   SavedDockLayout,
   SavedDockTimelineLayout,
+  PanelConfig,
 } from '../types/dock';
 import { DEPRECATED_PANEL_TYPES, PANEL_CONFIGS } from '../types/dock';
 import {
@@ -37,9 +38,29 @@ const DOCK_LAYOUT_TRANSITION_DURATION_MS = 500;
 
 // Valid panel types (used to filter out removed panels from saved layouts)
 const DEPRECATED_PANEL_TYPE_SET = new Set<PanelType>(DEPRECATED_PANEL_TYPES);
-const VALID_PANEL_TYPES = new Set(
-  (Object.keys(PANEL_CONFIGS) as PanelType[]).filter((type) => !DEPRECATED_PANEL_TYPE_SET.has(type)),
-);
+const BUILT_IN_PANEL_TYPES: PanelType[] = [
+  'preview',
+  'multi-preview',
+  'timeline',
+  'clip-properties',
+  'history',
+  'audio-mixer',
+  'node-workspace',
+  'media',
+  'export',
+  'midi-mapping',
+  'multicam',
+  'ai-chat',
+  'ai-segment',
+  'scene-description',
+  'download',
+  'transitions',
+  'scope-waveform',
+  'scope-histogram',
+  'scope-vectorscope',
+];
+const VALID_PANEL_TYPES = new Set(BUILT_IN_PANEL_TYPES.filter((type) => !DEPRECATED_PANEL_TYPE_SET.has(type)));
+const PANEL_CONFIG_LOOKUP = PANEL_CONFIGS as Partial<Record<PanelType, PanelConfig>>;
 const VALID_TIMELINE_AUDIO_DISPLAY_MODES = new Set(['compact', 'detailed', 'spectral']);
 const VALID_TIMELINE_TRACK_FOCUS_MODES = new Set(['balanced', 'audio', 'video']);
 const LEGACY_PANEL_TYPE_ALIASES: Partial<Record<PanelType, PanelType>> = {
@@ -64,12 +85,23 @@ function resolvePanelType(type: PanelType): PanelType {
   return LEGACY_PANEL_TYPE_ALIASES[type] ?? type;
 }
 
+function getPanelConfig(type: PanelType): PanelConfig {
+  return PANEL_CONFIG_LOOKUP[type] ?? {
+    type,
+    title: type
+      .split('-')
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' '),
+    closable: false,
+  };
+}
+
 function normalizeDockPanel(panel: DockPanel): NormalizedDockPanel | null {
   const normalizedType = resolvePanelType(panel.type);
   if (!VALID_PANEL_TYPES.has(normalizedType)) {
     return null;
   }
-  const configTitle = PANEL_CONFIGS[normalizedType].title;
+  const configTitle = getPanelConfig(normalizedType).title;
   const legacyTitles = LEGACY_PANEL_TITLES[normalizedType];
   const title = normalizedType === panel.type && !legacyTitles?.has(panel.title)
     ? panel.title
@@ -456,6 +488,7 @@ const DEFAULT_LAYOUT: DockLayout = {
                 id: 'right-group',
                 panels: [
                   { id: 'clip-properties', type: 'clip-properties', title: 'Properties' },
+                  { id: 'history', type: 'history', title: 'History' },
                 ],
                 activeIndex: 0,
               },
@@ -474,6 +507,7 @@ const DEFAULT_LAYOUT: DockLayout = {
   floatingPanels: [],
   panelZoom: {
     'clip-properties': 1,
+    history: 1,
   },
 };
 
@@ -482,13 +516,19 @@ const AUDIO_EDIT_LAYOUT: DockLayout = {
     kind: 'split',
     id: 'root-split',
     direction: 'vertical',
-    ratio: 0.6698039215686274,
+    ratio: 0.61,
     children: [
       {
+        kind: 'tab-group',
+        id: 'timeline-group',
+        panels: [{ id: 'timeline', type: 'timeline', title: 'Timeline' }],
+        activeIndex: 0,
+      },
+      {
         kind: 'split',
-        id: 'top-split',
+        id: 'audio-edit-bottom-split',
         direction: 'horizontal',
-        ratio: 0.24,
+        ratio: 0.14,
         children: [
           {
             kind: 'tab-group',
@@ -500,15 +540,15 @@ const AUDIO_EDIT_LAYOUT: DockLayout = {
           },
           {
             kind: 'split',
-            id: 'center-right-split',
+            id: 'audio-edit-mixer-properties-split',
             direction: 'horizontal',
-            ratio: 0.58,
+            ratio: 0.8,
             children: [
               {
                 kind: 'tab-group',
-                id: 'preview-group',
+                id: 'audio-mixer-group',
                 panels: [
-                  { id: 'preview', type: 'preview', title: 'Preview' },
+                  { id: 'audio-mixer', type: 'audio-mixer', title: 'Audio Mixer' },
                 ],
                 activeIndex: 0,
               },
@@ -517,25 +557,20 @@ const AUDIO_EDIT_LAYOUT: DockLayout = {
                 id: 'right-group',
                 panels: [
                   { id: 'clip-properties', type: 'clip-properties', title: 'Properties' },
-                  { id: 'audio-mixer', type: 'audio-mixer', title: 'Audio Mixer' },
+                  { id: 'history', type: 'history', title: 'History' },
                 ],
-                activeIndex: 1,
+                activeIndex: 0,
               },
             ],
           },
         ],
-      },
-      {
-        kind: 'tab-group',
-        id: 'timeline-group',
-        panels: [{ id: 'timeline', type: 'timeline', title: 'Timeline' }],
-        activeIndex: 0,
       },
     ],
   },
   floatingPanels: [],
   panelZoom: {
     'clip-properties': 1,
+    history: 1,
     'audio-mixer': 1,
   },
 };
@@ -603,7 +638,7 @@ const FACTORY_SAVED_DOCK_LAYOUTS: SavedDockLayout[] = [
     layout: AUDIO_EDIT_LAYOUT,
     timeline: AUDIO_EDIT_TIMELINE_LAYOUT,
     createdAt: 0,
-    updatedAt: 1,
+    updatedAt: 2,
     favorite: true,
     factory: true,
   },
@@ -1136,7 +1171,7 @@ export const useDockStore = create<DockState>()(
           const { layout, isPanelTypeVisible } = get();
           if (isPanelTypeVisible(resolvedType)) return; // Already visible
 
-          const config = PANEL_CONFIGS[resolvedType];
+          const config = getPanelConfig(resolvedType);
           const newPanel: DockPanel = {
             id: resolvedType,
             type: resolvedType,
@@ -1200,12 +1235,14 @@ export const useDockStore = create<DockState>()(
         activatePanelType: (type) => {
           const resolvedType = resolvePanelType(type);
           if (!VALID_PANEL_TYPES.has(resolvedType)) return;
-          const { layout, setActiveTab, showPanelType, isPanelTypeVisible, bringToFront } = get();
+          const { setActiveTab, showPanelType, isPanelTypeVisible, bringToFront } = get();
 
           // First make sure the panel is visible
           if (!isPanelTypeVisible(resolvedType)) {
             showPanelType(resolvedType);
           }
+
+          const { layout } = get();
 
           // Find the panel in the layout and activate it
           const result = findPanelAndGroup(layout.root, resolvedType);

@@ -25,6 +25,34 @@ describe('timeline edit replay descriptors', () => {
     expect(descriptor.pointerPath).toHaveLength(2);
   });
 
+  it('maps multi-split operations to one pointer point per cut time', () => {
+    const operation: TimelineEditOperation = {
+      id: 'split-times:clip-1',
+      type: 'split-at-times',
+      clipId: 'clip-1',
+      times: [2, 4, 6, 8],
+      scope: { trackIds: ['video-1'] },
+    };
+
+    const descriptor = createTimelineEditReplayDescriptor(operation);
+
+    expect(descriptor.toolId).toBe('blade');
+    expect(descriptor.targets).toEqual([
+      expect.objectContaining({ target: { kind: 'timelineClip', clipId: 'clip-1' } }),
+      expect.objectContaining({ target: { kind: 'timelineTime', trackId: 'video-1', time: 2 } }),
+      expect.objectContaining({ target: { kind: 'timelineTime', trackId: 'video-1', time: 4 } }),
+      expect.objectContaining({ target: { kind: 'timelineTime', trackId: 'video-1', time: 6 } }),
+      expect.objectContaining({ target: { kind: 'timelineTime', trackId: 'video-1', time: 8 } }),
+    ]);
+    expect(descriptor.pointerPath?.map((point) => point.target)).toEqual([
+      { kind: 'timelineClip', clipId: 'clip-1' },
+      { kind: 'timelineTime', trackId: 'video-1', time: 2 },
+      { kind: 'timelineTime', trackId: 'video-1', time: 4 },
+      { kind: 'timelineTime', trackId: 'video-1', time: 6 },
+      { kind: 'timelineTime', trackId: 'video-1', time: 8 },
+    ]);
+  });
+
   it('maps track-select-all operations to the grouped selection tool', () => {
     const operation: TimelineEditOperation = {
       id: 'select-forward:3',

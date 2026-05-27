@@ -39,7 +39,7 @@ export function MobileOptionsMenu({ isOpen, onClose }: MobileOptionsMenuProps) {
   }, [onClose]);
 
   const handleSave = useCallback(async () => {
-    await saveCurrentProject();
+    await saveCurrentProject({ source: 'manual', label: 'Manual save' });
     onClose();
   }, [onClose]);
 

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import type {
   GuidedPoint,
+  GuidedInputGesture,
   GuidedRuntimeEvent,
   GuidedScheduledAction,
   GuidedSerializableTargetResolution,
@@ -11,12 +12,15 @@ import type {
   GuidedTargetRef,
   GuidedTargetResolution,
 } from '../services/guidedActions/types';
+import type { TimelineToolId } from './timeline/types';
 import { getGuidedTargetKey } from '../services/guidedActions/targetRegistry';
 
 export interface GuidedCursorState {
   visible: boolean;
   position: GuidedPoint | null;
   clicking: boolean;
+  inputGesture: GuidedInputGesture | null;
+  toolId: TimelineToolId | null;
   transitionMs?: number;
 }
 
@@ -94,6 +98,8 @@ const INITIAL_CURSOR: GuidedCursorState = {
   visible: false,
   position: null,
   clicking: false,
+  inputGesture: null,
+  toolId: null,
 };
 
 export const useGuidedActionStore = create<GuidedActionStoreState>()(
@@ -122,6 +128,8 @@ export const useGuidedActionStore = create<GuidedActionStoreState>()(
               visible: true,
               position: previousPosition,
               clicking: false,
+              inputGesture: null,
+              toolId: null,
               transitionMs: 0,
             }
           : {
@@ -144,7 +152,7 @@ export const useGuidedActionStore = create<GuidedActionStoreState>()(
     },
 
     completeCurrentStep: () => {
-      set({ currentStep: null, cursor: { ...get().cursor, clicking: false } });
+      set({ currentStep: null, cursor: { ...get().cursor, clicking: false, inputGesture: null } });
     },
 
     setCursor: (cursor) => {
@@ -318,6 +326,7 @@ function shouldPrimeCursorForSession(
     || action.type === 'dragCursor'
     || action.type === 'clickVisual'
     || action.type === 'doubleClickVisual'
+    || action.type === 'showInputGesture'
   ));
 }
 export type { GuidedSessionPlan };

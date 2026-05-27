@@ -163,4 +163,57 @@ describe('FrameContext clipsAtTime', () => {
     expect(ctx.playheadPosition).toBe(12);
     expect(ctx.clipsAtTime.map(clip => clip.id)).toEqual(['clip-b']);
   });
+
+  it('uses clip drag preview patches when resolving active clips', () => {
+    const clip = createMockClip({
+      id: 'clip-a',
+      trackId: 'video-1',
+      startTime: 20,
+      duration: 5,
+      inPoint: 0,
+      outPoint: 5,
+    });
+
+    hoisted.timelineState = createTimelineState({
+      clips: [clip],
+      playheadPosition: 10,
+      clipDragPreview: {
+        patches: {
+          'clip-a': { startTime: 8 },
+        },
+      },
+    });
+
+    const ctx = createFrameContext();
+
+    expect(ctx.clipsAtTime.map(activeClip => activeClip.id)).toEqual(['clip-a']);
+    expect(ctx.clipsAtTime[0].startTime).toBe(8);
+    expect(clip.startTime).toBe(20);
+  });
+
+  it('removes an originally active clip when drag preview moves it away from the playhead', () => {
+    const clip = createMockClip({
+      id: 'clip-a',
+      trackId: 'video-1',
+      startTime: 8,
+      duration: 5,
+      inPoint: 0,
+      outPoint: 5,
+    });
+
+    hoisted.timelineState = createTimelineState({
+      clips: [clip],
+      playheadPosition: 10,
+      clipDragPreview: {
+        patches: {
+          'clip-a': { startTime: 20 },
+        },
+      },
+    });
+
+    const ctx = createFrameContext();
+
+    expect(ctx.clipsAtTime).toEqual([]);
+    expect(clip.startTime).toBe(8);
+  });
 });

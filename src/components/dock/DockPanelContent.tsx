@@ -25,6 +25,7 @@ const WaveformPanel = lazy(() => import('../panels/scopes/WaveformPanel').then(m
 const HistogramPanel = lazy(() => import('../panels/scopes/HistogramPanel').then(m => ({ default: m.HistogramPanel })));
 const VectorscopePanel = lazy(() => import('../panels/scopes/VectorscopePanel').then(m => ({ default: m.VectorscopePanel })));
 const MultiPreviewPanel = lazy(() => import('../preview/MultiPreviewPanel').then(m => ({ default: m.MultiPreviewPanel })));
+const HistoryPanel = lazy(() => import('../panels/HistoryPanel').then(m => ({ default: m.HistoryPanel })));
 
 const DEFAULT_MULTI_PREVIEW_DATA: MultiPreviewPanelData = {
   sourceCompositionId: null,
@@ -68,6 +69,8 @@ export function DockPanelContent({ panel }: DockPanelContentProps) {
       return <Timeline />;
     case 'media':
       return <MediaPanel />;
+    case 'history':
+      return <Suspense fallback={<PanelLoading />}><HistoryPanel /></Suspense>;
     case 'midi-mapping':
       return <Suspense fallback={<PanelLoading />}><MIDIMappingPanel /></Suspense>;
     case 'multicam':

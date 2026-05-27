@@ -107,7 +107,7 @@ function isGuidedLegacyFeedback(value: unknown): value is NonNullable<AIToolExec
 }
 
 function clampGuidedReplayBudgetMs(value: number): number {
-  return Math.max(0, Math.min(10000, Math.round(value)));
+  return Math.max(0, Math.round(value));
 }
 
 function collectDebugState(scope: string = 'all') {

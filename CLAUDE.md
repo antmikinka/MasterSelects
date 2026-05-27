@@ -83,6 +83,35 @@ Interpretation:
 - Windows-`requestAdapter(powerPreference)`-Warnungen und NativeHelper-WebSocket-Fehler sind nicht automatisch Exportblocker.
 - Bei Video-only-Timeline muss `FrameExporter` Audio ueberspringen; langer Start bei "Rendering audio" weist auf Audio-Range-Erkennung hin.
 
+## 0.2 Codex Session Usage Monitoring
+
+Fuer laengere Codex-/Agent-Arbeit soll nach Moeglichkeit der lokale Usage-Watcher mitlaufen:
+
+```bash
+npm run codex:usage:watch
+```
+
+Einmalige Auswertung:
+
+```bash
+npm run codex:usage
+```
+
+Versteckten Watcher stoppen:
+
+```bash
+npm run codex:usage:stop
+```
+
+Der Watcher liest `~/.codex/sessions`, filtert auf dieses Repo, gruppiert `token_count`-Events pro User-Turn und schreibt lokale Reports nach `.codex-usage/`:
+
+- `turns.jsonl`: maschinenlesbare Turn-Kosten, Fragen, Status, Tool-Nutzung und Git-Snapshots
+- `sessions.json`: Session-Summary
+- `report.md`: lesbarer Kosten-/Strategie-Report
+- `state.json`: Watcher-State fuer Commit-Zuordnung
+
+`.codex-usage/` bleibt lokal und ist in Git ignoriert. Exakte Commit-Zuordnung funktioniert nur fuer Turns, die beobachtet wurden, waehrend `codex:usage:watch` lief; historische Sessions bekommen nur den beim Report beobachteten Git-Stand.
+
 ---
 
 ## 1. Workflow (WICHTIG!)

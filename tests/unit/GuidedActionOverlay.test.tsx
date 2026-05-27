@@ -47,7 +47,12 @@ describe('GuidedActionOverlay', () => {
     useGuidedActionStore.setState({
       activeSession: session,
       currentStep: plan.actions[0] ?? null,
-      cursor: { visible: true, position: { x: 160, y: 90 }, clicking: true },
+      cursor: {
+        visible: true,
+        position: { x: 160, y: 90 },
+        clicking: true,
+        inputGesture: { kind: 'mouse-left', label: 'LMB', detail: 'Click' },
+      },
       spotlight: target,
       callout: { title: 'Adjust position', body: 'Drag the X value.', target },
       highlights: [{
@@ -83,6 +88,7 @@ describe('GuidedActionOverlay', () => {
     expect(callout?.style.left).toBe('');
     expect(callout?.style.top).toBe('');
     expect(container.querySelector('.guided-cursor--clicking')).not.toBeNull();
+    expect(screen.getByText('LMB')).toBeTruthy();
     expect(container.querySelector('.guided-spotlight')).not.toBeNull();
     expect(container.querySelector('.guided-target-highlight--primary')).not.toBeNull();
     expect(container.querySelector('.guided-preview-path')).not.toBeNull();
@@ -169,7 +175,7 @@ describe('GuidedActionOverlay', () => {
     useGuidedActionStore.setState({
       activeSession: session,
       currentStep: plan.actions[0] ?? null,
-      cursor: { visible: true, position: { x: 160, y: 90 }, clicking: true },
+      cursor: { visible: true, position: { x: 160, y: 90 }, clicking: true, inputGesture: null },
       spotlight: target,
       callout: { title: 'Should not render', target },
       highlights: [{
@@ -199,7 +205,7 @@ function resetGuidedActionStore(): void {
   useGuidedActionStore.setState({
     activeSession: null,
     currentStep: null,
-    cursor: { visible: false, position: null, clicking: false },
+    cursor: { visible: false, position: null, clicking: false, inputGesture: null },
     lastUserPointerPosition: null,
     spotlight: null,
     callout: null,

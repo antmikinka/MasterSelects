@@ -23,6 +23,7 @@ import { useFlashBoardStore } from '../../stores/flashboardStore';
 import { createDefaultFlashBoardComposer } from '../../stores/flashboardStore/defaults';
 import { useExportStore } from '../../stores/exportStore';
 import { useMIDIStore } from '../../stores/midiStore';
+import { hydrateHistoryStateFromProject } from '../../stores/historyStore';
 import { flashBoardMediaBridge } from '../flashboard/FlashBoardMediaBridge';
 import { cloneClipNodeGraph } from '../nodeGraph';
 import type {
@@ -1257,6 +1258,7 @@ export async function loadProjectToStores(): Promise<void> {
   });
 
   useExportStore.getState().hydrateFromProject(projectData.uiState?.exportState);
+  hydrateHistoryStateFromProject(projectData.uiState?.history);
 
   // Reload API keys (may have been restored from .keys.enc during loadProject)
   await useSettingsStore.getState().loadApiKeys();

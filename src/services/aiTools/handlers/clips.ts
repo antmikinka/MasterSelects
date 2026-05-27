@@ -193,13 +193,14 @@ export async function handleSplitClip(
   args: Record<string, unknown>,
   timelineStore: TimelineStore
 ): Promise<ToolResult> {
-  const clipId = args.clipId as string;
+  const requestedClipId = args.clipId as string;
   const splitTime = args.splitTime as number;
   const withLinked = (args.withLinked as boolean | undefined) ?? true;
+  const clip = resolveSplitClipTarget(timelineStore, requestedClipId, splitTime, args);
+  const clipId = clip?.id ?? requestedClipId;
 
-  const clip = timelineStore.clips.find(c => c.id === clipId);
   if (!clip) {
-    return { success: false, error: `Clip not found: ${clipId}` };
+    return { success: false, error: `Clip not found: ${requestedClipId}` };
   }
 
   const clipEnd = clip.startTime + clip.duration;
@@ -239,6 +240,29 @@ export async function handleSplitClip(
   }
 
   return { success: true, data: { splitAt: splitTime, originalClipId: clipId, withLinked } };
+}
+
+function resolveSplitClipTarget(
+  timelineStore: TimelineStore,
+  clipId: string,
+  splitTime: number,
+  args: Record<string, unknown>,
+): TimelineClip | undefined {
+  const direct = timelineStore.clips.find(c => c.id === clipId);
+  if (direct) return direct;
+
+  const fallbackTrackId = typeof args.guidedResolveClipAtTimeTrackId === 'string'
+    ? args.guidedResolveClipAtTimeTrackId
+    : null;
+  if (!fallbackTrackId || typeof splitTime !== 'number' || !Number.isFinite(splitTime)) {
+    return undefined;
+  }
+
+  return timelineStore.clips.find((candidate) => (
+    candidate.trackId === fallbackTrackId
+    && splitTime > candidate.startTime
+    && splitTime < candidate.startTime + candidate.duration
+  ));
 }
 
 export async function handleDeleteClip(
@@ -884,10 +908,30 @@ export async function handleAddClipSegment(
     return { success: false, error: 'Failed to create clip' };
   }
 
-  // Trim all new clips (video + linked audio) to the desired segment
-  const ts = useTimelineStore.getState();
+  // Trim all new clips (video + linked audio) through the shared operation
+  // kernel so export-lock, history, and linked-pair policy stay centralized.
+  const trimmedClipIds = new Set<string>();
   for (const clip of newClips) {
-    ts.trimClip(clip.id, inPoint, outPoint);
+    if (trimmedClipIds.has(clip.id)) continue;
+    const trimResult = useTimelineStore.getState().applyTimelineEditOperation({
+      id: `ai-insert-media-trim:${clip.id}:${inPoint}:${outPoint}`,
+      type: 'trim-clip',
+      clipId: clip.id,
+      inPoint,
+      outPoint,
+      includeLinked: true,
+    }, {
+      source: 'ai-tool',
+      historyLabel: 'AI: trim inserted media clip',
+    });
+    if (!trimResult.success) {
+      return {
+        success: false,
+        error: trimResult.warnings.map((warning) => warning.message).join(' ') || 'Failed to trim inserted media clip',
+      };
+    }
+    trimmedClipIds.add(clip.id);
+    if (clip.linkedClipId) trimmedClipIds.add(clip.linkedClipId);
   }
 
   // Return info about created clips

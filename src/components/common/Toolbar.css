@@ -394,10 +394,18 @@
 
 .menu-nested-submenu-layouts {
   min-width: 320px;
+  max-height: calc(100vh - 56px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .menu-nested-submenu-panels {
   min-width: 240px;
+  max-height: calc(100vh - 56px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .menu-nested-submenu-recent {

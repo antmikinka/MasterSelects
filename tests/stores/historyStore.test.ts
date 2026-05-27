@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useHistoryStore, initHistoryStoreRefs, setHistoryCallbacks, captureSnapshot as captureSnapshotFn, undo as undoFn, redo as redoFn, startBatch as startBatchFn, endBatch as endBatchFn } from '../../src/stores/historyStore';
+import { useHistoryStore, initHistoryStoreRefs, setHistoryCallbacks, captureSnapshot as captureSnapshotFn, undo as undoFn, redo as redoFn, startBatch as startBatchFn, endBatch as endBatchFn, serializeHistoryStateForProject, hydrateHistoryStateFromProject } from '../../src/stores/historyStore';
 import type { Layer, TimelineClip } from '../../src/types';
 import { createMockClip } from '../helpers/mockData';
 
@@ -234,6 +234,17 @@ describe('historyStore', () => {
     expect(useHistoryStore.getState().redoStack.length).toBe(1);
   });
 
+  it('undo: returns the label of the action being undone', () => {
+    useHistoryStore.getState().captureSnapshot('initial');
+
+    mocks.setTimelineState({ zoom: 100 });
+    useHistoryStore.getState().captureSnapshot('zoom change');
+
+    const result = useHistoryStore.getState().undo();
+
+    expect(result).toEqual({ operation: 'undo', label: 'zoom change' });
+  });
+
   it('redo: restores undone state', () => {
     useHistoryStore.getState().captureSnapshot('initial');
 
@@ -249,6 +260,18 @@ describe('historyStore', () => {
     expect(useHistoryStore.getState().undoStack.length).toBe(1);
   });
 
+  it('redo: returns the label of the action being redone', () => {
+    useHistoryStore.getState().captureSnapshot('initial');
+
+    mocks.setTimelineState({ zoom: 100 });
+    useHistoryStore.getState().captureSnapshot('zoom 100');
+    useHistoryStore.getState().undo();
+
+    const result = useHistoryStore.getState().redo();
+
+    expect(result).toEqual({ operation: 'redo', label: 'zoom 100' });
+  });
+
   it('canUndo / canRedo: reflect stack state', () => {
     expect(useHistoryStore.getState().canUndo()).toBe(false);
     expect(useHistoryStore.getState().canRedo()).toBe(false);
@@ -262,6 +285,61 @@ describe('historyStore', () => {
     useHistoryStore.getState().undo();
     expect(useHistoryStore.getState().canUndo()).toBe(false);
     expect(useHistoryStore.getState().canRedo()).toBe(true);
+  });
+
+  it('getHistoryEntries: lists undoable, current, and redoable snapshots', () => {
+    useHistoryStore.getState().captureSnapshot('a');
+    useHistoryStore.getState().captureSnapshot('b');
+    useHistoryStore.getState().captureSnapshot('c');
+
+    useHistoryStore.getState().undo();
+
+    expect(useHistoryStore.getState().getHistoryEntries().map((entry) => ({
+      kind: entry.kind,
+      label: entry.label,
+    }))).toEqual([
+      { kind: 'undoable', label: 'a' },
+      { kind: 'current', label: 'b' },
+      { kind: 'redoable', label: 'c' },
+    ]);
+  });
+
+  it('project persistence: serializes and hydrates visible history metadata', () => {
+    mocks.setTimelineState({ zoom: 10 });
+    useHistoryStore.getState().captureSnapshot('zoom 10');
+    mocks.setTimelineState({ zoom: 20 });
+    useHistoryStore.getState().captureSnapshot('zoom 20');
+
+    const persisted = serializeHistoryStateForProject();
+    useHistoryStore.getState().clearHistory();
+    mocks.setTimelineState({ zoom: 999 });
+
+    hydrateHistoryStateFromProject(persisted);
+    expect(useHistoryStore.getState().getHistoryEntries().map((entry) => entry.label))
+      .toEqual(['zoom 10', 'zoom 20']);
+
+    expect(useHistoryStore.getState().undo()).toBeNull();
+    expect(mocks.timeline.getState().zoom).toBe(999);
+  });
+
+  it('project persistence: strips browser-only media payloads from snapshots', () => {
+    const file = new File(['payload'], 'clip.mp4', { type: 'video/mp4' });
+    mocks.setMediaState({
+      files: [
+        mockMediaFile({
+          file,
+          url: 'blob:video-url',
+          thumbnailUrl: 'blob:thumb-url',
+          proxyVideoUrl: 'blob:proxy-url',
+        }),
+      ],
+    });
+
+    useHistoryStore.getState().captureSnapshot('with media file');
+    const serialized = JSON.stringify(serializeHistoryStateForProject());
+
+    expect(serialized).not.toContain('blob:');
+    expect(serialized).not.toContain('"file"');
   });
 
   // ─── Batch operations ────────────────────────────────────────────────

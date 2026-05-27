@@ -58,9 +58,9 @@ Live routing uses `audioRoutingManager` when EQ, pan, above-unity gain, Aux send
 ## Waveforms
 
 - Audio clips generate waveforms from decoded audio data.
-- Import-time waveform generation produces the lightweight legacy preview first and finishes the timeline progress indicator without waiting for source waveform-pyramid artifact storage.
+- Import-time waveform generation produces the lightweight legacy preview first, then writes the source waveform-pyramid artifact to the active project artifact store so later timeline placements can reuse it.
 - Lightweight waveform previews preserve stereo and multichannel peak lanes in `waveformChannels`; the legacy `waveform` array remains an aggregate fallback for old projects and analysis helpers.
-- Timeline context-menu waveform regeneration refreshes only the lightweight preview; high-resolution source artifacts remain lazy detail-analysis jobs.
+- Timeline context-menu waveform regeneration refreshes the lightweight preview on request; source waveform-pyramid artifacts are generated at import time and reused by dragged timeline clips.
 - Source waveform pyramids and processed waveform pyramids can be stored as audio analysis artifacts.
 - Source and processed loudness envelopes can be stored as artifact-backed LUFS/RMS/peak curve payloads with summary metrics.
 - Source and processed beat grids/onset maps can be stored as artifact-backed spectral-flux event lists for node, repair, and edit workflows.
@@ -71,7 +71,7 @@ Live routing uses `audioRoutingManager` when EQ, pan, above-unity gain, Aux send
 - Processed spectrograms are keyed by the same clip audio-state hash as processed waveforms, so edit-stack, speed, reverse, mute, and audio effects get their own stale-safe spectral display.
 - Node Workspace audio ports can generate/refresh waveform, processed waveform, spectrogram, loudness, beat, onset, phase, and frequency-summary artifacts from the node inspector. AI/custom-node authoring and runtime context receive bounded artifact refs, cached loudness/frequency/phase summaries, and clip/track/master routing snapshots without exposing raw audio buffers.
 - Spectrogram, loudness, beat/onset, and frequency/phase timeline jobs share `ClipAudioAnalysisOrchestrator` for source/processed buffer preparation and expose a semantic `audioAnalysisJob` while keeping the legacy waveform progress indicator compatible.
-- Source waveform pyramids are generated lazily when Detailed Audio mode is active, when compact mode reaches deep zoom, or when an explicit waveform analysis job runs; normal compact zoom keeps using the fast legacy preview.
+- Source waveform pyramids are generated during import, with lazy upgrade remaining as a fallback for legacy media or clips that have only a lightweight waveform preview.
 - Source waveform-pyramid bucket analysis yields back to the browser between bounded sample chunks so timeout/cancel signals can be handled and the timeline does not freeze during detailed analysis.
 - Nested composition clips generate waveforms from the mixed-down buffer when available.
 - Large files are skipped: audio-only files above 4 GB and video files above 500 MB.

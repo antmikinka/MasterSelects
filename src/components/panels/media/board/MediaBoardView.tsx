@@ -2,7 +2,7 @@ import React from 'react';
 import type { Composition, MediaFile, MediaFolder, ProjectItem, SolidItem, TextItem } from '../../../../stores/mediaStore';
 import { mediaNeedsRelink } from '../../../../services/project/relinkMedia';
 import { FileTypeIcon } from '../FileTypeIcon';
-import { getItemImportProgress, isImportedMediaFileItem } from '../itemTypeGuards';
+import { getItemImportProgress, getItemWaveformProgress, isImportedMediaFileItem } from '../itemTypeGuards';
 import { getLabelHex } from '../labelColors';
 import { MEDIA_BOARD_GRID_PARALLAX } from './constants';
 import { getMediaBoardOrderKey, getMediaBoardTypeLabel, isMediaBoardFolder } from './layout';
@@ -121,6 +121,7 @@ function MediaBoardNode({
   const thumbUrl = mediaFile?.thumbnailUrl;
   const duration = mediaFile?.duration || comp?.duration;
   const importProgress = getItemImportProgress(item);
+  const waveformProgress = getItemWaveformProgress(item);
   const labelHex = 'labelColor' in item ? getLabelHex(item.labelColor) : 'transparent';
   const title = buildTooltip(item, false, isComp);
   const splatStatsLabel = mediaFile?.type === 'gaussian-splat'
@@ -197,6 +198,12 @@ function MediaBoardNode({
         )}
         {!isCompactNode && duration ? <span className="media-board-duration">{formatDuration(duration)}</span> : null}
         {!isCompactNode && importProgress !== null ? <span className="media-board-progress">{importProgress}%</span> : null}
+        {!isCompactNode && importProgress === null && waveformProgress !== null ? (
+          <span className="media-board-waveform-progress" title={`Generating waveform: ${waveformProgress}%`}>
+            <span className="waveform-progress-mark">W</span>
+            <span>{waveformProgress}%</span>
+          </span>
+        ) : null}
         <span
           className="media-board-node-timeline-drag"
           draggable={importProgress === null}
