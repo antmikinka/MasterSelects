@@ -174,6 +174,7 @@ function convertCompositions(compositions: Composition[]): ProjectComposition[] 
       name: t.name,
       type: t.type,
       height: t.height || 60,
+      labelColor: t.labelColor && t.labelColor !== 'none' ? t.labelColor : undefined,
       locked: t.locked || false,
       visible: t.visible !== false,
       muted: t.muted || false,

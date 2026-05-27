@@ -42,6 +42,7 @@ import type {
 } from '../../types';
 import type { MotionColor, MotionLayerDefinition, ShapePrimitive } from '../../types/motionDesign';
 import type { Composition } from '../mediaStore';
+import type { LabelColor } from '../mediaStore/types';
 import type { VectorAnimationClipSettings } from '../../types/vectorAnimation';
 import type { MarkerMIDIBinding } from '../../types/midi';
 import type { AudioSilenceDetectionOptions, AudioSilenceRange } from '../../services/audio/audioSilenceDetection';
@@ -299,6 +300,7 @@ export interface TrackActions {
   addTrack: (type: 'video' | 'audio') => string;
   removeTrack: (id: string) => void;
   renameTrack: (id: string, name: string) => void;
+  setTrackLabelColor: (id: string, labelColor: LabelColor) => void;
   setTrackMuted: (id: string, muted: boolean) => void;
   setTrackVisible: (id: string, visible: boolean) => void;
   setTrackSolo: (id: string, solo: boolean) => void;

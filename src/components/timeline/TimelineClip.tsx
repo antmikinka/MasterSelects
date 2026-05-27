@@ -1,12 +1,13 @@
 // TimelineClip component - Clip rendering within tracks
 
 import './TimelineClip.css';
-import { memo, useRef, useState, useEffect, useCallback, useMemo } from 'react';
+import { memo, type CSSProperties, useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import type { TimelineClipProps } from './types';
 import { THUMB_WIDTH } from './constants';
 import { useTimelineStore } from '../../stores/timeline';
 import { useMediaStore } from '../../stores/mediaStore';
 import { getLabelHex } from '../panels/media/labelColors';
+import { getTimelineTrackColor, TIMELINE_TRACK_COLOR_HIDDEN } from './trackColor';
 // PickWhip disabled
 import { Logger } from '../../services/logger';
 import {
@@ -216,6 +217,7 @@ function TimelineClipComponent({
   const waveformsEnabled = useTimelineStore(s => s.waveformsEnabled);
   const audioDisplayMode = useTimelineStore(s => s.audioDisplayMode);
   const audioFocusMode = useTimelineStore(s => s.audioFocusMode);
+  const timelineTrackColorsVisible = useTimelineStore(s => s.audioLayerAdvancedMode !== false);
   const audioRegionSelection = useTimelineStore(s =>
     s.audioRegionSelection?.clipId === clip.id ? s.audioRegionSelection : null
   );
@@ -1163,6 +1165,11 @@ function TimelineClipComponent({
   // Check if this clip is part of a multi-select drag
   const isInMultiSelectDrag = clipDrag?.multiSelectClipIds?.includes(clip.id) && clipDrag.multiSelectTimeDelta !== undefined;
   const isTrackLocked = track.locked === true;
+  const trackTypeIndex = useMemo(
+    () => tracks.filter(candidate => candidate.type === track.type).findIndex(candidate => candidate.id === track.id),
+    [track.id, track.type, tracks],
+  );
+  const trackColor = timelineTrackColorsVisible ? getTimelineTrackColor(track, trackTypeIndex) : TIMELINE_TRACK_COLOR_HIDDEN;
 
   const clipClass = [
     'timeline-clip',
@@ -1521,30 +1528,35 @@ function TimelineClipComponent({
   if (clip.trackId !== trackId && !isDragging) {
     return null;
   }
+  const clipStyle = {
+    left,
+    width,
+    cursor: isTrackLocked ? 'not-allowed' : toolMode === 'cut' ? 'crosshair' : undefined,
+    animationDelay: `${animationDelay}s`,
+    '--track-color': trackColor,
+    // FLIP move animation: initial phase applies offset transform, animating phase transitions to 0
+    ...(aiMovePhase === 'initial' && aiMove ? {
+      transform: `translateX(${timeToPixel(aiMove.fromStartTime) - left}px)`,
+    } : aiMovePhase === 'animating' && aiMove ? {
+      transform: 'translateX(0)',
+      transition: `transform ${aiMove.animationDuration}ms cubic-bezier(0.22, 1, 0.36, 1)`,
+    } : {}),
+    ...(isAudioClip && audioFocusMode ? {
+      background: `linear-gradient(180deg, color-mix(in srgb, ${trackColor} 72%, #202326), color-mix(in srgb, ${trackColor} 34%, #101214))`,
+      borderColor: trackColor,
+    } : isSolidClip && clip.solidColor ? {
+      background: clip.solidColor,
+      borderColor: clip.solidColor,
+    } : mediaLabelHex ? {
+      background: mediaLabelHex,
+      borderColor: mediaLabelHex,
+    } : {}),
+  } as CSSProperties & { '--track-color'?: string };
 
   return (
     <div
       className={`${clipClass}${toolMode === 'cut' ? ' cut-mode' : ''} ${animationClass}`}
-      style={{
-        left,
-        width,
-        cursor: isTrackLocked ? 'not-allowed' : toolMode === 'cut' ? 'crosshair' : undefined,
-        animationDelay: `${animationDelay}s`,
-        // FLIP move animation: initial phase applies offset transform, animating phase transitions to 0
-        ...(aiMovePhase === 'initial' && aiMove ? {
-          transform: `translateX(${timeToPixel(aiMove.fromStartTime) - left}px)`,
-        } : aiMovePhase === 'animating' && aiMove ? {
-          transform: 'translateX(0)',
-          transition: `transform ${aiMove.animationDuration}ms cubic-bezier(0.22, 1, 0.36, 1)`,
-        } : {}),
-        ...(isSolidClip && clip.solidColor ? {
-          background: clip.solidColor,
-          borderColor: clip.solidColor,
-        } : mediaLabelHex ? {
-          background: mediaLabelHex,
-          borderColor: mediaLabelHex,
-        } : {}),
-      }}
+      style={clipStyle}
       data-clip-id={clip.id}
       onMouseDown={isTrackLocked || toolMode === 'cut' ? undefined : onMouseDown}
       onDoubleClick={toolMode === 'cut' ? undefined : onDoubleClick}

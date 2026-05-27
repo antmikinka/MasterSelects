@@ -222,7 +222,7 @@ The toolbar and wheel gestures still drive playback and navigation:
 - Markers can be turned into `Stop Marker`s that automatically pause playback when crossed.
 - Marker MIDI bindings support `Jump To Marker`, `Play From Marker`, and `Jump To Marker And Stop`.
 - Left/Right arrows step frame by frame.
-- The ruler and lane grid use the active composition frame rate at deep zoom, showing one line per frame when frames are visually resolvable; at wider zooms they collapse back to readable time ticks.
+- The ruler and lane grid use the active composition frame rate at deep zoom. The base time grid crossfades out while frame-accurate grid lines fade in with zoom before the ruler switches to frame timecode labels.
 - `Alt+Scroll` or `Ctrl+Scroll` zooms the timeline around the playhead.
 - `Shift+Scroll` pans horizontally.
 - Vertical scroll snaps to track boundaries.

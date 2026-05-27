@@ -121,16 +121,17 @@ Media Panel image, video, and audio files can also be dragged onto the prompt co
 
 ## Access Rules
 
-The prompt tray is gated by the same AI access conditions:
+The prompt tray is Cloud-first by default:
 
-- if a Kie.ai key is present, the composer uses Kie.ai
-- if there is no Kie.ai key but the user is signed in, the composer uses hosted Cloud
-- if only an ElevenLabs key is present, the composer uses ElevenLabs audio
-- if none is available, the Media Panel generator tray shows the access overlay
+- signed-in users see hosted Cloud models and hosted credit prices by default
+- personal API-key providers stay hidden until the API-key settings section is unlocked with the internal shortcut
+- a personal key is only used when the key exists and that provider is marked `Use as default instead of Cloud credits`
+- if no personal key is marked as default, matching Cloud models are selected and priced in MasterSelects credits
+- BYO-only providers such as PiAPI, EvoLink, BYO ElevenLabs, and Suno are only exposed when their backing personal key is enabled as default
 
 Hosted generation requests are credit-backed and authenticated. There is no anonymous hosted generation path.
 Hosted ElevenLabs speech is metered by text length. The client shows a preflight credit estimate from the selected text/model, and the Cloudflare route finalizes the charge from the ElevenLabs `x-character-count` response header when available.
-Suno currently uses the user-entered Kie.ai key rather than a separate Suno key or hosted credit route.
+Suno currently uses a Kie.ai key marked as default rather than a separate Suno key or hosted credit route.
 
 ---
 

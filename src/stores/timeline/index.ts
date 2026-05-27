@@ -35,6 +35,7 @@ import { createPositioningUtils } from './positioningUtils';
 import { createSerializationUtils } from './serializationUtils';
 import { Logger } from '../../services/logger';
 import { lockTimelineEditActions } from './exportEditLock';
+import { readStoredAudioLayerAdvancedMode } from './viewPreferences';
 
 const log = Logger.create('Timeline');
 
@@ -197,7 +198,7 @@ export const useTimelineStore = create<TimelineStore>()(
       thumbnailsEnabled: true,
       waveformsEnabled: true,
       audioDisplayMode: 'detailed' as const,
-      audioLayerAdvancedMode: true,
+      audioLayerAdvancedMode: readStoredAudioLayerAdvancedMode(true),
       audioFocusMode: false,
       trackFocusMode: 'balanced' as const,
       audioRegionSelection: null,

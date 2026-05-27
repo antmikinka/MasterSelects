@@ -8,6 +8,7 @@ import { getRuntimeFrameProvider } from '../../services/mediaRuntime/runtimePlay
 import { playheadState, sanitizePlayheadPosition } from '../../services/layerBuilder/PlayheadState';
 import { resolvePlaybackStartPosition } from './playbackRange';
 import { prewarmProxyFramesForTimelinePosition } from '../../services/proxyFramePrewarm';
+import { persistAudioLayerAdvancedMode } from './viewPreferences';
 
 function createPlaybackWarmupRequestId(): string {
   return `playback-warmup-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -339,11 +340,16 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
   },
 
   setAudioLayerAdvancedMode: (enabled) => {
+    persistAudioLayerAdvancedMode(enabled);
     set({ audioLayerAdvancedMode: enabled });
   },
 
   toggleAudioLayerAdvancedMode: () => {
-    set((state) => ({ audioLayerAdvancedMode: !(state.audioLayerAdvancedMode !== false) }));
+    set((state) => {
+      const audioLayerAdvancedMode = !(state.audioLayerAdvancedMode !== false);
+      persistAudioLayerAdvancedMode(audioLayerAdvancedMode);
+      return { audioLayerAdvancedMode };
+    });
   },
 
   setAudioFocusMode: (enabled) => {

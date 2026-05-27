@@ -287,6 +287,18 @@ export const createTrackSlice: SliceCreator<TrackActions> = (set, get) => ({
     });
   },
 
+  setTrackLabelColor: (id, labelColor) => {
+    const { tracks } = get();
+    set({
+      tracks: tracks.map(t => t.id === id
+        ? {
+            ...t,
+            labelColor: labelColor === 'none' ? undefined : labelColor,
+          }
+        : t),
+    });
+  },
+
   setTrackMuted: (id, muted) => {
     const { tracks } = get();
     set({

@@ -208,6 +208,14 @@ describe('trackSlice', () => {
   });
 
   // ──────────────────────────────────────────────────
+  it('setTrackLabelColor: updates and clears track label color', () => {
+    store.getState().setTrackLabelColor('audio-1', 'aqua');
+    expect(store.getState().tracks.find(t => t.id === 'audio-1')!.labelColor).toBe('aqua');
+
+    store.getState().setTrackLabelColor('audio-1', 'none');
+    expect(store.getState().tracks.find(t => t.id === 'audio-1')!.labelColor).toBeUndefined();
+  });
+
   // setTrackMuted
   // ──────────────────────────────────────────────────
 

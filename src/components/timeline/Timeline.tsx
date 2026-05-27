@@ -2,6 +2,7 @@
 // Composes TimelineRuler, TimelineControls, TimelineHeader, TimelineTrack, TimelineClip, TimelineKeyframes
 
 import { useRef, useState, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
+import { IconFlag3Filled, IconMapPinFilled } from '@tabler/icons-react';
 import './Timeline.css';
 import './TimelineTracks.css';
 import { useShallow } from 'zustand/react/shallow';
@@ -53,17 +54,20 @@ import { usePickWhipDrag } from './hooks/usePickWhipDrag';
 import { useTimelineHelpers } from './hooks/useTimelineHelpers';
 import { usePlayheadSnap } from './hooks/usePlayheadSnap';
 import { useMarkerDrag } from './hooks/useMarkerDrag';
-import { MIN_ZOOM, MAX_ZOOM } from '../../stores/timeline/constants';
+import { MIN_ZOOM, MAX_ZOOM, MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT } from '../../stores/timeline/constants';
 import type { TimelineTrackFocusMode } from '../../stores/timeline/types';
-import type { ClipKeyframeTimeGroup, ContextMenuState, TimelineRulerCacheRange } from './types';
+import type { ClipKeyframeTimeGroup, ContextMenuState, TimelineControlsProps, TimelineRulerCacheRange } from './types';
 import { isProxyFrameCountComplete } from '../../stores/mediaStore/helpers/proxyCompleteness';
 import { parseVectorAnimationStateProperty } from '../../types/vectorAnimation';
 import { createSubcompositionFromSelection } from '../../services/timelineSubcomposition';
 import { getTimelineTrackBaseHeight } from './utils/timelineAudioLayout';
+import { getTimelineTrackColor, TIMELINE_TRACK_COLOR_HIDDEN } from './trackColor';
 
 const KEYFRAME_TIME_GROUP_PRECISION = 1000;
 const RAM_PREVIEW_FEATURE_ENABLED = false;
-const TRACK_HEADER_WIDTH = 210;
+const DEFAULT_TRACK_HEADER_WIDTH = 210;
+const MIN_TRACK_HEADER_WIDTH = 150;
+const MAX_TRACK_HEADER_WIDTH = 340;
 const SPLIT_DIVIDER_HEIGHT = 2;
 const COLLAPSED_TRACK_HEIGHT = 32;
 const MIN_SPLIT_SECTION_HEIGHT = 48;
@@ -86,6 +90,17 @@ type KeyframeAreaRevealSnapshot = {
   viewportHeight: number;
   keyframeAreaTop: number;
   keyframeAreaBottom: number;
+};
+
+type TrackResizeDragState = {
+  trackId: string;
+  startY: number;
+  startHeight: number;
+};
+
+type TrackHeaderWidthDragState = {
+  startX: number;
+  startWidth: number;
 };
 
 function clampScrollY(scrollY: number, contentHeight: number, viewportHeight: number): number {
@@ -243,6 +258,7 @@ export function Timeline() {
   const { snappingEnabled, inPoint, outPoint, loopPlayback, toolMode, thumbnailsEnabled, waveformsEnabled, audioDisplayMode, audioLayerAdvancedMode, audioFocusMode, trackFocusMode } =
     useTimelineStore(useShallow(selectUISettings));
   const effectiveAudioLayerAdvancedMode = audioLayerAdvancedMode !== false;
+  const timelineTrackColorsVisible = effectiveAudioLayerAdvancedMode;
 
   // Preview/export state
   const { ramPreviewEnabled, ramPreviewProgress, ramPreviewRange, isRamPreviewing, isExporting, exportProgress, exportRange } =
@@ -489,6 +505,11 @@ export function Timeline() {
   const [isEditingTimelineDuration, setIsEditingTimelineDuration] = useState(false);
   const [timelineDurationInputValue, setTimelineDurationInputValue] = useState('');
   const timelineDurationInputRef = useRef<HTMLInputElement>(null);
+  const hasInOutDisplayRange = inPoint !== null && outPoint !== null && outPoint > inPoint;
+  const inOutDisplayDuration = hasInOutDisplayRange ? outPoint - inPoint : duration;
+  const timelineRulerCurrentTime = hasInOutDisplayRange
+    ? Math.max(0, Math.min(playheadPosition - inPoint, inOutDisplayDuration))
+    : playheadPosition;
 
   useEffect(() => {
     if (isEditingTimelineDuration && timelineDurationInputRef.current) {
@@ -496,6 +517,12 @@ export function Timeline() {
       timelineDurationInputRef.current.select();
     }
   }, [isEditingTimelineDuration]);
+
+  useEffect(() => {
+    if (hasInOutDisplayRange && isEditingTimelineDuration) {
+      setIsEditingTimelineDuration(false);
+    }
+  }, [hasInOutDisplayRange, isEditingTimelineDuration]);
 
   const handleTimelineDurationClick = useCallback(() => {
     setTimelineDurationInputValue(formatTime(duration));
@@ -689,6 +716,12 @@ export function Timeline() {
   const [balancedSplitRatio, setBalancedSplitRatio] = useState<number | null>(null);
   const splitDragFrameRef = useRef<number | null>(null);
   const splitDragPendingClientYRef = useRef<number | null>(null);
+  const trackResizeDragRef = useRef<TrackResizeDragState | null>(null);
+  const [activeTrackResizeId, setActiveTrackResizeId] = useState<string | null>(null);
+  const trackHeaderWidthDragRef = useRef<TrackHeaderWidthDragState | null>(null);
+  const [trackHeaderWidth, setTrackHeaderWidth] = useState(DEFAULT_TRACK_HEADER_WIDTH);
+  const [isTrackHeaderWidthResizing, setIsTrackHeaderWidthResizing] = useState(false);
+  const [timelinePointerX, setTimelinePointerX] = useState<number | null>(null);
   const [hoveredKeyframeRow, setHoveredKeyframeRow] = useState<{
     trackId: string;
     property: AnimatableProperty;
@@ -1390,6 +1423,94 @@ export function Timeline() {
     [trackMap]
   );
 
+  const handleTrackResizeStart = useCallback((e: React.PointerEvent, trackId: string) => {
+    if (isExporting) return;
+
+    const currentTrack = useTimelineStore.getState().tracks.find(candidate => candidate.id === trackId)
+      ?? trackMap.get(trackId);
+    if (!currentTrack) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    trackResizeDragRef.current = {
+      trackId,
+      startY: e.clientY,
+      startHeight: currentTrack.height,
+    };
+    setActiveTrackResizeId(trackId);
+  }, [isExporting, trackMap]);
+
+  useEffect(() => {
+    if (!activeTrackResizeId) return undefined;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const drag = trackResizeDragRef.current;
+      if (!drag) return;
+
+      const nextHeight = Math.max(
+        MIN_TRACK_HEIGHT,
+        Math.min(MAX_TRACK_HEIGHT, drag.startHeight + event.clientY - drag.startY),
+      );
+      useTimelineStore.getState().setTrackHeight(drag.trackId, nextHeight);
+    };
+
+    const handlePointerUp = () => {
+      trackResizeDragRef.current = null;
+      setActiveTrackResizeId(null);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp, { once: true });
+    window.addEventListener('pointercancel', handlePointerUp, { once: true });
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+  }, [activeTrackResizeId]);
+
+  const handleTrackHeaderWidthResizeStart = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    trackHeaderWidthDragRef.current = {
+      startX: e.clientX,
+      startWidth: trackHeaderWidth,
+    };
+    setIsTrackHeaderWidthResizing(true);
+  }, [trackHeaderWidth]);
+
+  useEffect(() => {
+    if (!isTrackHeaderWidthResizing) return undefined;
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const drag = trackHeaderWidthDragRef.current;
+      if (!drag) return;
+
+      setTrackHeaderWidth(Math.max(
+        MIN_TRACK_HEADER_WIDTH,
+        Math.min(MAX_TRACK_HEADER_WIDTH, drag.startWidth + event.clientX - drag.startX),
+      ));
+    };
+
+    const handlePointerUp = () => {
+      trackHeaderWidthDragRef.current = null;
+      setIsTrackHeaderWidthResizing(false);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp, { once: true });
+    window.addEventListener('pointercancel', handlePointerUp, { once: true });
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+  }, [isTrackHeaderWidthResizing]);
+
   // Zoom handling - extracted to hook
   const { handleSetZoom, handleFitToWindow } = useTimelineZoom({
     timelineBodyRef: timelineBodyRef,
@@ -1598,13 +1719,44 @@ export function Timeline() {
     ]
   );
 
-  const playheadLeft = timeToPixel(playheadPosition) - scrollX + TRACK_HEADER_WIDTH;
-  const showPlayhead = playheadLeft >= TRACK_HEADER_WIDTH;
+  const playheadLeft = timeToPixel(playheadPosition) - scrollX + trackHeaderWidth;
+  const showPlayhead = playheadLeft >= trackHeaderWidth;
   const timelineSwitchMotionClass = clipAnimationPhase === 'exiting'
     ? (compositionSwitchDirection === 'backward' ? 'timeline-switch-exit-left' : 'timeline-switch-exit-right')
     : clipAnimationPhase === 'entering'
       ? (compositionSwitchDirection === 'backward' ? 'timeline-switch-enter-right' : 'timeline-switch-enter-left')
       : '';
+  const handleTimelinePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const nextPointerX = Math.round(event.clientX - rect.left);
+    setTimelinePointerX(previousPointerX => previousPointerX === nextPointerX ? previousPointerX : nextPointerX);
+  }, []);
+  const handleTimelinePointerLeave = useCallback(() => {
+    setTimelinePointerX(null);
+  }, []);
+  const getTimelineLineOpacity = useCallback((lineLeft: number) => {
+    if (timelinePointerX === null) {
+      return 0;
+    }
+
+    const distance = Math.abs(timelinePointerX - lineLeft);
+    const fullOpacityDistance = 8;
+    const hiddenDistance = 72;
+    if (distance <= fullOpacityDistance) {
+      return 1;
+    }
+    if (distance >= hiddenDistance) {
+      return 0;
+    }
+
+    return 1 - ((distance - fullOpacityDistance) / (hiddenDistance - fullOpacityDistance));
+  }, [timelinePointerX]);
+  const getTimelineLineOpacityForTime = useCallback((time: number | null) => {
+    if (time === null) {
+      return 0;
+    }
+    return getTimelineLineOpacity(timeToPixel(time) - scrollX + trackHeaderWidth);
+  }, [getTimelineLineOpacity, scrollX, timeToPixel, trackHeaderWidth]);
 
   useEffect(() => {
     if (!isPlaying || isDraggingPlayhead) return;
@@ -1758,6 +1910,8 @@ export function Timeline() {
                       useTimelineStore.getState().renameTrack(track.id, name)
                     }
                     onWheel={(e) => handleTrackHeightWheel(e, track.id)}
+                    onResizeStart={handleTrackResizeStart}
+                    isResizeActive={activeTrackResizeId === track.id}
                     clipKeyframes={clipKeyframes}
                     getClipKeyframes={getClipKeyframes}
                     getInterpolatedTransform={getInterpolatedTransform}
@@ -1815,6 +1969,10 @@ export function Timeline() {
                   transform: `translateX(-${scrollX}px)`,
                   minWidth: Math.max(duration * zoom + 500, 2000),
                   ['--grid-size' as string]: `${gridSize}px`,
+                  ['--frame-grid-size' as string]: `${gridPlan.frameIntervalPixels}px`,
+                  ['--frame-grid-strength' as string]: `${Math.round(gridPlan.frameGridOpacity * 100)}%`,
+                  ['--time-grid-strength' as string]: `${Math.round(gridPlan.timeGridOpacity * 100)}%`,
+                  ['--time-grid-muted-strength' as string]: `${Math.round(gridPlan.timeGridOpacity * 22)}%`,
                 }}
               >
                 {isVideoSection && externalDrag && !externalDrag.isAudio && externalDrag.showVideoNewTrackZone && !sectionCollapsed && (
@@ -1845,7 +2003,7 @@ export function Timeline() {
                   </div>
                 )}
 
-                {sectionTracks.map((track) => {
+                {sectionTracks.map((track, trackIndex) => {
                   const isDimmed =
                     (track.type === 'video' && anyViewVideoSolo && !track.solo) ||
                     (track.type === 'audio' && anyViewAudioSolo && !track.solo);
@@ -1857,6 +2015,7 @@ export function Timeline() {
                     <TimelineTrack
                       key={track.id}
                       track={track}
+                      trackColor={timelineTrackColorsVisible ? getTimelineTrackColor(track, trackIndex) : TIMELINE_TRACK_COLOR_HIDDEN}
                       clips={isCompositionTrackMorphing ? [] : clips}
                       isDimmed={isDimmed}
                       isExpanded={isExpanded}
@@ -1883,6 +2042,8 @@ export function Timeline() {
                       onDragOver={(e) => handleCombinedDragOver(e, track.id)}
                       onDragEnter={(e) => handleTrackDragEnter(e, track.id)}
                       onDragLeave={handleCombinedDragLeave}
+                      onResizeStart={handleTrackResizeStart}
+                      isResizeActive={activeTrackResizeId === track.id}
                       renderClip={(clip, trackId) => renderClipForSection(clip, trackId)}
                       clipKeyframes={clipKeyframes}
                       renderKeyframeDiamonds={renderKeyframeDiamonds}
@@ -2009,25 +2170,6 @@ export function Timeline() {
                   </div>
                 )}
 
-                <TimelineOverlays
-                  timeToPixel={timeToPixel}
-                  formatTime={formatTime}
-                  inPoint={inPoint}
-                  outPoint={outPoint}
-                  duration={duration}
-                  markerDrag={markerDrag}
-                  onMarkerMouseDown={handleMarkerMouseDown}
-                  switchMotionClass={timelineSwitchMotionClass}
-                  clipDrag={clipDrag}
-                  isRamPreviewing={effectiveIsRamPreviewing}
-                  ramPreviewProgress={effectiveRamPreviewProgress}
-                  playheadPosition={playheadPosition}
-                  isExporting={isExporting}
-                  exportProgress={exportProgress}
-                  exportRange={exportRange}
-                  getCachedRanges={getCachedRanges}
-                />
-
                 {!isCompositionTrackMorphing && (
                   <ParentChildLinksOverlay
                     clips={clips}
@@ -2048,9 +2190,49 @@ export function Timeline() {
     );
   };
 
+  const timelineControlsProps: Omit<TimelineControlsProps, 'variant'> = {
+    isPlaying,
+    loopPlayback,
+    playheadPosition,
+    duration,
+    zoom,
+    snappingEnabled,
+    inPoint,
+    outPoint,
+    proxyEnabled,
+    currentlyGeneratingProxyId,
+    mediaFilesWithProxy: mediaFilesWithProxyCount,
+    showTranscriptMarkers,
+    thumbnailsEnabled,
+    waveformsEnabled,
+    audioDisplayMode,
+    audioFocusMode,
+    trackFocusMode,
+    toolMode,
+    onPlay: play,
+    onPause: pause,
+    onStop: stop,
+    onToggleLoop: toggleLoopPlayback,
+    onSetZoom: handleSetZoom,
+    onToggleSnapping: toggleSnapping,
+    onToggleProxy: toggleProxyEnabled,
+    onToggleTranscriptMarkers: toggleTranscriptMarkers,
+    onToggleThumbnails: toggleThumbnailsEnabled,
+    onToggleWaveforms: toggleWaveformsEnabled,
+    onSetAudioDisplayMode: setAudioDisplayMode,
+    onToggleAudioFocusMode: toggleAudioFocusMode,
+    onSetTrackFocusMode: setTrackFocusMode,
+    onToggleCutTool: toggleCutTool,
+    onFitToWindow: handleFitToWindow,
+    onToggleSlotGrid: handleToggleSlotGrid,
+    slotGridActive: slotGridProgress > 0.5,
+    formatTime,
+  };
+
   return (
     <div
-      className={`timeline-container audio-mode-${audioDisplayMode} timeline-split-mode-${trackFocusMode} ${audioFocusMode ? 'audio-focus-mode' : ''} ${trackFocusMode === 'video' ? 'video-focus-mode' : ''} ${splitDragVideoHeight !== null ? 'is-split-dragging' : ''} ${clipDrag || clipTrim ? 'is-dragging' : ''}`}
+      className={`timeline-container audio-mode-${audioDisplayMode} audio-layer-${effectiveAudioLayerAdvancedMode ? 'advanced' : 'basic'} timeline-split-mode-${trackFocusMode} ${audioFocusMode ? 'audio-focus-mode' : ''} ${trackFocusMode === 'video' ? 'video-focus-mode' : ''} ${splitDragVideoHeight !== null ? 'is-split-dragging' : ''} ${activeTrackResizeId !== null ? 'is-track-resizing' : ''} ${isTrackHeaderWidthResizing ? 'is-header-width-resizing' : ''} ${clipDrag || clipTrim ? 'is-dragging' : ''}`}
+      style={{ '--track-header-width': `${trackHeaderWidth}px` } as React.CSSProperties}
       onMouseDown={() => {
         if (useMediaStore.getState().sourceMonitorFileId) {
           useMediaStore.getState().setSourceMonitorFile(null);
@@ -2063,47 +2245,48 @@ export function Timeline() {
         opacity: 1 - slotGridProgress,
         overflow: 'hidden',
       } : undefined}>
-        <TimelineControls
-          isPlaying={isPlaying}
-          loopPlayback={loopPlayback}
-          playheadPosition={playheadPosition}
-          duration={duration}
-          zoom={zoom}
-          snappingEnabled={snappingEnabled}
-          inPoint={inPoint}
-          outPoint={outPoint}
-          proxyEnabled={proxyEnabled}
-          currentlyGeneratingProxyId={currentlyGeneratingProxyId}
-          mediaFilesWithProxy={mediaFilesWithProxyCount}
-          showTranscriptMarkers={showTranscriptMarkers}
-          thumbnailsEnabled={thumbnailsEnabled}
-          waveformsEnabled={waveformsEnabled}
-          audioDisplayMode={audioDisplayMode}
-          audioFocusMode={audioFocusMode}
-          trackFocusMode={trackFocusMode}
-          toolMode={toolMode}
-          onPlay={play}
-          onPause={pause}
-          onStop={stop}
-          onToggleLoop={toggleLoopPlayback}
-          onSetZoom={handleSetZoom}
-          onToggleSnapping={toggleSnapping}
-          onSetInPoint={setInPointAtPlayhead}
-          onSetOutPoint={setOutPointAtPlayhead}
-          onClearInOut={clearInOut}
-          onToggleProxy={toggleProxyEnabled}
-          onToggleTranscriptMarkers={toggleTranscriptMarkers}
-          onToggleThumbnails={toggleThumbnailsEnabled}
-          onToggleWaveforms={toggleWaveformsEnabled}
-          onSetAudioDisplayMode={setAudioDisplayMode}
-          onToggleAudioFocusMode={toggleAudioFocusMode}
-          onSetTrackFocusMode={setTrackFocusMode}
-          onToggleCutTool={toggleCutTool}
-          onFitToWindow={handleFitToWindow}
-          onToggleSlotGrid={handleToggleSlotGrid}
-          slotGridActive={slotGridProgress > 0.5}
-          formatTime={formatTime}
-        />
+        <div className="timeline-timebar">
+          <div className="timeline-ruler-timecode" title="Current time / composition duration">
+            <span
+              className="timeline-ruler-current-time"
+              title={hasInOutDisplayRange ? 'Current time from In point' : 'Current composition time'}
+            >
+              {formatTime(timelineRulerCurrentTime)}
+            </span>
+            <span className="timeline-ruler-time-separator" aria-hidden="true">/</span>
+            {isEditingTimelineDuration && !hasInOutDisplayRange ? (
+              <input
+                ref={timelineDurationInputRef}
+                type="text"
+                className="timeline-ruler-duration-input"
+                value={timelineDurationInputValue}
+                style={{ '--timeline-duration-input-ch': `${Math.max(timelineDurationInputValue.length, 8)}ch` } as React.CSSProperties}
+                onChange={(e) => setTimelineDurationInputValue(e.target.value)}
+                onKeyDown={handleTimelineDurationKeyDown}
+                onBlur={handleTimelineDurationSubmit}
+              />
+            ) : hasInOutDisplayRange ? (
+              <span
+                className="timeline-ruler-duration range"
+                title="In/Out range duration"
+              >
+                {formatTime(inOutDisplayDuration)}
+              </span>
+            ) : (
+              <button
+                className="timeline-ruler-duration"
+                type="button"
+                onClick={handleTimelineDurationClick}
+                title="Click to edit composition duration"
+              >
+                {formatTime(duration)}
+              </button>
+            )}
+          </div>
+          <TimelineControls variant="transport" {...timelineControlsProps} />
+          <TimelineControls variant="utility" {...timelineControlsProps} />
+          <TimelineControls variant="zoom" {...timelineControlsProps} />
+        </div>
       </div>
 
       {/* Slot Grid toolbar - slides in when entering slot view */}
@@ -2134,46 +2317,62 @@ export function Timeline() {
           <SlotGrid opacity={slotGridProgress} />
         )}
         {/* Timeline content — fades out with subtle scale-back */}
-        <div className="timeline-body-content" style={slotGridProgress > 0 ? {
-          opacity: 1 - slotGridProgress,
-          transform: `scale(${1 - slotGridProgress * 0.05})`,
-          transformOrigin: 'center center',
-          pointerEvents: (slotGridProgress >= 0.5 ? 'none' : 'auto') as React.CSSProperties['pointerEvents'],
-          display: slotGridProgress >= 1 ? 'none' as const : undefined,
-        } : undefined}>
+        <div
+          className="timeline-body-content"
+          style={slotGridProgress > 0 ? {
+            opacity: 1 - slotGridProgress,
+            transform: `scale(${1 - slotGridProgress * 0.05})`,
+            transformOrigin: 'center center',
+            pointerEvents: (slotGridProgress >= 0.5 ? 'none' : 'auto') as React.CSSProperties['pointerEvents'],
+            display: slotGridProgress >= 1 ? 'none' as const : undefined,
+          } : undefined}
+          onPointerMove={handleTimelinePointerMove}
+          onPointerLeave={handleTimelinePointerLeave}
+        >
           <div className="timeline-header-row">
             <div className="ruler-header">
-              <div className="timeline-ruler-timecode" title="Current time / composition duration">
-                <span className="timeline-ruler-current-time">{formatTime(playheadPosition)}</span>
-                <span className="timeline-ruler-time-separator" aria-hidden="true">/</span>
-                {isEditingTimelineDuration ? (
-                  <input
-                    ref={timelineDurationInputRef}
-                    type="text"
-                    className="timeline-ruler-duration-input"
-                    value={timelineDurationInputValue}
-                    onChange={(e) => setTimelineDurationInputValue(e.target.value)}
-                    onKeyDown={handleTimelineDurationKeyDown}
-                    onBlur={handleTimelineDurationSubmit}
-                  />
-                ) : (
+              <div className="timeline-ruler-control-strip">
+                <TimelineControls variant="main" {...timelineControlsProps} />
+                <button
+                  className={`add-marker-btn ${markerCreateDrag?.isDragging ? 'dragging' : ''}`}
+                  onMouseDown={handleMarkerButtonDragStart}
+                  title="Drag to place marker, or press M"
+                >
+                  <IconMapPinFilled size={15} aria-hidden="true" />
+                </button>
+                <div className="timeline-ruler-inout-controls" aria-label="In and out points">
                   <button
-                    className="timeline-ruler-duration"
                     type="button"
-                    onClick={handleTimelineDurationClick}
-                    title="Click to edit composition duration"
+                    className={`timeline-ruler-inout-btn ${inPoint !== null ? 'active' : ''}`}
+                    onClick={() => {
+                      if (inPoint !== null) {
+                        setInPoint(null);
+                      } else {
+                        setInPointAtPlayhead();
+                      }
+                    }}
+                    title={inPoint !== null ? 'Clear In point' : 'Set In point (I)'}
+                    aria-label={inPoint !== null ? 'Clear In point' : 'Set In point'}
                   >
-                    {formatTime(duration)}
+                    <IconFlag3Filled className="timeline-flag-icon in-flag" aria-hidden="true" />
                   </button>
-                )}
+                  <button
+                    type="button"
+                    className={`timeline-ruler-inout-btn ${outPoint !== null ? 'active' : ''}`}
+                    onClick={() => {
+                      if (outPoint !== null) {
+                        setOutPoint(null);
+                      } else {
+                        setOutPointAtPlayhead();
+                      }
+                    }}
+                    title={outPoint !== null ? 'Clear Out point' : 'Set Out point (O)'}
+                    aria-label={outPoint !== null ? 'Clear Out point' : 'Set Out point'}
+                  >
+                    <IconFlag3Filled className="timeline-flag-icon out-flag" aria-hidden="true" />
+                  </button>
+                </div>
               </div>
-              <button
-                className={`add-marker-btn ${markerCreateDrag?.isDragging ? 'dragging' : ''}`}
-                onMouseDown={handleMarkerButtonDragStart}
-                title="Drag to place marker, or press M"
-              >
-                M
-              </button>
             </div>
             <div className={`time-ruler-wrapper ${clipAnimationPhase !== 'idle' ? 'comp-switching' : ''}`}>
               <TimelineRuler
@@ -2187,6 +2386,13 @@ export function Timeline() {
               />
             </div>
           </div>
+          <div
+            className={`timeline-layer-divider-resize-handle ${isTrackHeaderWidthResizing ? 'active' : ''}`}
+            role="separator"
+            aria-orientation="vertical"
+            title="Drag to resize layer column"
+            onPointerDown={handleTrackHeaderWidthResizeStart}
+          />
           <div className="timeline-scroll-wrapper" ref={scrollWrapperRef}>
             <div
               ref={(el) => {
@@ -2195,7 +2401,7 @@ export function Timeline() {
               className={`timeline-track-stack timeline-tracks ${clipDrag ? 'dragging-clip' : ''} ${marquee ? 'marquee-selecting' : ''} ${isExporting ? 'export-locked' : ''}`}
               data-ai-id="timeline-tracks"
               data-guided-target="timeline-tracks"
-              data-guided-timeline-origin-x={TRACK_HEADER_WIDTH}
+              data-guided-timeline-origin-x={trackHeaderWidth}
               data-guided-timeline-scroll-x={scrollX}
               data-guided-timeline-zoom={zoom}
               onDragOver={(e) => e.preventDefault()}
@@ -2205,7 +2411,7 @@ export function Timeline() {
                 ref={timelineRef}
                 className="timeline-lane-reference"
                 data-guided-target="timeline-lane-reference"
-                style={{ left: TRACK_HEADER_WIDTH }}
+                style={{ left: trackHeaderWidth }}
                 aria-hidden="true"
               />
               {renderTrackSection('video')}
@@ -2277,8 +2483,61 @@ export function Timeline() {
                   }}
                 />
               )}
+              <div
+                className="timeline-global-overlays"
+                style={{ left: trackHeaderWidth }}
+              >
+                <TimelineOverlays
+                  timeToPixel={timeToPixel}
+                  formatTime={formatTime}
+                  scrollX={scrollX}
+                  inPoint={inPoint}
+                  outPoint={outPoint}
+                  duration={duration}
+                  markerDrag={markerDrag}
+                  onMarkerMouseDown={handleMarkerMouseDown}
+                  switchMotionClass={timelineSwitchMotionClass}
+                  renderMode="trackOverlays"
+                  clipDrag={clipDrag}
+                  isRamPreviewing={effectiveIsRamPreviewing}
+                  ramPreviewProgress={effectiveRamPreviewProgress}
+                  playheadPosition={playheadPosition}
+                  isExporting={isExporting}
+                  exportProgress={exportProgress}
+                  exportRange={exportRange}
+                  getCachedRanges={getCachedRanges}
+                />
+              </div>
             </div>
           </div>{/* timeline-scroll-wrapper */}
+
+          <div
+            className="timeline-range-marker-overlays"
+            style={{ left: trackHeaderWidth }}
+          >
+            <TimelineOverlays
+              timeToPixel={timeToPixel}
+              formatTime={formatTime}
+              scrollX={scrollX}
+              inPoint={inPoint}
+              outPoint={outPoint}
+              duration={duration}
+              markerDrag={markerDrag}
+              onMarkerMouseDown={handleMarkerMouseDown}
+              switchMotionClass={timelineSwitchMotionClass}
+              renderMode="rangeMarkers"
+              inLineOpacity={getTimelineLineOpacityForTime(inPoint)}
+              outLineOpacity={getTimelineLineOpacityForTime(outPoint)}
+              clipDrag={clipDrag}
+              isRamPreviewing={effectiveIsRamPreviewing}
+              ramPreviewProgress={effectiveRamPreviewProgress}
+              playheadPosition={playheadPosition}
+              isExporting={isExporting}
+              exportProgress={exportProgress}
+              exportRange={exportRange}
+              getCachedRanges={getCachedRanges}
+            />
+          </div>
 
           {/* Playhead - spans from ruler through all tracks */}
           {showPlayhead && (
@@ -2294,38 +2553,47 @@ export function Timeline() {
           )}
 
           {/* Timeline markers - span from ruler through all tracks like playhead */}
-          {markers.map(marker => (
-            <div
-              key={marker.id}
-              className={`timeline-marker ${timelineSwitchMotionClass} ${marker.stopPlayback ? 'is-stop-marker' : ''} ${timelineMarkerDrag?.markerId === marker.id ? 'dragging' : ''} ${aiAnimatedMarkers.get(marker.id) === 'add' ? 'ai-marker-added' : aiAnimatedMarkers.get(marker.id) === 'remove' ? 'ai-marker-removed' : ''}`}
-              style={{
-                left: timeToPixel(marker.time) - scrollX + TRACK_HEADER_WIDTH,
-                '--marker-color': marker.color,
-              } as React.CSSProperties}
-              title={`${marker.stopPlayback ? 'Stop Marker' : (marker.label || 'Marker')}: ${formatTime(marker.time)} (drag to move, right-click for MIDI and transport actions)${marker.stopPlayback ? ' - playback stops automatically here' : ''}`}
-              onMouseDown={(e) => handleTimelineMarkerMouseDown(e, marker.id)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setMarkerContextMenu({
-                  x: e.clientX,
-                  y: e.clientY,
-                  markerId: marker.id,
-                });
-              }}
-            >
-              <div className="timeline-marker-head">{marker.stopPlayback ? 'S' : 'M'}</div>
-              <div className="timeline-marker-line" />
-            </div>
-          ))}
+          {markers.map(marker => {
+            const markerLeft = timeToPixel(marker.time) - scrollX + trackHeaderWidth;
+            const markerLineOpacity = timelineMarkerDrag?.markerId === marker.id
+              ? 1
+              : getTimelineLineOpacity(markerLeft);
+
+            return (
+              <div
+                key={marker.id}
+                className={`timeline-marker ${timelineSwitchMotionClass} ${marker.stopPlayback ? 'is-stop-marker' : ''} ${timelineMarkerDrag?.markerId === marker.id ? 'dragging' : ''} ${aiAnimatedMarkers.get(marker.id) === 'add' ? 'ai-marker-added' : aiAnimatedMarkers.get(marker.id) === 'remove' ? 'ai-marker-removed' : ''}`}
+                style={{
+                  left: markerLeft,
+                  '--marker-color': marker.color,
+                  '--timeline-line-opacity': markerLineOpacity,
+                } as React.CSSProperties}
+                title={`${marker.stopPlayback ? 'Stop Marker' : (marker.label || 'Marker')}: ${formatTime(marker.time)} (drag to move, right-click for MIDI and transport actions)${marker.stopPlayback ? ' - playback stops automatically here' : ''}`}
+                onMouseDown={(e) => handleTimelineMarkerMouseDown(e, marker.id)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setMarkerContextMenu({
+                    x: e.clientX,
+                    y: e.clientY,
+                    markerId: marker.id,
+                  });
+                }}
+              >
+                <div className="timeline-marker-head">{marker.stopPlayback ? 'S' : 'M'}</div>
+                <div className="timeline-marker-line" />
+              </div>
+            );
+          })}
 
           {/* Ghost marker for drag-to-create */}
           {markerCreateDrag && markerCreateDrag.isOverTimeline && (
             <div
               className={`timeline-marker ghost ${markerCreateDrag.dropAnimating ? 'drop-animation' : ''}`}
               style={{
-                left: timeToPixel(markerCreateDrag.currentTime) - scrollX + 150,
+                left: timeToPixel(markerCreateDrag.currentTime) - scrollX + trackHeaderWidth,
                 '--marker-color': '#2997E5',
+                '--timeline-line-opacity': 1,
               } as React.CSSProperties}
             >
               <div className="timeline-marker-head">M</div>

@@ -633,6 +633,7 @@ function convertProjectCompositionToStore(
         name: t.name,
         type: t.type,
         height: t.height,
+        labelColor: t.labelColor,
         locked: t.locked,
         visible: t.visible,
         muted: t.muted,

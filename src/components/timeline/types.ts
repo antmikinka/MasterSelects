@@ -118,6 +118,7 @@ export interface TimelineRulerProps {
 
 // Props for TimelineControls component
 export interface TimelineControlsProps {
+  variant?: 'full' | 'main' | 'utility' | 'transport' | 'zoom';
   isPlaying: boolean;
   loopPlayback: boolean;
   playheadPosition: number;
@@ -142,9 +143,6 @@ export interface TimelineControlsProps {
   onToggleLoop: () => void;
   onSetZoom: (zoom: number) => void;
   onToggleSnapping: () => void;
-  onSetInPoint: () => void;
-  onSetOutPoint: () => void;
-  onClearInOut: () => void;
   onToggleProxy: () => void;
   onToggleTranscriptMarkers: () => void;
   onToggleThumbnails: () => void;
@@ -179,6 +177,8 @@ export interface TimelineHeaderProps {
   onRenameTrack: (name: string) => void;
   onContextMenu: (e: React.MouseEvent) => void;
   onWheel: (e: React.WheelEvent) => void;
+  onResizeStart?: (e: React.PointerEvent, trackId: string) => void;
+  isResizeActive?: boolean;
   // For property labels - clipKeyframes map triggers re-render when keyframes change
   clipKeyframes: Map<string, Array<{ id: string; clipId: string; time: number; property: AnimatableProperty; value: number; easing: string }>>;
   getClipKeyframes: (clipId: string) => Array<{
@@ -211,6 +211,7 @@ export interface TimelineHeaderProps {
 // Props for TimelineTrack component
 export interface TimelineTrackProps {
   track: TimelineTrack;
+  trackColor?: string;
   clips: TimelineClip[];
   isDimmed: boolean;
   isExpanded: boolean;
@@ -233,6 +234,8 @@ export interface TimelineTrackProps {
   onDragOver: (e: React.DragEvent) => void;
   onDragEnter: (e: React.DragEvent) => void;
   onDragLeave: (e: React.DragEvent) => void;
+  onResizeStart?: (e: React.PointerEvent, trackId: string) => void;
+  isResizeActive?: boolean;
   renderClip: (clip: TimelineClip, trackId: string, trackBaseHeightOverride?: number) => React.ReactNode;
   // For keyframe tracks - clipKeyframes map triggers re-render when keyframes change
   clipKeyframes: Map<string, Array<{ id: string; clipId: string; time: number; property: AnimatableProperty; value: number; easing: string }>>;

@@ -174,6 +174,7 @@ function TrackPropertyTracks({
 
 function TimelineTrackComponent({
   track,
+  trackColor,
   clips,
   isDimmed,
   isExpanded,
@@ -190,6 +191,8 @@ function TimelineTrackComponent({
   onDragOver,
   onDragEnter,
   onDragLeave,
+  onResizeStart,
+  isResizeActive = false,
   renderClip,
   clipKeyframes,
   renderKeyframeDiamonds,
@@ -234,6 +237,10 @@ function TimelineTrackComponent({
   }, [allTrackClips, clipDrag, clipTrim?.clipId, selectedClipIds, visibleEndTime, visibleStartTime]);
   const trackClipIds = useMemo(() => new Set(allTrackClips.map((clip) => clip.id)), [allTrackClips]);
   const selectedTrackClip = allTrackClips.find((c) => selectedClipIds.has(c.id));
+  const trackLaneStyle = {
+    height: dynamicHeight,
+    ...(trackColor ? { '--track-color': trackColor } : {}),
+  } as React.CSSProperties & { '--track-color'?: string };
   const renderExternalPreview = (
     className: string,
     left: number,
@@ -266,9 +273,9 @@ function TimelineTrackComponent({
         isExpanded ? 'expanded' : ''
       } ${isDragTarget ? 'drag-target' : ''} ${
         isExternalDragTarget ? 'external-drag-target' : ''
-      } ${track.locked ? 'locked' : ''}`}
+      } ${track.locked ? 'locked' : ''} ${isResizeActive ? 'resizing' : ''}`}
       data-track-id={track.id}
-      style={{ height: dynamicHeight }}
+      style={trackLaneStyle}
       onDrop={onDrop}
       onDragOver={onDragOver}
       onDragEnter={onDragEnter}
@@ -325,6 +332,15 @@ function TimelineTrackComponent({
           onUpdateBezierHandle={onUpdateBezierHandle}
           timeToPixel={timeToPixel}
           pixelToTime={pixelToTime}
+        />
+      )}
+      {onResizeStart && (
+        <div
+          className={`track-resize-handle track-resize-handle-lane ${isResizeActive ? 'active' : ''}`}
+          role="separator"
+          aria-orientation="horizontal"
+          title="Drag to resize track height"
+          onPointerDown={(event) => onResizeStart(event, track.id)}
         />
       )}
     </div>

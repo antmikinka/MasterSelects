@@ -34,8 +34,8 @@
 }
 
 .timeline-clip.audio.audio-focus-active {
-  border-color: color-mix(in srgb, #52beff 52%, #3a7a58);
-  box-shadow: inset 0 0 0 1px rgba(82, 190, 255, 0.16);
+  border-color: color-mix(in srgb, var(--track-color, #5f646b) 72%, #050607);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--track-color, #5f646b) 28%, transparent);
 }
 
 .timeline-clip.text {
