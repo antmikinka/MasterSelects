@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { useDockStore } from '../../src/stores/dockStore';
+import {
+  FACTORY_AUDIO_EDIT_LAYOUT_ID,
+  FACTORY_VIDEO_EDIT_LAYOUT_ID,
+  getFactoryDockLayouts,
+  useDockStore,
+} from '../../src/stores/dockStore';
 import { DEFAULT_TRACKS, useTimelineStore } from '../../src/stores/timeline';
 import type { DockNode, DockTabGroup, PanelType } from '../../src/types/dock';
 
@@ -18,8 +23,8 @@ describe('dock store saved layouts', () => {
   beforeEach(() => {
     localStorage.clear();
     useDockStore.setState({
-      savedLayouts: [],
-      defaultSavedLayoutId: null,
+      savedLayouts: getFactoryDockLayouts(),
+      defaultSavedLayoutId: FACTORY_VIDEO_EDIT_LAYOUT_ID,
       activeSavedLayoutId: null,
     });
     useDockStore.getState().resetLayout();
@@ -39,21 +44,21 @@ describe('dock store saved layouts', () => {
     if (layout.root.kind !== 'split') return;
 
     expect(layout.root.direction).toBe('vertical');
-    expect(layout.root.ratio).toBeCloseTo(0.74);
+    expect(layout.root.ratio).toBeCloseTo(0.6698039215686274);
 
     const top = layout.root.children[0];
     expect(top.kind).toBe('split');
     if (top.kind !== 'split') return;
 
     expect(top.direction).toBe('horizontal');
-    expect(top.ratio).toBeCloseTo(0.23);
+    expect(top.ratio).toBeCloseTo(0.29449423815621);
 
     const centerRight = top.children[1];
     expect(centerRight.kind).toBe('split');
     if (centerRight.kind !== 'split') return;
 
     expect(centerRight.direction).toBe('horizontal');
-    expect(centerRight.ratio).toBeCloseTo(0.6);
+    expect(centerRight.ratio).toBeCloseTo(0.7109300593133233);
 
     const leftGroup = findTabGroup(layout.root, 'left-group');
     const previewGroup = findTabGroup(layout.root, 'preview-group');
@@ -62,13 +67,47 @@ describe('dock store saved layouts', () => {
 
     expect(panelTypes(leftGroup)).toEqual(['media']);
     expect(panelTypes(previewGroup)).toEqual(['preview']);
-    expect(panelTypes(rightGroup)).toEqual(['clip-properties', 'export']);
+    expect(panelTypes(rightGroup)).toEqual(['clip-properties']);
     expect(rightGroup?.activeIndex).toBe(0);
     expect(panelTypes(timelineGroup)).toEqual(['timeline']);
   });
 
+  it('keeps the built-in video and audio layouts as default favorites', () => {
+    const savedLayouts = useDockStore.getState().savedLayouts;
+    const videoLayout = savedLayouts.find((layout) => layout.id === FACTORY_VIDEO_EDIT_LAYOUT_ID);
+    const audioLayout = savedLayouts.find((layout) => layout.id === FACTORY_AUDIO_EDIT_LAYOUT_ID);
+
+    expect(videoLayout).toMatchObject({
+      name: 'VIDEO EDIT',
+      favorite: true,
+      factory: true,
+    });
+    expect(audioLayout).toMatchObject({
+      name: 'AUDIO EDIT',
+      favorite: true,
+      factory: true,
+    });
+    expect(useDockStore.getState().defaultSavedLayoutId).toBe(FACTORY_VIDEO_EDIT_LAYOUT_ID);
+  });
+
+  it('allows built-in layouts to be removed from and restored to favorites', () => {
+    useDockStore.getState().toggleFavoriteSavedLayout(FACTORY_VIDEO_EDIT_LAYOUT_ID);
+    let videoLayout = useDockStore.getState().savedLayouts.find((layout) => layout.id === FACTORY_VIDEO_EDIT_LAYOUT_ID);
+    expect(videoLayout).toMatchObject({
+      favorite: false,
+      factory: true,
+    });
+
+    useDockStore.getState().toggleFavoriteSavedLayout(FACTORY_VIDEO_EDIT_LAYOUT_ID);
+    videoLayout = useDockStore.getState().savedLayouts.find((layout) => layout.id === FACTORY_VIDEO_EDIT_LAYOUT_ID);
+    expect(videoLayout).toMatchObject({
+      favorite: true,
+      factory: true,
+    });
+  });
+
   it('toggles favorite state for saved layouts', () => {
-    const savedLayout = useDockStore.getState().saveNamedLayout('Video Edit');
+    const savedLayout = useDockStore.getState().saveNamedLayout('Custom Video Edit');
 
     expect(savedLayout).not.toBeNull();
     expect(useDockStore.getState().activeSavedLayoutId).toBe(savedLayout!.id);
@@ -80,11 +119,11 @@ describe('dock store saved layouts', () => {
   });
 
   it('preserves favorite state when an existing saved layout is overwritten', () => {
-    const savedLayout = useDockStore.getState().saveNamedLayout('Audio Edit');
+    const savedLayout = useDockStore.getState().saveNamedLayout('Custom Audio Edit');
     expect(savedLayout).not.toBeNull();
 
     useDockStore.getState().toggleFavoriteSavedLayout(savedLayout!.id);
-    const updatedLayout = useDockStore.getState().saveNamedLayout('Audio Edit');
+    const updatedLayout = useDockStore.getState().saveNamedLayout('Custom Audio Edit');
 
     expect(updatedLayout?.id).toBe(savedLayout!.id);
     expect(updatedLayout?.favorite).toBe(true);
@@ -110,6 +149,8 @@ describe('dock store saved layouts', () => {
       audioLayerAdvancedMode: false,
       audioFocusMode: true,
       trackFocusMode: 'audio',
+      trackHeaderWidth: 210,
+      timelineSplitRatio: null,
       trackHeights: {
         'video-1': 120,
         'audio-1': 88,
@@ -207,6 +248,7 @@ describe('dock store saved layouts', () => {
   });
 
   it('returns null when there is no current named layout to overwrite', () => {
+    useDockStore.setState({ activeSavedLayoutId: null });
     expect(useDockStore.getState().saveCurrentNamedLayout()).toBeNull();
   });
 });

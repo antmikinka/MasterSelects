@@ -2724,6 +2724,10 @@
     0 0 0 1px color-mix(in srgb, var(--accent, #4aa3ff) 20%, transparent);
 }
 
+.fb-chat-clear-pill {
+  color: var(--text-secondary, #bbb);
+}
+
 .fb-generate:disabled {
   opacity: 0.42;
   cursor: not-allowed;

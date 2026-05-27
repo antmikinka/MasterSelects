@@ -10,17 +10,38 @@ MasterSelects soll eine kompakte, professionelle Timeline-Toolbar bekommen:
 - wiederholtes Druecken des Gruppen-Shortcuts zyklisiert durch die Unterwerkzeuge
 - alle gaengigen NLE-Timeline-Werkzeuge sind einsortiert, ohne die Toolbar vollzustellen
 
-Das Interaktionsmodell folgt dem bekannten Adobe-Muster: Werkzeuggruppen zeigen ein kleines Dreieck/Indicator; gedrueckt halten oeffnet die versteckten Werkzeuge. Adobe beschreibt dieses Pattern fuer After Effects/Adobe-Tools als "hold down the mouse button to view the hidden tools".
+## Kurzfassung der Entscheidung
 
-Reference:
-https://helpx.adobe.com/ie/after-effects/using/general-user-interface-items.html
+- Tool-Palette mit 5 Root-Gruppen: Auswahl, Schnitt, Trimmen, Platzieren, Navigieren/Markieren.
+- Tabler Icons bleibt primaeres Icon-System, weil es bereits installiert ist und genug Abdeckung fuer Timeline-Tools bietet.
+- Eigene MS-Icons entstehen nur fuer NLE-Spezialfaelle wie Rolling, Slip, Slide, Ripple Trim, Delete Gap und Trim-to-Playhead.
+- Phase 0 ist der Operation Kernel. Neue mutierende Tools, AI-Aktionen, Shortcuts, Kontextmenues und Drop-Gesten duerfen keinen zweiten Timeline-Mutationspfad aufbauen.
+- Tool-Auswahl ist nicht mutierend und bleibt waehrend Export erlaubt; mutierende Commands und Pointer-Commits werden waehrend Export blockiert.
+- Die Palette mountet im Ruler/Header-Bereich mit 150-340px Track-Header-Breite und nutzt Portal-Flyouts gegen Clipping.
+
+Das Interaktionsmodell folgt dem bekannten Adobe-Muster: Werkzeuggruppen zeigen ein kleines Dreieck/Indicator; gedrueckt halten oeffnet die versteckten Werkzeuge. Adobe beschreibt dieses Pattern fuer After Effects/Adobe-Tools als "hold down the mouse button to view the hidden tools". Adobe dokumentiert auch das Wiederholen des Gruppen-Shortcuts zum Durchschalten versteckter Tools und momentary tool activation per gedrueckter Taste.
+
+Quelle:
+https://helpx.adobe.com/ca/after-effects/using/general-user-interface-items.html
 
 ## Plan-Struktur
 
 Der Plan ist absichtlich zweischichtig:
 
 - zuerst Icon-System und Full-Scope-Integration, also wie die neue Tool-Palette in MS architektonisch andockt und welche bestehenden Sonderpfade sie ersetzt
-- danach die Tool-Taxonomie mit Gruppen, Flyout-Verhalten, Registry-Kurzfassung, Phasen, Roadmap und offenen Entscheidungen
+- danach die Tool-Taxonomie mit Gruppen, Flyout-Verhalten, Registry-Kurzfassung, Phasen, Roadmap und verbindlichen Defaults
+
+## Abschlusskriterien fuer diesen Plan
+
+Der Plan gilt als umsetzungsreif, wenn diese Punkte erfuellt sind:
+
+- Toolgruppen, Untertools und Flyout-Verhalten sind vollstaendig beschrieben.
+- Icon-System, externe Quellen und vorhandene Package-Situation sind geprueft.
+- aktuelle MS-Codepfade sind mit konkreten Dateien benannt.
+- Operation Kernel, Pointer Dispatcher, Overlay-Schicht, Shortcut-System, Export-Lock, History und AI-Tools sind als zusammenhaengende Zielarchitektur geplant.
+- Migration ist so geordnet, dass keine neuen parallelen Split/Trim/Delete/Move-Kerne entstehen.
+- Tests und manuelle Checks decken UI, Store, AI, Export-Lock, Undo/Redo, Linked-Clips, Collision und responsive Toolbar ab.
+- offene Produktentscheidungen haben empfohlene Defaults, damit Implementation nicht blockiert.
 
 ## Icon-System
 
@@ -34,7 +55,7 @@ Status:
 
 Warum Tabler:
 
-- 6146 Icons, dadurch bessere Abdeckung fuer spezielle Editing-Begriffe als kleinere Sets.
+- offizielles Paket und Repository nennen aktuell mehr als 6000/6100 freie Icons; dadurch bessere Abdeckung fuer spezielle Editing-Begriffe als kleinere Sets.
 - 24x24 Grid und 2px Stroke passen gut zur aktuellen Toolbar-Sprache.
 - React Package, SVG Package, Webfont und Figma Plugin sind offiziell verfuegbar.
 - MIT License und kommerzielle Nutzung sind auf der offiziellen Seite genannt.
@@ -44,6 +65,7 @@ Offizielle Quellen:
 
 - Tabler Icons: https://tabler.io/icons
 - Tabler Packages: https://tabler.io/icons/packages
+- Tabler Repository: https://github.com/tabler/tabler-icons
 - npm Package: https://www.npmjs.com/package/@tabler/icons-react
 
 ### Gepruefte Alternativen
@@ -60,6 +82,7 @@ Offizielle Quellen:
 - Lucide: https://lucide.dev/
 - Iconoir: https://iconoir.com/
 - Phosphor: https://phosphoricons.com/
+- Phosphor React Package: https://www.npmjs.com/package/@phosphor-icons/react
 
 ### Import-Regel
 
@@ -175,7 +198,7 @@ Die Timeline-Tool-Palette soll nicht nur neue Buttons sein. Sie soll die zentral
 - eine gemeinsame Preview/Overlay-Schicht fuer Cut-Linien, Range-Auswahl, Ripple-Previews, Trim-Handles und Track-Select-Highlights
 - kompatibel mit AI Tools, Shortcut-Presets, Undo/Redo, Export-Lock und Guided Replay
 
-Das ist bewusst groesser als ein UI-MVP. Die Toolbar wird zur Oberflaeche fuer eine robustere Timeline-Editing-Architektur.
+Das ist bewusst groesser als ein reiner Button-Umbau. Die Toolbar wird zur Oberflaeche fuer eine robustere Timeline-Editing-Architektur.
 
 ### Aktuelle Andockpunkte im Code
 
@@ -977,6 +1000,23 @@ Abhaengigkeiten:
 
 ## Umsetzung als robuste Gesamtsequenz
 
+### Slice 0: Operation Kernel P0
+
+Dieser Slice ist ein harter Gate vor neuen mutierenden Tools. Sichtbare UI-Shell kann parallel vorbereitet werden, aber jeder neue Split/Trim/Delete/Ripple/Move/Drop-Commit muss nach diesem Slice ueber den Kernel laufen.
+
+Lieferung:
+
+- `applyTimelineEditOperation`.
+- Export-Guard im Kernel.
+- History-Transaction pro Operation.
+- zentrale Linked-/Group-/Track-/Collision-Policy-Typen.
+- nur Split, Select-from-time, Ripple Delete und Delete Gap als erste Operationen.
+
+Vereinfachung:
+
+- Neue Tools und AI-Migrationen bekommen einen gemeinsamen Chokepoint.
+- Mutierende Direct-`setState()`-Pfade koennen gezielt abgebaut werden.
+
 ### Slice A: Tool Foundation
 
 Dateien:
@@ -1028,23 +1068,6 @@ Vereinfachung:
 - Clip-Komponente kennt nicht mehr `cutHoverInfo`.
 - `Timeline.tsx` muss keinen Cut-Spezialstate halten.
 
-### Slice C0: Operation Kernel P0
-
-Dieser Slice ist ein harter Gate vor neuen mutierenden Tools aus Slice B-E. Sichtbare UI-Shell kann parallel vorbereitet werden, aber jeder neue Split/Trim/Delete/Ripple/Move/Drop-Commit muss nach diesem Slice ueber den Kernel laufen.
-
-Lieferung:
-
-- `applyTimelineEditOperation`.
-- Export-Guard im Kernel.
-- History-Transaction pro Operation.
-- zentrale Linked-/Group-/Track-/Collision-Policy-Typen.
-- nur Split, Select-from-time, Ripple Delete und Delete Gap als erste Operationen.
-
-Vereinfachung:
-
-- Neue Tools und AI-Migrationen bekommen einen gemeinsamen Chokepoint.
-- Mutierende Direct-`setState()`-Pfade koennen gezielt abgebaut werden.
-
 ### Slice C: Edit Operations Core
 
 Dateien:
@@ -1059,7 +1082,7 @@ Lieferung:
 
 - pure functions fuer Split, Select From Time, Ripple Delete, Delete Gap.
 - Store-Actions rufen Operationen auf.
-- AI Handlers koennen optional schon auf Split Operations wechseln.
+- AI Split/Delete/Range-Handler wechseln auf dieselben Operationen, bevor neue Palette-Commands fuer diese Semantik aktiviert werden.
 
 Vereinfachung:
 
@@ -1112,6 +1135,16 @@ Vereinfachung:
 - Drag/Trim-Kollisionen laufen ueber gemeinsame Policy.
 - `moveClip` kann langfristig intern ueber Operationen gehen.
 
+Aktueller Implementierungsstand:
+
+- Ripple Trim, Rolling Edit, Slip, Slide und Rate Stretch existieren als `TimelineEditOperation`-Varianten mit fokussierten Unit-Tests fuer linked audio/video, Nachbar-Clips, source timing, timeline timing und Speed-Semantik.
+- Trim Start/End to Playhead und Ripple Trim Start/End to Playhead laufen ueber den Operation Kernel.
+- Edge Trim, Ripple Trim, Rolling Edit und Rate Stretch sind in der UI ueber Trim-Handles angebunden und committen durch `applyTimelineEditOperation`.
+- Slip und Slide sind als Body-Drag-Gesten angebunden: Slip verschiebt Source-In/Out bei gleicher Timeline-Position, Slide bewegt den Clip zwischen Nachbarn und commitet beide Werkzeuge durch den Operation Kernel.
+- Icon-Cursor sind fuer aktive Pointer-Tools angebunden, damit das ausgewaehlte Werkzeug am Mauszeiger sichtbar bleibt.
+- `TimelineToolOverlayLayer` rendert gemeinsame Section-Overlays fuer Track Select, Blade All Tracks, blocked states und Placement-Ghost-Clips mit Source-In/Out-Bounds.
+- Noch offen sind hoehere Operation-Previews fuer Trim/Ripple-Ghost-Zustaende jenseits der bereits vorhandenen Drag-Previews.
+
 ### Slice G: Placement Engine
 
 Lieferung:
@@ -1129,6 +1162,19 @@ Vereinfachung:
 
 - Media Panel Drop, Source Monitor Edit Buttons und Toolbar Commands laufen ueber denselben Code.
 
+Aktueller Implementierungsstand:
+
+- `place-timeline-range` existiert als Operation-Kernel-Pfad fuer Insert- und Overwrite-artige Range-Vorbereitung.
+- Insert splittet Clips am Einfuegepunkt und schiebt folgende Clips auf den Ziel-Tracks nach rechts.
+- Position/Overwrite trimmt, loescht oder splittet Clips im Zielbereich, bevor der neue Drop-Clip erzeugt wird.
+- Linked video/audio-Split-Parts behalten ihre Links, wenn beide Tracks in der Placement-Operation betroffen sind.
+- Externe Drops im aktivierten `Position / Overwrite`-Tool nutzen diese Operation; normale Select-Drops bleiben gap-aware.
+- Die Toolbar-Commands Insert, Overwrite, Replace, Fit to Fill, Append, Place on Top und Ripple Overwrite loesen die aktuelle Source aus Media Panel oder Source Monitor auf und fuehren danach die passende Placement-Operation aus.
+- Replace, Fit to Fill und Ripple Overwrite nutzen bevorzugt Timeline-Range oder kompatiblen Zielclip; Insert/Overwrite nutzen den Playhead, Append das Track-Ende und Place on Top eine freie oder neu angelegte Videospur.
+- Source-Monitor-In/Out wird als Quellrange fuer Placement aufgeloest; die Commands erhalten daraus Source-Dauer, Source-In und volle Natural-Duration.
+- Source Monitor bietet direkte Insert-, Overwrite-, Replace-, Fit-, Append- und Top-Buttons ausserhalb der Timeline-Toolbar, auch fuer Still-Image-Quellen.
+- Placement-Commands veroeffentlichen beim Hover/Fokus eine nicht-mutierende Ghost-Preview mit Track-Zielen, Timeline-Dauer und Source-In/Out-Bounds.
+
 ### Slice H: AI/Gesture/Docs Consolidation
 
 Lieferung:
@@ -1140,6 +1186,13 @@ Lieferung:
 - alte Compatibility Wrapper markieren.
 - mutierende AI-Handler auf Operation Kernel ziehen.
 - Direct-`setState()`-Mutationen in AI-Clip-Editing-Handlern entfernen oder als Legacy-Ausnahme dokumentieren.
+
+Aktueller Implementierungsstand:
+
+- Pen/Keyframe ist als Navigation/Marking-Mode aktiviert und nutzt einen eigenen Icon-Cursor.
+- Klicks auf sichtbare Keyframe-Property-Lanes setzen Keyframes am Klickzeitpunkt mit einem aus der vorhandenen Lane interpolierten Wert.
+- `TimelineEditOperation` kann ueber `createTimelineEditReplayDescriptor()` in einen `TimelineEditReplayDescriptor` gemappt und mit `compileTimelineEditReplayDescriptor()` als visuelle Guided-Actions wiedergegeben werden.
+- Die verbleibende Consolidation betrifft vor allem hoehere Trim/Ripple-Ghost-Previews und den Completion-Audit gegen alle Qualitaetskriterien.
 
 ## Tests und Qualitaetskriterien
 
@@ -1468,7 +1521,7 @@ Grund:
 
 ## Empfohlene Toolbar im ersten Release
 
-Minimal sichtbare Hauptbuttons:
+Kompakte sichtbare Hauptbuttons:
 
 1. Auswahl
 2. Schnitt
@@ -1871,13 +1924,17 @@ P2:
 - keine Source-Monitor-Abhaengigkeit fuer Phase 1
 - keine neuen Hidden Shortcuts ohne Settings-UI-Eintrag
 
-## Offene Entscheidungen
+## Entscheidungen und Defaults
 
-1. Soll Track Select standardmaessig nur unlocked Tracks oder auch hidden Tracks beruecksichtigen?
-2. Soll "all tracks" ein eigenes Child-Tool sein oder nur Shift-Modifier?
-3. Soll Range Selection eine eigene sichtbare Auswahl in der Timeline speichern oder sofort in Clip-Auswahl uebersetzen?
-4. Soll Delete standardmaessig Lift oder Ripple Delete sein? Empfehlung: Delete bleibt Lift-artig, Ripple Delete eigener Command.
-5. Soll Blade nach einem Klick zu Select zurueckspringen? Aktuell macht MS das. NLEs bleiben meist im Blade-Modus. Empfehlung: Preference oder "single-shot blade" als separates Child.
+Diese Defaults sind fuer die erste Implementierung verbindlich. Sie koennen spaeter als Settings erweitert werden, blockieren aber die Umsetzung nicht.
+
+1. Track Select beruecksichtigt standardmaessig unlocked und visible Tracks. Hidden Tracks werden ignoriert, locked Tracks blockieren oder warnen je nach Operation.
+2. "All Tracks" wird sowohl als eigenes Child-Tool als auch als Shift-Modifier angeboten. Das Child ist discoverable, der Modifier bleibt schnell fuer Power-User.
+3. Range Selection wird als eigene sichtbare Timeline-Range im Tool-State gespeichert und erst bei Lift/Extract/Delete/Split in konkrete Clip-Operationen uebersetzt.
+4. Delete bleibt lift-artig und loescht Auswahl ohne Luecke zu schliessen. Ripple Delete ist ein eigener Command im Schnitt-Flyout und Kontextmenue.
+5. Blade bleibt standardmaessig im Blade-Modus. Das heutige Zurueckspringen zu Select wird als optionales "single-shot blade" Child oder Preference abgebildet.
+6. Aktives Tool wechseln ist nicht mutierend und waehrend Export erlaubt. Mutierende Commands und Pointer-Commits bleiben waehrend Export blockiert.
+7. Neue AI-Tools oder Guided-Replay-Aktionen duerfen keine eigenen Timeline-Mutationskerne bekommen; sie muessen den Operation Kernel nutzen.
 
 ## Empfehlung
 

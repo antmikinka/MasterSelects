@@ -17,7 +17,7 @@ FlashBoard is not a separate model backend. It is a composer/runtime layer on to
 - `cloud` for hosted Kling 3.0, hosted Nano Banana 2, and hosted ElevenLabs speech
 - `elevenlabs` for user-key text-to-speech audio generation
 - `suno` for Kie.ai-backed Suno music generation using the user's Kie.ai key
-- compact chat for prompt discussion through OpenAI, Anthropic, or local Lemonade without creating a generation node
+- compact chat for prompt discussion and editor actions through OpenAI, Anthropic, or local Lemonade without creating a generation node; requests include the Media-chat system prompt, current timeline summary, and callable AI tools routed through the shared chat dispatcher
 
 The Media Panel generator tray offers two collapsed launch actions: `Generate` opens the normal generation prompt, while `Chat` opens a separate chat prompt window with provider/model/temperature controls and OpenAI reasoning effort for GPT-5.x models. If only an ElevenLabs key is configured, the generation composer starts on the audio text-to-speech target. If Kie.ai or hosted cloud access is also available, the generation composer can still switch between video, image, and audio targets. `Generate` remains the only action that queues media generation.
 

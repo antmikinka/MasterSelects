@@ -98,6 +98,8 @@ export interface SavedDockTimelineLayout {
   audioLayerAdvancedMode?: boolean;
   audioFocusMode?: boolean;
   trackFocusMode?: SavedDockTimelineTrackFocusMode;
+  trackHeaderWidth?: number;
+  timelineSplitRatio?: number | null;
   trackHeights?: Record<string, number>;
   trackTypeHeights?: Partial<Record<'video' | 'audio', number>>;
   trackVisibility?: Record<string, boolean>;
@@ -111,6 +113,7 @@ export interface SavedDockLayout {
   createdAt: number;
   updatedAt: number;
   favorite?: boolean;
+  factory?: boolean;
   timeline?: SavedDockTimelineLayout;
 }
 

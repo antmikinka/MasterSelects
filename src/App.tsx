@@ -74,6 +74,17 @@ function App() {
   // Browser MIDI runtime
   useMIDIRuntime();
 
+  useEffect(() => {
+    const preventBrowserContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+    };
+
+    document.addEventListener('contextmenu', preventBrowserContextMenu, { capture: true });
+    return () => {
+      document.removeEventListener('contextmenu', preventBrowserContextMenu, { capture: true });
+    };
+  }, []);
+
   // Check if there's a stored project in IndexedDB (the only allowed browser storage)
   const [isChecking, setIsChecking] = useState(true);
   const [hasStoredProject, setHasStoredProject] = useState(false);

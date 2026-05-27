@@ -37,6 +37,7 @@
 
 .timeline-timebar {
   display: flex;
+  position: relative;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
@@ -48,16 +49,50 @@
 }
 
 .timeline-timebar .timeline-ruler-timecode {
+  position: relative;
   flex: 0 0 auto;
   height: 32px;
   min-width: max-content;
   padding: 0;
+  overflow: visible;
   font-size: 24px;
   font-weight: 800;
 }
 
-.timeline-timebar .timeline-ruler-time-separator {
+.timeline-timebar .timeline-ruler-current-time {
+  cursor: pointer;
+}
+
+.timeline-timebar .timeline-ruler-separator-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
   margin: 0 8px;
+}
+
+.timeline-timebar .timeline-ruler-timecode.frames .timeline-ruler-separator-wrap {
+  margin: 0 3px;
+}
+
+.timeline-timebar .timeline-ruler-time-separator {
+  margin: 0;
+}
+
+.timeline-timebar .timeline-ruler-fps-label {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translate(-50%, -100%);
+  pointer-events: none;
+  color: #ffffff;
+  font-family: var(--font-family);
+  font-size: 6px;
+  font-weight: 500;
+  line-height: 1;
+  opacity: 0.82;
+  white-space: nowrap;
 }
 
 .timeline-timebar .timeline-ruler-duration-input {
@@ -72,6 +107,11 @@
   text-align: left;
   overflow: visible;
   white-space: nowrap;
+}
+
+.timeline-timebar .timeline-ruler-duration,
+.timeline-timebar .timeline-ruler-duration-input {
+  font-weight: 300;
 }
 
 .timeline-body {
@@ -120,7 +160,7 @@
 
 .timeline-layer-divider-resize-handle {
   position: absolute;
-  top: 0;
+  top: 30px;
   bottom: 0;
   left: calc(var(--track-header-width, 210px) - 4px);
   width: 8px;
@@ -357,7 +397,7 @@
 }
 
 .timeline-track-section.audio {
-  background: linear-gradient(180deg, rgba(20, 42, 36, 0.18), transparent 40%), var(--bg-secondary);
+  background: var(--bg-secondary);
 }
 
 .timeline-container.audio-layer-basic .timeline-track-section.audio {

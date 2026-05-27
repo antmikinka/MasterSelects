@@ -1,7 +1,7 @@
 // Playback-related actions slice
 
 import type { PlaybackActions, SliceCreator } from './types';
-import { MIN_ZOOM, MAX_ZOOM } from './constants';
+import { MIN_ZOOM, MAX_ZOOM, MIN_TRACK_HEADER_WIDTH, MAX_TRACK_HEADER_WIDTH } from './constants';
 import { useMediaStore } from '../mediaStore';
 import { engine } from '../../engine/WebGPUEngine';
 import { getRuntimeFrameProvider } from '../../services/mediaRuntime/runtimePlayback';
@@ -200,6 +200,25 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
   // View actions
   setZoom: (zoom) => {
     set({ zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom)) });
+  },
+
+  setTrackHeaderWidth: (width) => {
+    const nextWidth = Number.isFinite(width)
+      ? Math.max(MIN_TRACK_HEADER_WIDTH, Math.min(MAX_TRACK_HEADER_WIDTH, width))
+      : get().trackHeaderWidth;
+    set({ trackHeaderWidth: nextWidth });
+  },
+
+  setTimelineSplitRatio: (ratio) => {
+    if (ratio === null) {
+      set({ timelineSplitRatio: null });
+      return;
+    }
+
+    const nextRatio = Number.isFinite(ratio)
+      ? Math.max(0, Math.min(1, ratio))
+      : get().timelineSplitRatio;
+    set({ timelineSplitRatio: nextRatio });
   },
 
   toggleSnapping: () => {
@@ -436,12 +455,16 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
 
   // Tool mode actions
   setToolMode: (mode) => {
-    set({ toolMode: mode });
+    get().setActiveTimelineTool(mode === 'cut' ? 'blade' : 'select');
   },
 
   toggleCutTool: () => {
-    const { toolMode } = get();
-    set({ toolMode: toolMode === 'cut' ? 'select' : 'cut' });
+    const { activeTimelineToolId, toolMode } = get();
+    get().setActiveTimelineTool(
+      toolMode === 'cut' || activeTimelineToolId === 'blade' || activeTimelineToolId === 'blade-all-tracks'
+        ? 'select'
+        : 'blade',
+    );
   },
 
   // Clip animation phase for composition transitions

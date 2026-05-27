@@ -53,6 +53,7 @@ import {
 } from '../../../services/flashboard/FlashBoardPromptRefiner';
 import {
   DEFAULT_FLASHBOARD_CHAT_PROVIDER,
+  DEFAULT_FLASHBOARD_CHAT_MODEL,
   DEFAULT_FLASHBOARD_CHAT_TEMPERATURE,
   DEFAULT_FLASHBOARD_OPENAI_REASONING_EFFORT,
   FLASHBOARD_CHAT_MODEL_OPTIONS,
@@ -727,7 +728,7 @@ export function FlashBoardComposer({
   const [chatPanelOpen, setChatPanelOpen] = useState(initialMode === 'chat');
   const [chatPrompt, setChatPrompt] = useState('');
   const [chatProvider, setChatProvider] = useState<FlashBoardChatProvider>(DEFAULT_FLASHBOARD_CHAT_PROVIDER);
-  const [chatModel, setChatModel] = useState(FLASHBOARD_CHAT_MODEL_OPTIONS[DEFAULT_FLASHBOARD_CHAT_PROVIDER][0]?.id ?? 'gpt-5.5');
+  const [chatModel, setChatModel] = useState(DEFAULT_FLASHBOARD_CHAT_MODEL);
   const [chatTemperature, setChatTemperature] = useState(DEFAULT_FLASHBOARD_CHAT_TEMPERATURE);
   const [openAiReasoningEffort, setOpenAiReasoningEffort] = useState<FlashBoardOpenAiReasoningEffort>(
     DEFAULT_FLASHBOARD_OPENAI_REASONING_EFFORT,
@@ -1750,6 +1751,21 @@ export function FlashBoardComposer({
     openSettings,
     useOpenAiKeyByDefault,
   ]);
+
+  const handleClearChatHistory = useCallback(() => {
+    closePopover();
+    chatAbortRef.current?.abort();
+    chatAbortRef.current = null;
+    if (copiedChatResetTimeoutRef.current !== null) {
+      window.clearTimeout(copiedChatResetTimeoutRef.current);
+      copiedChatResetTimeoutRef.current = null;
+    }
+    setChatMessages([]);
+    setChatPrompt('');
+    setChatError(null);
+    setCopiedChatMessageId(null);
+    setIsChatting(false);
+  }, [closePopover]);
 
   const handleChatMessageDoubleClick = useCallback((message: FlashBoardChatMessage) => {
     if (message.role !== 'assistant' || message.isPending || !message.text.trim()) {
@@ -3577,6 +3593,15 @@ export function FlashBoardComposer({
               title={chatTemperatureSupported ? `Temperature: ${chatTemperature.toFixed(1)}` : 'Temperature fixed for this model'}
             >
               {chatTemperatureSupported ? `Temp ${chatTemperature.toFixed(1)}` : 'Fixed temp'}
+            </button>
+            <button
+              className="fb-pill fb-chat-clear-pill"
+              type="button"
+              onClick={handleClearChatHistory}
+              disabled={chatMessages.length === 0 && !chatPrompt && !chatError}
+              title="Clear chat history and start a new chat"
+            >
+              New
             </button>
 
             {renderedPopover === 'chatProvider' && (

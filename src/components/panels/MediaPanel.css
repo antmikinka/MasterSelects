@@ -209,10 +209,16 @@
   overflow-x: auto;
   overflow-y: auto;
   scrollbar-gutter: stable;
+  overscroll-behavior: contain;
 }
 
 .media-panel-table-wrapper .media-column-headers,
 .media-panel-table-wrapper .media-item-list {
+  width: max-content;
+  min-width: 100%;
+}
+
+.media-panel-table-wrapper .media-item {
   width: max-content;
   min-width: 100%;
 }
@@ -252,51 +258,9 @@
   overflow: hidden;
   position: relative;
   flex-shrink: 0;
-  width: min(var(--media-name-column-width, 250px), max(120px, calc(100cqw - 408px))) !important;
-  min-width: min(var(--media-name-column-width, 250px), max(120px, calc(100cqw - 408px))) !important;
-  max-width: min(var(--media-name-column-width, 250px), max(120px, calc(100cqw - 408px))) !important;
-}
-
-@container (max-width: 760px) {
-  .media-col-bitrate,
-  .media-col-size,
-  .media-col-container,
-  .media-col-codec {
-    display: none;
-  }
-
-  .media-col-name {
-    width: min(var(--media-name-column-width, 250px), max(120px, calc(100cqw - 218px))) !important;
-    min-width: min(var(--media-name-column-width, 250px), max(120px, calc(100cqw - 218px))) !important;
-    max-width: min(var(--media-name-column-width, 250px), max(120px, calc(100cqw - 218px))) !important;
-  }
-}
-
-@container (max-width: 560px) {
-  .media-col-resolution,
-  .media-col-fps,
-  .media-col-audio {
-    display: none;
-  }
-
-  .media-col-name {
-    width: min(var(--media-name-column-width, 250px), max(120px, calc(100cqw - 102px))) !important;
-    min-width: min(var(--media-name-column-width, 250px), max(120px, calc(100cqw - 102px))) !important;
-    max-width: min(var(--media-name-column-width, 250px), max(120px, calc(100cqw - 102px))) !important;
-  }
-}
-
-@container (max-width: 380px) {
-  .media-col-label,
-  .media-col-duration {
-    display: none;
-  }
-
-  .media-col-name {
-    width: calc(100cqw - 16px) !important;
-    min-width: calc(100cqw - 16px) !important;
-    max-width: calc(100cqw - 16px) !important;
-  }
+  width: var(--media-name-column-width, 250px) !important;
+  min-width: var(--media-name-column-width, 250px) !important;
+  max-width: var(--media-name-column-width, 250px) !important;
 }
 
 /* Resize handle for name column */
@@ -423,50 +387,50 @@
 }
 
 .media-col-duration {
-  width: 56px;
-  min-width: 56px;
+  width: 74px;
+  min-width: 74px;
   text-align: right;
 }
 
 .media-col-resolution {
-  width: 118px;
-  min-width: 118px;
+  width: 126px;
+  min-width: 126px;
   text-align: right;
 }
 
 .media-col-fps {
-  width: 40px;
-  min-width: 40px;
+  width: 48px;
+  min-width: 48px;
   text-align: right;
 }
 
 .media-col-container {
-  width: 72px;
-  min-width: 72px;
+  width: 86px;
+  min-width: 86px;
   text-align: center;
 }
 
 .media-col-codec {
-  width: 68px;
-  min-width: 68px;
+  width: 84px;
+  min-width: 84px;
   text-align: center;
 }
 
 .media-col-audio {
-  width: 44px;
-  min-width: 44px;
+  width: 62px;
+  min-width: 62px;
   text-align: center;
 }
 
 .media-col-bitrate {
-  width: 70px;
-  min-width: 70px;
+  width: 86px;
+  min-width: 86px;
   text-align: right;
 }
 
 .media-col-size {
-  width: 70px;
-  min-width: 70px;
+  width: 82px;
+  min-width: 82px;
   text-align: right;
   padding-right: 12px;
 }

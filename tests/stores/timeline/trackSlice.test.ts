@@ -1005,4 +1005,25 @@ describe('trackSlice', () => {
 
     expect(store.getState().runtimeAudioMeters.trackMeters['audio-1']).toBeUndefined();
   });
+
+  it('setTargetTrack toggles the edit target track off and on', () => {
+    store.getState().setTargetTrack('video-1');
+    expect(store.getState().targetTrackIdByType.video).toBe('video-1');
+
+    store.getState().setTargetTrack('video-1');
+    expect(store.getState().targetTrackIdByType.video).toBeUndefined();
+  });
+
+  it('setTargetTrack stores independent video and audio edit targets', () => {
+    const videoId = store.getState().addTrack('video');
+    const audioId = store.getState().addTrack('audio');
+
+    store.getState().setTargetTrack(videoId);
+    store.getState().setTargetTrack(audioId);
+
+    expect(store.getState().targetTrackIdByType).toMatchObject({
+      video: videoId,
+      audio: audioId,
+    });
+  });
 });

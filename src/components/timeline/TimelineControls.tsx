@@ -13,13 +13,13 @@ import {
   IconPlayerStopFilled,
   IconPlus,
   IconRepeat,
-  IconScissors,
 } from '@tabler/icons-react';
 import './TimelineControls.css';
 import type { TimelineControlsProps } from './types';
 import { useTimelineStore } from '../../stores/timeline';
 import { AudioEffectStackControl } from '../panels/properties/AudioEffectStackControl';
 import { AudioLevelMeter } from './components/AudioLevelMeter';
+import { TimelineToolPalette } from './tools/TimelineToolPalette';
 import { AudioExportPipeline } from '../../engine/audio/AudioExportPipeline';
 import { audioRecordingService } from '../../services/audio/AudioRecordingService';
 import {
@@ -47,7 +47,6 @@ function TimelineControlsComponent({
   audioDisplayMode,
   audioFocusMode,
   trackFocusMode,
-  toolMode,
   onPlay,
   onPause,
   onStop,
@@ -61,7 +60,6 @@ function TimelineControlsComponent({
   onSetAudioDisplayMode,
   onToggleAudioFocusMode,
   onSetTrackFocusMode,
-  onToggleCutTool,
   onFitToWindow,
   onToggleSlotGrid,
   slotGridActive,
@@ -204,18 +202,6 @@ function TimelineControlsComponent({
     <div className={`timeline-toolbar timeline-toolbar-${variant}`}>
       {showMainControls && (
         <>
-      <div className="timeline-slot-toggle">
-        <button
-          className={`btn btn-sm btn-icon ${slotGridActive ? 'btn-active' : ''}`}
-          onClick={onToggleSlotGrid}
-          title={slotGridActive ? 'Back to Timeline (Ctrl+Shift+Scroll)' : 'Slot Grid View (Ctrl+Shift+Scroll)'}
-        >
-          {slotGridActive
-            ? <IconList size={14} stroke={2.2} aria-hidden="true" />
-            : <IconLayoutGrid size={14} stroke={2.2} aria-hidden="true" />
-          }
-        </button>
-      </div>
       <div className="timeline-controls">
         <button className="btn btn-sm btn-icon timeline-transport-button" onClick={onStop} title="Stop">
           <IconPlayerStopFilled className="timeline-transport-icon" aria-hidden="true" />
@@ -247,6 +233,13 @@ function TimelineControlsComponent({
         >
           <IconPlayerRecordFilled className="timeline-transport-icon" aria-hidden="true" />
         </button>
+        <button
+          className={`btn btn-sm timeline-proxy-button ${proxyEnabled ? 'btn-active' : ''}`}
+          onClick={onToggleProxy}
+          title={proxyTitle}
+        >
+          Proxy
+        </button>
         {recoveryEntries.length > 0 && (
           <button
             type="button"
@@ -267,19 +260,24 @@ function TimelineControlsComponent({
         )}
       </div>
       <div className="timeline-edit-tools">
+        <TimelineToolPalette />
         <button
-          className={`btn btn-sm btn-icon ${snappingEnabled ? 'btn-active' : ''}`}
-          onClick={onToggleSnapping}
+          type="button"
+          className={`timeline-tool-button timeline-snapping-button ${snappingEnabled ? 'active' : ''}`}
+          aria-label="Snapping"
+          aria-pressed={snappingEnabled}
+          onPointerUp={(event) => {
+            if (event.button !== 0) return;
+            onToggleSnapping();
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            onToggleSnapping();
+          }}
           title={snappingEnabled ? 'Snapping enabled - clips snap to edges' : 'Snapping disabled - free positioning'}
         >
-          <IconMagnet size={14} stroke={2.2} aria-hidden="true" />
-        </button>
-        <button
-          className={`btn btn-sm btn-icon ${toolMode === 'cut' ? 'btn-active' : ''}`}
-          onClick={onToggleCutTool}
-          title={toolMode === 'cut' ? 'Cut Tool active (C) - click clips to split' : 'Cut Tool (C) - click to activate'}
-        >
-          <IconScissors size={14} stroke={2.2} aria-hidden="true" />
+          <IconMagnet className="timeline-tool-button-icon" size={18} stroke={2.2} aria-hidden="true" />
         </button>
       </div>
         </>
@@ -416,13 +414,6 @@ function TimelineControlsComponent({
         )}
       </div>
       <div className="timeline-ram-preview">
-        <button
-          className={`btn btn-sm ${proxyEnabled ? 'btn-active' : ''}`}
-          onClick={onToggleProxy}
-          title={proxyTitle}
-        >
-          Proxy
-        </button>
         <div className="view-dropdown" ref={viewDropdownRef}>
           <button
             className={`btn btn-sm ${viewDropdownOpen ? 'btn-active' : ''}`}
@@ -514,6 +505,21 @@ function TimelineControlsComponent({
               </div>
             </div>
           )}
+        </div>
+        <div className="timeline-slot-toggle timeline-slot-toggle-view">
+          <button
+            type="button"
+            className={`timeline-tool-button ${slotGridActive ? 'active' : ''}`}
+            onClick={onToggleSlotGrid}
+            title={slotGridActive ? 'Back to Timeline (Ctrl+Shift+Scroll)' : 'Slot Grid View (Ctrl+Shift+Scroll)'}
+            aria-label={slotGridActive ? 'Back to Timeline' : 'Slot Grid View'}
+            aria-pressed={slotGridActive}
+          >
+            {slotGridActive
+              ? <IconList className="timeline-tool-button-icon" size={18} stroke={2.2} aria-hidden="true" />
+              : <IconLayoutGrid className="timeline-tool-button-icon" size={18} stroke={2.2} aria-hidden="true" />
+            }
+          </button>
         </div>
       </div>
         </>

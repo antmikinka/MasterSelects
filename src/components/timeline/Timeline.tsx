@@ -2,7 +2,6 @@
 // Composes TimelineRuler, TimelineControls, TimelineHeader, TimelineTrack, TimelineClip, TimelineKeyframes
 
 import { useRef, useState, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
-import { IconFlag3Filled, IconMapPinFilled } from '@tabler/icons-react';
 import './Timeline.css';
 import './TimelineTracks.css';
 import { useShallow } from 'zustand/react/shallow';
@@ -36,10 +35,12 @@ import { PickWhipCables } from './components/PickWhipCables';
 import { ParentChildLinksOverlay } from './components/ParentChildLinksOverlay';
 import { SlotGrid } from './SlotGrid';
 import { animateSlotGrid } from './slotGridAnimation';
+import { TimelineToolOverlayLayer } from './tools/TimelineToolOverlayLayer';
 import { useTimelineKeyboard } from './hooks/useTimelineKeyboard';
 import { useTimelineZoom } from './hooks/useTimelineZoom';
 import { usePlayheadDrag } from './hooks/usePlayheadDrag';
 import { TimelineContextMenu } from './TimelineContextMenu';
+import { InOutContextMenu, type InOutContextMenuState, type InOutPointType } from './InOutContextMenu';
 import { useClipContextMenu } from './useClipContextMenu';
 import { useMarqueeSelection } from './hooks/useMarqueeSelection';
 import { useClipTrim } from './hooks/useClipTrim';
@@ -54,7 +55,15 @@ import { usePickWhipDrag } from './hooks/usePickWhipDrag';
 import { useTimelineHelpers } from './hooks/useTimelineHelpers';
 import { usePlayheadSnap } from './hooks/usePlayheadSnap';
 import { useMarkerDrag } from './hooks/useMarkerDrag';
-import { MIN_ZOOM, MAX_ZOOM, MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT } from '../../stores/timeline/constants';
+import { getTimelineToolCursor } from './tools/pointer/timelineToolPointerDispatcher';
+import {
+  MIN_ZOOM,
+  MAX_ZOOM,
+  MIN_TRACK_HEIGHT,
+  MAX_TRACK_HEIGHT,
+  MIN_TRACK_HEADER_WIDTH,
+  MAX_TRACK_HEADER_WIDTH,
+} from '../../stores/timeline/constants';
 import type { TimelineTrackFocusMode } from '../../stores/timeline/types';
 import type { ClipKeyframeTimeGroup, ContextMenuState, TimelineControlsProps, TimelineRulerCacheRange } from './types';
 import { isProxyFrameCountComplete } from '../../stores/mediaStore/helpers/proxyCompleteness';
@@ -65,9 +74,8 @@ import { getTimelineTrackColor, TIMELINE_TRACK_COLOR_HIDDEN } from './trackColor
 
 const KEYFRAME_TIME_GROUP_PRECISION = 1000;
 const RAM_PREVIEW_FEATURE_ENABLED = false;
-const DEFAULT_TRACK_HEADER_WIDTH = 210;
-const MIN_TRACK_HEADER_WIDTH = 150;
-const MAX_TRACK_HEADER_WIDTH = 340;
+const TIMELINE_END_PADDING_PX = 100;
+const TIMELINE_VIEWPORT_FALLBACK_PX = 1600;
 const SPLIT_DIVIDER_HEIGHT = 2;
 const COLLAPSED_TRACK_HEIGHT = 32;
 const MIN_SPLIT_SECTION_HEIGHT = 48;
@@ -103,9 +111,41 @@ type TrackHeaderWidthDragState = {
   startWidth: number;
 };
 
+type TimelineSurfaceDragState = {
+  pointerId: number;
+  startClientX: number;
+  startScrollX: number;
+  maxScrollX: number;
+};
+
+function clampValue(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
 function clampScrollY(scrollY: number, contentHeight: number, viewportHeight: number): number {
   const maxScroll = Math.max(0, contentHeight - viewportHeight);
   return Math.max(0, Math.min(maxScroll, scrollY));
+}
+
+function shouldIgnoreTimelineSurfaceToolTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest([
+    'button',
+    'input',
+    'select',
+    'textarea',
+    '[role="button"]',
+    '[role="menuitem"]',
+    '.timeline-ruler-control-strip',
+    '.timeline-layer-divider-resize-handle',
+    '.track-header',
+    '.timeline-split-divider',
+    '.playhead',
+    '.timeline-marker',
+    '.in-out-marker',
+    '.timeline-context-menu',
+    '.timeline-tool-flyout',
+  ].join(',')));
 }
 
 function getNormalizedWheelDeltaY(e: React.WheelEvent, viewportHeight: number): number {
@@ -247,7 +287,7 @@ export function Timeline() {
     useTimelineStore(useShallow(selectPlaybackState));
 
   // View state (changes on zoom/scroll)
-  const { zoom, scrollX } =
+  const { zoom, scrollX, trackHeaderWidth, timelineSplitRatio } =
     useTimelineStore(useShallow(selectViewState));
 
   // Slot grid progress - direct selector for reliable reactivity
@@ -255,8 +295,11 @@ export function Timeline() {
   const timelineSessionId = useTimelineStore(state => state.timelineSessionId);
 
   // UI settings (rarely changes)
-  const { snappingEnabled, inPoint, outPoint, loopPlayback, toolMode, thumbnailsEnabled, waveformsEnabled, audioDisplayMode, audioLayerAdvancedMode, audioFocusMode, trackFocusMode } =
+  const { snappingEnabled, inPoint, outPoint, loopPlayback, toolMode, activeTimelineToolId, thumbnailsEnabled, waveformsEnabled, audioDisplayMode, audioLayerAdvancedMode, audioFocusMode, trackFocusMode } =
     useTimelineStore(useShallow(selectUISettings));
+  const timelineRangeSelection = useTimelineStore(state => state.timelineRangeSelection);
+  const timelineToolPreview = useTimelineStore(state => state.timelineToolPreview);
+  const timelineToolCursor = getTimelineToolCursor(activeTimelineToolId);
   const effectiveAudioLayerAdvancedMode = audioLayerAdvancedMode !== false;
   const timelineTrackColorsVisible = effectiveAudioLayerAdvancedMode;
 
@@ -291,10 +334,11 @@ export function Timeline() {
   // Clip actions
   const {
     addClip, addCompClip, addTextClip, addSolidClip, addMeshClip, addCameraClip, addSplatEffectorClip,
-    addMathSceneClip, addMotionShapeClip, moveClip, trimClip,
-    updateClip, updateTextProperties, removeClip, selectClip, unlinkGroup, splitClip, splitClipAtPlayhead,
+    addMathSceneClip, addMotionShapeClip, moveClip,
+    updateClip, updateTextProperties, removeClip, selectClip, unlinkGroup, splitClipAtPlayhead,
     toggleClipReverse, updateClipTransform, setClipParent, generateWaveformForClip,
-    addClipEffect, convertSolidToMotionShape,
+    addClipEffect, convertSolidToMotionShape, rippleDeleteSelection, deleteGapAtTime,
+    prepareTimelinePlacementRange,
   } = store;
 
   // Transform getters
@@ -315,7 +359,14 @@ export function Timeline() {
   const { setInPoint, setOutPoint, setInPointAtPlayhead, setOutPointAtPlayhead, clearInOut } = store;
 
   // View actions
-  const { setZoom, setScrollX, setDuration, toggleSnapping } = store;
+  const {
+    setZoom,
+    setScrollX,
+    setDuration,
+    setTrackHeaderWidth,
+    setTimelineSplitRatio,
+    toggleSnapping,
+  } = store;
 
   // Preview actions
   const {
@@ -324,7 +375,17 @@ export function Timeline() {
   } = store;
 
   // Tool actions
-  const { setToolMode, toggleCutTool, toggleThumbnailsEnabled, toggleWaveformsEnabled, setAudioDisplayMode, toggleAudioLayerAdvancedMode, toggleAudioFocusMode, setTrackFocusMode } = store;
+  const {
+    toggleCutTool,
+    toggleThumbnailsEnabled,
+    toggleWaveformsEnabled,
+    setAudioDisplayMode,
+    toggleAudioLayerAdvancedMode,
+    toggleAudioFocusMode,
+    setTrackFocusMode,
+    setTimelineRangeSelection,
+    clearTimelineRangeSelection,
+  } = store;
 
   // Marker actions
   const { addMarker, moveMarker, removeMarker, updateMarker } = store;
@@ -358,6 +419,7 @@ export function Timeline() {
   const trackLanesRef = useRef<HTMLDivElement>(null);
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
   const [scrubCacheRevision, setScrubCacheRevision] = useState(0);
+  const [timelineViewportWidth, setTimelineViewportWidth] = useState(TIMELINE_VIEWPORT_FALLBACK_PX);
 
   useEffect(() => {
     const handleScrubCacheUpdated = () => {
@@ -407,22 +469,6 @@ export function Timeline() {
       compositionSwitchSourceTracksRef.current = null;
     }
   }, [clipAnimationPhase, compositionSwitchTargetTracks, tracks]);
-
-  // Cut tool hover state (shared across linked clips)
-  const [cutHoverInfo, setCutHoverInfo] = useState<{ clipId: string; time: number } | null>(null);
-  const handleCutHover = useCallback((clipId: string | null, time: number | null) => {
-    if (clipId && time !== null) {
-      setCutHoverInfo({ clipId, time });
-    } else {
-      setCutHoverInfo(null);
-    }
-  }, []);
-
-  // Cut at position handler - splits clip and returns to select mode
-  const handleCutAtPosition = useCallback((clipId: string, time: number) => {
-    splitClip(clipId, time);
-    setToolMode('select');
-  }, [splitClip, setToolMode]);
 
   // Stable callbacks for TimelineControls (avoids re-renders from inline arrows)
   const toggleProxyEnabled = useMediaStore(state => state.toggleProxyEnabled);
@@ -504,12 +550,25 @@ export function Timeline() {
   } = useTimelineHelpers({ zoom, frameRate: compositionFrameRate, clips, getClipKeyframes });
   const [isEditingTimelineDuration, setIsEditingTimelineDuration] = useState(false);
   const [timelineDurationInputValue, setTimelineDurationInputValue] = useState('');
+  const [timelineTimeDisplayMode, setTimelineTimeDisplayMode] = useState<'time' | 'frames'>('time');
   const timelineDurationInputRef = useRef<HTMLInputElement>(null);
   const hasInOutDisplayRange = inPoint !== null && outPoint !== null && outPoint > inPoint;
   const inOutDisplayDuration = hasInOutDisplayRange ? outPoint - inPoint : duration;
   const timelineRulerCurrentTime = hasInOutDisplayRange
     ? Math.max(0, Math.min(playheadPosition - inPoint, inOutDisplayDuration))
     : playheadPosition;
+  const timelineFrameRate = Number.isFinite(compositionFrameRate) && compositionFrameRate > 0
+    ? compositionFrameRate
+    : 30;
+  const timelineTotalFrames = Math.max(0, Math.round(inOutDisplayDuration * timelineFrameRate));
+  const timelineCurrentFrame = Math.max(
+    0,
+    Math.min(timelineTotalFrames, Math.floor(timelineRulerCurrentTime * timelineFrameRate + Number.EPSILON)),
+  );
+  const timelineFpsValue = Number.isInteger(timelineFrameRate)
+    ? timelineFrameRate.toString()
+    : timelineFrameRate.toFixed(2).replace(/\.?0+$/, '');
+  const timelineFpsLabel = `${timelineFpsValue} fps`;
 
   useEffect(() => {
     if (isEditingTimelineDuration && timelineDurationInputRef.current) {
@@ -529,6 +588,12 @@ export function Timeline() {
     setIsEditingTimelineDuration(true);
   }, [duration, formatTime]);
 
+  const handleTimelineTimeDoubleClick = useCallback((e: React.MouseEvent<HTMLSpanElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setTimelineTimeDisplayMode(mode => mode === 'frames' ? 'time' : 'frames');
+  }, []);
+
   const handleTimelineDurationSubmit = useCallback(() => {
     const nextDuration = parseTime(timelineDurationInputValue);
     if (nextDuration !== null && nextDuration > 0) {
@@ -536,6 +601,22 @@ export function Timeline() {
     }
     setIsEditingTimelineDuration(false);
   }, [parseTime, setDuration, timelineDurationInputValue]);
+
+  useEffect(() => {
+    if (!isEditingTimelineDuration) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const input = timelineDurationInputRef.current;
+      if (input && event.target instanceof Node && input.contains(event.target)) {
+        return;
+      }
+
+      handleTimelineDurationSubmit();
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    return () => document.removeEventListener('pointerdown', handlePointerDown, true);
+  }, [handleTimelineDurationSubmit, isEditingTimelineDuration]);
 
   const handleTimelineDurationKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -556,8 +637,10 @@ export function Timeline() {
     scrollX,
     snappingEnabled,
     isExporting,
+    activeTimelineToolId,
     selectClip,
     moveClip,
+    applyTimelineEditOperation: store.applyTimelineEditOperation,
     openCompositionTab,
     pixelToTime,
     getRenderedTrackHeight: getRenderedTrackHeightForTrack,
@@ -570,9 +653,10 @@ export function Timeline() {
     clipMap,
     tracks,
     isExporting,
+    activeTimelineToolId,
     selectClip,
-    trimClip,
-    moveClip,
+    applyTimelineEditOperation: store.applyTimelineEditOperation,
+    setTimelineToolPreview: store.setTimelineToolPreview,
     pixelToTime,
   });
 
@@ -625,7 +709,9 @@ export function Timeline() {
     tracks,
     clips,
     isExporting,
+    activeTimelineToolId,
     pixelToTime,
+    prepareTimelinePlacementRange,
     addTrack,
     addClip,
     addCompClip,
@@ -713,14 +799,14 @@ export function Timeline() {
   const [audioViewportHeight, setAudioViewportHeight] = useState(160);
   const [splitViewportHeight, setSplitViewportHeight] = useState(320);
   const [splitDragVideoHeight, setSplitDragVideoHeight] = useState<number | null>(null);
-  const [balancedSplitRatio, setBalancedSplitRatio] = useState<number | null>(null);
   const splitDragFrameRef = useRef<number | null>(null);
   const splitDragPendingClientYRef = useRef<number | null>(null);
   const trackResizeDragRef = useRef<TrackResizeDragState | null>(null);
   const [activeTrackResizeId, setActiveTrackResizeId] = useState<string | null>(null);
   const trackHeaderWidthDragRef = useRef<TrackHeaderWidthDragState | null>(null);
-  const [trackHeaderWidth, setTrackHeaderWidth] = useState(DEFAULT_TRACK_HEADER_WIDTH);
   const [isTrackHeaderWidthResizing, setIsTrackHeaderWidthResizing] = useState(false);
+  const timelineSurfaceDragRef = useRef<TimelineSurfaceDragState | null>(null);
+  const [isTimelineSurfacePanning, setIsTimelineSurfacePanning] = useState(false);
   const [timelinePointerX, setTimelinePointerX] = useState<number | null>(null);
   const [hoveredKeyframeRow, setHoveredKeyframeRow] = useState<{
     trackId: string;
@@ -737,6 +823,32 @@ export function Timeline() {
   // Context menu state for marker right-click
   const [markerContextMenu, setMarkerContextMenu] = useState<MarkerContextMenuState | null>(null);
 
+  // Context menu state for in/out marker right-click
+  const [inOutContextMenu, setInOutContextMenu] = useState<InOutContextMenuState | null>(null);
+
+  const handleInOutMarkerContextMenu = useCallback((e: React.MouseEvent, type: InOutPointType) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (isExporting) return;
+
+    setContextMenu(null);
+    setTrackContextMenu(null);
+    setMarkerContextMenu(null);
+    setInOutContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      type,
+    });
+  }, [isExporting]);
+
+  const handleDeleteInOutPoint = useCallback((type: InOutPointType) => {
+    if (type === 'in') {
+      setInPoint(null);
+    } else {
+      setOutPoint(null);
+    }
+  }, [setInPoint, setOutPoint]);
+
   // Transcript markers visibility toggle (from store for persistence)
   const showTranscriptMarkers = useTimelineStore(s => s.showTranscriptMarkers);
   const toggleTranscriptMarkers = useTimelineStore(s => s.toggleTranscriptMarkers);
@@ -749,7 +861,6 @@ export function Timeline() {
     timelineMarkerDrag,
     markerCreateDrag,
     handleTimelineMarkerMouseDown,
-    handleMarkerButtonDragStart,
   } = useMarkerDrag({
     timelineRef,
     timelineBodyRef,
@@ -798,6 +909,7 @@ export function Timeline() {
     selectedClipIds,
     selectedKeyframeIds,
     clipKeyframes,
+    activeTimelineToolId,
     clipDrag,
     clipTrim,
     markerDrag,
@@ -805,6 +917,8 @@ export function Timeline() {
     selectClip,
     selectKeyframe,
     deselectAllKeyframes,
+    setTimelineRangeSelection,
+    clearTimelineRangeSelection,
     pixelToTime,
     isTrackExpanded: isTrackExpandedForRender,
     getTrackBaseHeight: getRenderedTrackBaseHeight,
@@ -941,8 +1055,8 @@ export function Timeline() {
       };
     }
 
-    if (trackFocusMode === 'balanced' && balancedSplitRatio !== null) {
-      const videoHeight = clampSplitDragVideoHeight(availableHeight * balancedSplitRatio, availableHeight);
+    if (trackFocusMode === 'balanced' && timelineSplitRatio !== null) {
+      const videoHeight = clampSplitDragVideoHeight(availableHeight * timelineSplitRatio, availableHeight);
       return {
         videoSectionHeight: videoHeight,
         audioSectionHeight: Math.max(0, availableHeight - videoHeight),
@@ -1000,10 +1114,10 @@ export function Timeline() {
     };
   }, [
     audioSectionMetrics.contentHeight,
-    balancedSplitRatio,
     clampSplitDragVideoHeight,
     splitDragVideoHeight,
     splitViewportHeight,
+    timelineSplitRatio,
     trackFocusMode,
     videoSectionMetrics.contentHeight,
   ]);
@@ -1118,6 +1232,12 @@ export function Timeline() {
       if (audioSectionViewportRef.current) {
         setAudioViewportHeight(audioSectionViewportRef.current.clientHeight);
       }
+      const nextTimelineViewportWidth =
+        timelineRef.current?.clientWidth ??
+        (timelineBodyRef.current ? timelineBodyRef.current.clientWidth - trackHeaderWidth : null);
+      if (nextTimelineViewportWidth && nextTimelineViewportWidth > 0) {
+        setTimelineViewportWidth(Math.max(1, nextTimelineViewportWidth));
+      }
     };
 
     updateViewportHeights();
@@ -1125,7 +1245,7 @@ export function Timeline() {
     const observer = typeof ResizeObserver !== 'undefined'
       ? new ResizeObserver(updateViewportHeights)
       : null;
-    [scrollWrapperRef.current, videoSectionViewportRef.current, audioSectionViewportRef.current]
+    [scrollWrapperRef.current, timelineRef.current, videoSectionViewportRef.current, audioSectionViewportRef.current]
       .forEach((element) => {
         if (element) observer?.observe(element);
       });
@@ -1135,7 +1255,7 @@ export function Timeline() {
       observer?.disconnect();
       window.removeEventListener('resize', updateViewportHeights);
     };
-  }, []);
+  }, [trackHeaderWidth]);
 
   useEffect(() => {
     setVideoScrollY((current) => isVideoSectionCollapsed
@@ -1248,12 +1368,12 @@ export function Timeline() {
       setVideoScrollY((current) => Math.abs(current - nextVideoScrollY) > 0.5 ? nextVideoScrollY : current);
     }
     if (nextMode === 'balanced') {
-      setBalancedSplitRatio(nextVideoHeight / availableHeight);
+      setTimelineSplitRatio(nextVideoHeight / availableHeight);
     }
     if (useTimelineStore.getState().trackFocusMode !== nextMode) {
       setTrackFocusMode(nextMode);
     }
-  }, [clampSplitDragVideoHeight, setTrackFocusMode, videoSectionMetrics.contentHeight]);
+  }, [clampSplitDragVideoHeight, setTimelineSplitRatio, setTrackFocusMode, videoSectionMetrics.contentHeight]);
 
   const scheduleSplitDragPosition = useCallback((clientY: number) => {
     splitDragPendingClientYRef.current = clientY;
@@ -1509,7 +1629,7 @@ export function Timeline() {
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerUp);
     };
-  }, [isTrackHeaderWidthResizing]);
+  }, [isTrackHeaderWidthResizing, setTrackHeaderWidth]);
 
   // Zoom handling - extracted to hook
   const { handleSetZoom, handleFitToWindow } = useTimelineZoom({
@@ -1648,21 +1768,18 @@ export function Timeline() {
           clipFade={clipFade}
           zoom={zoom}
           scrollX={scrollX}
+          timelineViewportWidth={timelineViewportWidth}
           timelineRef={timelineRef}
           proxyEnabled={proxyEnabled}
           proxyStatus={proxyStatus}
           proxyProgress={mediaFile?.proxyProgress || 0}
           showTranscriptMarkers={showTranscriptMarkers}
-          toolMode={toolMode}
           snappingEnabled={snappingEnabled}
-          cutHoverInfo={cutHoverInfo}
-          onCutHover={handleCutHover}
           onMouseDown={(e) => handleClipMouseDown(e, clip.id)}
           onDoubleClick={(e) => handleClipDoubleClick(e, clip.id)}
           onContextMenu={(e) => handleClipContextMenu(e, clip.id)}
           onTrimStart={(e, edge) => handleTrimStart(e, clip.id, edge)}
           onFadeStart={(e, edge) => handleFadeStart(e, clip.id, edge)}
-          onCutAtPosition={handleCutAtPosition}
           hasKeyframes={hasKeyframes}
           fadeInDuration={getFadeInDuration(clip.id)}
           fadeOutDuration={getFadeOutDuration(clip.id)}
@@ -1690,19 +1807,16 @@ export function Timeline() {
       clipFade,
       zoom,
       scrollX,
+      timelineViewportWidth,
       proxyEnabled,
       mediaFiles,
       showTranscriptMarkers,
-      toolMode,
       snappingEnabled,
-      cutHoverInfo,
-      handleCutHover,
       handleClipMouseDown,
       handleClipDoubleClick,
       handleClipContextMenu,
       handleTrimStart,
       handleFadeStart,
-      handleCutAtPosition,
       hasKeyframes,
       getFadeInDuration,
       getFadeOutDuration,
@@ -1726,14 +1840,104 @@ export function Timeline() {
     : clipAnimationPhase === 'entering'
       ? (compositionSwitchDirection === 'backward' ? 'timeline-switch-enter-right' : 'timeline-switch-enter-left')
       : '';
+  const getTimelineViewportWidth = useCallback(() => {
+    const laneWidth = trackLanesRef.current?.clientWidth;
+    if (laneWidth && laneWidth > 0) return laneWidth;
+
+    const bodyWidth = timelineBodyRef.current?.clientWidth;
+    if (bodyWidth && bodyWidth > 0) return Math.max(1, bodyWidth - trackHeaderWidth);
+
+    return 800;
+  }, [trackHeaderWidth]);
+
+  const getTimelineMaxScrollX = useCallback((zoomValue: number) => {
+    return Math.max(
+      0,
+      duration * zoomValue - getTimelineViewportWidth() + TIMELINE_END_PADDING_PX,
+    );
+  }, [duration, getTimelineViewportWidth]);
+
+  const getTimelineSurfacePointerX = useCallback((clientX: number) => {
+    const rect = trackLanesRef.current?.getBoundingClientRect() ??
+      timelineBodyRef.current?.getBoundingClientRect();
+    const viewportWidth = getTimelineViewportWidth();
+    if (!rect) return 0;
+    return clampValue(clientX - rect.left, 0, viewportWidth);
+  }, [getTimelineViewportWidth]);
+
+  const handleTimelinePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    if (activeTimelineToolId !== 'hand' && activeTimelineToolId !== 'zoom') return;
+    if (shouldIgnoreTimelineSurfaceToolTarget(event.target)) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (activeTimelineToolId === 'zoom') {
+      const viewportWidth = getTimelineViewportWidth();
+      const pointerX = getTimelineSurfacePointerX(event.clientX);
+      const pointerTime = Math.max(0, (scrollX + pointerX) / Math.max(MIN_ZOOM, zoom));
+      const dynamicMinZoom = Math.max(MIN_ZOOM, (viewportWidth - TIMELINE_END_PADDING_PX) / Math.max(0.001, duration));
+      const zoomMultiplier = event.altKey || event.shiftKey ? 1 / 1.35 : 1.35;
+      const nextZoom = clampValue(zoom * zoomMultiplier, dynamicMinZoom, MAX_ZOOM);
+      const nextMaxScrollX = Math.max(0, duration * nextZoom - viewportWidth + TIMELINE_END_PADDING_PX);
+      const nextScrollX = clampValue(pointerTime * nextZoom - pointerX, 0, nextMaxScrollX);
+
+      setZoom(nextZoom);
+      setScrollX(nextScrollX);
+      return;
+    }
+
+    timelineSurfaceDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startScrollX: scrollX,
+      maxScrollX: getTimelineMaxScrollX(zoom),
+    };
+    setIsTimelineSurfacePanning(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }, [
+    activeTimelineToolId,
+    duration,
+    getTimelineMaxScrollX,
+    getTimelineSurfacePointerX,
+    getTimelineViewportWidth,
+    scrollX,
+    setScrollX,
+    setZoom,
+    zoom,
+  ]);
+
   const handleTimelinePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = timelineSurfaceDragRef.current;
+    if (drag && drag.pointerId === event.pointerId) {
+      const deltaX = event.clientX - drag.startClientX;
+      setScrollX(clampValue(drag.startScrollX - deltaX, 0, drag.maxScrollX));
+      event.preventDefault();
+    }
+
     const rect = event.currentTarget.getBoundingClientRect();
     const nextPointerX = Math.round(event.clientX - rect.left);
     setTimelinePointerX(previousPointerX => previousPointerX === nextPointerX ? previousPointerX : nextPointerX);
+  }, [setScrollX]);
+
+  const handleTimelinePointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = timelineSurfaceDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+
+    timelineSurfaceDragRef.current = null;
+    setIsTimelineSurfacePanning(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   }, []);
+
   const handleTimelinePointerLeave = useCallback(() => {
-    setTimelinePointerX(null);
+    if (!timelineSurfaceDragRef.current) {
+      setTimelinePointerX(null);
+    }
   }, []);
+  const timelineSurfaceCursor = isTimelineSurfacePanning ? 'grabbing' : timelineToolCursor;
   const getTimelineLineOpacity = useCallback((lineLeft: number) => {
     if (timelinePointerX === null) {
       return 0;
@@ -2029,6 +2233,7 @@ export function Timeline() {
                       }
                       selectedClipIds={selectedClipIds}
                       selectedKeyframeIds={selectedKeyframeIds}
+                      activeTimelineToolId={activeTimelineToolId}
                       clipDrag={clipDrag}
                       clipTrim={clipTrim}
                       externalDrag={externalDrag}
@@ -2053,6 +2258,7 @@ export function Timeline() {
                       onSelectKeyframe={selectKeyframe}
                       onMoveKeyframe={moveKeyframe}
                       onUpdateBezierHandle={updateBezierHandle}
+                      addKeyframe={addKeyframe}
                     />
                   );
                 })}
@@ -2099,6 +2305,17 @@ export function Timeline() {
                     isTrackExpanded={(trackId) => !sectionCollapsed && isTrackExpandedForRender(trackId)}
                     getExpandedTrackHeight={getSectionTrackHeightById}
                     getTrackHeight={getSectionTrackHeightForOverlay}
+                  />
+                )}
+
+                {!isCompositionTrackMorphing && (
+                  <TimelineToolOverlayLayer
+                    preview={timelineToolPreview}
+                    tracks={sectionTracks}
+                    clips={clips}
+                    duration={duration}
+                    timeToPixel={timeToPixel}
+                    getTrackHeight={(track) => getSectionTrackHeight(track, sectionKind)}
                   />
                 )}
 
@@ -2246,14 +2463,27 @@ export function Timeline() {
         overflow: 'hidden',
       } : undefined}>
         <div className="timeline-timebar">
-          <div className="timeline-ruler-timecode" title="Current time / composition duration">
+          <div
+            className={`timeline-ruler-timecode ${timelineTimeDisplayMode === 'frames' ? 'frames' : 'time'}`}
+            title="Current time / composition duration"
+          >
             <span
               className="timeline-ruler-current-time"
-              title={hasInOutDisplayRange ? 'Current time from In point' : 'Current composition time'}
+              onDoubleClick={handleTimelineTimeDoubleClick}
+              title={timelineTimeDisplayMode === 'frames'
+                ? 'Double-click to show timecode'
+                : hasInOutDisplayRange
+                  ? 'Current time from In point - double-click to show frames'
+                  : 'Current composition time - double-click to show frames'}
             >
-              {formatTime(timelineRulerCurrentTime)}
+              {timelineTimeDisplayMode === 'frames' ? timelineCurrentFrame : formatTime(timelineRulerCurrentTime)}
             </span>
-            <span className="timeline-ruler-time-separator" aria-hidden="true">/</span>
+            <span className="timeline-ruler-separator-wrap" aria-hidden="true">
+              <span className="timeline-ruler-time-separator">/</span>
+              {timelineTimeDisplayMode === 'frames' && (
+                <span className="timeline-ruler-fps-label">{timelineFpsLabel}</span>
+              )}
+            </span>
             {isEditingTimelineDuration && !hasInOutDisplayRange ? (
               <input
                 ref={timelineDurationInputRef}
@@ -2270,7 +2500,7 @@ export function Timeline() {
                 className="timeline-ruler-duration range"
                 title="In/Out range duration"
               >
-                {formatTime(inOutDisplayDuration)}
+                {timelineTimeDisplayMode === 'frames' ? timelineTotalFrames : formatTime(inOutDisplayDuration)}
               </span>
             ) : (
               <button
@@ -2279,7 +2509,7 @@ export function Timeline() {
                 onClick={handleTimelineDurationClick}
                 title="Click to edit composition duration"
               >
-                {formatTime(duration)}
+                {timelineTimeDisplayMode === 'frames' ? timelineTotalFrames : formatTime(duration)}
               </button>
             )}
           </div>
@@ -2318,60 +2548,25 @@ export function Timeline() {
         )}
         {/* Timeline content — fades out with subtle scale-back */}
         <div
-          className="timeline-body-content"
+          className={`timeline-body-content timeline-tool-active-${activeTimelineToolId}`}
           style={slotGridProgress > 0 ? {
             opacity: 1 - slotGridProgress,
             transform: `scale(${1 - slotGridProgress * 0.05})`,
             transformOrigin: 'center center',
             pointerEvents: (slotGridProgress >= 0.5 ? 'none' : 'auto') as React.CSSProperties['pointerEvents'],
             display: slotGridProgress >= 1 ? 'none' as const : undefined,
-          } : undefined}
+            cursor: timelineSurfaceCursor,
+          } : timelineSurfaceCursor ? { cursor: timelineSurfaceCursor } : undefined}
+          onPointerDown={handleTimelinePointerDown}
           onPointerMove={handleTimelinePointerMove}
+          onPointerUp={handleTimelinePointerUp}
+          onPointerCancel={handleTimelinePointerUp}
           onPointerLeave={handleTimelinePointerLeave}
         >
           <div className="timeline-header-row">
             <div className="ruler-header">
               <div className="timeline-ruler-control-strip">
                 <TimelineControls variant="main" {...timelineControlsProps} />
-                <button
-                  className={`add-marker-btn ${markerCreateDrag?.isDragging ? 'dragging' : ''}`}
-                  onMouseDown={handleMarkerButtonDragStart}
-                  title="Drag to place marker, or press M"
-                >
-                  <IconMapPinFilled size={15} aria-hidden="true" />
-                </button>
-                <div className="timeline-ruler-inout-controls" aria-label="In and out points">
-                  <button
-                    type="button"
-                    className={`timeline-ruler-inout-btn ${inPoint !== null ? 'active' : ''}`}
-                    onClick={() => {
-                      if (inPoint !== null) {
-                        setInPoint(null);
-                      } else {
-                        setInPointAtPlayhead();
-                      }
-                    }}
-                    title={inPoint !== null ? 'Clear In point' : 'Set In point (I)'}
-                    aria-label={inPoint !== null ? 'Clear In point' : 'Set In point'}
-                  >
-                    <IconFlag3Filled className="timeline-flag-icon in-flag" aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    className={`timeline-ruler-inout-btn ${outPoint !== null ? 'active' : ''}`}
-                    onClick={() => {
-                      if (outPoint !== null) {
-                        setOutPoint(null);
-                      } else {
-                        setOutPointAtPlayhead();
-                      }
-                    }}
-                    title={outPoint !== null ? 'Clear Out point' : 'Set Out point (O)'}
-                    aria-label={outPoint !== null ? 'Clear Out point' : 'Set Out point'}
-                  >
-                    <IconFlag3Filled className="timeline-flag-icon out-flag" aria-hidden="true" />
-                  </button>
-                </div>
               </div>
             </div>
             <div className={`time-ruler-wrapper ${clipAnimationPhase !== 'idle' ? 'comp-switching' : ''}`}>
@@ -2474,12 +2669,22 @@ export function Timeline() {
               {renderTrackSection('audio')}
               {marquee && (
                 <div
-                  className="marquee-selection"
+                  className={marquee.mode === 'range' ? 'range-selection-drag' : 'marquee-selection'}
                   style={{
                     left: Math.min(marquee.startX, marquee.currentX) - scrollX,
                     top: Math.min(marquee.startY, marquee.currentY),
                     width: Math.abs(marquee.currentX - marquee.startX),
                     height: Math.abs(marquee.currentY - marquee.startY),
+                  }}
+                />
+              )}
+              {timelineRangeSelection && timelineRangeSelection.endTime > timelineRangeSelection.startTime && (
+                <div
+                  className="timeline-range-selection-overlay"
+                  data-track-count={timelineRangeSelection.trackIds.length}
+                  style={{
+                    left: trackHeaderWidth + timeToPixel(timelineRangeSelection.startTime) - scrollX,
+                    width: Math.max(1, timeToPixel(timelineRangeSelection.endTime - timelineRangeSelection.startTime)),
                   }}
                 />
               )}
@@ -2496,6 +2701,7 @@ export function Timeline() {
                   duration={duration}
                   markerDrag={markerDrag}
                   onMarkerMouseDown={handleMarkerMouseDown}
+                  onMarkerContextMenu={handleInOutMarkerContextMenu}
                   switchMotionClass={timelineSwitchMotionClass}
                   renderMode="trackOverlays"
                   clipDrag={clipDrag}
@@ -2524,6 +2730,7 @@ export function Timeline() {
               duration={duration}
               markerDrag={markerDrag}
               onMarkerMouseDown={handleMarkerMouseDown}
+              onMarkerContextMenu={handleInOutMarkerContextMenu}
               switchMotionClass={timelineSwitchMotionClass}
               renderMode="rangeMarkers"
               inLineOpacity={getTimelineLineOpacityForTime(inPoint)}
@@ -2627,12 +2834,20 @@ export function Timeline() {
         clipMap={clipMap}
         selectedClipIds={selectedClipIds}
         isClipLocked={isClipLocked}
+        thumbnailsEnabled={thumbnailsEnabled}
+        waveformsEnabled={waveformsEnabled}
+        audioDisplayMode={audioDisplayMode}
         selectClip={selectClip}
         removeClip={removeClip}
         splitClipAtPlayhead={splitClipAtPlayhead}
+        rippleDeleteSelection={rippleDeleteSelection}
+        deleteGapAtTime={deleteGapAtTime}
         toggleClipReverse={toggleClipReverse}
         unlinkGroup={unlinkGroup}
         generateWaveformForClip={generateWaveformForClip}
+        toggleThumbnailsEnabled={toggleThumbnailsEnabled}
+        toggleWaveformsEnabled={toggleWaveformsEnabled}
+        setAudioDisplayMode={setAudioDisplayMode}
         convertSolidToMotionShape={convertSolidToMotionShape}
         createSubcompositionFromSelection={(clipId) => {
           void createSubcompositionFromSelection(clipId);
@@ -2658,6 +2873,12 @@ export function Timeline() {
         updateMarker={updateMarker}
         removeMarker={removeMarker}
         onClose={() => setMarkerContextMenu(null)}
+      />
+
+      <InOutContextMenu
+        menu={inOutContextMenu}
+        onDelete={handleDeleteInOutPoint}
+        onClose={() => setInOutContextMenu(null)}
       />
 
       {/* Multicam Dialog */}

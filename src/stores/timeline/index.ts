@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 
 import type { TimelineStore, TimelineUtils, TimelineClip, Keyframe } from './types';
-import { DEFAULT_TRACKS } from './constants';
+import { DEFAULT_TRACKS, DEFAULT_TRACK_HEADER_WIDTH } from './constants';
 
 import { createTrackSlice } from './trackSlice';
 import { createClipSlice } from './clipSlice';
@@ -20,6 +20,8 @@ import { createColorCorrectionSlice } from './colorCorrectionSlice';
 import { createLinkedGroupSlice } from './linkedGroupSlice';
 import { createDownloadClipSlice } from './downloadClipSlice';
 import { createAudioEditSlice } from './audioEditSlice';
+import { createToolSlice, getDefaultLastTimelineToolByGroup } from './toolSlice';
+import { createTimelineEditOperationSlice } from './editOperations';
 import { createPlaybackSlice } from './playbackSlice';
 import { createRamPreviewSlice } from './ramPreviewSlice';
 import { createProxyCacheSlice } from './proxyCacheSlice';
@@ -73,6 +75,8 @@ export const useTimelineStore = create<TimelineStore>()(
     const linkedGroupActions = createLinkedGroupSlice(set, get);
     const downloadClipActions = createDownloadClipSlice(set, get);
     const audioEditActions = createAudioEditSlice(set, get);
+    const toolActions = createToolSlice(set, get);
+    const timelineEditOperationActions = createTimelineEditOperationSlice(set, get);
     const playbackActions = createPlaybackSlice(set, get);
     const ramPreviewActions = createRamPreviewSlice(set, get);
     const proxyCacheActions = createProxyCacheSlice(set, get);
@@ -153,12 +157,15 @@ export const useTimelineStore = create<TimelineStore>()(
       duration: 60,
       zoom: 50,
       scrollX: 0,
+      trackHeaderWidth: DEFAULT_TRACK_HEADER_WIDTH,
+      timelineSplitRatio: null as number | null,
       snappingEnabled: true,
       isPlaying: false,
       isDraggingPlayhead: false,
       playbackWarmup: null,
       selectedClipIds: new Set<string>(),
       primarySelectedClipId: null,
+      targetTrackIdByType: {},
 
       // Render layers (populated by useLayerSync, used by engine)
       layers: [] as import('../../types').Layer[],
@@ -225,6 +232,13 @@ export const useTimelineStore = create<TimelineStore>()(
 
       // Tool mode
       toolMode: 'select' as const,
+      activeTimelineToolId: 'select' as const,
+      previousTimelineToolId: null as import('./types').TimelineToolId | null,
+      lastTimelineToolByGroup: getDefaultLastTimelineToolByGroup(),
+      openTimelineToolGroupId: null as import('./types').TimelineToolGroupId | null,
+      momentaryTimelineToolId: null as import('./types').TimelineToolId | null,
+      timelineRangeSelection: null as import('./types').TimelineRangeSelection | null,
+      timelineToolPreview: null as import('./types').TimelineToolPreview | null,
 
       // Timeline markers
       markers: [] as import('./types').TimelineMarker[],
@@ -331,6 +345,8 @@ export const useTimelineStore = create<TimelineStore>()(
       ...linkedGroupActions,
       ...downloadClipActions,
       ...audioEditActions,
+      ...toolActions,
+      ...timelineEditOperationActions,
       ...playbackActions,
       ...ramPreviewActions,
       ...proxyCacheActions,

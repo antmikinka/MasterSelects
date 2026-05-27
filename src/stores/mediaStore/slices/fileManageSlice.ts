@@ -555,6 +555,12 @@ export const createFileManageSlice: MediaSliceCreator<FileManageActions> = (set,
       sourceMonitorFileId: current.sourceMonitorFileId && deletedIds.has(current.sourceMonitorFileId)
         ? null
         : current.sourceMonitorFileId,
+      sourceMonitorInPoint: current.sourceMonitorFileId && deletedIds.has(current.sourceMonitorFileId)
+        ? null
+        : current.sourceMonitorInPoint,
+      sourceMonitorOutPoint: current.sourceMonitorFileId && deletedIds.has(current.sourceMonitorFileId)
+        ? null
+        : current.sourceMonitorOutPoint,
       sourceMonitorPlaybackRequestId: current.sourceMonitorFileId && deletedIds.has(current.sourceMonitorFileId)
         ? current.sourceMonitorPlaybackRequestId + 1
         : current.sourceMonitorPlaybackRequestId,

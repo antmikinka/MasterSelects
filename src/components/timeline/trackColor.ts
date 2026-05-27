@@ -2,7 +2,7 @@ import type { TimelineTrack } from '../../types';
 import type { LabelColor } from '../../stores/mediaStore/types';
 import { getLabelHex } from '../panels/media/labelColors';
 
-const COLORLESS_TRACK_COLOR = '#5f646b';
+const COLORLESS_TRACK_COLOR = '#303030';
 export const TIMELINE_TRACK_COLOR_HIDDEN = 'transparent';
 
 export function getTrackLabelColor(track: Pick<TimelineTrack, 'labelColor'> | null | undefined): LabelColor {

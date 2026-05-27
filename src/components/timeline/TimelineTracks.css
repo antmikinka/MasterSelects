@@ -36,14 +36,26 @@
 
 .track-header.video {
   background:
-    linear-gradient(90deg, color-mix(in srgb, var(--track-color, #5f646b) 24%, transparent), transparent 58%),
+    linear-gradient(90deg, color-mix(in srgb, var(--track-color, #303030) 24%, transparent), transparent 58%),
     var(--bg-tertiary);
 }
 
 .track-header.audio {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 34%),
-    linear-gradient(90deg, color-mix(in srgb, var(--track-color, #5f646b) 34%, rgba(13, 19, 22, 0.96)), rgba(13, 19, 22, 0.96));
+    linear-gradient(90deg, color-mix(in srgb, var(--track-color, #303030) 18%, var(--bg-tertiary)), var(--bg-tertiary));
+}
+
+.track-header.targeted {
+  border-left: 3px solid var(--timeline-toggle-active-color, var(--accent));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--timeline-toggle-active-color, var(--accent)) 22%, transparent), transparent 64%),
+    linear-gradient(90deg, color-mix(in srgb, var(--track-color, #303030) 28%, var(--bg-tertiary)), var(--bg-tertiary));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--timeline-toggle-active-color, var(--accent)) 30%, transparent);
+}
+
+.track-header.targeted .track-name {
+  color: #fff;
 }
 
 .track-header.locked {
@@ -1203,7 +1215,7 @@
       transparent 1px,
       transparent var(--frame-grid-size, 99999px)
     ),
-    linear-gradient(90deg, color-mix(in srgb, var(--track-color, #5f646b) 12%, transparent), transparent 72px),
+    linear-gradient(90deg, color-mix(in srgb, var(--track-color, #303030) 12%, transparent), transparent 72px),
     repeating-linear-gradient(
       90deg,
       color-mix(in srgb, var(--timeline-grid-video) var(--time-grid-strength, 100%), transparent),
@@ -1222,7 +1234,7 @@
       transparent 1px,
       transparent var(--frame-grid-size, 99999px)
     ),
-    linear-gradient(90deg, color-mix(in srgb, var(--track-color, #5f646b) 14%, transparent), transparent 72px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.012), transparent 72px),
     repeating-linear-gradient(
       90deg,
       color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-strength, 100%), transparent),
@@ -1341,7 +1353,7 @@
 
 .timeline-container.audio-mode-detailed .track-header.audio,
 .timeline-container.audio-mode-detailed .track-lane.audio {
-  border-color: color-mix(in srgb, var(--success) 36%, var(--border-color));
+  border-color: color-mix(in srgb, var(--track-color, #303030) 42%, var(--border-color));
 }
 
 .timeline-container.audio-mode-detailed .track-lane.audio {
@@ -1353,8 +1365,8 @@
       transparent 1px,
       transparent var(--frame-grid-size, 99999px)
     ),
-    linear-gradient(180deg, color-mix(in srgb, var(--track-color, #5f646b) 18%, transparent), transparent 46%, rgba(4, 11, 18, 0.18)),
-    linear-gradient(90deg, color-mix(in srgb, var(--track-color, #5f646b) 12%, transparent), transparent 72px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 46%, rgba(0, 0, 0, 0.08)),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.012), transparent 72px),
     repeating-linear-gradient(
       90deg,
       color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-strength, 100%), transparent),
@@ -1366,24 +1378,24 @@
 
 .timeline-container.audio-mode-spectral .track-header.audio,
 .timeline-container.audio-mode-spectral .track-lane.audio {
-  border-color: color-mix(in srgb, #52beff 34%, var(--border-color));
+  border-color: color-mix(in srgb, var(--track-color, #303030) 42%, var(--border-color));
 }
 
 .timeline-container.audio-mode-spectral .track-lane.audio {
   background:
     repeating-linear-gradient(
       90deg,
-      color-mix(in srgb, rgba(82, 190, 255, 0.16) var(--frame-grid-strength, 0%), transparent),
-      color-mix(in srgb, rgba(82, 190, 255, 0.16) var(--frame-grid-strength, 0%), transparent) 1px,
+      color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent),
+      color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent) 1px,
       transparent 1px,
       transparent var(--frame-grid-size, 99999px)
     ),
-    linear-gradient(180deg, rgba(26, 48, 82, 0.38), rgba(13, 28, 46, 0.16) 46%, rgba(45, 20, 51, 0.2)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 46%, rgba(0, 0, 0, 0.08)),
     repeating-linear-gradient(
       90deg,
-      color-mix(in srgb, rgba(82, 190, 255, 0.16) var(--time-grid-strength, 100%), transparent),
-      color-mix(in srgb, rgba(82, 190, 255, 0.16) var(--time-grid-strength, 100%), transparent) 1px,
-      transparent 1px,
+      color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-strength, 100%), transparent),
+      color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-strength, 100%), transparent) 1px,
+      var(--bg-secondary) 1px,
       transparent var(--grid-size, 50px)
     );
 }
@@ -1401,12 +1413,12 @@
 
 .timeline-container.audio-focus-mode .track-header.audio,
 .timeline-container.audio-focus-mode .track-lane.audio {
-  border-color: color-mix(in srgb, var(--track-color, #5f646b) 64%, var(--border-color));
+  border-color: color-mix(in srgb, var(--track-color, #303030) 64%, var(--border-color));
 }
 
 .timeline-container.audio-focus-mode .track-header.audio {
   background:
-    linear-gradient(90deg, color-mix(in srgb, var(--track-color, #5f646b) 32%, transparent), transparent 68%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025), transparent 68%),
     var(--bg-tertiary);
 }
 
@@ -1414,17 +1426,17 @@
   background:
     repeating-linear-gradient(
       90deg,
-      color-mix(in srgb, var(--track-color, #5f646b) var(--frame-grid-strength, 0%), transparent),
-      color-mix(in srgb, var(--track-color, #5f646b) var(--frame-grid-strength, 0%), transparent) 1px,
+      color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent),
+      color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent) 1px,
       transparent 1px,
       transparent var(--frame-grid-size, 99999px)
     ),
-    linear-gradient(180deg, color-mix(in srgb, var(--track-color, #5f646b) 16%, transparent), transparent 32%, color-mix(in srgb, var(--track-color, #5f646b) 12%, rgba(6, 10, 18, 0.24))),
-    linear-gradient(90deg, color-mix(in srgb, var(--track-color, #5f646b) 18%, transparent), transparent 72px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 32%, rgba(0, 0, 0, 0.08)),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.014), transparent 72px),
     repeating-linear-gradient(
       90deg,
-      color-mix(in srgb, var(--track-color, #5f646b) var(--time-grid-muted-strength, 22%), transparent),
-      color-mix(in srgb, var(--track-color, #5f646b) var(--time-grid-muted-strength, 22%), transparent) 1px,
+      color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-muted-strength, 22%), transparent),
+      color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-muted-strength, 22%), transparent) 1px,
       transparent 1px,
       transparent var(--grid-size, 50px)
     );

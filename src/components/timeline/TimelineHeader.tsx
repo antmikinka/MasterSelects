@@ -1278,6 +1278,9 @@ function TimelineHeaderComponent({
   const collapsedAudioSummaryMeter = useTimelineStore(state => showAudioSummaryMeter
     ? state.runtimeAudioMeters.master
     : undefined);
+  const targetTrackId = useTimelineStore(state => state.targetTrackIdByType[track.type]);
+  const setTargetTrack = useTimelineStore(state => state.setTargetTrack);
+  const isTargeted = targetTrackId === track.id;
   const [audioFxOpen, setAudioFxOpen] = useState(false);
   const [audioSendsOpen, setAudioSendsOpen] = useState(false);
   const audioFxPopoverRef = useRef<HTMLDivElement>(null);
@@ -1355,17 +1358,13 @@ function TimelineHeaderComponent({
     }
   };
 
-  // Handle click on header main area (except buttons) to toggle expand
+  // Handle click on header main area (except buttons) to set the edit target track.
   const handleHeaderClick = (e: React.MouseEvent) => {
-    // Don't toggle if editing or if click was on a button
     if (isEditing) return;
     if ((e.target as HTMLElement).closest('.track-controls')) return;
     if ((e.target as HTMLElement).closest('.audio-track-faders')) return;
     if ((e.target as HTMLElement).closest('.audio-track-popover')) return;
-    // Both video and audio tracks can expand
-    if (track.type === 'video' || track.type === 'audio') {
-      onToggleExpand();
-    }
+    setTargetTrack(track.id);
   };
 
   const handleTrackVolumeChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1400,6 +1399,8 @@ function TimelineHeaderComponent({
         showAudioSummaryMeter ? 'audio-summary-meter-visible' : ''
       } ${
         isResizeActive ? 'resizing' : ''
+      } ${
+        isTargeted ? 'targeted' : ''
       }`}
       style={trackHeaderStyle}
       onWheel={onWheel}
@@ -1425,6 +1426,10 @@ function TimelineHeaderComponent({
                 hasKeyframes ? 'has-keyframes' : ''
               }`}
               title={isExpanded ? 'Collapse properties' : 'Expand properties'}
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleExpand();
+              }}
             >
               {'\u25B6'}
             </span>

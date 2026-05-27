@@ -19,6 +19,7 @@ interface TimelineOverlaysProps {
   duration: number;
   markerDrag: { type: 'in' | 'out' } | null;
   onMarkerMouseDown: (e: React.MouseEvent, type: 'in' | 'out') => void;
+  onMarkerContextMenu?: (e: React.MouseEvent, type: 'in' | 'out') => void;
   switchMotionClass?: string;
   renderMode?: 'all' | 'trackOverlays' | 'rangeMarkers';
   inLineOpacity?: number;
@@ -50,6 +51,7 @@ export function TimelineOverlays({
   duration,
   markerDrag,
   onMarkerMouseDown,
+  onMarkerContextMenu,
   switchMotionClass = '',
   renderMode = 'all',
   inLineOpacity = 1,
@@ -187,6 +189,7 @@ export function TimelineOverlays({
             '--timeline-line-opacity': markerDrag?.type === 'in' ? 1 : inLineOpacity,
           } as React.CSSProperties}
           title={`In: ${formatTime(inPoint)} (drag to move)`}
+          onContextMenu={(e) => onMarkerContextMenu?.(e, 'in')}
         >
           <div
             className="marker-flag"
@@ -207,6 +210,7 @@ export function TimelineOverlays({
             '--timeline-line-opacity': markerDrag?.type === 'out' ? 1 : outLineOpacity,
           } as React.CSSProperties}
           title={`Out: ${formatTime(outPoint)} (drag to move)`}
+          onContextMenu={(e) => onMarkerContextMenu?.(e, 'out')}
         >
           <div
             className="marker-flag"

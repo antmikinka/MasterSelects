@@ -225,6 +225,14 @@ function cleanupSavedTimelineLayout(timeline: SavedDockTimelineLayout | undefine
   ) {
     cleaned.trackFocusMode = timeline.trackFocusMode;
   }
+  if (typeof timeline.trackHeaderWidth === 'number' && Number.isFinite(timeline.trackHeaderWidth)) {
+    cleaned.trackHeaderWidth = timeline.trackHeaderWidth;
+  }
+  if (timeline.timelineSplitRatio === null) {
+    cleaned.timelineSplitRatio = null;
+  } else if (typeof timeline.timelineSplitRatio === 'number' && Number.isFinite(timeline.timelineSplitRatio)) {
+    cleaned.timelineSplitRatio = Math.max(0, Math.min(1, timeline.timelineSplitRatio));
+  }
 
   if (
     timeline.trackHeights
@@ -302,6 +310,8 @@ function captureTimelineLayout(): SavedDockTimelineLayout {
     audioLayerAdvancedMode: timelineState.audioLayerAdvancedMode !== false,
     audioFocusMode: timelineState.audioFocusMode,
     trackFocusMode: timelineState.trackFocusMode,
+    trackHeaderWidth: timelineState.trackHeaderWidth,
+    timelineSplitRatio: timelineState.timelineSplitRatio,
     trackHeights: Object.fromEntries(
       timelineState.tracks.map((track) => [track.id, track.height]),
     ),
@@ -336,6 +346,12 @@ function applySavedTimelineLayout(timeline: SavedDockTimelineLayout | undefined)
     timelineStore.setTrackFocusMode(cleaned.trackFocusMode);
   } else if (typeof cleaned.audioFocusMode === 'boolean') {
     timelineStore.setAudioFocusMode(cleaned.audioFocusMode);
+  }
+  if (typeof cleaned.trackHeaderWidth === 'number') {
+    timelineStore.setTrackHeaderWidth(cleaned.trackHeaderWidth);
+  }
+  if ('timelineSplitRatio' in cleaned) {
+    timelineStore.setTimelineSplitRatio(cleaned.timelineSplitRatio ?? null);
   }
 
   if (cleaned.trackHeights) {
@@ -390,6 +406,7 @@ function cleanupSavedLayout(savedLayout: SavedDockLayout): SavedDockLayout {
     ...savedLayout,
     layout: cleanupPersistedLayout(savedLayout.layout),
     favorite: savedLayout.favorite === true,
+    factory: savedLayout.factory === true || isFactoryDockLayoutId(savedLayout.id),
     timeline: cleanupSavedTimelineLayout(savedLayout.timeline),
   };
 }
@@ -398,19 +415,19 @@ function areDockLayoutsEqual(left: DockLayout, right: DockLayout): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-// Default editing layout: Media left, Preview center, Properties/Export right, compact Timeline bottom.
+// Default editing layout: Media left, Preview center, Properties right, Timeline bottom.
 const DEFAULT_LAYOUT: DockLayout = {
   root: {
     kind: 'split',
     id: 'root-split',
     direction: 'vertical',
-    ratio: 0.74,
+    ratio: 0.6698039215686274,
     children: [
       {
         kind: 'split',
         id: 'top-split',
         direction: 'horizontal',
-        ratio: 0.23,
+        ratio: 0.29449423815621,
         children: [
           {
             kind: 'tab-group',
@@ -421,13 +438,13 @@ const DEFAULT_LAYOUT: DockLayout = {
             activeIndex: 0,
           },
           {
-            kind: 'split',
-            id: 'center-right-split',
-            direction: 'horizontal',
-            ratio: 0.6,
-            children: [
-              {
-                kind: 'tab-group',
+                kind: 'split',
+                id: 'center-right-split',
+                direction: 'horizontal',
+                ratio: 0.7109300593133233,
+                children: [
+                  {
+                    kind: 'tab-group',
                 id: 'preview-group',
                 panels: [
                   { id: 'preview', type: 'preview', title: 'Preview' },
@@ -439,7 +456,6 @@ const DEFAULT_LAYOUT: DockLayout = {
                 id: 'right-group',
                 panels: [
                   { id: 'clip-properties', type: 'clip-properties', title: 'Properties' },
-                  { id: 'export', type: 'export', title: 'Export' },
                 ],
                 activeIndex: 0,
               },
@@ -456,8 +472,214 @@ const DEFAULT_LAYOUT: DockLayout = {
     ],
   },
   floatingPanels: [],
-  panelZoom: {},
+  panelZoom: {
+    'clip-properties': 1,
+  },
 };
+
+const AUDIO_EDIT_LAYOUT: DockLayout = {
+  root: {
+    kind: 'split',
+    id: 'root-split',
+    direction: 'vertical',
+    ratio: 0.6698039215686274,
+    children: [
+      {
+        kind: 'split',
+        id: 'top-split',
+        direction: 'horizontal',
+        ratio: 0.24,
+        children: [
+          {
+            kind: 'tab-group',
+            id: 'left-group',
+            panels: [
+              { id: 'media', type: 'media', title: 'Media' },
+            ],
+            activeIndex: 0,
+          },
+          {
+            kind: 'split',
+            id: 'center-right-split',
+            direction: 'horizontal',
+            ratio: 0.58,
+            children: [
+              {
+                kind: 'tab-group',
+                id: 'preview-group',
+                panels: [
+                  { id: 'preview', type: 'preview', title: 'Preview' },
+                ],
+                activeIndex: 0,
+              },
+              {
+                kind: 'tab-group',
+                id: 'right-group',
+                panels: [
+                  { id: 'clip-properties', type: 'clip-properties', title: 'Properties' },
+                  { id: 'audio-mixer', type: 'audio-mixer', title: 'Audio Mixer' },
+                ],
+                activeIndex: 1,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        kind: 'tab-group',
+        id: 'timeline-group',
+        panels: [{ id: 'timeline', type: 'timeline', title: 'Timeline' }],
+        activeIndex: 0,
+      },
+    ],
+  },
+  floatingPanels: [],
+  panelZoom: {
+    'clip-properties': 1,
+    'audio-mixer': 1,
+  },
+};
+
+export const FACTORY_VIDEO_EDIT_LAYOUT_ID = 'factory-video-edit';
+export const FACTORY_AUDIO_EDIT_LAYOUT_ID = 'factory-audio-edit';
+const FACTORY_DOCK_LAYOUT_IDS = new Set([FACTORY_VIDEO_EDIT_LAYOUT_ID, FACTORY_AUDIO_EDIT_LAYOUT_ID]);
+const FACTORY_DOCK_LAYOUT_NAMES = new Map<string, string>([
+  [FACTORY_VIDEO_EDIT_LAYOUT_ID, 'VIDEO EDIT'],
+  [FACTORY_AUDIO_EDIT_LAYOUT_ID, 'AUDIO EDIT'],
+]);
+const FACTORY_DOCK_LAYOUT_NAME_TO_ID = new Map<string, string>(
+  Array.from(FACTORY_DOCK_LAYOUT_NAMES.entries()).map(([id, name]) => [name.toLowerCase(), id]),
+);
+export const CAN_EDIT_FACTORY_DOCK_LAYOUTS = import.meta.env.DEV;
+
+const VIDEO_EDIT_TIMELINE_LAYOUT: SavedDockTimelineLayout = {
+  audioDisplayMode: 'detailed',
+  audioLayerAdvancedMode: true,
+  audioFocusMode: false,
+  trackFocusMode: 'balanced',
+  trackHeaderWidth: 210,
+  timelineSplitRatio: null,
+  trackTypeHeights: {
+    video: 70,
+    audio: 30,
+  },
+  trackTypeVisibility: {
+    video: true,
+    audio: true,
+  },
+};
+
+const AUDIO_EDIT_TIMELINE_LAYOUT: SavedDockTimelineLayout = {
+  audioDisplayMode: 'detailed',
+  audioLayerAdvancedMode: true,
+  audioFocusMode: true,
+  trackFocusMode: 'audio',
+  trackHeaderWidth: 210,
+  timelineSplitRatio: null,
+  trackTypeHeights: {
+    video: 40,
+    audio: 92,
+  },
+  trackTypeVisibility: {
+    video: true,
+    audio: true,
+  },
+};
+
+const FACTORY_SAVED_DOCK_LAYOUTS: SavedDockLayout[] = [
+  {
+    id: FACTORY_VIDEO_EDIT_LAYOUT_ID,
+    name: 'VIDEO EDIT',
+    layout: DEFAULT_LAYOUT,
+    timeline: VIDEO_EDIT_TIMELINE_LAYOUT,
+    createdAt: 0,
+    updatedAt: 2,
+    favorite: true,
+    factory: true,
+  },
+  {
+    id: FACTORY_AUDIO_EDIT_LAYOUT_ID,
+    name: 'AUDIO EDIT',
+    layout: AUDIO_EDIT_LAYOUT,
+    timeline: AUDIO_EDIT_TIMELINE_LAYOUT,
+    createdAt: 0,
+    updatedAt: 1,
+    favorite: true,
+    factory: true,
+  },
+];
+
+export function isFactoryDockLayoutId(layoutId: string | null | undefined): boolean {
+  return typeof layoutId === 'string' && FACTORY_DOCK_LAYOUT_IDS.has(layoutId);
+}
+
+export function isFactoryDockLayout(savedLayout: SavedDockLayout | null | undefined): boolean {
+  return savedLayout?.factory === true || isFactoryDockLayoutId(savedLayout?.id);
+}
+
+export function isProtectedFactoryDockLayout(savedLayout: SavedDockLayout | null | undefined): boolean {
+  return isFactoryDockLayout(savedLayout) && !CAN_EDIT_FACTORY_DOCK_LAYOUTS;
+}
+
+function getFactoryDockLayoutIdByName(name: string): string | null {
+  return FACTORY_DOCK_LAYOUT_NAME_TO_ID.get(name.trim().toLowerCase()) ?? null;
+}
+
+function getFactoryDockLayoutIdForSavedLayout(savedLayout: SavedDockLayout): string | null {
+  return isFactoryDockLayoutId(savedLayout.id)
+    ? savedLayout.id
+    : getFactoryDockLayoutIdByName(savedLayout.name);
+}
+
+function cloneSavedDockLayout(savedLayout: SavedDockLayout): SavedDockLayout {
+  return JSON.parse(JSON.stringify(savedLayout)) as SavedDockLayout;
+}
+
+export function getFactoryDockLayouts(): SavedDockLayout[] {
+  return FACTORY_SAVED_DOCK_LAYOUTS.map(cloneSavedDockLayout);
+}
+
+function mergeFactoryDockLayouts(savedLayouts: SavedDockLayout[]): SavedDockLayout[] {
+  const devOverrides = new Map<string, SavedDockLayout>();
+  const factoryFavoriteOverrides = new Map<string, boolean>();
+  const userLayouts: SavedDockLayout[] = [];
+
+  for (const savedLayout of savedLayouts) {
+    const factoryId = getFactoryDockLayoutIdForSavedLayout(savedLayout);
+    if (factoryId) {
+      factoryFavoriteOverrides.set(factoryId, savedLayout.favorite === true);
+      if (CAN_EDIT_FACTORY_DOCK_LAYOUTS) {
+        devOverrides.set(factoryId, {
+          ...savedLayout,
+          id: factoryId,
+          name: FACTORY_DOCK_LAYOUT_NAMES.get(factoryId) ?? savedLayout.name,
+          factory: true,
+          favorite: savedLayout.favorite === true,
+        });
+      }
+      continue;
+    }
+
+    userLayouts.push(savedLayout);
+  }
+
+  const factoryLayouts = FACTORY_SAVED_DOCK_LAYOUTS.map((factoryLayout) => {
+    const override = devOverrides.get(factoryLayout.id);
+    if (override) {
+      return cloneSavedDockLayout({
+        ...override,
+        factory: true,
+      });
+    }
+
+    return cloneSavedDockLayout({
+      ...factoryLayout,
+      favorite: factoryFavoriteOverrides.get(factoryLayout.id) ?? factoryLayout.favorite,
+    });
+  });
+
+  return [...factoryLayouts, ...userLayouts];
+}
 
 function panelTypesForGroup(layout: DockLayout, groupId: string): PanelType[] | null {
   const group = findTabGroupById(layout.root, groupId);
@@ -607,8 +829,8 @@ export const useDockStore = create<DockState>()(
         maxZIndex: 1000,
         hoveredTabTarget: null,
         maximizedPanelId: null,
-        savedLayouts: [],
-        defaultSavedLayoutId: null,
+        savedLayouts: getFactoryDockLayouts(),
+        defaultSavedLayoutId: FACTORY_VIDEO_EDIT_LAYOUT_ID,
         activeSavedLayoutId: null,
 
         setActiveTab: (groupId, index) => {
@@ -1056,6 +1278,9 @@ export const useDockStore = create<DockState>()(
           const existingLayout = get().savedLayouts.find((savedLayout) => (
             savedLayout.name.trim().toLowerCase() === trimmedName.toLowerCase()
           ));
+          if (isProtectedFactoryDockLayout(existingLayout)) {
+            return null;
+          }
           const nextSavedLayout: SavedDockLayout = existingLayout
             ? {
                 ...existingLayout,
@@ -1093,6 +1318,9 @@ export const useDockStore = create<DockState>()(
           const existingLayout = savedLayouts.find((savedLayout) => savedLayout.id === activeSavedLayoutId);
           if (!existingLayout) {
             set({ activeSavedLayoutId: null });
+            return null;
+          }
+          if (isProtectedFactoryDockLayout(existingLayout)) {
             return null;
           }
 
@@ -1245,14 +1473,14 @@ export const useDockStore = create<DockState>()(
         merge: (persistedState, currentState) => {
           const persisted = persistedState as Partial<DockState> | undefined;
           const savedLayouts = Array.isArray(persisted?.savedLayouts)
-            ? persisted.savedLayouts.map(cleanupSavedLayout)
-            : currentState.savedLayouts;
+            ? mergeFactoryDockLayouts(persisted.savedLayouts.map(cleanupSavedLayout))
+            : mergeFactoryDockLayouts(currentState.savedLayouts);
           const defaultSavedLayoutId = (
             typeof persisted?.defaultSavedLayoutId === 'string'
             && savedLayouts.some((savedLayout) => savedLayout.id === persisted.defaultSavedLayoutId)
           )
             ? persisted.defaultSavedLayoutId
-            : null;
+            : FACTORY_VIDEO_EDIT_LAYOUT_ID;
           const activeSavedLayoutId = (
             typeof persisted?.activeSavedLayoutId === 'string'
             && savedLayouts.some((savedLayout) => savedLayout.id === persisted.activeSavedLayoutId)
