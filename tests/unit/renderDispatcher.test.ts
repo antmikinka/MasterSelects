@@ -241,7 +241,7 @@ describe('RenderDispatcher empty playback hold', () => {
     expect(dispatcher.lastRenderHadContent).toBe(false);
   });
 
-  it('clears stale empty scrub holds after large drag teleports', () => {
+  it('holds the last frame during large drag teleports instead of flashing black', () => {
     const { dispatcher, deps, renderEmptyFrame, recordMainPreviewFrame } = createDispatcher(false);
 
     useTimelineStore.setState({ isDraggingPlayhead: true });
@@ -259,13 +259,14 @@ describe('RenderDispatcher empty playback hold', () => {
       },
     } as unknown as Layer]);
 
-    expect(renderEmptyFrame).toHaveBeenCalledTimes(1);
-    expect(recordMainPreviewFrame).toHaveBeenCalledWith('empty', undefined, {
+    expect(renderEmptyFrame).not.toHaveBeenCalled();
+    expect(recordMainPreviewFrame).toHaveBeenCalledWith('empty-hold', undefined, {
       clipId: 'clip-1',
       targetTimeMs: 4800,
+      displayedTimeMs: 19_160,
     });
     expect(deps.performanceStats.setLayerCount).toHaveBeenCalledWith(0);
-    expect(dispatcher.lastRenderHadContent).toBe(false);
+    expect(dispatcher.lastRenderHadContent).toBe(true);
   });
 
   it('uses the export render-time override for active splat effectors', () => {

@@ -926,18 +926,21 @@ export class RenderDispatcher {
       // previous clip's last frame.
       const isPlaying = d.renderLoop?.getIsPlaying() ?? false;
       const isDragging = useTimelineStore.getState().isDraggingPlayhead;
+      const isScrubSettling =
+        !isPlaying &&
+        !isDragging &&
+        !!previewFallback.clipId &&
+        scrubSettleState.isPending(previewFallback.clipId);
       const emptyScrubHoldDriftMs =
         typeof previewFallback.targetTimeMs === 'number' &&
         typeof this.lastPreviewDisplayedTimeMs === 'number'
           ? Math.abs(previewFallback.targetTimeMs - this.lastPreviewDisplayedTimeMs)
           : undefined;
+      // During interactive scrubs, a stale visible frame is preferable to a
+      // black clear while the browser decoder catches up to a long-GOP seek.
       const canHoldEmptyScrubFrame =
-        isDragging &&
-        this.lastRenderHadContent &&
-        (
-          emptyScrubHoldDriftMs === undefined ||
-          emptyScrubHoldDriftMs <= 250
-        );
+        (isDragging || isScrubSettling) &&
+        this.lastRenderHadContent;
       const shouldHoldEmptyFrame =
         hasVisibleInputLayer &&
         (
@@ -954,7 +957,7 @@ export class RenderDispatcher {
           driftMs: emptyScrubHoldDriftMs,
         });
         this.recordMainPreviewFrame(
-          isDragging ? 'empty-hold' : 'playback-stall-hold',
+          isDragging || isScrubSettling ? 'empty-hold' : 'playback-stall-hold',
           undefined,
           {
             ...previewFallback,

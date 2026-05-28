@@ -1,6 +1,6 @@
 // App version
 // Format: MAJOR.MINOR.PATCH
-export const APP_VERSION = '2.0.2';
+export const APP_VERSION = '2.0.3';
 
 export interface ChangelogNotice {
   type: 'info' | 'warning' | 'success' | 'danger';
@@ -27,8 +27,8 @@ export const FEATURED_VIDEO: {
   title: 'MasterSelects Demo',
   banner: {
     type: 'success',
-    title: 'MasterSelects 2.0.2',
-    message: 'History now has a compact branch graph, undo/redo feedback, persistent visible history metadata, and tighter noise filtering for layout and AI-driven updates.',
+    title: 'MasterSelects 2.0.3',
+    message: 'Scrubbing now keeps the last visible preview frame during decoder gaps, preventing black flashes while long-GOP video seeks catch up.',
     animated: true,
   },
 };
@@ -36,8 +36,8 @@ export const FEATURED_VIDEO: {
 // Build/Platform notice shown at top of changelog (set to null to hide)
 export const BUILD_NOTICE: ChangelogNotice | null = {
   type: 'success',
-  title: 'MasterSelects 2.0.2',
-  message: 'This release focuses on editor history, branch navigation, guided AI interaction visibility, and performance-safe project persistence.',
+  title: 'MasterSelects 2.0.3',
+  message: 'This release tightens playback and scrub preview resilience for smoother timeline navigation.',
   animated: true,
 };
 

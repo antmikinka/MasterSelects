@@ -1,5 +1,12 @@
 [
   {
+    "date": "2026-05-28",
+    "type": "fix",
+    "title": "MasterSelects 2.0.3",
+    "description": "Scrubbing now holds the last visible preview frame during transient decoder gaps instead of clearing the preview to black while long-GOP seeks catch up.",
+    "section": "Release"
+  },
+  {
     "date": "2026-05-27",
     "type": "new",
     "title": "MasterSelects 2.0.2",
