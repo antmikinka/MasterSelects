@@ -103,6 +103,17 @@ export class WebGPUEngine {
       this.handleDeviceRestored();
       this.isRecoveringFromDeviceLoss = false;
     });
+
+    // When the context auto-falls back to a different GPU after an unexpected
+    // loss, persist it so future loads start on the working GPU directly.
+    this.context.onPowerPreferenceFallback((preference) => {
+      try {
+        useSettingsStore.getState().setGpuPowerPreference(preference);
+        log.info('Persisted GPU power preference fallback', { preference });
+      } catch (e) {
+        log.error('Failed to persist GPU power preference fallback', e);
+      }
+    });
   }
 
   // === INITIALIZATION ===
