@@ -103,6 +103,15 @@ export class WebGPUEngine {
       this.handleDeviceRestored();
       this.isRecoveringFromDeviceLoss = false;
     });
+
+    this.context.onPowerPreferenceFallback((preference) => {
+      try {
+        useSettingsStore.getState().setGpuPowerPreference(preference);
+        log.info('Persisted GPU power preference fallback', { preference });
+      } catch (e) {
+        log.error('Failed to persist GPU power preference fallback', e);
+      }
+    });
   }
 
   // === INITIALIZATION ===
