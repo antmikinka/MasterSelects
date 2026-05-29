@@ -71,7 +71,7 @@ import {
   MAX_TRACK_HEADER_WIDTH,
 } from '../../stores/timeline/constants';
 import type { TimelineTrackFocusMode } from '../../stores/timeline/types';
-import type { ClipKeyframeTimeGroup, ContextMenuState, TimelineControlsProps, TimelineRulerCacheRange } from './types';
+import type { ClipDragState, ClipKeyframeTimeGroup, ContextMenuState, TimelineControlsProps, TimelineRulerCacheRange } from './types';
 import { isProxyFrameCountComplete } from '../../stores/mediaStore/helpers/proxyCompleteness';
 import { parseVectorAnimationStateProperty } from '../../types/vectorAnimation';
 import { createSubcompositionFromSelection } from '../../services/timelineSubcomposition';
@@ -107,6 +107,31 @@ const TRACK_SCROLL_MAX_STEPS_PER_GESTURE = 8;
 const TRACK_SCROLL_LIVE_TARGET_APPROACH = 0.68;
 
 type TrackSectionKind = 'video' | 'audio';
+
+function clipDragAffectsTrack(
+  drag: ClipDragState | null,
+  trackId: string,
+  clipMap: Map<string, TimelineClipType>,
+): boolean {
+  if (!drag) return false;
+  if (drag.originalTrackId === trackId || drag.currentTrackId === trackId) return true;
+
+  const draggedClip = clipMap.get(drag.clipId);
+  if (draggedClip?.trackId === trackId) return true;
+  if (draggedClip?.linkedClipId && clipMap.get(draggedClip.linkedClipId)?.trackId === trackId) return true;
+
+  if (draggedClip?.linkedGroupId && isManualLinkedGroupId(draggedClip.linkedGroupId)) {
+    for (const clip of clipMap.values()) {
+      if (clip.linkedGroupId === draggedClip.linkedGroupId && clip.trackId === trackId) {
+        return true;
+      }
+    }
+  }
+
+  if (drag.multiSelectClipIds?.some((clipId) => clipMap.get(clipId)?.trackId === trackId)) return true;
+  if (drag.overlapClipIds?.some((clipId) => clipMap.get(clipId)?.trackId === trackId)) return true;
+  return false;
+}
 
 type TrackSectionMetrics = {
   contentHeight: number;
@@ -2202,7 +2227,6 @@ export function Timeline() {
 
   // Layer sync - extracted to hook
   useLayerSync({
-    timelineRef,
     playheadPosition,
     clips,
     tracks,
@@ -2212,8 +2236,6 @@ export function Timeline() {
     isRamPreviewing: effectiveIsRamPreviewing,
     clipKeyframes,
     clipDrag,
-    zoom,
-    scrollX,
     clipMap,
     videoTracks,
     audioTracks,
@@ -2512,6 +2534,14 @@ export function Timeline() {
             clip.linkedGroupId === draggedClip.linkedGroupId &&
             clip.id !== draggedClip.id
           ));
+      const isInMultiSelectDrag =
+        !!clipDrag?.multiSelectClipIds?.includes(clip.id) &&
+        clipDrag.multiSelectTimeDelta !== undefined;
+      const isOverlapCollisionTarget = !!clipDrag?.overlapClipIds?.includes(clip.id);
+      const clipDragForClip =
+        clipDrag && (isDragging || isLinkedToDragging || isInMultiSelectDrag || isOverlapCollisionTarget)
+          ? clipDrag
+          : null;
       const isLinkedToTrimming =
         clipTrim &&
         !clipTrim.altKey &&
@@ -2554,7 +2584,7 @@ export function Timeline() {
           isFading={isFading}
           isLinkedToDragging={!!isLinkedToDragging}
           isLinkedToTrimming={!!isLinkedToTrimming}
-          clipDrag={clipDrag}
+          clipDrag={clipDragForClip}
           clipTrim={clipTrim}
           clipFade={clipFade}
           zoom={zoom}
@@ -2709,10 +2739,14 @@ export function Timeline() {
       event.preventDefault();
     }
 
+    if (clipDrag || clipTrim) {
+      return;
+    }
+
     const rect = event.currentTarget.getBoundingClientRect();
     const nextPointerX = Math.round(event.clientX - rect.left);
     setTimelinePointerX(previousPointerX => previousPointerX === nextPointerX ? previousPointerX : nextPointerX);
-  }, [setScrollX]);
+  }, [clipDrag, clipTrim, setScrollX]);
 
   const handleTimelinePointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const drag = timelineSurfaceDragRef.current;
@@ -3152,6 +3186,9 @@ export function Timeline() {
                   const isExpanded = !sectionCollapsed && isTrackExpandedForRender(track.id);
                   const baseHeight = getSectionTrackBaseHeight(track, sectionKind);
                   const dynamicHeight = getSectionTrackHeight(track, sectionKind);
+                  const trackClipDrag = clipDragAffectsTrack(clipDrag, track.id, clipMap)
+                    ? clipDrag
+                    : null;
 
                   return (
                     <TimelineTrack
@@ -3172,7 +3209,8 @@ export function Timeline() {
                       selectedClipIds={selectedClipIds}
                       selectedKeyframeIds={selectedKeyframeIds}
                       activeTimelineToolId={activeTimelineToolId}
-                      clipDrag={clipDrag}
+                      isClipDragActive={clipDrag !== null}
+                      clipDrag={trackClipDrag}
                       clipTrim={clipTrim}
                       externalDrag={externalDrag}
                       zoom={zoom}

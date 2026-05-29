@@ -18,6 +18,7 @@ import { STEM_LAYER_HEADER_ROW_HEIGHT, STEM_LAYER_ROW_HEIGHT } from '../../store
 import {
   STEM_SOURCE_LAYER_ID,
 } from '../../services/audio/stemSeparation';
+import { isManualLinkedGroupId } from '../../stores/timeline/helpers/idGenerator';
 
 const TRACK_VIEWPORT_FALLBACK_PX = 1600;
 const TRACK_VIEWPORT_MIN_PX = 1600;
@@ -31,6 +32,59 @@ const ACTIVE_STEM_JOB_PHASES = new Set([
   'separating',
   'storing',
 ]);
+
+function resolveClipDragPlacement(
+  clip: TimelineTrackProps['clips'][number],
+  clipDrag: TimelineTrackProps['clipDrag'],
+  clips: TimelineTrackProps['clips'],
+): { startTime: number; trackId: string } {
+  if (!clipDrag) {
+    return { startTime: clip.startTime, trackId: clip.trackId };
+  }
+
+  const draggedClip = clips.find((candidate) => candidate.id === clipDrag.clipId);
+  if (!draggedClip) {
+    return { startTime: clip.startTime, trackId: clip.trackId };
+  }
+
+  if (clip.id === clipDrag.clipId) {
+    return {
+      startTime: Math.max(0, clipDrag.snappedTime ?? clip.startTime),
+      trackId: clipDrag.currentTrackId,
+    };
+  }
+
+  if (
+    clipDrag.multiSelectClipIds?.includes(clip.id) &&
+    clipDrag.multiSelectTimeDelta !== undefined
+  ) {
+    return {
+      startTime: Math.max(0, clip.startTime + clipDrag.multiSelectTimeDelta),
+      trackId: clip.trackId,
+    };
+  }
+
+  const isLinkedToDraggedClip = !clipDrag.altKeyPressed && (
+    clip.linkedClipId === clipDrag.clipId ||
+    draggedClip.linkedClipId === clip.id ||
+    (
+      draggedClip.linkedGroupId &&
+      isManualLinkedGroupId(draggedClip.linkedGroupId) &&
+      clip.linkedGroupId === draggedClip.linkedGroupId &&
+      clip.id !== draggedClip.id
+    )
+  );
+
+  if (isLinkedToDraggedClip && clipDrag.snappedTime !== null) {
+    const timeDelta = clipDrag.snappedTime - draggedClip.startTime;
+    return {
+      startTime: Math.max(0, clip.startTime + timeDelta),
+      trackId: clip.trackId,
+    };
+  }
+
+  return { startTime: clip.startTime, trackId: clip.trackId };
+}
 
 type KeyframeTrackClip = {
   id: string;
@@ -309,13 +363,17 @@ const StemWaveformPreview = memo(function StemWaveformPreview({
 
 function ClipStemLayerTracks({
   clips,
+  trackId,
   selectedClipIds,
   expandedClipStemLayerIds,
+  clipDrag,
   timeToPixel,
 }: {
   clips: TimelineTrackProps['clips'];
+  trackId: string;
   selectedClipIds: Set<string>;
   expandedClipStemLayerIds: Set<string>;
+  clipDrag: TimelineTrackProps['clipDrag'];
   timeToPixel: (time: number) => number;
 }) {
   const clipStemSeparationJobs = useTimelineStore(state => state.clipStemSeparationJobs);
@@ -381,19 +439,26 @@ function ClipStemLayerTracks({
       void mediaStore.generateMediaWaveform(mediaFileId);
     }
   }, [stemMenuWaveformMediaIdsKey]);
-  const stemClips = useMemo(() => clips.filter((clip) => {
-    const job = clipStemSeparationJobs[clip.id];
-    const isActiveJob = ACTIVE_STEM_JOB_PHASES.has(job?.phase ?? 'failed');
-    return isActiveJob || (
-      selectedClipIds.has(clip.id)
-      && Boolean(clip.audioState?.stemSeparation?.stems.length)
-    );
-  }), [clipStemSeparationJobs, clips, selectedClipIds]);
+  const stemClips = useMemo(() => clips
+    .map((clip) => ({
+      clip,
+      placement: resolveClipDragPlacement(clip, clipDrag, clips),
+    }))
+    .filter(({ clip, placement }) => {
+      if (placement.trackId !== trackId) return false;
+
+      const job = clipStemSeparationJobs[clip.id];
+      const isActiveJob = ACTIVE_STEM_JOB_PHASES.has(job?.phase ?? 'failed');
+      return isActiveJob || (
+        selectedClipIds.has(clip.id)
+        && Boolean(clip.audioState?.stemSeparation?.stems.length)
+      );
+    }), [clipDrag, clipStemSeparationJobs, clips, selectedClipIds, trackId]);
   if (stemClips.length === 0) return null;
 
   return (
     <div className="clip-stem-layer-tracks">
-      {stemClips.map((clip) => {
+      {stemClips.map(({ clip, placement }) => {
         const stemSeparation = clip.audioState?.stemSeparation;
         const job = clipStemSeparationJobs[clip.id];
         const isActiveJob = ACTIVE_STEM_JOB_PHASES.has(job?.phase ?? 'failed');
@@ -419,7 +484,7 @@ function ClipStemLayerTracks({
             <div
               className="clip-stem-layer-panel"
               style={{
-                left: timeToPixel(clip.startTime),
+                left: timeToPixel(placement.startTime),
                 width,
               }}
               onMouseDown={(event) => event.stopPropagation()}
@@ -559,6 +624,7 @@ function TimelineTrackComponent({
   selectedClipIds,
   selectedKeyframeIds,
   activeTimelineToolId,
+  isClipDragActive,
   clipDrag,
   clipTrim,
   externalDrag,
@@ -581,6 +647,7 @@ function TimelineTrackComponent({
   onUpdateBezierHandle,
   addKeyframe,
 }: TimelineTrackProps) {
+  void isClipDragActive;
   // Deduplicate by clip id so transient store/render races do not produce duplicate React keys.
   const allTrackClips = useMemo(() => {
     const uniqueClips = new Map<string, typeof clips[number]>();
@@ -704,9 +771,11 @@ function TimelineTrackComponent({
       </div>
       {(track.type === 'video' || track.type === 'audio') && isExpanded && (
         <ClipStemLayerTracks
-          clips={allTrackClips}
+          clips={clips}
+          trackId={track.id}
           selectedClipIds={selectedClipIds}
           expandedClipStemLayerIds={expandedClipStemLayerIds}
+          clipDrag={clipDrag}
           timeToPixel={timeToPixel}
         />
       )}
@@ -741,4 +810,40 @@ function TimelineTrackComponent({
   );
 }
 
-export const TimelineTrack = memo(TimelineTrackComponent);
+function areTimelineTrackPropsEqual(
+  previous: TimelineTrackProps,
+  next: TimelineTrackProps,
+): boolean {
+  if (
+    previous.isClipDragActive &&
+    next.isClipDragActive &&
+    previous.clipDrag === null &&
+    next.clipDrag === null
+  ) {
+    return previous.track === next.track &&
+      previous.trackColor === next.trackColor &&
+      previous.clips === next.clips &&
+      previous.isDimmed === next.isDimmed &&
+      previous.isExpanded === next.isExpanded &&
+      previous.baseHeight === next.baseHeight &&
+      previous.dynamicHeight === next.dynamicHeight &&
+      previous.isDragTarget === next.isDragTarget &&
+      previous.isExternalDragTarget === next.isExternalDragTarget &&
+      previous.selectedClipIds === next.selectedClipIds &&
+      previous.selectedKeyframeIds === next.selectedKeyframeIds &&
+      previous.activeTimelineToolId === next.activeTimelineToolId &&
+      previous.isClipDragActive === next.isClipDragActive &&
+      previous.clipTrim === next.clipTrim &&
+      previous.externalDrag === next.externalDrag &&
+      previous.zoom === next.zoom &&
+      previous.scrollX === next.scrollX &&
+      previous.timelineRef === next.timelineRef &&
+      previous.isResizeActive === next.isResizeActive &&
+      previous.clipKeyframes === next.clipKeyframes &&
+      previous.expandedCurveProperties === next.expandedCurveProperties;
+  }
+
+  return false;
+}
+
+export const TimelineTrack = memo(TimelineTrackComponent, areTimelineTrackPropsEqual);

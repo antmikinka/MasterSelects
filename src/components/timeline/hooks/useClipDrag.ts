@@ -22,6 +22,9 @@ import { findSweptClipSnap } from '../utils/clipDragSnapping';
 
 const log = Logger.create('useClipDrag');
 const MIN_TOOL_GESTURE_DURATION = 0.1;
+const CLIP_DRAG_COMMIT_EPSILON_SECONDS = 0.000001;
+const CLIP_DRAG_STATE_PUBLISH_INTERVAL_MS = 33;
+const CLIP_DRAG_PREVIEW_PUBLISH_INTERVAL_MS = 66;
 
 interface UseClipDragProps {
   // Refs
@@ -170,8 +173,49 @@ function buildClipDragPreview(
   return Object.keys(patches).length > 0 ? { patches } : null;
 }
 
-function setClipDragPreview(preview: TimelineClipDragPreview | null): void {
+let lastClipDragPreviewPublishAt = 0;
+let pendingClipDragPreviewInput: { drag: ClipDragState; clipMap: Map<string, TimelineClip> } | null = null;
+let pendingClipDragPreviewTimer: number | null = null;
+
+function publishClipDragPreview(preview: TimelineClipDragPreview | null): void {
+  lastClipDragPreviewPublishAt = performance.now();
   useTimelineStore.setState({ clipDragPreview: preview });
+}
+
+function clearPendingClipDragPreviewTimer(): void {
+  if (pendingClipDragPreviewTimer !== null) {
+    window.clearTimeout(pendingClipDragPreviewTimer);
+    pendingClipDragPreviewTimer = null;
+  }
+  pendingClipDragPreviewInput = null;
+}
+
+function setClipDragPreviewFromDrag(drag: ClipDragState | null, clipMap: Map<string, TimelineClip>): void {
+  if (drag === null) {
+    clearPendingClipDragPreviewTimer();
+    publishClipDragPreview(null);
+    return;
+  }
+
+  const now = performance.now();
+  const elapsed = now - lastClipDragPreviewPublishAt;
+  if (elapsed >= CLIP_DRAG_PREVIEW_PUBLISH_INTERVAL_MS) {
+    clearPendingClipDragPreviewTimer();
+    publishClipDragPreview(buildClipDragPreview(drag, clipMap));
+    return;
+  }
+
+  pendingClipDragPreviewInput = { drag, clipMap };
+  if (pendingClipDragPreviewTimer !== null) return;
+
+  pendingClipDragPreviewTimer = window.setTimeout(() => {
+    pendingClipDragPreviewTimer = null;
+    const nextInput = pendingClipDragPreviewInput;
+    pendingClipDragPreviewInput = null;
+    if (nextInput) {
+      publishClipDragPreview(buildClipDragPreview(nextInput.drag, nextInput.clipMap));
+    }
+  }, Math.max(0, CLIP_DRAG_PREVIEW_PUBLISH_INTERVAL_MS - elapsed));
 }
 
 function getClipDragOverlapClipIds(
@@ -254,14 +298,13 @@ export function useClipDrag({
 }: UseClipDragProps): UseClipDragReturn {
   const [clipDrag, setClipDrag] = useState<ClipDragState | null>(null);
   const clipDragRef = useRef<ClipDragState | null>(clipDrag);
+  const lastClipDragStatePublishAtRef = useRef(0);
+  const pendingClipDragStateRef = useRef<ClipDragState | null>(null);
+  const pendingClipDragStateTimerRef = useRef<number | null>(null);
 
   // Keep refs to current values for use in event handlers (avoid stale closures)
   const selectedClipIdsRef = useRef<Set<string>>(selectedClipIds);
   const clipMapRef = useRef<Map<string, TimelineClip>>(clipMap);
-
-  useEffect(() => {
-    clipDragRef.current = clipDrag;
-  }, [clipDrag]);
 
   useEffect(() => {
     selectedClipIdsRef.current = selectedClipIds;
@@ -271,7 +314,53 @@ export function useClipDrag({
     clipMapRef.current = clipMap;
   }, [clipMap]);
 
-  useEffect(() => () => setClipDragPreview(null), []);
+  const clearPendingClipDragStateTimer = useCallback(() => {
+    if (pendingClipDragStateTimerRef.current !== null) {
+      window.clearTimeout(pendingClipDragStateTimerRef.current);
+      pendingClipDragStateTimerRef.current = null;
+    }
+    pendingClipDragStateRef.current = null;
+  }, []);
+
+  const publishClipDragState = useCallback((nextDrag: ClipDragState | null) => {
+    lastClipDragStatePublishAtRef.current = performance.now();
+    setClipDrag(nextDrag);
+  }, []);
+
+  const setClipDragStateForInteraction = useCallback((nextDrag: ClipDragState | null) => {
+    clipDragRef.current = nextDrag;
+
+    if (nextDrag === null) {
+      clearPendingClipDragStateTimer();
+      publishClipDragState(null);
+      return;
+    }
+
+    const now = performance.now();
+    const elapsed = now - lastClipDragStatePublishAtRef.current;
+    if (elapsed >= CLIP_DRAG_STATE_PUBLISH_INTERVAL_MS) {
+      clearPendingClipDragStateTimer();
+      publishClipDragState(nextDrag);
+      return;
+    }
+
+    pendingClipDragStateRef.current = nextDrag;
+    if (pendingClipDragStateTimerRef.current !== null) return;
+
+    pendingClipDragStateTimerRef.current = window.setTimeout(() => {
+      pendingClipDragStateTimerRef.current = null;
+      const pendingDrag = pendingClipDragStateRef.current;
+      pendingClipDragStateRef.current = null;
+      if (pendingDrag) {
+        publishClipDragState(pendingDrag);
+      }
+    }, Math.max(0, CLIP_DRAG_STATE_PUBLISH_INTERVAL_MS - elapsed));
+  }, [clearPendingClipDragStateTimer, publishClipDragState]);
+
+  useEffect(() => () => {
+    clearPendingClipDragStateTimer();
+    setClipDragPreviewFromDrag(null, clipMapRef.current);
+  }, [clearPendingClipDragStateTimer]);
 
   // Premiere-style clip drag
   const handleClipMouseDown = useCallback(
@@ -347,11 +436,10 @@ export function useClipDrag({
         multiSelectClipIds: otherSelectedIds.length > 0 ? otherSelectedIds : undefined,
         multiSelectTimeDelta: 0,
       };
-      setClipDrag(initialDrag);
-      clipDragRef.current = initialDrag;
-      setClipDragPreview(buildClipDragPreview(initialDrag, currentClipMap));
+      setClipDragStateForInteraction(initialDrag);
+      setClipDragPreviewFromDrag(initialDrag, currentClipMap);
 
-      const handleMouseMove = (moveEvent: MouseEvent) => {
+      const processMouseMove = (moveEvent: MouseEvent) => {
         const drag = clipDragRef.current;
         if (!drag || !trackLanesRef.current || !timelineRef.current) return;
 
@@ -380,9 +468,8 @@ export function useClipDrag({
             multiSelectTimeDelta: drag.toolGesture === 'slide' ? clampedDelta : undefined,
             sourceTimeDelta: drag.toolGesture === 'slip' ? clampedDelta : undefined,
           };
-          setClipDrag(newDrag);
-          clipDragRef.current = newDrag;
-          setClipDragPreview(buildClipDragPreview(newDrag, clipMapRef.current));
+          setClipDragStateForInteraction(newDrag);
+          setClipDragPreviewFromDrag(newDrag, clipMapRef.current);
           return;
         }
 
@@ -700,12 +787,53 @@ export function useClipDrag({
           overlapClipIds,
           multiSelectTimeDelta,
         };
-        setClipDrag(newDrag);
-        clipDragRef.current = newDrag;
-        setClipDragPreview(buildClipDragPreview(newDrag, clipMapRef.current));
+        setClipDragStateForInteraction(newDrag);
+        setClipDragPreviewFromDrag(newDrag, clipMapRef.current);
+      };
+
+      let pendingMoveEvent: MouseEvent | null = null;
+      let moveAnimationFrameId: number | null = null;
+
+      const cancelPendingMouseMoveFrame = () => {
+        if (moveAnimationFrameId !== null) {
+          window.cancelAnimationFrame(moveAnimationFrameId);
+          moveAnimationFrameId = null;
+        }
+      };
+
+      const flushPendingMouseMove = () => {
+        cancelPendingMouseMoveFrame();
+        const moveEvent = pendingMoveEvent;
+        pendingMoveEvent = null;
+        if (moveEvent) {
+          processMouseMove(moveEvent);
+        }
+      };
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        pendingMoveEvent = moveEvent;
+        if (moveAnimationFrameId !== null) return;
+
+        moveAnimationFrameId = window.requestAnimationFrame(() => {
+          moveAnimationFrameId = null;
+          const latestMoveEvent = pendingMoveEvent;
+          pendingMoveEvent = null;
+          if (latestMoveEvent) {
+            processMouseMove(latestMoveEvent);
+          }
+        });
+      };
+
+      const cleanupDragListeners = () => {
+        cancelPendingMouseMoveFrame();
+        pendingMoveEvent = null;
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
       };
 
       const handleMouseUp = (upEvent: MouseEvent) => {
+        flushPendingMouseMove();
+        processMouseMove(upEvent);
         const drag = clipDragRef.current;
         if (drag && timelineRef.current) {
           if (drag.toolGesture === 'slip' || drag.toolGesture === 'slide') {
@@ -739,11 +867,9 @@ export function useClipDrag({
                 });
               }
             }
-            setClipDrag(null);
-            clipDragRef.current = null;
-            setClipDragPreview(null);
-            document.removeEventListener('mousemove', handleMouseMove);
-            document.removeEventListener('mouseup', handleMouseUp);
+            setClipDragStateForInteraction(null);
+            setClipDragPreviewFromDrag(null, clipMapRef.current);
+            cleanupDragListeners();
             return;
           }
 
@@ -797,63 +923,73 @@ export function useClipDrag({
           // If multiple clips are selected, move them all by the same delta
           if (isMultiSelect) {
             log.debug('Moving multiple clips', { count: currentSelectedIds.size });
-
-            // Collect all clips that should be excluded from resistance (selected + linked)
-            const allExcludedIds: string[] = [...currentSelectedIds];
-            for (const selId of currentSelectedIds) {
-              const selClip = currentClipMap.get(selId);
-              if (selClip?.linkedClipId && !allExcludedIds.includes(selClip.linkedClipId)) {
-                allExcludedIds.push(selClip.linkedClipId);
-              }
-            }
-
-            // Track which clips we've already moved (to avoid double-moving linked clips)
-            const movedClipIds = new Set<string>();
-
-            // Move the dragged clip first (this handles snapping)
-            // skipLinked depends on whether linked clip is also selected
             const draggedClip = currentClipMap.get(drag.clipId);
-            const draggedLinkedInSelection = !!(draggedClip?.linkedClipId && currentSelectedIds.has(draggedClip.linkedClipId));
-            moveClip(drag.clipId, finalStartTime, finalTrackId, draggedLinkedInSelection, drag.altKeyPressed, false, allExcludedIds);
-            movedClipIds.add(drag.clipId);
-            // If linked clip was moved via skipLinked=false, mark it as moved
-            if (draggedClip?.linkedClipId && !draggedLinkedInSelection && !drag.altKeyPressed) {
-              movedClipIds.add(draggedClip.linkedClipId);
-            }
+            const shouldCommitMultiSelect =
+              finalTrackId !== draggedClip?.trackId ||
+              Math.abs(timeDelta) > CLIP_DRAG_COMMIT_EPSILON_SECONDS;
 
-            // Move other selected clips by the same delta
-            for (const selectedId of currentSelectedIds) {
-              if (movedClipIds.has(selectedId)) continue; // Skip already-moved clips
-              const selectedClip = currentClipMap.get(selectedId);
-              if (selectedClip) {
-                const newTime = Math.max(0, selectedClip.startTime + timeDelta);
-                // If linked clip is also selected, skip it (will be moved in its own iteration)
-                // If linked clip is NOT selected, move it with this clip (skipLinked=false)
-                const linkedInSelection = !!(selectedClip.linkedClipId && currentSelectedIds.has(selectedClip.linkedClipId));
-                moveClip(selectedId, newTime, selectedClip.trackId, linkedInSelection, true, false, allExcludedIds); // skipGroup always true, skipTrim false
-                movedClipIds.add(selectedId);
-                // If linked clip was moved via skipLinked=false, mark it as moved
-                if (selectedClip.linkedClipId && !linkedInSelection) {
-                  movedClipIds.add(selectedClip.linkedClipId);
+            if (shouldCommitMultiSelect) {
+              // Collect all clips that should be excluded from resistance (selected + linked)
+              const allExcludedIds: string[] = [...currentSelectedIds];
+              for (const selId of currentSelectedIds) {
+                const selClip = currentClipMap.get(selId);
+                if (selClip?.linkedClipId && !allExcludedIds.includes(selClip.linkedClipId)) {
+                  allExcludedIds.push(selClip.linkedClipId);
+                }
+              }
+
+              // Track which clips we've already moved (to avoid double-moving linked clips)
+              const movedClipIds = new Set<string>();
+
+              // Move the dragged clip first (this handles snapping)
+              // skipLinked depends on whether linked clip is also selected
+              const draggedLinkedInSelection = !!(draggedClip?.linkedClipId && currentSelectedIds.has(draggedClip.linkedClipId));
+              moveClip(drag.clipId, finalStartTime, finalTrackId, draggedLinkedInSelection, drag.altKeyPressed, false, allExcludedIds);
+              movedClipIds.add(drag.clipId);
+              // If linked clip was moved via skipLinked=false, mark it as moved
+              if (draggedClip?.linkedClipId && !draggedLinkedInSelection && !drag.altKeyPressed) {
+                movedClipIds.add(draggedClip.linkedClipId);
+              }
+
+              // Move other selected clips by the same delta
+              for (const selectedId of currentSelectedIds) {
+                if (movedClipIds.has(selectedId)) continue; // Skip already-moved clips
+                const selectedClip = currentClipMap.get(selectedId);
+                if (selectedClip) {
+                  const newTime = Math.max(0, selectedClip.startTime + timeDelta);
+                  // If linked clip is also selected, skip it (will be moved in its own iteration)
+                  // If linked clip is NOT selected, move it with this clip (skipLinked=false)
+                  const linkedInSelection = !!(selectedClip.linkedClipId && currentSelectedIds.has(selectedClip.linkedClipId));
+                  moveClip(selectedId, newTime, selectedClip.trackId, linkedInSelection, true, false, allExcludedIds); // skipGroup always true, skipTrim false
+                  movedClipIds.add(selectedId);
+                  // If linked clip was moved via skipLinked=false, mark it as moved
+                  if (selectedClip.linkedClipId && !linkedInSelection) {
+                    movedClipIds.add(selectedClip.linkedClipId);
+                  }
                 }
               }
             }
           } else {
             // Single clip drag - normal behavior
-            moveClip(drag.clipId, finalStartTime, finalTrackId, false, drag.altKeyPressed);
+            const draggedClip = currentClipMap.get(drag.clipId);
+            if (
+              !draggedClip ||
+              finalTrackId !== draggedClip.trackId ||
+              Math.abs(finalStartTime - draggedClip.startTime) > CLIP_DRAG_COMMIT_EPSILON_SECONDS
+            ) {
+              moveClip(drag.clipId, finalStartTime, finalTrackId, false, drag.altKeyPressed);
+            }
           }
         }
-        setClipDrag(null);
-        clipDragRef.current = null;
-        setClipDragPreview(null);
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
+        setClipDragStateForInteraction(null);
+        setClipDragPreviewFromDrag(null, clipMapRef.current);
+        cleanupDragListeners();
       };
 
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
     },
-    [activeTimelineToolId, applyTimelineEditOperation, trackLanesRef, timelineRef, clipMap, tracks, scrollX, snappingEnabled, isExporting, pixelToTime, getRenderedTrackHeight, selectClip, getSnappedPosition, getPositionWithResistance, addTrack, moveClip]
+    [activeTimelineToolId, applyTimelineEditOperation, trackLanesRef, timelineRef, clipMap, tracks, scrollX, snappingEnabled, isExporting, pixelToTime, getRenderedTrackHeight, selectClip, getSnappedPosition, getPositionWithResistance, addTrack, moveClip, setClipDragStateForInteraction]
   );
 
   // Handle double-click on clip - open composition if it's a nested comp

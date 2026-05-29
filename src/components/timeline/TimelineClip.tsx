@@ -1063,6 +1063,14 @@ function TimelineClipComponent({
   }
 
   const width = timeToPixel(displayDuration);
+  const isClipPositionDragPreview = !clipDrag?.toolGesture && (
+    isDragging ||
+    isLinkedToDragging ||
+    (
+      clipDrag?.multiSelectClipIds?.includes(clip.id) &&
+      clipDrag.multiSelectTimeDelta !== undefined
+    )
+  );
 
   // Calculate position - if dragging, use the computed position (with snapping/resistance)
   let left = timeToPixel(displayStartTime);
@@ -1089,14 +1097,23 @@ function TimelineClipComponent({
     TIMELINE_VIEWPORT_MIN_PX,
     visibleTimelineViewportWidth
   );
-  const waveformRenderStartPx = Math.max(0, scrollX - left - TIMELINE_RENDER_OVERSCAN_PX);
-  const waveformRenderEndPx = Math.min(width, scrollX - left + renderTimelineViewportWidth + TIMELINE_RENDER_OVERSCAN_PX);
+  const staticContentRenderLeft = isClipPositionDragPreview
+    ? timeToPixel(displayStartTime)
+    : left;
+  const waveformRenderStartPx = Math.max(0, scrollX - staticContentRenderLeft - TIMELINE_RENDER_OVERSCAN_PX);
+  const waveformRenderEndPx = Math.min(
+    width,
+    scrollX - staticContentRenderLeft + renderTimelineViewportWidth + TIMELINE_RENDER_OVERSCAN_PX,
+  );
   const waveformRenderWindow = {
     startPx: waveformRenderStartPx,
     width: Math.max(0, waveformRenderEndPx - waveformRenderStartPx),
   };
-  const thumbnailRenderStartPx = Math.max(0, scrollX - left - THUMBNAIL_RENDER_OVERSCAN_PX);
-  const thumbnailRenderEndPx = Math.min(width, scrollX - left + renderTimelineViewportWidth + THUMBNAIL_RENDER_OVERSCAN_PX);
+  const thumbnailRenderStartPx = Math.max(0, scrollX - staticContentRenderLeft - THUMBNAIL_RENDER_OVERSCAN_PX);
+  const thumbnailRenderEndPx = Math.min(
+    width,
+    scrollX - staticContentRenderLeft + renderTimelineViewportWidth + THUMBNAIL_RENDER_OVERSCAN_PX,
+  );
   const thumbnailRenderWindow = {
     startPx: thumbnailRenderStartPx,
     width: Math.max(0, thumbnailRenderEndPx - thumbnailRenderStartPx),
@@ -2133,9 +2150,10 @@ function TimelineClipComponent({
 
   // Check if this clip is part of a multi-select drag
   const isInMultiSelectDrag = clipDrag?.multiSelectClipIds?.includes(clip.id) && clipDrag.multiSelectTimeDelta !== undefined;
+  const isClipBodyDragging = isDragging || isLinkedToDragging || isInMultiSelectDrag;
   const showFocusCollisionHighlight = trackFocusMode !== 'balanced' && !!clipDrag?.overlapClipIds?.length;
   const isOverlapCollisionTarget = showFocusCollisionHighlight && !!clipDrag?.overlapClipIds?.includes(clip.id);
-  const isOverlapCollisionSource = showFocusCollisionHighlight && (isDragging || isLinkedToDragging || isInMultiSelectDrag);
+  const isOverlapCollisionSource = showFocusCollisionHighlight && isClipBodyDragging;
   const isTrackLocked = track.locked === true;
   const trackTypeIndex = useMemo(
     () => tracks.filter(candidate => candidate.type === track.type).findIndex(candidate => candidate.id === track.id),
@@ -3141,8 +3159,8 @@ function TimelineClipComponent({
       onMouseDown={isTrackLocked || (isPointerToolActive && !canUseBodyToolGesture) ? undefined : onMouseDown}
       onDoubleClick={isPointerToolActive ? undefined : onDoubleClick}
       onContextMenu={onContextMenu}
-      onMouseMove={isTrackLocked ? undefined : handleMouseMove}
-      onMouseLeave={handleMouseLeave}
+      onMouseMove={isTrackLocked || isClipBodyDragging ? undefined : handleMouseMove}
+      onMouseLeave={isClipBodyDragging ? undefined : handleMouseLeave}
       onClick={isTrackLocked ? undefined : handleClick}
     >
       {/* Cut indicator line */}

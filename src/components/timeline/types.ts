@@ -239,6 +239,7 @@ export interface TimelineTrackProps {
   selectedClipIds: Set<string>;
   selectedKeyframeIds: Set<string>;
   activeTimelineToolId: TimelineToolId;
+  isClipDragActive: boolean;
   clipDrag: ClipDragState | null;
   clipTrim: ClipTrimState | null;
   externalDrag: ExternalDragState | null;

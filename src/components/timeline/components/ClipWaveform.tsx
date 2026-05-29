@@ -276,7 +276,7 @@ function applyDisplayGain(
   gain: number | undefined,
 ): WaveformColumn[] {
   if (!Number.isFinite(gain) || Math.abs((gain ?? 1) - 1) < 0.001) {
-    return columns.map(column => ({ ...column }));
+    return columns as WaveformColumn[];
   }
 
   const clampedGain = Math.max(0, Math.min(8, gain ?? 1));
@@ -294,7 +294,7 @@ function applyDisplayGain(
 }
 
 function applyMultiplierToColumn(column: WaveformColumn, multiplier: number): WaveformColumn {
-  if (Math.abs(multiplier - 1) < 0.001) return { ...column };
+  if (Math.abs(multiplier - 1) < 0.001) return column;
   const gain = Math.max(0, Math.min(4, multiplier));
   const min = Math.max(-1, Math.min(1, column.min * gain));
   const max = Math.max(-1, Math.min(1, column.max * gain));
@@ -322,7 +322,7 @@ function applyAudioEditPreviewToColumns(
   const previewApplies = Boolean(clipId && options.regionGainPreview?.clipId === clipId);
   const editStack = options.editStack ?? [];
   if (!clipId || (!previewApplies && editStack.length === 0)) {
-    return columns.map(column => ({ ...column }));
+    return columns as WaveformColumn[];
   }
 
   const sourceDuration = Math.max(0.001, options.sourceEnd - options.sourceStart);
@@ -406,13 +406,13 @@ function applyVolumeAutomationToColumns(
 ): WaveformColumn[] {
   const keyframes = options.keyframes ?? [];
   if (keyframes.length === 0) {
-    return columns.map(column => ({ ...column }));
+    return columns as WaveformColumn[];
   }
   const sortedKeyframes = keyframes
     .filter(keyframe => Number.isFinite(keyframe.time) && Number.isFinite(keyframe.value))
     .toSorted((a, b) => a.time - b.time);
   if (sortedKeyframes.length === 0) {
-    return columns.map(column => ({ ...column }));
+    return columns as WaveformColumn[];
   }
 
   const clipDuration = Math.max(0.001, options.clipEnd - options.clipStart);
