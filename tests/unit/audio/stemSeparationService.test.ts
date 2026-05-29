@@ -4,6 +4,7 @@ import { AudioArtifactStore } from '../../../src/services/audio/AudioArtifactSto
 import {
   decodeStemPcmF32Payload,
   StemSeparationService,
+  STEM_SOURCE_LAYER_ID,
   STEM_PCM_F32_MIME_TYPE,
   type StemSeparationWorkerClientLike,
   type StemSeparationWorkerStemResult,
@@ -199,7 +200,9 @@ describe('StemSeparationService', () => {
       sourceFingerprint: 'sha256:source-a',
       sampleRate: 4,
       channelCount: 2,
-      mixMode: 'stems',
+      soloStemId: STEM_SOURCE_LAYER_ID,
+      sourceGainDb: 0,
+      mixMode: 'original',
       stems: [
         { id: 'stem-stem-job-a-drums', kind: 'drums', enabled: true, gainDb: 0 },
         { id: 'stem-stem-job-a-bass', kind: 'bass', enabled: true, gainDb: 0 },
@@ -234,9 +237,15 @@ describe('StemSeparationService', () => {
 
   it('publishes WAV stem files into Stems/source media folders', async () => {
     const folders: Array<{ id: string; name: string; parentId: string | null; createdAt: number; isExpanded: boolean }> = [];
-    const imported: Array<{ file: File; parentId: string | null | undefined; projectFileName?: string }> = [];
-    const importFile = vi.fn(async (file: File, parentId?: string | null, options?: { projectFileName?: string }) => {
-      imported.push({ file, parentId, projectFileName: options?.projectFileName });
+    const imported: Array<{ file: File; parentId: string | null | undefined; projectFileName?: string; stemKind?: string; sourceMediaFileId?: string }> = [];
+    const importFile = vi.fn(async (file: File, parentId?: string | null, options?: { projectFileName?: string; stemInfo?: { kind: string; sourceMediaFileId: string } }) => {
+      imported.push({
+        file,
+        parentId,
+        projectFileName: options?.projectFileName,
+        stemKind: options?.stemInfo?.kind,
+        sourceMediaFileId: options?.stemInfo?.sourceMediaFileId,
+      });
       return {
         id: `media-${imported.length}`,
         name: file.name,
@@ -284,6 +293,8 @@ describe('StemSeparationService', () => {
       'Dialog - Vocals.wav',
     ]);
     expect(imported[0]?.projectFileName).toBe('Stems/Dialog/Dialog - Drums.wav');
+    expect(imported.map(item => item.stemKind)).toEqual(['drums', 'bass', 'other', 'vocals']);
+    expect(imported.every(item => item.sourceMediaFileId === 'media-a')).toBe(true);
     expect(imported.every(item => item.parentId === 'folder-2')).toBe(true);
     expect(result?.stems.map(stem => stem.mediaFileId)).toEqual(['media-1', 'media-2', 'media-3', 'media-4']);
   });

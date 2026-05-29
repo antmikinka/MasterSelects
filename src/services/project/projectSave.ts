@@ -177,6 +177,7 @@ function convertMediaFiles(files: MediaFile[]): ProjectMediaFile[] {
     hasAudioProxy: file.hasProxyAudio === true || file.audioProxyStatus === 'ready',
     audioProxyStorageKey: file.audioProxyStorageKey || file.fileHash || file.id,
     audioAnalysisRefs: file.audioAnalysisRefs ? structuredClone(file.audioAnalysisRefs) : undefined,
+    stemInfo: file.stemInfo ? structuredClone(file.stemInfo) : undefined,
     waveform: shouldPersistMediaWaveform(file) && file.waveformStatus === 'ready' && file.waveform
       ? [...file.waveform]
       : undefined,

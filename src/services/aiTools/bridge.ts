@@ -385,7 +385,6 @@ async function collectStemDebugState(args: Record<string, unknown> = {}) {
     data: {
       selectedClipIds: Array.from(timelineState.selectedClipIds),
       primarySelectedClipId: timelineState.primarySelectedClipId,
-      expandedClipStemLayerIds: Array.from(timelineState.expandedClipStemLayerIds),
       clipStemSeparationJobs: Object.fromEntries(
         Object.entries(timelineState.clipStemSeparationJobs).map(([clipId, job]) => [
           clipId,
@@ -449,6 +448,57 @@ function summarizeNumberList(values: number[]): { count: number; avg: number; ma
     avg: Math.round((sum / values.length) * 100) / 100,
     max: Math.round(Math.max(...values) * 100) / 100,
     min: Math.round(Math.min(...values) * 100) / 100,
+  };
+}
+
+function roundTiming(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.round(value * 100) / 100
+    : null;
+}
+
+function summarizeLongAnimationFrameEntry(entry: PerformanceEntry, startedAt: number): Record<string, unknown> {
+  const detail = entry as PerformanceEntry & {
+    blockingDuration?: number;
+    renderStart?: number;
+    styleAndLayoutStart?: number;
+    scripts?: Array<{
+      duration?: number;
+      executionStart?: number;
+      forcedStyleAndLayoutDuration?: number;
+      pauseDuration?: number;
+      sourceURL?: string;
+      sourceFunctionName?: string;
+      invoker?: string;
+      invokerType?: string;
+    }>;
+  };
+  const scripts = Array.isArray(detail.scripts)
+    ? detail.scripts
+      .map(script => ({
+        durationMs: roundTiming(script.duration),
+        executionStartMs: roundTiming(typeof script.executionStart === 'number' ? script.executionStart - startedAt : undefined),
+        forcedStyleAndLayoutMs: roundTiming(script.forcedStyleAndLayoutDuration),
+        pauseMs: roundTiming(script.pauseDuration),
+        sourceURL: typeof script.sourceURL === 'string' ? script.sourceURL.slice(-160) : null,
+        sourceFunctionName: script.sourceFunctionName ?? null,
+        invoker: script.invoker ?? null,
+        invokerType: script.invokerType ?? null,
+      }))
+      .sort((left, right) => (right.durationMs ?? 0) - (left.durationMs ?? 0))
+      .slice(0, 8)
+    : [];
+
+  return {
+    name: entry.name,
+    startTime: roundTiming(entry.startTime - startedAt),
+    durationMs: roundTiming(entry.duration),
+    blockingDurationMs: roundTiming(detail.blockingDuration),
+    renderStartMs: roundTiming(typeof detail.renderStart === 'number' ? detail.renderStart - startedAt : undefined),
+    styleAndLayoutStartMs: roundTiming(typeof detail.styleAndLayoutStart === 'number' ? detail.styleAndLayoutStart - startedAt : undefined),
+    entryType: entry.entryType,
+    scriptCount: Array.isArray(detail.scripts) ? detail.scripts.length : 0,
+    scripts,
   };
 }
 
@@ -631,7 +681,6 @@ async function measureUiFrameLoop(args: Record<string, unknown> = {}) {
       },
       stemClipCount: timelineState.clips.filter((clip) => clip.audioState?.stemSeparation?.stems.length).length,
       selectedClipIds: Array.from(timelineState.selectedClipIds),
-      expandedClipStemLayerIds: Array.from(timelineState.expandedClipStemLayerIds),
       frames: frames.slice(-240),
     },
   };
@@ -889,7 +938,6 @@ async function measureTimelineInteraction(args: Record<string, unknown> = {}) {
       afterSnapshot: collectTimelineInteractionSnapshot(),
       stemClipCount: timelineState.clips.filter((clip) => clip.audioState?.stemSeparation?.stems.length).length,
       selectedClipIds: Array.from(timelineState.selectedClipIds),
-      expandedClipStemLayerIds: Array.from(timelineState.expandedClipStemLayerIds),
       target: summarizeElementForDebug(target),
       frames: frames.slice(-240),
     },
@@ -1390,12 +1438,7 @@ function startRealClipDragRecording(event: MouseEvent, target: HTMLElement): voi
     try {
       state.animationFrameObserver = new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) {
-          state.longAnimationFrames.push({
-            name: entry.name,
-            startTime: Math.round((entry.startTime - startedAt) * 100) / 100,
-            durationMs: Math.round(entry.duration * 100) / 100,
-            entryType: entry.entryType,
-          });
+          state.longAnimationFrames.push(summarizeLongAnimationFrameEntry(entry, startedAt));
         }
       });
       state.animationFrameObserver.observe({ entryTypes: ['long-animation-frame'] });
@@ -2619,16 +2662,6 @@ async function runDebugAction(action: string, args: Record<string, unknown> = {}
         ? args.stemId.trim()
         : null;
       timelineState.setClipStemSolo(clipId, stemId);
-      return collectStemDebugState({ ...args, clipId });
-    }
-    case 'set-clip-stem-layer-open': {
-      const clipId = typeof args.clipId === 'string' && args.clipId.trim()
-        ? args.clipId.trim()
-        : timelineState.primarySelectedClipId ?? Array.from(timelineState.selectedClipIds)[0] ?? '';
-      if (!clipId) {
-        return { success: false, error: 'No clipId provided and no clip is selected.' };
-      }
-      timelineState.setClipStemLayerDropdownOpen(clipId, args.open !== false);
       return collectStemDebugState({ ...args, clipId });
     }
     case 'sync-clip-stem-copies': {

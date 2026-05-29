@@ -1842,7 +1842,10 @@ export class ClipAudioRenderService {
     }
 
     const sourceBufferWithGain = createGainAdjustedBuffer(sourceBuffer, dbToLinearGain(stemSeparation.sourceGainDb ?? 0));
-    if (stemSeparation.mixMode === 'original' || stemSeparation.soloStemId === STEM_SOURCE_LAYER_ID) {
+    if (
+      stemSeparation.mixMode === 'original' ||
+      stemSeparation.soloStemId === STEM_SOURCE_LAYER_ID
+    ) {
       return sourceBufferWithGain;
     }
 

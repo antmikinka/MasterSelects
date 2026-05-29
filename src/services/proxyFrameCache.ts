@@ -670,6 +670,18 @@ class ProxyFrameCache {
     return `${mediaFileId}_${frameIndex}`;
   }
 
+  private disposeAudioProxyElement(mediaFileId: string, audio: HTMLAudioElement): void {
+    const src = audio.currentSrc || audio.src;
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+    if (src && this.ownedAudioUrls.has(src)) {
+      URL.revokeObjectURL(src);
+      this.ownedAudioUrls.delete(src);
+    }
+    this.audioCache.delete(mediaFileId);
+  }
+
   private touchAudioBufferCacheEntry(mediaFileId: string, buffer: AudioBuffer): void {
     this.audioBufferCache.delete(mediaFileId);
     this.audioBufferCache.set(mediaFileId, buffer);
@@ -1073,6 +1085,13 @@ class ProxyFrameCache {
    */
   getCachedAudioProxy(mediaFileId: string): HTMLAudioElement | null {
     return this.audioCache.get(mediaFileId) || null;
+  }
+
+  releaseAudioProxy(mediaFileId: string): void {
+    const audio = this.audioCache.get(mediaFileId);
+    if (audio) {
+      this.disposeAudioProxyElement(mediaFileId, audio);
+    }
   }
 
   /**
@@ -1815,6 +1834,13 @@ class ProxyFrameCache {
     return this.audioBufferCache.has(mediaFileId);
   }
 
+  getCachedAudioBuffer(mediaFileId: string): AudioBuffer | null {
+    const cached = this.audioBufferCache.get(mediaFileId);
+    if (!cached) return null;
+    this.touchAudioBufferCacheEntry(mediaFileId, cached);
+    return cached;
+  }
+
   private attachScrubEffectChain(
     ctx: AudioContext,
     volume: number,
@@ -2037,12 +2063,7 @@ class ProxyFrameCache {
     // Also clear audio cache
     const audio = this.audioCache.get(mediaFileId);
     if (audio) {
-      audio.pause();
-      if (this.ownedAudioUrls.has(audio.src)) {
-        URL.revokeObjectURL(audio.src);
-        this.ownedAudioUrls.delete(audio.src);
-      }
-      this.audioCache.delete(mediaFileId);
+      this.disposeAudioProxyElement(mediaFileId, audio);
     }
 
     this.audioBufferCache.delete(mediaFileId);
@@ -2056,11 +2077,8 @@ class ProxyFrameCache {
     this.preloadQueue = [];
 
     // Clear audio cache
-    for (const [, audio] of this.audioCache) {
-      audio.pause();
-      if (this.ownedAudioUrls.has(audio.src)) {
-        URL.revokeObjectURL(audio.src);
-      }
+    for (const [mediaFileId, audio] of Array.from(this.audioCache.entries())) {
+      this.disposeAudioProxyElement(mediaFileId, audio);
     }
     this.audioCache.clear();
     this.ownedAudioUrls.clear();

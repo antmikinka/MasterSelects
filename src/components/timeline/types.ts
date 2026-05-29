@@ -300,6 +300,7 @@ export interface TimelineClipProps {
   isFading: boolean;  // True if this clip is being fade-adjusted
   isLinkedToDragging: boolean;
   isLinkedToTrimming: boolean;
+  isClipDragActive: boolean;
   clipDrag: ClipDragState | null;
   clipTrim: ClipTrimState | null;
   clipFade: ClipFadeState | null;

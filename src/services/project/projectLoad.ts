@@ -620,6 +620,7 @@ async function convertProjectMediaToStore(
       projectPath: representativeProjectPath,
       fileHash: pm.fileHash,
       audioAnalysisRefs: pm.audioAnalysisRefs ? structuredClone(pm.audioAnalysisRefs) : undefined,
+      stemInfo: pm.stemInfo ? structuredClone(pm.stemInfo) : undefined,
       waveform: pm.waveform ? [...pm.waveform] : undefined,
       waveformChannels: pm.waveformChannels?.map(channel => [...channel]),
       waveformStatus: pm.waveform?.length ? 'ready' : undefined,

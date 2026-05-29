@@ -2,7 +2,7 @@
 
 import type { VectorAnimationMetadata } from '../../../types/vectorAnimation';
 import type { GaussianSplatSequenceData, ModelSequenceData } from '../../../types';
-import type { MediaFileAudioAnalysisRefs } from '../../../types/audio';
+import type { MediaFileAudioAnalysisRefs, MediaFileStemInfo } from '../../../types/audio';
 
 export interface ProjectMediaFile {
   id: string;
@@ -28,6 +28,7 @@ export interface ProjectMediaFile {
   fileSize?: number;
   hasAudio?: boolean;
   audioAnalysisRefs?: MediaFileAudioAnalysisRefs;
+  stemInfo?: MediaFileStemInfo;
   waveform?: number[];
   waveformChannels?: number[][];
   splatCount?: number;

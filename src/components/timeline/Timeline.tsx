@@ -502,7 +502,6 @@ export function Timeline() {
   const { selectedKeyframeIds, clipKeyframes, expandedCurveProperties } =
     useTimelineStore(useShallow(selectKeyframeState));
   const expandedTracks = useTimelineStore(state => state.expandedTracks);
-  const expandedClipStemLayerIds = useTimelineStore(state => state.expandedClipStemLayerIds);
   const clipStemSeparationJobs = useTimelineStore(state => state.clipStemSeparationJobs);
 
   // ===========================================
@@ -715,10 +714,8 @@ export function Timeline() {
       selectedClipIds,
       clipKeyframes,
       expandedCurveProperties,
-      expandedClipStemLayerIds,
-      clipStemSeparationJobs,
     }),
-    [clipKeyframes, expandedCurveProperties, expandedClipStemLayerIds, clipStemSeparationJobs, selectedClipIds],
+    [clipKeyframes, expandedCurveProperties, selectedClipIds],
   );
   const getRenderedTrackBaseHeight = useCallback(
     (track: TimelineTrackType) => getTimelineTrackBaseHeight(track, audioDisplayMode, audioFocusMode),
@@ -2584,6 +2581,7 @@ export function Timeline() {
           isFading={isFading}
           isLinkedToDragging={!!isLinkedToDragging}
           isLinkedToTrimming={!!isLinkedToTrimming}
+          isClipDragActive={clipDrag !== null}
           clipDrag={clipDragForClip}
           clipTrim={clipTrim}
           clipFade={clipFade}

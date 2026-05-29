@@ -34,6 +34,14 @@ The main runtime path is `LayerBuilderService` -> `AudioTrackSyncManager` -> `Au
 - Live playback folds enabled Aux sends into the same master-return gain model used by export: post-fader sends follow track volume, pre-fader sends bypass it, disabled sends are ignored.
 - Audio track headers expose `R` record-arm and `I` input-monitor toggles. The timeline toolbar record button starts from the current playhead for armed audio tracks.
 
+## Stem Separation
+
+- Stem generation runs as a background job and publishes generated WAV stems into the project media library instead of storing heavy stem payloads on timeline clips.
+- Clips with completed linked stems show a bottom-left `S` badge. Opening it prewarms the source and stem audio files, then shows compact source/stem buttons with pictogram icons.
+- Selecting Source, Vocals, Drums, Bass, or another stem switches the clip's media source while preserving trim, timing, effects, and audio edit state.
+- Stem source switching is live during playback. The audio sync manager drops stale clip proxy/handoff elements when the active `mediaFileId` changes, so the audible source follows the selected button without stopping playback.
+- Project reload relinks completed stem choices from `MediaFile.stemInfo` or the legacy `Stems/<source>/<source> - <Stem>.wav` folder layout.
+
 ## Audio Effects
 
 Audio clip controls live in the Properties panel under `CLIP Effects`; clip edit-stack operations live under `CLIP Audio Edits`, and clip transcripts remain clip-only under `CLIP Transcript`. Selecting an audio track/layer switches the same panel to `TRACK Controls`, `TRACK Effects`, and `TRACK Sends`; selecting the master bus switches it to `MASTER Controls` and `MASTER Effects`.

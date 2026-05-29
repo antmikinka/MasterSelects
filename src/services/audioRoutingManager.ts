@@ -34,6 +34,8 @@ const log = Logger.create('AudioRouting');
 const EQ_FREQUENCIES = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 const HUM_NOTCH_MAX_HARMONICS = 8;
 const REVERB_IMPULSE_CACHE_LIMIT = 24;
+const ROUTE_CREATE_RETRY_COOLDOWN_MS = 5000;
+const ROUTE_CREATE_WARNING_INTERVAL_MS = 15000;
 
 const audioRoutingDebugCounters = {
   applyEffectsCalls: 0,
@@ -910,6 +912,7 @@ class AudioRoutingManager {
   private audioContext: AudioContext | null = null;
   private masterRoute: MasterAudioRoute | null = null;
   private routes = new Map<HTMLMediaElement, AudioRoute>();
+  private routeCreateFailures = new WeakMap<HTMLMediaElement, { retryAt: number; lastLoggedAt: number }>();
   private contextResumePromise: Promise<void> | null = null;
 
   /**
@@ -993,7 +996,18 @@ class AudioRoutingManager {
   private async getOrCreateRoute(element: HTMLMediaElement): Promise<AudioRoute | null> {
     // Check if route already exists
     let route = this.routes.get(element);
-    if (route) return route;
+    if (route) {
+      if (!route.isConnected) {
+        this.reconnectRouteChain(route);
+      }
+      return route;
+    }
+
+    const previousFailure = this.routeCreateFailures.get(element);
+    const now = performance.now();
+    if (previousFailure && now < previousFailure.retryAt) {
+      return null;
+    }
 
     try {
       const ctx = await this.getContext();
@@ -1054,6 +1068,7 @@ class AudioRoutingManager {
       this.reconnectRouteChain(route);
 
       this.routes.set(element, route);
+      this.routeCreateFailures.delete(element);
       audioRoutingDebugCounters.routeCreates++;
       log.debug('Created audio route for element');
 
@@ -1061,7 +1076,16 @@ class AudioRoutingManager {
     } catch (err) {
       // MediaElementSourceNode can fail if element is already connected elsewhere
       // or if there's a CORS issue with the audio source
-      log.warn('Failed to create audio route:', err);
+      const failure = this.routeCreateFailures.get(element);
+      if (!failure || now - failure.lastLoggedAt > ROUTE_CREATE_WARNING_INTERVAL_MS) {
+        log.warn('Failed to create audio route:', err);
+      }
+      this.routeCreateFailures.set(element, {
+        retryAt: now + ROUTE_CREATE_RETRY_COOLDOWN_MS,
+        lastLoggedAt: failure?.lastLoggedAt && now - failure.lastLoggedAt <= ROUTE_CREATE_WARNING_INTERVAL_MS
+          ? failure.lastLoggedAt
+          : now,
+      });
       return null;
     }
   }
@@ -1189,17 +1213,22 @@ class AudioRoutingManager {
       } catch {
         // Ignore disconnect errors
       }
-      this.routes.delete(element);
+      route.isConnected = false;
       log.debug('Removed audio route');
     }
+  }
+
+  disposeRoute(element: HTMLMediaElement): void {
+    this.removeRoute(element);
+    this.routes.delete(element);
   }
 
   /**
    * Clean up all routes and close context
    */
   dispose(): void {
-    for (const [element] of this.routes) {
-      this.removeRoute(element);
+    for (const element of Array.from(this.routes.keys())) {
+      this.disposeRoute(element);
     }
     this.disconnectMasterRoute();
     if (this.audioContext && this.audioContext.state !== 'closed') {
@@ -1255,6 +1284,7 @@ class AudioRoutingManager {
         processors: route.processorNodes.map(getProcessorDebugSnapshot),
         eqGains: route.lastEQGains.map(gain => roundDebug(gain, 2)),
         analyserFftSize: route.analyserNode.fftSize,
+        isConnected: route.isConnected,
         lastProcessorSignature: route.lastProcessorSignature,
       })),
       counters: {
@@ -1635,6 +1665,7 @@ class AudioRoutingManager {
     route.stereoSplitterNode.connect(route.rightAnalyserNode, 1);
     route.panNode.connect(route.analyserNode);
     route.analyserNode.connect(this.getOrCreateMasterRoute(this.audioContext!).inputNode);
+    route.isConnected = true;
   }
 
   private reconnectMasterRouteChain(route: MasterAudioRoute): void {

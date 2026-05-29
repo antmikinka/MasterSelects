@@ -588,7 +588,10 @@ export const ClipWaveform = memo(function ClipWaveform({
     const frameId = scheduleFrame(() => {
       if (cancelled) return;
 
-      const ctx = canvas.getContext('2d');
+      // willReadFrequently forces Chromium onto the CPU raster path for this canvas.
+      // This avoids a Linux GPU-accelerated 2D canvas present bug where the waveform
+      // can render blank after the per-zoom backing-store resize (#171).
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) return;
 
     const clipWidth = Math.max(1, width);

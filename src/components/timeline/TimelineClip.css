@@ -468,7 +468,7 @@
 
 .stem-fill-bg {
   background: rgba(56, 189, 248, 0.2);
-  color: rgba(56, 189, 248, 0.44);
+  color: rgba(56, 189, 248, 0.45);
 }
 
 .proxy-fill-progress,
@@ -500,31 +500,152 @@
 
 .clip-stem-generating {
   position: absolute;
-  top: 2px;
-  right: calc(var(--clip-right-sticky-offset, 0px) + 56px);
+  left: 16px;
+  bottom: 8px;
   display: flex;
   align-items: center;
-  gap: 3px;
-  z-index: 10;
+  gap: 6px;
+  padding: 3px 8px 3px 0;
+  z-index: 12;
+  pointer-events: none;
 }
 
-.clip-stem-generating .stem-percent {
-  font-size: 8px;
+.clip-stem-generating .stem-fill-badge {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 24px;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
+}
+
+.clip-stem-generating .stem-percent,
+.clip-stem-generating .stem-status-text {
+  font-size: 11px;
   color: #7dd3fc;
-  font-weight: bold;
+  font-weight: 800;
+  line-height: 1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
 }
 
-.clip-stem-badge {
+.clip-stem-generating .stem-status-text {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  max-width: min(180px, calc(100% - 30px));
+  padding: 0 8px;
+  border-radius: 4px;
+  background: rgba(8, 47, 73, 0.72);
+  color: #e0f2fe;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.clip-stem-switcher {
   position: absolute;
-  top: 2px;
-  right: calc(var(--clip-right-sticky-offset, 0px) + 56px);
-  background: #0284c7;
+  left: 16px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 13;
+}
+
+.clip-stem-switcher.open {
+  margin: -12px -18px -14px -10px;
+  padding: 12px 18px 14px 10px;
+}
+
+.clip-stem-ready-badge,
+.clip-stem-choice-button {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 4px;
   color: var(--text-inverse);
-  font-size: 9px;
-  font-weight: bold;
-  padding: 1px 4px;
-  border-radius: 2px;
-  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
+}
+
+.clip-stem-ready-badge {
+  background: #38bdf8;
+  font-size: 14px;
+  line-height: 24px;
+  font-weight: 800;
+  opacity: 0.5;
+  cursor: pointer;
+  transition: opacity 0.12s ease, transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.clip-stem-ready-badge:hover,
+.clip-stem-switcher.open .clip-stem-ready-badge {
+  opacity: 1;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(56, 189, 248, 0.45), 0 1px 5px rgba(0, 0, 0, 0.35);
+}
+
+.clip-stem-menu {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 10px;
+  animation: clip-stem-menu-out 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.clip-stem-choice-button {
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(125, 211, 252, 0.55);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateX(-10px) scale(0.82);
+  animation: clip-stem-button-out 150ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+.clip-stem-choice-button:nth-child(2) {
+  animation-delay: 18ms;
+}
+
+.clip-stem-choice-button:nth-child(3) {
+  animation-delay: 36ms;
+}
+
+.clip-stem-choice-button:nth-child(4) {
+  animation-delay: 54ms;
+}
+
+.clip-stem-choice-button:nth-child(5) {
+  animation-delay: 72ms;
+}
+
+.clip-stem-choice-button:hover,
+.clip-stem-choice-button.active {
+  background: #0ea5e9;
+  border-color: #bae6fd;
+}
+
+.clip-stem-choice-icon {
+  display: block;
+}
+
+@keyframes clip-stem-menu-out {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes clip-stem-button-out {
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
 }
 
 .clip-audio-proxy-badge,
@@ -548,25 +669,10 @@
   background: var(--danger);
 }
 
-.clip-stem-error {
-  position: absolute;
-  top: 2px;
-  right: calc(var(--clip-right-sticky-offset, 0px) + 56px);
-  background: var(--danger);
-  color: var(--text-inverse);
-  font-size: 9px;
-  font-weight: bold;
-  padding: 1px 4px;
-  border-radius: 2px;
-  z-index: 10;
-  cursor: help;
-}
-
 /* Loading state takes visual priority over proxy states */
 .timeline-clip.loading.has-proxy,
 .timeline-clip.loading.generating-proxy,
-.timeline-clip.loading.generating-audio-proxy,
-.timeline-clip.loading.separating-stems {
+.timeline-clip.loading.generating-audio-proxy {
   border-color: var(--accent) !important;
 }
 
@@ -576,8 +682,7 @@
 .timeline-clip.loading .clip-audio-proxy-badge,
 .timeline-clip.loading .clip-audio-proxy-error,
 .timeline-clip.loading .clip-stem-generating,
-.timeline-clip.loading .clip-stem-badge,
-.timeline-clip.loading .clip-stem-error {
+.timeline-clip.loading .clip-stem-switcher {
   display: none;
 }
 
@@ -1003,66 +1108,6 @@
   background-size: 200% 100%;
   animation: waveform-progress-pulse 1s ease-in-out infinite;
   box-shadow: 0 0 4px rgba(239, 68, 68, 0.6);
-}
-
-/* Stem separation progress shown directly on the clip while the model downloads/runs. */
-.clip-stem-progress {
-  position: absolute;
-  left: 5px;
-  right: 5px;
-  bottom: 5px;
-  height: 18px;
-  overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 3px;
-  background: rgba(4, 9, 14, 0.74);
-  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.32);
-  z-index: 7;
-  pointer-events: none;
-}
-
-.clip-stem-progress-bar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  min-width: 2px;
-  background: linear-gradient(90deg, #22c55e, #38bdf8);
-  opacity: 0.82;
-  transition: width 0.18s ease;
-}
-
-.clip-stem-progress.phase-downloading-model .clip-stem-progress-bar,
-.clip-stem-progress.phase-loading-model .clip-stem-progress-bar {
-  background: linear-gradient(90deg, #f59e0b, #38bdf8);
-}
-
-.clip-stem-progress-label {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  height: 100%;
-  gap: 5px;
-  padding: 0 5px;
-  color: rgba(248, 250, 252, 0.96);
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 1;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.82);
-}
-
-.clip-stem-progress-label span {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.clip-stem-progress-label strong {
-  font-size: 9px;
-  font-weight: 700;
 }
 
 @keyframes waveform-progress-pulse {
