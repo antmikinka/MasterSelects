@@ -261,6 +261,83 @@ describe('timeline edit operations kernel', () => {
     ]);
   });
 
+  it('deletes all gaps on unlocked visible tracks', () => {
+    useTimelineStore.setState({
+      tracks: [
+        createMockTrack({ id: 'video-1', type: 'video' }),
+        createMockTrack({ id: 'audio-1', type: 'audio' }),
+      ],
+      clips: [
+        createMockClip({ id: 'v-a', trackId: 'video-1', startTime: 1, duration: 2 }),
+        createMockClip({ id: 'v-b', trackId: 'video-1', startTime: 6, duration: 2 }),
+        createMockClip({ id: 'a-a', trackId: 'audio-1', startTime: 0, duration: 1 }),
+        createMockClip({ id: 'a-b', trackId: 'audio-1', startTime: 3, duration: 1 }),
+      ],
+    });
+
+    const result = useTimelineStore.getState().deleteAllGaps();
+
+    expect(result.success).toBe(true);
+    expect(useTimelineStore.getState().clips.map((clip) => [clip.id, clip.startTime])).toEqual([
+      ['v-a', 0],
+      ['v-b', 2],
+      ['a-a', 0],
+      ['a-b', 1],
+    ]);
+  });
+
+  it('can delete all gaps on one requested track only', () => {
+    useTimelineStore.setState({
+      tracks: [
+        createMockTrack({ id: 'video-1', type: 'video' }),
+        createMockTrack({ id: 'audio-1', type: 'audio' }),
+      ],
+      clips: [
+        createMockClip({ id: 'v-a', trackId: 'video-1', startTime: 0, duration: 2 }),
+        createMockClip({ id: 'v-b', trackId: 'video-1', startTime: 5, duration: 2 }),
+        createMockClip({ id: 'a-a', trackId: 'audio-1', startTime: 0, duration: 1 }),
+        createMockClip({ id: 'a-b', trackId: 'audio-1', startTime: 4, duration: 1 }),
+      ],
+    });
+
+    const result = useTimelineStore.getState().deleteAllGaps(['video-1']);
+
+    expect(result.success).toBe(true);
+    expect(useTimelineStore.getState().clips.map((clip) => [clip.id, clip.startTime])).toEqual([
+      ['v-a', 0],
+      ['v-b', 2],
+      ['a-a', 0],
+      ['a-b', 4],
+    ]);
+  });
+
+  it('can delete all later gaps on one requested track from a clicked gap', () => {
+    useTimelineStore.setState({
+      tracks: [
+        createMockTrack({ id: 'video-1', type: 'video' }),
+        createMockTrack({ id: 'audio-1', type: 'audio' }),
+      ],
+      clips: [
+        createMockClip({ id: 'v-a', trackId: 'video-1', startTime: 2, duration: 2 }),
+        createMockClip({ id: 'v-b', trackId: 'video-1', startTime: 7, duration: 2 }),
+        createMockClip({ id: 'v-c', trackId: 'video-1', startTime: 12, duration: 2 }),
+        createMockClip({ id: 'a-a', trackId: 'audio-1', startTime: 0, duration: 1 }),
+        createMockClip({ id: 'a-b', trackId: 'audio-1', startTime: 4, duration: 1 }),
+      ],
+    });
+
+    const result = useTimelineStore.getState().deleteAllGaps(['video-1'], 10);
+
+    expect(result.success).toBe(true);
+    expect(useTimelineStore.getState().clips.map((clip) => [clip.id, clip.startTime])).toEqual([
+      ['v-a', 2],
+      ['v-b', 7],
+      ['v-c', 9],
+      ['a-a', 0],
+      ['a-b', 4],
+    ]);
+  });
+
   it('moves linked clips through the operation kernel', () => {
     const video = createMockClip({
       id: 'video-1',

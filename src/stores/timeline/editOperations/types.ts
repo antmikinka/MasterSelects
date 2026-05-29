@@ -111,6 +111,12 @@ export interface DeleteGapAtTimeOperation extends TimelineEditOperationBase {
   trackIds?: string[];
 }
 
+export interface DeleteAllGapsOperation extends TimelineEditOperationBase {
+  type: 'delete-all-gaps';
+  trackIds?: string[];
+  startTime?: number;
+}
+
 export interface TimelineClipMove {
   clipId: string;
   startTime: number;
@@ -226,6 +232,7 @@ export type TimelineEditOperation =
   | RippleDeleteSelectionOperation
   | DeleteClipsOperation
   | DeleteGapAtTimeOperation
+  | DeleteAllGapsOperation
   | MoveClipsOperation
   | TrimClipOperation
   | TrimEdgeToTimeOperation

@@ -34,7 +34,7 @@ getTrackChildren()  // Query child tracks
 ```
 
 ### Track Height
-- Track height clamps to 20-200 px.
+- Track height clamps to 20-600 px.
 - Curve editors clamp to 80-600 px.
 - Expanded track height depends on the selected clip, visible property rows, and open curve editors.
 
@@ -119,7 +119,11 @@ getTrackChildren()  // Query child tracks
 | Blade all tracks | Available in the Cut flyout as a mode; splits every unlocked visible clip crossing the click time. |
 | Trim start/end to playhead | Available in the Cut flyout; trims selected clips through the operation kernel and keeps linked audio aligned. |
 | Ripple delete | Available in the Cut flyout and clip context menu; deletes selected clips and closes the affected track gap through the operation kernel. |
-| Delete gap | Available in the Cut flyout and clip context menu; closes an empty gap through the operation kernel. |
+| Delete gap | Available in the Cut flyout, clip context menu, and empty timeline right-click menu; closes an empty gap through the operation kernel. |
+| Delete all gaps in this layer | Available from the empty timeline right-click menu; closes gaps on the clicked layer from the clicked empty space onward as one undoable operation. |
+| Delete all gaps | Available from the empty timeline right-click menu; closes all gaps on unlocked visible tracks as one undoable operation. |
+| Fit comp to window | Available from the zoom controls and empty timeline right-click menu. |
+| Right-drag empty space or clips | Scrubs the playhead without opening the timeline context menu; context menus open only for a single right-click. |
 | Lift range | Available in the Cut flyout after drawing a Range Selection; removes the range and leaves a gap. |
 | Extract range | Available in the Cut flyout after drawing a Range Selection; removes the range and ripples following clips left. |
 | Copy | `Ctrl+C` copies selected keyframes first, otherwise selected clips. |
@@ -280,7 +284,7 @@ The toolbar and wheel gestures still drive playback and navigation:
 - Marker MIDI bindings support `Jump To Marker`, `Play From Marker`, and `Jump To Marker And Stop`.
 - Left/Right arrows step frame by frame.
 - The ruler and lane grid use the active composition frame rate at deep zoom. The base time grid crossfades out while frame-accurate grid lines fade in with zoom before the ruler switches to frame timecode labels.
-- `Alt+Scroll` or `Ctrl+Scroll` zooms the timeline around the playhead.
+- `Alt+Scroll` or `Ctrl+Scroll` zooms the timeline around the mouse pointer by default; Preferences -> General -> Timeline can switch the zoom anchor to the playhead. Faster wheel gestures use larger zoom steps.
 - `Shift+Scroll` pans horizontally.
 - Vertical scroll snaps to track boundaries.
 - `Ctrl+Shift+Scroll` or `Cmd+Shift+Scroll` toggles slot-grid view.

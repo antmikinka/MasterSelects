@@ -57,6 +57,7 @@ export type AIProvider = 'openai' | 'lemonade';
 
 export type GuidedActionReplayVisualizationMode = 'off' | 'concise' | 'full';
 export type GuidedActionReplayCompressionMode = 'none' | 'family' | 'aggressive';
+export type TimelineZoomAnchor = 'playhead' | 'mouse';
 
 export const DEFAULT_GUIDED_ACTION_REPLAY_BUDGET_MS = 3000;
 
@@ -132,6 +133,9 @@ interface SettingsState {
   // Mobile/Desktop view
   forceDesktopMode: boolean;  // Show desktop UI even on mobile devices
 
+  // Timeline interaction
+  timelineZoomAnchor: TimelineZoomAnchor;  // Where Ctrl/Alt+wheel zoom keeps focus
+
   // GPU preference
   gpuPowerPreference: GPUPowerPreference;  // 'high-performance' (dGPU) or 'low-power' (iGPU)
 
@@ -203,6 +207,7 @@ interface SettingsState {
   setNativeHelperPort: (port: number) => void;
   setNativeHelperConnected: (connected: boolean) => void;
   setForceDesktopMode: (force: boolean) => void;
+  setTimelineZoomAnchor: (anchor: TimelineZoomAnchor) => void;
   setGpuPowerPreference: (preference: GPUPowerPreference) => void;
   setMatAnyoneEnabled: (enabled: boolean) => void;
   setMatAnyonePythonPath: (path: string) => void;
@@ -283,6 +288,7 @@ export const useSettingsStore = create<SettingsState>()(
       nativeHelperPort: 9876, // Default WebSocket port
       nativeHelperConnected: false, // Not connected initially
       forceDesktopMode: false, // Use responsive detection by default
+      timelineZoomAnchor: 'mouse' as TimelineZoomAnchor, // Zoom toward the mouse pointer by default
       gpuPowerPreference: 'high-performance', // Prefer dGPU by default
       matanyoneEnabled: false, // MatAnyone2 disabled by default
       matanyonePythonPath: '', // Auto-detect Python path
@@ -398,6 +404,10 @@ export const useSettingsStore = create<SettingsState>()(
 
       setForceDesktopMode: (force) => {
         set({ forceDesktopMode: force });
+      },
+
+      setTimelineZoomAnchor: (anchor) => {
+        set({ timelineZoomAnchor: anchor });
       },
 
       setGpuPowerPreference: (preference) => {
@@ -626,6 +636,7 @@ export const useSettingsStore = create<SettingsState>()(
         nativeDecodeEnabled: state.nativeDecodeEnabled,
         nativeHelperPort: state.nativeHelperPort,
         forceDesktopMode: state.forceDesktopMode,
+        timelineZoomAnchor: state.timelineZoomAnchor,
         gpuPowerPreference: state.gpuPowerPreference,
         matanyoneEnabled: state.matanyoneEnabled,
         matanyonePythonPath: state.matanyonePythonPath,

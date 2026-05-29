@@ -100,7 +100,7 @@ export const MAX_ZOOM = 10000;
 
 // Track height limits
 export const MIN_TRACK_HEIGHT = 20;
-export const MAX_TRACK_HEIGHT = 200;
+export const MAX_TRACK_HEIGHT = 600;
 
 // Track header width limits
 export const DEFAULT_TRACK_HEADER_WIDTH = 210;

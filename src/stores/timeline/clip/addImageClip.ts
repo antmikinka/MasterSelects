@@ -13,6 +13,7 @@ export interface AddImageClipParams {
   file: File;
   startTime: number;
   estimatedDuration: number;
+  mediaFileId?: string;
 }
 
 /**
@@ -20,7 +21,7 @@ export interface AddImageClipParams {
  * Returns clip ready to be added to state while media loads in background.
  */
 export function createImageClipPlaceholder(params: AddImageClipParams): TimelineClip {
-  const { trackId, file, startTime, estimatedDuration } = params;
+  const { trackId, file, startTime, estimatedDuration, mediaFileId } = params;
   const clipId = generateClipId('clip-img');
 
   return {
@@ -32,7 +33,7 @@ export function createImageClipPlaceholder(params: AddImageClipParams): Timeline
     duration: estimatedDuration,
     inPoint: 0,
     outPoint: estimatedDuration,
-    source: { type: 'image', naturalDuration: estimatedDuration },
+    source: { type: 'image', naturalDuration: estimatedDuration, mediaFileId },
     transform: { ...DEFAULT_TRANSFORM },
     effects: [],
     isLoading: true,
@@ -49,6 +50,7 @@ export interface LoadImageMediaParams {
  */
 export async function loadImageMedia(params: LoadImageMediaParams): Promise<void> {
   const { clip, updateClip } = params;
+  const mediaFileId = clip.source?.mediaFileId ?? clip.mediaFileId;
 
   // Create and load image element - track URL for cleanup
   const img = new Image();
@@ -69,7 +71,7 @@ export async function loadImageMedia(params: LoadImageMediaParams): Promise<void
     : { x: 1, y: 1 };
 
   updateClip(clip.id, {
-    source: { type: 'image', imageElement: img, naturalDuration: clip.duration },
+    source: { type: 'image', imageElement: img, naturalDuration: clip.duration, mediaFileId },
     transform: { ...DEFAULT_TRANSFORM, scale: nativeScale },
     thumbnails,
     isLoading: false,

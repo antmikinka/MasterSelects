@@ -605,7 +605,7 @@ const VIDEO_EDIT_TIMELINE_LAYOUT: SavedDockTimelineLayout = {
   timelineSplitRatio: null,
   trackTypeHeights: {
     video: 70,
-    audio: 30,
+    audio: 48,
   },
   trackTypeVisibility: {
     video: true,
@@ -622,7 +622,7 @@ const AUDIO_EDIT_TIMELINE_LAYOUT: SavedDockTimelineLayout = {
   timelineSplitRatio: null,
   trackTypeHeights: {
     video: 40,
-    audio: 92,
+    audio: 96,
   },
   trackTypeVisibility: {
     video: true,
@@ -637,7 +637,7 @@ const FACTORY_SAVED_DOCK_LAYOUTS: SavedDockLayout[] = [
     layout: DEFAULT_LAYOUT,
     timeline: VIDEO_EDIT_TIMELINE_LAYOUT,
     createdAt: 0,
-    updatedAt: 2,
+    updatedAt: 3,
     favorite: true,
     factory: true,
   },
@@ -647,7 +647,7 @@ const FACTORY_SAVED_DOCK_LAYOUTS: SavedDockLayout[] = [
     layout: AUDIO_EDIT_LAYOUT,
     timeline: AUDIO_EDIT_TIMELINE_LAYOUT,
     createdAt: 0,
-    updatedAt: 2,
+    updatedAt: 3,
     favorite: true,
     factory: true,
   },

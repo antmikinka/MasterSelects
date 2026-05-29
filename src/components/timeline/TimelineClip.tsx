@@ -1555,6 +1555,51 @@ function TimelineClipComponent({
   const predictiveAudioRegionGainPreview = canApplyPredictiveAudioWaveform
     ? audioRegionGainPreview
     : null;
+  const useStableWaveformTrimWindow = Boolean(
+    isAudioClip &&
+    (isTrimming || isLinkedToTrimming) &&
+    clipTrim &&
+    !processedWaveformPyramidForRender &&
+    width > 1,
+  );
+  const originalWaveformTrimInPoint = isTrimming && clipTrim
+    ? clipTrim.originalInPoint
+    : clip.inPoint;
+  const originalWaveformTrimOutPoint = isTrimming && clipTrim
+    ? clipTrim.originalOutPoint
+    : clip.outPoint;
+  const displayWaveformSourceSpan = Math.max(0.001, waveformOutPointForRender - waveformInPointForRender);
+  const waveformSourceSecondsPerPixel = displayWaveformSourceSpan / Math.max(1, width);
+  const stableWaveformContentInPoint = useStableWaveformTrimWindow
+    ? Math.max(0, Math.min(originalWaveformTrimInPoint, waveformInPointForRender))
+    : waveformInPointForRender;
+  const stableWaveformContentOutPoint = useStableWaveformTrimWindow
+    ? Math.max(stableWaveformContentInPoint + 0.001, Math.max(originalWaveformTrimOutPoint, waveformOutPointForRender))
+    : waveformOutPointForRender;
+  const stableWaveformContentWidth = useStableWaveformTrimWindow
+    ? Math.max(1, (stableWaveformContentOutPoint - stableWaveformContentInPoint) / waveformSourceSecondsPerPixel)
+    : width;
+  const stableWaveformContentOffsetPx = useStableWaveformTrimWindow
+    ? (stableWaveformContentInPoint - waveformInPointForRender) / waveformSourceSecondsPerPixel
+    : 0;
+  const stableWaveformRenderStartPx = useStableWaveformTrimWindow
+    ? Math.max(0, scrollX - (left + stableWaveformContentOffsetPx) - TIMELINE_RENDER_OVERSCAN_PX)
+    : waveformRenderWindow.startPx;
+  const stableWaveformRenderEndPx = useStableWaveformTrimWindow
+    ? Math.min(
+        stableWaveformContentWidth,
+        scrollX - (left + stableWaveformContentOffsetPx) + renderTimelineViewportWidth + TIMELINE_RENDER_OVERSCAN_PX,
+      )
+    : waveformRenderWindow.startPx + waveformRenderWindow.width;
+  const stableWaveformRenderWindow = useStableWaveformTrimWindow
+    ? {
+        startPx: stableWaveformRenderStartPx,
+        width: Math.max(0, stableWaveformRenderEndPx - stableWaveformRenderStartPx),
+      }
+    : waveformRenderWindow;
+  const stableWaveformClipDuration = useStableWaveformTrimWindow
+    ? Math.max(0.001, (stableWaveformContentOutPoint - stableWaveformContentInPoint) * displayDuration / displayWaveformSourceSpan)
+    : displayDuration;
 
   const commitAudioRegionOperationRange = useCallback((
     operationIds: string[],
@@ -2437,6 +2482,7 @@ function TimelineClipComponent({
   const handleAudioRegionGainMouseDown = useCallback((
     mode: AudioRegionGainDragState['mode'],
   ) => (e: React.MouseEvent<HTMLButtonElement | HTMLDivElement>) => {
+    if (e.button !== 0) return;
     if (!audioRegionGainControl) return;
     const regionElement = e.currentTarget.closest('.clip-audio-region-selection');
     if (!regionElement) return;
@@ -3236,7 +3282,14 @@ function TimelineClipComponent({
       style={clipStyle}
       data-clip-id={clip.id}
       data-dock-layout-child-anim-id={`timeline-clip:${clip.id}`}
-      onMouseDown={isTrackLocked || (isPointerToolActive && !canUseBodyToolGesture) ? undefined : onMouseDown}
+      onMouseDown={(e) => {
+        if (e.button === 2) {
+          onMouseDown(e);
+          return;
+        }
+        if (isTrackLocked || (isPointerToolActive && !canUseBodyToolGesture)) return;
+        onMouseDown(e);
+      }}
       onDoubleClick={isPointerToolActive ? undefined : onDoubleClick}
       onContextMenu={onContextMenu}
       onMouseMove={canHandleTimelineToolPointer ? handleMouseMove : undefined}
@@ -3509,12 +3562,12 @@ function TimelineClipComponent({
               clipId={clip.id}
               waveform={waveformLegacyForRender}
               waveformChannels={waveformChannelsForRender}
-              width={width}
+              width={stableWaveformContentWidth}
               height={Math.max(20, trackBaseHeight - 12)}
-              inPoint={waveformInPointForRender}
-              outPoint={waveformOutPointForRender}
+              inPoint={stableWaveformContentInPoint}
+              outPoint={stableWaveformContentOutPoint}
               naturalDuration={waveformNaturalDurationForRender}
-              clipDuration={displayDuration}
+              clipDuration={stableWaveformClipDuration}
               displayMode={audioDisplayMode}
               pixelsPerSecond={zoom}
               pyramid={waveformPyramidForRender}
@@ -3523,8 +3576,12 @@ function TimelineClipComponent({
               volumeAutomationKeyframes={audioVolumeAutomationKeyframes}
               audioEditStack={predictiveAudioEditStack}
               audioRegionGainPreview={predictiveAudioRegionGainPreview}
-              renderStartPx={waveformRenderWindow.startPx}
-              renderWidth={waveformRenderWindow.width}
+              renderStartPx={stableWaveformRenderWindow.startPx}
+              renderWidth={stableWaveformRenderWindow.width}
+              contentOffsetPx={stableWaveformContentOffsetPx}
+              normalizationInPoint={useStableWaveformTrimWindow ? originalWaveformTrimInPoint : undefined}
+              normalizationOutPoint={useStableWaveformTrimWindow ? originalWaveformTrimOutPoint : undefined}
+              normalizationWidth={useStableWaveformTrimWindow ? Math.max(1, (originalWaveformTrimOutPoint - originalWaveformTrimInPoint) / waveformSourceSecondsPerPixel) : undefined}
             />
           ) : null}
           {(audioAnalysisDisplayStatus || (audioWaveformDiagnostics?.badges.length ?? 0) > 0) && (
@@ -4220,6 +4277,7 @@ function TimelineClipComponent({
             className={`fade-handle left${fadeInDuration > 0 ? ' active' : ''}`}
             style={fadeInDuration > 0 ? { left: timeToPixel(fadeInDuration) - 6 } : undefined}
             onMouseDown={(e) => {
+              if (e.button !== 0) return;
               if (!canUseFadeHandles) return;
               e.stopPropagation();
               onFadeStart(e, 'left');
@@ -4230,6 +4288,7 @@ function TimelineClipComponent({
             className={`fade-handle right${fadeOutDuration > 0 ? ' active' : ''}`}
             style={fadeOutDuration > 0 ? { right: timeToPixel(fadeOutDuration) - 6 } : undefined}
             onMouseDown={(e) => {
+              if (e.button !== 0) return;
               if (!canUseFadeHandles) return;
               e.stopPropagation();
               onFadeStart(e, 'right');
@@ -4240,6 +4299,7 @@ function TimelineClipComponent({
           <div
             className={`trim-handle left arrows-${leftTrimHandleDirections.length}`}
             onMouseDown={(e) => {
+              if (e.button !== 0) return;
               if (!canUseTrimHandles) return;
               e.stopPropagation();
               onTrimStart(e, 'left');
@@ -4250,6 +4310,7 @@ function TimelineClipComponent({
           <div
             className={`trim-handle right arrows-${rightTrimHandleDirections.length}`}
             onMouseDown={(e) => {
+              if (e.button !== 0) return;
               if (!canUseTrimHandles) return;
               e.stopPropagation();
               onTrimStart(e, 'right');

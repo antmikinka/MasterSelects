@@ -1,6 +1,6 @@
 // App version
 // Format: MAJOR.MINOR.PATCH
-export const APP_VERSION = '2.0.5';
+export const APP_VERSION = '2.0.6';
 
 export interface ChangelogNotice {
   type: 'info' | 'warning' | 'success' | 'danger';
@@ -27,8 +27,8 @@ export const FEATURED_VIDEO: {
   title: 'MasterSelects Demo',
   banner: {
     type: 'success',
-    title: 'MasterSelects 2.0.5',
-    message: 'Dock resizing now follows raw mouse movement at the frame loop, while audio track and master selections open scoped Properties controls without breaking timeline focus.',
+    title: 'MasterSelects 2.0.6',
+    message: 'Timeline editing now gets clearer waveform detail, right-drag scrubbing over clips and empty space, faster pointer-centered zoom, and denser audio track controls.',
     animated: true,
   },
 };
@@ -36,8 +36,8 @@ export const FEATURED_VIDEO: {
 // Build/Platform notice shown at top of changelog (set to null to hide)
 export const BUILD_NOTICE: ChangelogNotice | null = {
   type: 'success',
-  title: 'MasterSelects 2.0.5',
-  message: 'This release makes live dock resizing snappier, adds scoped audio bus Properties tabs, and improves debug bridge measurements for panel and timeline interactions.',
+  title: 'MasterSelects 2.0.6',
+  message: 'This release improves timeline waveform readability, empty-space edit menus, drop-to-timeline import handling, mouse-anchored zoom, and compact audio header pan controls.',
   animated: true,
 };
 

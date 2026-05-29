@@ -237,6 +237,8 @@ function TimelineTrackComponent({
   clipDrag,
   clipTrim,
   externalDrag,
+  onEmptyMouseDown,
+  onEmptyContextMenu,
   onDrop,
   onDragOver,
   onDragEnter,
@@ -340,7 +342,25 @@ function TimelineTrackComponent({
       onDragLeave={onDragLeave}
     >
       {/* Clip row - the normal clip area */}
-      <div className="track-clip-row" style={{ height: baseHeight }}>
+      <div
+        className="track-clip-row"
+        style={{ height: baseHeight }}
+        onMouseDown={(event) => {
+          if (event.button !== 2) return;
+          const target = event.target as HTMLElement;
+          if (target.closest('.timeline-clip, .timeline-clip-preview')) return;
+          const rect = event.currentTarget.getBoundingClientRect();
+          const time = Math.max(0, pixelToTime(event.clientX - rect.left));
+          onEmptyMouseDown(event, track.id, time);
+        }}
+        onContextMenu={(event) => {
+          const target = event.target as HTMLElement;
+          if (target.closest('.timeline-clip, .timeline-clip-preview')) return;
+          const rect = event.currentTarget.getBoundingClientRect();
+          const time = Math.max(0, pixelToTime(event.clientX - rect.left));
+          onEmptyContextMenu(event, track.id, time);
+        }}
+      >
         {/* Render clips belonging to this track */}
         {trackClips.map((clip) => renderClip(clip, track.id))}
         {/* Render clip being dragged TO this track */}
@@ -435,6 +455,8 @@ function areTimelineTrackPropsEqual(
       previous.zoom === next.zoom &&
       previous.scrollX === next.scrollX &&
       previous.timelineRef === next.timelineRef &&
+      previous.onEmptyMouseDown === next.onEmptyMouseDown &&
+      previous.onEmptyContextMenu === next.onEmptyContextMenu &&
       previous.isResizeActive === next.isResizeActive &&
       previous.clipKeyframes === next.clipKeyframes &&
       previous.expandedCurveProperties === next.expandedCurveProperties;

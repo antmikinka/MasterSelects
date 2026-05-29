@@ -309,6 +309,24 @@
     rgba(21, 25, 30, 0.98);
 }
 
+.track-header.audio.audio-layer-advanced.audio-strip-full:not(.audio-summary-meter-visible) .track-controls {
+  grid-template-columns: repeat(4, 19px);
+  grid-auto-rows: 18px;
+  gap: 2px;
+  right: 5px;
+  top: 8px;
+  transform: scale(var(--audio-strip-control-scale, 1));
+  transform-origin: right top;
+}
+
+.track-header.audio.audio-layer-advanced.audio-strip-full:not(.audio-summary-meter-visible) .track-controls .btn-icon {
+  width: 19px;
+  height: 18px;
+  min-width: 19px;
+  border-radius: 3px;
+  font-size: 9px;
+}
+
 .audio-button-label-short {
   display: none;
 }
@@ -326,6 +344,23 @@
   height: 16px;
   min-width: 16px;
   border-radius: 3px;
+  font-size: 8px;
+}
+
+.track-header.audio.audio-layer-advanced.audio-strip-compact:not(.audio-summary-meter-visible) .track-controls {
+  grid-template-columns: repeat(4, 16px);
+  grid-auto-rows: 15px;
+  gap: 1px;
+  right: 4px;
+  top: 2px;
+  transform: none;
+  transform-origin: right top;
+}
+
+.track-header.audio.audio-layer-advanced.audio-strip-compact:not(.audio-summary-meter-visible) .track-controls .btn-icon {
+  width: 16px;
+  height: 15px;
+  min-width: 16px;
   font-size: 8px;
 }
 
@@ -651,6 +686,12 @@
   padding-left: 4px;
 }
 
+.track-header.audio.audio-layer-advanced.audio-strip-full:not(.audio-summary-meter-visible) > .track-header-top {
+  align-items: flex-start;
+  padding-right: 4px;
+  padding-bottom: 22px;
+}
+
 .track-header.audio.audio-strip-condensed > .track-header-top {
   padding-right: 96px;
 }
@@ -661,6 +702,7 @@
   align-content: center;
   row-gap: 2px;
   padding-left: 50px;
+  box-sizing: border-box;
   min-width: 0;
   width: 100%;
 }
@@ -671,42 +713,73 @@
   font-weight: 600;
 }
 
+.track-header.audio.audio-layer-advanced.audio-strip-full:not(.audio-summary-meter-visible) .track-header-main {
+  align-content: flex-start;
+  padding-top: 8px;
+  padding-right: 86px;
+}
+
+.track-header.audio.audio-layer-advanced.audio-strip-full:not(.audio-summary-meter-visible) .audio-track-pan-footer {
+  position: absolute;
+  left: 50px;
+  right: 5px;
+  bottom: 7px;
+  z-index: 5;
+  width: auto;
+  margin-top: 0;
+  padding-right: 0;
+}
+
+.track-header.audio.audio-layer-advanced.audio-strip-full:not(.audio-summary-meter-visible) .audio-track-pan-value {
+  width: 20px;
+}
+
 .track-header.audio.audio-strip-compact .track-header-main {
   row-gap: 0;
-  padding-left: 38px;
+  padding-left: 22px;
 }
 
 .track-header.audio.audio-strip-compact .track-header-main > .track-name {
   font-size: 11px;
 }
 
-.track-header.audio.audio-strip-compact .audio-track-pan-row,
 .track-header.audio.audio-strip-condensed .audio-track-pan-row {
   display: none;
+}
+
+.track-header.audio.audio-layer-advanced.audio-strip-compact:not(.audio-summary-meter-visible) > .track-header-top {
+  align-items: flex-start;
+  padding-right: 4px;
+  padding-bottom: 14px;
+}
+
+.track-header.audio.audio-layer-advanced.audio-strip-compact:not(.audio-summary-meter-visible) .track-header-main {
+  align-content: flex-start;
+  padding-top: 5px;
+  padding-right: 74px;
+}
+
+.track-header.audio.audio-layer-advanced.audio-strip-compact:not(.audio-summary-meter-visible) .audio-track-pan-footer {
+  position: absolute;
+  left: 22px;
+  right: 4px;
+  bottom: 2px;
+  z-index: 5;
+  width: auto;
+  margin-top: 0;
+  padding-right: 0;
+}
+
+.track-header.audio.audio-layer-advanced.audio-strip-compact:not(.audio-summary-meter-visible) .audio-track-pan-value {
+  width: 20px;
 }
 
 .track-header.audio.audio-strip-compact .audio-track-faders {
   top: 7px;
   bottom: 7px;
-  width: 29px;
-  grid-template-columns: 12px 13px;
-  gap: 3px;
-}
-
-.track-header.audio.audio-strip-compact .audio-track-fader-column {
-  grid-template-rows: 1fr;
-}
-
-.track-header.audio.audio-strip-compact .audio-track-fader-control {
   width: 12px;
-}
-
-.track-header.audio.audio-strip-compact .audio-track-fader {
-  inset: -5px;
-}
-
-.track-header.audio.audio-strip-compact .audio-track-fader-value {
-  display: none;
+  grid-template-columns: 12px;
+  gap: 0;
 }
 
 .track-header.audio.audio-strip-condensed .track-header-main {

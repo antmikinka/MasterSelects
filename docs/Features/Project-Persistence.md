@@ -483,8 +483,11 @@ saveLayoutAsDefault()      // View -> Layouts; stores dock layout, timeline focu
 resetLayout()              // View -> Layouts
 ```
 
-The hardcoded default layout is the shared Video/Audio Edit arrangement: Media on the left,
-Preview in the center, Properties/Export on the right, and a compact Timeline at the bottom.
+The hardcoded factory layouts are `VIDEO EDIT` and `AUDIO EDIT`. `VIDEO EDIT` is the default
+layout with Media on the left, Preview in the center, Properties/History on the right, and
+Timeline at the bottom. It stores balanced timeline focus with 70 px video tracks and 48 px
+compact audio tracks. `AUDIO EDIT` stores audio focus with Timeline above Media, Audio Mixer,
+and Properties/History, using 40 px video context tracks and 96 px audio tracks.
 
 ---
 

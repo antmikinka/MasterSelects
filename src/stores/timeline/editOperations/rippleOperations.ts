@@ -1,5 +1,5 @@
 import type { TimelineClip, TimelineTrack } from '../../../types';
-import type { DeleteGapAtTimeOperation, RippleDeleteSelectionOperation, TimelineEditWarning } from './types';
+import type { DeleteAllGapsOperation, DeleteGapAtTimeOperation, RippleDeleteSelectionOperation, TimelineEditWarning } from './types';
 
 const EPSILON = 0.0001;
 
@@ -141,4 +141,60 @@ export function applyDeleteGapAtTimeOperation(
   });
 
   return { clips: nextClips, changedClipIds: [...changedClipIds], warnings };
+}
+
+export function applyDeleteAllGapsOperation(
+  operation: DeleteAllGapsOperation,
+  clips: TimelineClip[],
+  tracks: TimelineTrack[],
+): { clips: TimelineClip[]; changedClipIds: string[]; warnings: TimelineEditWarning[] } {
+  const warnings: TimelineEditWarning[] = [];
+  const allowedTrackIds = operation.trackIds
+    ? new Set(operation.trackIds)
+    : new Set(tracks.filter((track) => track.locked !== true && track.visible !== false).map((track) => track.id));
+  const nextStartByClipId = new Map<string, number>();
+
+  for (const track of tracks) {
+    if (!allowedTrackIds.has(track.id)) continue;
+    if (track.locked) {
+      warnings.push({ code: 'track-locked', message: 'Skipped locked track while deleting all gaps.', trackId: track.id });
+      continue;
+    }
+
+    const sorted = clips
+      .filter((clip) => clip.trackId === track.id)
+      .toSorted((a, b) => a.startTime - b.startTime || a.id.localeCompare(b.id));
+    let nextStart = 0;
+    const startTime = operation.startTime;
+
+    for (const clip of sorted) {
+      const currentStart = clip.startTime;
+      if (startTime !== undefined && currentStart < startTime - EPSILON) {
+        nextStart = Math.max(nextStart, currentStart + clip.duration);
+        continue;
+      }
+      const targetStart = currentStart > nextStart + EPSILON ? nextStart : currentStart;
+      if (Math.abs(targetStart - currentStart) > EPSILON) {
+        nextStartByClipId.set(clip.id, targetStart);
+      }
+      nextStart = Math.max(nextStart, targetStart + clip.duration);
+    }
+  }
+
+  if (nextStartByClipId.size === 0) {
+    return {
+      clips,
+      changedClipIds: [],
+      warnings: warnings.length > 0
+        ? warnings
+        : [{ code: 'no-op', message: 'No timeline gaps found.' }],
+    };
+  }
+
+  const nextClips = clips.map((clip) => {
+    const nextStart = nextStartByClipId.get(clip.id);
+    return nextStart === undefined ? clip : { ...clip, startTime: Math.max(0, nextStart) };
+  });
+
+  return { clips: nextClips, changedClipIds: [...nextStartByClipId.keys()], warnings };
 }

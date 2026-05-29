@@ -181,6 +181,24 @@ describe('buildWaveformLod', () => {
     expect(normalized[1].peak).toBeLessThanOrEqual(1);
   });
 
+  it('can use a perceptual display scale that drops sub-floor waveform haze', () => {
+    const normalized = normalizeWaveformColumnsForDisplay([
+      { min: -0.0004, max: 0.0004, rms: 0.0003, peak: 0.0004 },
+      { min: -0.08, max: 0.08, rms: 0.04, peak: 0.08 },
+      { min: -0.7, max: 0.7, rms: 0.36, peak: 0.7 },
+    ], {
+      targetPeak: 0.72,
+      referencePeak: 0.7,
+      maxGain: 16,
+      perceptualScale: true,
+      noiseFloorDb: -36,
+    });
+
+    expect(normalized[0].peak).toBe(0);
+    expect(normalized[1].peak).toBeGreaterThan(normalized[0].peak);
+    expect(normalized[2].peak).toBeGreaterThan(normalized[1].peak);
+  });
+
   it('normalizes pathological display columns to finite bounded values', () => {
     const normalized = normalizeWaveformColumnsForDisplay([
       { min: -20, max: 20, rms: 20, peak: 20 },

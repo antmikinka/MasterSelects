@@ -27,7 +27,6 @@ describe('dock store saved layouts', () => {
       defaultSavedLayoutId: FACTORY_VIDEO_EDIT_LAYOUT_ID,
       activeSavedLayoutId: null,
     });
-    useDockStore.getState().resetLayout();
     useTimelineStore.setState({
       tracks: DEFAULT_TRACKS.map((track) => ({ ...track })),
       audioDisplayMode: 'detailed',
@@ -35,6 +34,7 @@ describe('dock store saved layouts', () => {
       audioFocusMode: false,
       trackFocusMode: 'balanced',
     });
+    useDockStore.getState().resetLayout();
   });
 
   it('uses the hardcoded video editing layout as the default', () => {
@@ -70,6 +70,12 @@ describe('dock store saved layouts', () => {
     expect(panelTypes(rightGroup)).toEqual(['clip-properties', 'history']);
     expect(rightGroup?.activeIndex).toBe(0);
     expect(panelTypes(timelineGroup)).toEqual(['timeline']);
+
+    const timeline = useTimelineStore.getState();
+    expect(timeline.audioFocusMode).toBe(false);
+    expect(timeline.trackFocusMode).toBe('balanced');
+    expect(timeline.tracks.find((track) => track.type === 'video')?.height).toBe(70);
+    expect(timeline.tracks.find((track) => track.type === 'audio')?.height).toBe(48);
   });
 
   it('activates the history tab when requested from the panels menu', () => {
@@ -129,7 +135,7 @@ describe('dock store saved layouts', () => {
     expect(timeline.audioFocusMode).toBe(true);
     expect(timeline.trackFocusMode).toBe('audio');
     expect(timeline.tracks.find((track) => track.type === 'video')?.height).toBe(40);
-    expect(timeline.tracks.find((track) => track.type === 'audio')?.height).toBe(92);
+    expect(timeline.tracks.find((track) => track.type === 'audio')?.height).toBe(96);
   });
 
   it('keeps the built-in video and audio layouts as default favorites', () => {

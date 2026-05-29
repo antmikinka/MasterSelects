@@ -3,7 +3,45 @@
 
 import { useEffect, useCallback, useRef } from 'react';
 import { MIN_ZOOM, MAX_ZOOM } from '../../../stores/timeline/constants';
+import { useSettingsStore } from '../../../stores/settingsStore';
 import { animateSlotGrid } from '../slotGridAnimation';
+
+const ZOOM_WHEEL_BASE_MULTIPLIER = 1.08;
+const ZOOM_WHEEL_REFERENCE_DELTA_PX = 100;
+const ZOOM_WHEEL_MIN_STEPS = 0.35;
+const ZOOM_WHEEL_MAX_STEPS = 8;
+const ZOOM_WHEEL_RAPID_INTERVAL_MS = 90;
+const ZOOM_WHEEL_MAX_RAPID_BOOST = 2.25;
+const WHEEL_DELTA_MODE_LINE = 1;
+const WHEEL_DELTA_MODE_PAGE = 2;
+const WHEEL_DELTA_LINE_HEIGHT_PX = 16;
+const WHEEL_DELTA_PAGE_HEIGHT_PX = 800;
+
+function normalizeWheelDeltaPx(event: WheelEvent): number {
+  if (event.deltaMode === WHEEL_DELTA_MODE_LINE) {
+    return event.deltaY * WHEEL_DELTA_LINE_HEIGHT_PX;
+  }
+  if (event.deltaMode === WHEEL_DELTA_MODE_PAGE) {
+    return event.deltaY * WHEEL_DELTA_PAGE_HEIGHT_PX;
+  }
+  return event.deltaY;
+}
+
+export function getTimelineZoomWheelMultiplier(deltaPx: number, elapsedMs: number): number {
+  const absDeltaPx = Math.abs(deltaPx);
+  if (!Number.isFinite(absDeltaPx) || absDeltaPx === 0) {
+    return 1;
+  }
+
+  const baseSteps = Math.max(ZOOM_WHEEL_MIN_STEPS, absDeltaPx / ZOOM_WHEEL_REFERENCE_DELTA_PX);
+  const safeElapsedMs = Number.isFinite(elapsedMs) ? Math.max(1, elapsedMs) : ZOOM_WHEEL_RAPID_INTERVAL_MS;
+  const rapidFactor = safeElapsedMs < ZOOM_WHEEL_RAPID_INTERVAL_MS
+    ? 1 + ((ZOOM_WHEEL_RAPID_INTERVAL_MS - safeElapsedMs) / ZOOM_WHEEL_RAPID_INTERVAL_MS) * (ZOOM_WHEEL_MAX_RAPID_BOOST - 1)
+    : 1;
+  const steps = Math.min(ZOOM_WHEEL_MAX_STEPS, baseSteps * rapidFactor);
+
+  return Math.pow(ZOOM_WHEEL_BASE_MULTIPLIER, steps);
+}
 
 interface UseTimelineZoomProps {
   // Refs
@@ -44,8 +82,12 @@ export function useTimelineZoom({
   setScrollX,
   setScrollY,
 }: UseTimelineZoomProps): UseTimelineZoomReturn {
+  const timelineZoomAnchorSetting = useSettingsStore((state) => state.timelineZoomAnchor);
+  const timelineZoomAnchor = timelineZoomAnchorSetting === 'mouse' ? 'mouse' : 'playhead';
+
   // Ref to avoid stale closure for scrollY in wheel handler
   const scrollYRef = useRef(scrollY);
+  const lastZoomWheelTimeRef = useRef<number | null>(null);
 
   useEffect(() => {
     scrollYRef.current = scrollY;
@@ -124,25 +166,37 @@ export function useTimelineZoom({
         // Get the track lanes container width for accurate centering
         const trackLanes = el.querySelector<HTMLElement>('.timeline-lane-reference, .track-lanes');
         const viewportWidth = trackLanes?.clientWidth ?? el.clientWidth - 210;
+        const viewportLeft = trackLanes?.getBoundingClientRect().left ?? el.getBoundingClientRect().left + 210;
 
         // Calculate dynamic minimum zoom with padding to see end marker
         const dynamicMinZoom = Math.max(MIN_ZOOM, (viewportWidth - END_PADDING) / duration);
 
-        // Exponential zoom: each scroll step changes zoom by a constant ratio
-        // This feels consistent at all zoom levels (same % change per step)
-        const zoomMultiplier = 1.08; // 8% per scroll step
+        const now = performance.now();
+        const elapsedMs = lastZoomWheelTimeRef.current === null
+          ? ZOOM_WHEEL_RAPID_INTERVAL_MS
+          : now - lastZoomWheelTimeRef.current;
+        lastZoomWheelTimeRef.current = now;
+        const wheelDeltaPx = normalizeWheelDeltaPx(e);
+        const zoomMultiplier = getTimelineZoomWheelMultiplier(wheelDeltaPx, elapsedMs);
         const newZoom = Math.max(dynamicMinZoom, Math.min(MAX_ZOOM,
-          e.deltaY > 0 ? zoom / zoomMultiplier : zoom * zoomMultiplier
+          wheelDeltaPx > 0 ? zoom / zoomMultiplier : zoom * zoomMultiplier
         ));
 
         // Calculate max scroll with padding
         const maxScrollX = Math.max(0, duration * newZoom - viewportWidth + END_PADDING);
 
-        // Calculate playhead position in pixels with new zoom
-        const playheadPixel = playheadPosition * newZoom;
+        let newScrollX: number;
+        if (timelineZoomAnchor === 'mouse') {
+          const mouseX = Math.max(0, Math.min(viewportWidth, e.clientX - viewportLeft));
+          const anchorTime = (scrollX + mouseX) / Math.max(MIN_ZOOM, zoom);
+          newScrollX = Math.max(0, Math.min(maxScrollX, anchorTime * newZoom - mouseX));
+        } else {
+          // Calculate playhead position in pixels with new zoom
+          const playheadPixel = playheadPosition * newZoom;
 
-        // Calculate scrollX to center playhead in viewport, clamped to valid range
-        const newScrollX = Math.max(0, Math.min(maxScrollX, playheadPixel - viewportWidth / 2));
+          // Calculate scrollX to center playhead in viewport, clamped to valid range
+          newScrollX = Math.max(0, Math.min(maxScrollX, playheadPixel - viewportWidth / 2));
+        }
 
         setZoom(newZoom);
         setScrollX(newScrollX);
@@ -190,7 +244,7 @@ export function useTimelineZoom({
 
     el.addEventListener('wheel', handleWheel, { passive: false });
     return () => el.removeEventListener('wheel', handleWheel);
-  }, [timelineBodyRef, zoom, scrollX, playheadPosition, duration, contentHeight, viewportHeight, trackSnapPositions, setZoom, setScrollX, setScrollY]);
+  }, [timelineBodyRef, zoom, scrollX, playheadPosition, duration, contentHeight, viewportHeight, trackSnapPositions, timelineZoomAnchor, setZoom, setScrollX, setScrollY]);
 
   return {
     handleSetZoom,

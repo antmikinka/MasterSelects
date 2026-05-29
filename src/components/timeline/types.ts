@@ -99,6 +99,13 @@ export interface ContextMenuState {
   clipId: string;
 }
 
+export interface TimelineEmptyContextMenuState {
+  x: number;
+  y: number;
+  time: number;
+  trackId: string;
+}
+
 // Marquee selection state for rectangle selection
 export interface MarqueeState {
   mode?: 'marquee' | 'range';
@@ -248,6 +255,8 @@ export interface TimelineTrackProps {
   timelineRef: React.RefObject<HTMLDivElement | null>;
   onClipMouseDown: (e: React.MouseEvent, clipId: string) => void;
   onClipContextMenu: (e: React.MouseEvent, clipId: string) => void;
+  onEmptyMouseDown: (e: React.MouseEvent, trackId: string, time: number) => void;
+  onEmptyContextMenu: (e: React.MouseEvent, trackId: string, time: number) => void;
   onTrimStart: (e: React.MouseEvent, clipId: string, edge: 'left' | 'right') => void;
   onDrop: (e: React.DragEvent) => void;
   onDragOver: (e: React.DragEvent) => void;

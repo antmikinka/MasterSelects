@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { useSettingsStore, type AutosaveInterval, type SaveMode, type PreviewQuality, type GPUPowerPreference } from '../../../stores/settingsStore';
+import { useSettingsStore, type AutosaveInterval, type SaveMode, type PreviewQuality, type GPUPowerPreference, type TimelineZoomAnchor } from '../../../stores/settingsStore';
 // AutosaveInterval used in interval select onChange cast
 import { useIsMobile } from '../../../hooks/useIsMobile';
 import { OutputSettings } from './OutputSettings';
@@ -11,12 +11,14 @@ export function GeneralSettings() {
     autosaveInterval,
     copyMediaToProject,
     forceDesktopMode,
+    timelineZoomAnchor,
     previewQuality,
     gpuPowerPreference,
     setSaveMode,
     setAutosaveInterval,
     setCopyMediaToProject,
     setForceDesktopMode,
+    setTimelineZoomAnchor,
     setPreviewQuality,
     setGpuPowerPreference,
   } = useSettingsStore();
@@ -100,6 +102,26 @@ export function GeneralSettings() {
           </button>
         </div>
       )}
+
+      {/* Timeline */}
+      <div className="settings-group">
+        <div className="settings-group-title">Timeline</div>
+
+        <label className="settings-row">
+          <span className="settings-label">Zoom Anchor</span>
+          <select
+            value={timelineZoomAnchor}
+            onChange={(e) => setTimelineZoomAnchor(e.target.value as TimelineZoomAnchor)}
+            className="settings-select"
+          >
+            <option value="mouse">Mouse Pointer</option>
+            <option value="playhead">Playhead</option>
+          </select>
+        </label>
+        <p className="settings-hint">
+          Controls whether Ctrl/Alt+scroll zooms toward the cursor or the playhead.
+        </p>
+      </div>
 
       {/* Output */}
       <OutputSettings embedded />
