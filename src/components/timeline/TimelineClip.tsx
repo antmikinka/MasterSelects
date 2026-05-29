@@ -2133,6 +2133,9 @@ function TimelineClipComponent({
 
   // Check if this clip is part of a multi-select drag
   const isInMultiSelectDrag = clipDrag?.multiSelectClipIds?.includes(clip.id) && clipDrag.multiSelectTimeDelta !== undefined;
+  const showFocusCollisionHighlight = trackFocusMode !== 'balanced' && !!clipDrag?.overlapClipIds?.length;
+  const isOverlapCollisionTarget = showFocusCollisionHighlight && !!clipDrag?.overlapClipIds?.includes(clip.id);
+  const isOverlapCollisionSource = showFocusCollisionHighlight && (isDragging || isLinkedToDragging || isInMultiSelectDrag);
   const isTrackLocked = track.locked === true;
   const trackTypeIndex = useMemo(
     () => tracks.filter(candidate => candidate.type === track.type).findIndex(candidate => candidate.id === track.id),
@@ -2153,6 +2156,8 @@ function TimelineClipComponent({
     isLinkedToTrimming ? 'linked-trimming' : '',
     isFading ? 'fading' : '',
     isDragging && clipDrag?.forcingOverlap ? 'forcing-overlap' : '',
+    isOverlapCollisionSource ? 'overlap-collision-source' : '',
+    isOverlapCollisionTarget ? 'overlap-collision-target' : '',
     clipTypeClass,
     isAudioClip ? `audio-mode-${audioDisplayMode}` : '',
     isAudioClip && audioFocusMode ? 'audio-focus-active' : '',

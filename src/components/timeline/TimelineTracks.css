@@ -1762,6 +1762,41 @@
   box-shadow: 0 0 0 1px rgba(126, 148, 173, 0.18);
 }
 
+.timeline-track-section.collapsed .timeline-clip.overlap-collision-source,
+.timeline-track-section.collapsed .timeline-clip.overlap-collision-target {
+  z-index: 110 !important;
+  background:
+    linear-gradient(180deg, rgba(255, 89, 89, 0.95), rgba(172, 20, 31, 0.9)) !important;
+  border-color: #ff5a5a !important;
+  box-shadow:
+    0 0 0 1px rgba(255, 116, 116, 1),
+    0 0 9px rgba(255, 47, 47, 0.98),
+    0 0 18px rgba(239, 68, 68, 0.82) !important;
+  filter: drop-shadow(0 0 7px rgba(239, 68, 68, 0.95));
+  animation: mini-clip-overlap-collision-pulse 620ms ease-in-out infinite;
+}
+
+@keyframes mini-clip-overlap-collision-pulse {
+  0%,
+  100% {
+    opacity: 0.84;
+    transform: scaleY(1);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scaleY(1.35);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline-track-section.collapsed .timeline-clip.overlap-collision-source,
+  .timeline-track-section.collapsed .timeline-clip.overlap-collision-target {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 .timeline-track-section.collapsed .track-lane::before {
   display: none;
 }

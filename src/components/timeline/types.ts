@@ -35,6 +35,7 @@ export interface ClipDragState {
   newTrackType?: 'video' | 'audio' | null; // Ghost target when dragging beyond video/audio track stacks
   altKeyPressed: boolean;      // If true, skip linked group movement (independent drag)
   forcingOverlap: boolean;     // If true, user has pushed through resistance and is forcing overlap
+  overlapClipIds?: string[];    // Clips currently overlapping the drag preview
   dragStartTime: number;       // Timestamp when drag started (for track-change delay)
   // Multi-select drag support
   multiSelectTimeDelta?: number;  // Time delta to apply to all selected clips during preview

@@ -70,6 +70,12 @@ function getClipEnd(clip: TimelineClip): number {
   return clip.startTime + clip.duration;
 }
 
+function timeRangesOverlap(startA: number, durationA: number, startB: number, durationB: number): boolean {
+  const endA = startA + durationA;
+  const endB = startB + durationB;
+  return endA > startB && startA < endB;
+}
+
 function getSourceDuration(clip: TimelineClip): number {
   const naturalDuration = clip.source?.naturalDuration;
   if (Number.isFinite(naturalDuration) && naturalDuration && naturalDuration > 0) {
@@ -166,6 +172,63 @@ function buildClipDragPreview(
 
 function setClipDragPreview(preview: TimelineClipDragPreview | null): void {
   useTimelineStore.setState({ clipDragPreview: preview });
+}
+
+function getClipDragOverlapClipIds(
+  clipMap: Map<string, TimelineClip>,
+  drag: ClipDragState,
+  primaryStartTime: number,
+  primaryTrackId: string,
+  timeDelta: number,
+  excludeClipIds: string[],
+): string[] {
+  const movingClip = clipMap.get(drag.clipId);
+  if (!movingClip) return [];
+
+  const movedClips = new Map<string, { clip: TimelineClip; startTime: number; trackId: string }>();
+  const excludedIds = new Set(excludeClipIds);
+  const addMovedClip = (clip: TimelineClip, startTime: number, trackId = clip.trackId) => {
+    movedClips.set(clip.id, { clip, startTime, trackId });
+    excludedIds.add(clip.id);
+  };
+
+  addMovedClip(movingClip, primaryStartTime, primaryTrackId);
+
+  if (drag.multiSelectClipIds?.length && drag.multiSelectTimeDelta !== undefined) {
+    for (const selectedId of drag.multiSelectClipIds) {
+      const selectedClip = clipMap.get(selectedId);
+      if (selectedClip) addMovedClip(selectedClip, selectedClip.startTime + drag.multiSelectTimeDelta);
+    }
+  }
+
+  if (!drag.altKeyPressed) {
+    for (const moved of Array.from(movedClips.values())) {
+      const linkedClip = moved.clip.linkedClipId ? clipMap.get(moved.clip.linkedClipId) : undefined;
+      if (linkedClip && !movedClips.has(linkedClip.id)) {
+        addMovedClip(linkedClip, linkedClip.startTime + timeDelta);
+      }
+    }
+
+    if (movingClip.linkedGroupId) {
+      for (const clip of clipMap.values()) {
+        if (clip.linkedGroupId === movingClip.linkedGroupId && !movedClips.has(clip.id)) {
+          addMovedClip(clip, clip.startTime + timeDelta);
+        }
+      }
+    }
+  }
+
+  const overlapIds = new Set<string>();
+  for (const moved of movedClips.values()) {
+    for (const candidate of clipMap.values()) {
+      if (excludedIds.has(candidate.id) || candidate.trackId !== moved.trackId) continue;
+      if (timeRangesOverlap(moved.startTime, moved.clip.duration, candidate.startTime, candidate.duration)) {
+        overlapIds.add(candidate.id);
+      }
+    }
+  }
+
+  return [...overlapIds];
 }
 
 export function useClipDrag({
@@ -278,6 +341,7 @@ export function useClipDrag({
         newTrackType: null,
         altKeyPressed: e.altKey, // Capture Alt state for independent drag
         forcingOverlap: false,
+        overlapClipIds: [],
         dragStartTime: Date.now(), // Track when drag started for track-change delay
         // Multi-select support
         multiSelectClipIds: otherSelectedIds.length > 0 ? otherSelectedIds : undefined,
@@ -312,6 +376,7 @@ export function useClipDrag({
             newTrackType: null,
             altKeyPressed: moveEvent.altKey,
             forcingOverlap: false,
+            overlapClipIds: [],
             multiSelectTimeDelta: drag.toolGesture === 'slide' ? clampedDelta : undefined,
             sourceTimeDelta: drag.toolGesture === 'slip' ? clampedDelta : undefined,
           };
@@ -508,6 +573,21 @@ export function useClipDrag({
             allExcludedIds.push(selClip.linkedClipId);
           }
         }
+        const rawTimeDelta = baseTime - (draggedClip?.startTime ?? drag.originalStartTime);
+        const overlapClipIds = getClipDragOverlapClipIds(
+          clipMap,
+          {
+            ...drag,
+            currentTrackId: newTrackId,
+            snappedTime: baseTime,
+            altKeyPressed: moveEvent.altKey,
+            multiSelectTimeDelta: drag.multiSelectClipIds?.length ? rawTimeDelta : undefined,
+          },
+          baseTime,
+          newTrackId,
+          rawTimeDelta,
+          allExcludedIds,
+        );
 
         // Check primary clip with all related clips excluded
         const resistanceResult = getPositionWithResistance(
@@ -617,6 +697,7 @@ export function useClipDrag({
           newTrackType,
           altKeyPressed: moveEvent.altKey, // Update Alt state dynamically
           forcingOverlap,
+          overlapClipIds,
           multiSelectTimeDelta,
         };
         setClipDrag(newDrag);

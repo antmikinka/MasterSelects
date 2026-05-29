@@ -1167,6 +1167,45 @@
   box-shadow: 0 0 0 2px var(--danger), 0 4px 12px rgba(239, 68, 68, 0.5);
 }
 
+.timeline-clip.overlap-collision-source,
+.timeline-clip.overlap-collision-target {
+  border-color: #ff4d4d;
+  animation: clip-overlap-collision-pulse 720ms ease-in-out infinite;
+}
+
+.timeline-clip.overlap-collision-source {
+  box-shadow:
+    0 0 0 2px rgba(255, 77, 77, 0.95),
+    0 0 16px rgba(239, 68, 68, 0.78),
+    0 4px 14px rgba(239, 68, 68, 0.48);
+}
+
+.timeline-clip.overlap-collision-target {
+  z-index: 98;
+  box-shadow:
+    0 0 0 2px rgba(255, 77, 77, 0.96),
+    0 0 18px rgba(239, 68, 68, 0.86),
+    inset 0 0 12px rgba(239, 68, 68, 0.2);
+}
+
+@keyframes clip-overlap-collision-pulse {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 2px rgba(239, 68, 68, 0.48));
+  }
+
+  50% {
+    filter: drop-shadow(0 0 10px rgba(239, 68, 68, 0.98));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline-clip.overlap-collision-source,
+  .timeline-clip.overlap-collision-target {
+    animation: none;
+  }
+}
+
 /* Cut tool mode */
 .timeline-clip.cut-mode {
   cursor: inherit;
