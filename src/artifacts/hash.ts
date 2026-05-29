@@ -1,9 +1,26 @@
 import { ARTIFACT_HASH_ALGORITHM, type ArtifactInput } from './types';
 
+type Sha256Input = ArrayBuffer | ArrayBufferView;
+type CryptoDigestBytes = Uint8Array<ArrayBuffer>;
+
 function toHex(bytes: ArrayBuffer): string {
   return [...new Uint8Array(bytes)]
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
+}
+
+function copyCryptoDigestBytes(source: Uint8Array): CryptoDigestBytes {
+  const copy = new Uint8Array(source.byteLength);
+  copy.set(source);
+  return copy;
+}
+
+function toCryptoDigestBytes(input: Sha256Input): CryptoDigestBytes {
+  const source = ArrayBuffer.isView(input)
+    ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
+    : new Uint8Array(input);
+
+  return copyCryptoDigestBytes(source);
 }
 
 export async function artifactInputToBlob(
@@ -37,12 +54,12 @@ export async function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
   });
 }
 
-export async function sha256ArrayBuffer(buffer: ArrayBuffer): Promise<string> {
+export async function sha256ArrayBuffer(buffer: Sha256Input): Promise<string> {
   if (!globalThis.crypto?.subtle) {
     throw new Error('Web Crypto SHA-256 is not available in this runtime');
   }
 
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', buffer);
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', toCryptoDigestBytes(buffer));
   return toHex(digest);
 }
 
