@@ -1,5 +1,13 @@
 [
   {
+    "date": "2026-05-29",
+    "type": "improve",
+    "title": "MasterSelects 2.0.4",
+    "description": "History capture is less aggressive during realtime editor interactions: dock resizing and floating panel moves are batched until release, debug history disabling is available for profiling, and locked preview tracks no longer spam transform updates.",
+    "section": "Release",
+    "commits": ["690e25fc"]
+  },
+  {
     "date": "2026-05-28",
     "type": "fix",
     "title": "MasterSelects 2.0.3",

@@ -1,6 +1,6 @@
 // App version
 // Format: MAJOR.MINOR.PATCH
-export const APP_VERSION = '2.0.3';
+export const APP_VERSION = '2.0.4';
 
 export interface ChangelogNotice {
   type: 'info' | 'warning' | 'success' | 'danger';
@@ -27,8 +27,8 @@ export const FEATURED_VIDEO: {
   title: 'MasterSelects Demo',
   banner: {
     type: 'success',
-    title: 'MasterSelects 2.0.3',
-    message: 'Scrubbing now keeps the last visible preview frame during decoder gaps, preventing black flashes while long-GOP video seeks catch up.',
+    title: 'MasterSelects 2.0.4',
+    message: 'History capture is now less aggressive during live editor interactions, so timeline and dock edits stay responsive while still creating undo points after release.',
     animated: true,
   },
 };
@@ -36,8 +36,8 @@ export const FEATURED_VIDEO: {
 // Build/Platform notice shown at top of changelog (set to null to hide)
 export const BUILD_NOTICE: ChangelogNotice | null = {
   type: 'success',
-  title: 'MasterSelects 2.0.3',
-  message: 'This release tightens playback and scrub preview resilience for smoother timeline navigation.',
+  title: 'MasterSelects 2.0.4',
+  message: 'This release improves editor responsiveness by batching realtime history updates and reducing unnecessary snapshot work.',
   animated: true,
 };
 
