@@ -105,6 +105,7 @@ function collectSnapshot(playbackWindowMs = DEFAULT_PLAYBACK_WINDOW_MS) {
     getRenderCount?: () => number;
     getIsIdle?: () => boolean;
     getIsPlaying?: () => boolean;
+    getTimelineVisualDemand?: () => boolean;
   }) | null;
 
   const snapshot: Record<string, unknown> = {
@@ -147,6 +148,7 @@ function collectSnapshot(playbackWindowMs = DEFAULT_PLAYBACK_WINDOW_MS) {
       renderRequested: renderLoop.renderRequested,
       hasActiveVideo: renderLoop.hasActiveVideo,
       isScrubbing: renderLoop.isScrubbing,
+      timelineVisualDemand: renderLoop.getTimelineVisualDemand?.(),
       isIdle: renderLoop.getIsIdle?.(),
       isPlaying: renderLoop.getIsPlaying?.(),
       renderCount: renderLoop.getRenderCount?.(),

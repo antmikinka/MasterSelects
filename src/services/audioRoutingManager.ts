@@ -1129,6 +1129,12 @@ class AudioRoutingManager {
     return this.routes.has(element);
   }
 
+  pauseAllRoutedMedia(): void {
+    for (const element of this.routes.keys()) {
+      element.pause();
+    }
+  }
+
   getMeterSnapshot(element: HTMLMediaElement, updatedAt = performance.now()): AudioMeterSnapshot | null {
     const route = this.routes.get(element);
     if (!route) return null;

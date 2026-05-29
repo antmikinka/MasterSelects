@@ -1036,8 +1036,12 @@ export function Timeline() {
   const splitDragFrameRef = useRef<number | null>(null);
   const splitDragPendingClientYRef = useRef<number | null>(null);
   const trackResizeDragRef = useRef<TrackResizeDragState | null>(null);
+  const trackResizeFrameRef = useRef<number | null>(null);
+  const trackResizePendingClientYRef = useRef<number | null>(null);
   const [activeTrackResizeId, setActiveTrackResizeId] = useState<string | null>(null);
   const trackHeaderWidthDragRef = useRef<TrackHeaderWidthDragState | null>(null);
+  const trackHeaderWidthFrameRef = useRef<number | null>(null);
+  const trackHeaderWidthPendingClientXRef = useRef<number | null>(null);
   const [isTrackHeaderWidthResizing, setIsTrackHeaderWidthResizing] = useState(false);
   const timelineSurfaceDragRef = useRef<TimelineSurfaceDragState | null>(null);
   const [isTimelineSurfacePanning, setIsTimelineSurfacePanning] = useState(false);
@@ -2111,18 +2115,40 @@ export function Timeline() {
   useEffect(() => {
     if (!activeTrackResizeId) return undefined;
 
-    const handlePointerMove = (event: PointerEvent) => {
+    const applyTrackResize = (clientY: number) => {
       const drag = trackResizeDragRef.current;
       if (!drag) return;
 
       const nextHeight = Math.max(
         MIN_TRACK_HEIGHT,
-        Math.min(MAX_TRACK_HEIGHT, drag.startHeight + event.clientY - drag.startY),
+        Math.min(MAX_TRACK_HEIGHT, drag.startHeight + clientY - drag.startY),
       );
       useTimelineStore.getState().setTrackHeight(drag.trackId, nextHeight);
     };
 
-    const handlePointerUp = () => {
+    const handlePointerMove = (event: PointerEvent) => {
+      trackResizePendingClientYRef.current = event.clientY;
+      if (trackResizeFrameRef.current !== null) return;
+
+      trackResizeFrameRef.current = window.requestAnimationFrame(() => {
+        trackResizeFrameRef.current = null;
+        const pendingClientY = trackResizePendingClientYRef.current;
+        trackResizePendingClientYRef.current = null;
+        if (pendingClientY !== null) {
+          applyTrackResize(pendingClientY);
+        }
+      });
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      if (Number.isFinite(event.clientY)) {
+        applyTrackResize(event.clientY);
+      }
+      if (trackResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(trackResizeFrameRef.current);
+        trackResizeFrameRef.current = null;
+      }
+      trackResizePendingClientYRef.current = null;
       trackResizeDragRef.current = null;
       setActiveTrackResizeId(null);
     };
@@ -2132,6 +2158,11 @@ export function Timeline() {
     window.addEventListener('pointercancel', handlePointerUp, { once: true });
 
     return () => {
+      if (trackResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(trackResizeFrameRef.current);
+        trackResizeFrameRef.current = null;
+      }
+      trackResizePendingClientYRef.current = null;
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerUp);
@@ -2152,17 +2183,39 @@ export function Timeline() {
   useEffect(() => {
     if (!isTrackHeaderWidthResizing) return undefined;
 
-    const handlePointerMove = (event: PointerEvent) => {
+    const applyTrackHeaderWidth = (clientX: number) => {
       const drag = trackHeaderWidthDragRef.current;
       if (!drag) return;
 
       setTrackHeaderWidth(Math.max(
         MIN_TRACK_HEADER_WIDTH,
-        Math.min(MAX_TRACK_HEADER_WIDTH, drag.startWidth + event.clientX - drag.startX),
+        Math.min(MAX_TRACK_HEADER_WIDTH, drag.startWidth + clientX - drag.startX),
       ));
     };
 
-    const handlePointerUp = () => {
+    const handlePointerMove = (event: PointerEvent) => {
+      trackHeaderWidthPendingClientXRef.current = event.clientX;
+      if (trackHeaderWidthFrameRef.current !== null) return;
+
+      trackHeaderWidthFrameRef.current = window.requestAnimationFrame(() => {
+        trackHeaderWidthFrameRef.current = null;
+        const pendingClientX = trackHeaderWidthPendingClientXRef.current;
+        trackHeaderWidthPendingClientXRef.current = null;
+        if (pendingClientX !== null) {
+          applyTrackHeaderWidth(pendingClientX);
+        }
+      });
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      if (Number.isFinite(event.clientX)) {
+        applyTrackHeaderWidth(event.clientX);
+      }
+      if (trackHeaderWidthFrameRef.current !== null) {
+        window.cancelAnimationFrame(trackHeaderWidthFrameRef.current);
+        trackHeaderWidthFrameRef.current = null;
+      }
+      trackHeaderWidthPendingClientXRef.current = null;
       trackHeaderWidthDragRef.current = null;
       setIsTrackHeaderWidthResizing(false);
     };
@@ -2172,6 +2225,11 @@ export function Timeline() {
     window.addEventListener('pointercancel', handlePointerUp, { once: true });
 
     return () => {
+      if (trackHeaderWidthFrameRef.current !== null) {
+        window.cancelAnimationFrame(trackHeaderWidthFrameRef.current);
+        trackHeaderWidthFrameRef.current = null;
+      }
+      trackHeaderWidthPendingClientXRef.current = null;
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerUp);

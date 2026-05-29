@@ -11,6 +11,7 @@ import { layerPlaybackManager } from '../layerPlaybackManager';
 import { Logger } from '../logger';
 import { createLiveAudioRouteSettings, type LiveAudioRouteSettings } from '../audio/audioGraphRouteSettings';
 import { getClipAudioEditPreviewVolumeMultiplier } from '../audio/clipAudioEditPreview';
+import { audioRoutingManager } from '../audioRoutingManager';
 import { useTimelineStore } from '../../stores/timeline';
 import { useMediaStore } from '../../stores/mediaStore';
 import { createCurrentAudioArtifactStore } from '../audio/timelineWaveformPyramidCache';
@@ -197,11 +198,20 @@ function createAudioElementFromUrl(url: string): HTMLAudioElement {
   return element;
 }
 
+function createAudioProxyInstance(base: HTMLAudioElement): HTMLAudioElement | null {
+  const src = base.currentSrc || base.src;
+  if (!src) return null;
+
+  const element = document.createElement('audio');
+  element.src = src;
+  element.preload = 'auto';
+  element.crossOrigin = base.crossOrigin;
+  return element;
+}
+
 function pauseAudioElement(element: HTMLAudioElement | HTMLVideoElement | null | undefined): void {
   if (!element) return;
-  if (!element.paused) {
-    element.pause();
-  }
+  element.pause();
 }
 
 function getClipAudioRouteSettings(
@@ -251,8 +261,17 @@ export class AudioTrackSyncManager {
     registerTimelineAudioPlaybackStopper(() => this.stopAllAudioPlayback());
   }
 
+  private clearAudioHandoffState(): void {
+    this.lastAudioTrackState.clear();
+    this.audioHandoffs.clear();
+    this.audioHandoffElements.clear();
+  }
+
   stopAllAudioPlayback(): void {
     clearMasterAudio();
+    this.clearAudioHandoffState();
+    audioRoutingManager.pauseAllRoutedMedia();
+    this.audioSyncHandler.stopScrubAudio();
     const timelineState = useTimelineStore.getState();
     for (const clip of timelineState.clips) {
       pauseAudioElement(clip.source?.audioElement);
@@ -267,11 +286,13 @@ export class AudioTrackSyncManager {
 
     for (const audioProxy of this.activeAudioTrackProxies.values()) {
       pauseAudioElement(audioProxy);
+      audioRoutingManager.removeRoute(audioProxy);
     }
     this.activeAudioTrackProxies.clear();
 
     for (const audioProxy of this.activeAudioProxies.values()) {
       pauseAudioElement(audioProxy);
+      audioRoutingManager.removeRoute(audioProxy);
     }
     this.activeAudioProxies.clear();
 
@@ -315,11 +336,21 @@ export class AudioTrackSyncManager {
     // Resume audio context if needed
     resumeAudioContextIfNeeded(ctx.isPlaying, ctx.isDraggingPlayhead);
     if (!ctx.isPlaying || ctx.isDraggingPlayhead || ctx.playbackSpeed !== 1) {
+      this.clearAudioHandoffState();
       this.stopAllStemBufferMixers();
     }
+    if (!ctx.isDraggingPlayhead) {
+      this.audioSyncHandler.resetScrubState();
+      if (!ctx.isPlaying) {
+        this.audioSyncHandler.stopScrubAudio();
+      }
+    }
 
-    // Compute audio handoffs for seamless cut transitions
-    this.computeAudioHandoffs(ctx);
+    // Compute audio handoffs for seamless cut transitions only while playing.
+    // Paused/stopped sync must not retain stale proxy elements across resumes.
+    if (ctx.isPlaying && !ctx.isDraggingPlayhead) {
+      this.computeAudioHandoffs(ctx);
+    }
 
     // Create sync state
     const state = createAudioSyncState();
@@ -336,8 +367,10 @@ export class AudioTrackSyncManager {
     // Pause inactive audio
     this.pauseInactiveAudio(ctx);
 
-    // Update audio track state for next frame's handoff detection
-    this.updateLastAudioTrackState(ctx);
+    // Update audio track state for next frame's handoff detection only during playback.
+    if (ctx.isPlaying && !ctx.isDraggingPlayhead) {
+      this.updateLastAudioTrackState(ctx);
+    }
 
     // Pre-buffer audio for upcoming clips (audio lookahead)
     this.preBufferUpcomingAudio(ctx);
@@ -584,7 +617,7 @@ export class AudioTrackSyncManager {
         const video = clip.source.videoElement;
         if (!video.muted) video.muted = true;
 
-        const audioProxy = proxyFrameCache.getCachedAudioProxy(mediaFile.id);
+        const audioProxy = this.getVideoAudioProxyElementForClip(mediaFile.id, clip.id);
         if (audioProxy) {
           this.activeAudioProxies.set(clip.id, audioProxy);
 
@@ -622,8 +655,9 @@ export class AudioTrackSyncManager {
 
     // Pause inactive audio proxies
     for (const [clipId, audioProxy] of this.activeAudioProxies) {
-      if (!activeVideoClipIds.has(clipId) && !audioProxy.paused) {
-        audioProxy.pause();
+      if (!activeVideoClipIds.has(clipId)) {
+        if (!audioProxy.paused) audioProxy.pause();
+        audioRoutingManager.removeRoute(audioProxy);
         this.activeAudioProxies.delete(clipId);
       }
     }
@@ -682,6 +716,7 @@ export class AudioTrackSyncManager {
         if (!audioTrackProxy.paused && !this.audioHandoffElements.has(audioTrackProxy)) {
           audioTrackProxy.pause();
         }
+        audioRoutingManager.removeRoute(audioTrackProxy);
         this.activeAudioTrackProxies.delete(clip.id);
       }
 
@@ -713,6 +748,7 @@ export class AudioTrackSyncManager {
     for (const [clipId, audioProxy] of this.activeAudioTrackProxies) {
       if (!knownClipIds.has(clipId)) {
         if (!audioProxy.paused) audioProxy.pause();
+        audioRoutingManager.removeRoute(audioProxy);
         this.activeAudioTrackProxies.delete(clipId);
       }
     }
@@ -868,6 +904,7 @@ export class AudioTrackSyncManager {
   private muteAllAudio(ctx: FrameContext): void {
     // Clear master audio since we're not using audio sync
     clearMasterAudio();
+    this.clearAudioHandoffState();
 
     // Pause all audio elements
     for (const clip of ctx.clips) {
@@ -890,11 +927,13 @@ export class AudioTrackSyncManager {
       if (!audioProxy.paused) {
         audioProxy.pause();
       }
+      audioRoutingManager.removeRoute(audioProxy);
     }
     for (const audioProxy of this.activeAudioProxies.values()) {
       if (!audioProxy.paused) {
         audioProxy.pause();
       }
+      audioRoutingManager.removeRoute(audioProxy);
     }
     this.stopAllStemBufferMixers();
   }
@@ -917,12 +956,41 @@ export class AudioTrackSyncManager {
     const mediaFileId = clip.source?.mediaFileId || clip.mediaFileId;
     if (!mediaFileId) return null;
 
+    return this.getAudioProxyInstanceForClip(mediaFileId, clip.id, this.activeAudioTrackProxies);
+  }
+
+  private getVideoAudioProxyElementForClip(mediaFileId: string, clipId: string): HTMLAudioElement | null {
+    return this.getAudioProxyInstanceForClip(mediaFileId, clipId, this.activeAudioProxies);
+  }
+
+  private getAudioProxyInstanceForClip(
+    mediaFileId: string,
+    clipId: string,
+    activeMap: Map<string, HTMLAudioElement>,
+  ): HTMLAudioElement | null {
+    if (!mediaFileId) return null;
+
     const mediaFile = useMediaStore.getState().files.find(file => file.id === mediaFileId);
     if (!hasUsableAudioProxy(mediaFile)) return null;
 
-    const audioProxy = proxyFrameCache.getCachedAudioProxy(mediaFileId);
-    if (audioProxy) {
-      return audioProxy;
+    const sharedProxy = proxyFrameCache.getCachedAudioProxy(mediaFileId);
+    if (sharedProxy) {
+      const src = sharedProxy.currentSrc || sharedProxy.src;
+      if (!src) return null;
+
+      const existing = activeMap.get(clipId);
+      if (existing && (existing.currentSrc || existing.src) === src) {
+        return existing;
+      }
+
+      pauseAudioElement(existing);
+      if (existing) {
+        audioRoutingManager.removeRoute(existing);
+      }
+      const proxyInstance = createAudioProxyInstance(sharedProxy);
+      if (!proxyInstance) return null;
+      activeMap.set(clipId, proxyInstance);
+      return proxyInstance;
     }
 
     void proxyFrameCache.preloadAudioProxy(mediaFileId);

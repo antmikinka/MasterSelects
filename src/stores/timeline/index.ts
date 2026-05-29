@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 
 import type { TimelineStore, TimelineUtils, TimelineClip, Keyframe } from './types';
-import { DEFAULT_TRACKS, DEFAULT_TRACK_HEADER_WIDTH } from './constants';
+import { DEFAULT_TRACKS, DEFAULT_TRACK_HEADER_WIDTH, MIN_TRACK_HEADER_WIDTH, MAX_TRACK_HEADER_WIDTH } from './constants';
 
 import { createTrackSlice } from './trackSlice';
 import { createClipSlice } from './clipSlice';
@@ -39,7 +39,12 @@ import { createPositioningUtils } from './positioningUtils';
 import { createSerializationUtils } from './serializationUtils';
 import { Logger } from '../../services/logger';
 import { lockTimelineEditActions } from './exportEditLock';
-import { readStoredAudioLayerAdvancedMode } from './viewPreferences';
+import {
+  readStoredAudioLayerAdvancedMode,
+  readStoredTimelineSplitRatio,
+  readStoredTimelineTrackFocusMode,
+  readStoredTimelineTrackHeaderWidth,
+} from './viewPreferences';
 
 const log = Logger.create('Timeline');
 
@@ -153,6 +158,8 @@ export const useTimelineStore = create<TimelineStore>()(
       ...serializationUtils,
     };
 
+    const initialTrackFocusMode = readStoredTimelineTrackFocusMode('balanced');
+
     // Initial state
     const initialState = {
       // Core state
@@ -162,8 +169,12 @@ export const useTimelineStore = create<TimelineStore>()(
       duration: 60,
       zoom: 50,
       scrollX: 0,
-      trackHeaderWidth: DEFAULT_TRACK_HEADER_WIDTH,
-      timelineSplitRatio: null as number | null,
+      trackHeaderWidth: readStoredTimelineTrackHeaderWidth(
+        DEFAULT_TRACK_HEADER_WIDTH,
+        MIN_TRACK_HEADER_WIDTH,
+        MAX_TRACK_HEADER_WIDTH,
+      ),
+      timelineSplitRatio: readStoredTimelineSplitRatio(null),
       snappingEnabled: true,
       isPlaying: false,
       isDraggingPlayhead: false,
@@ -211,8 +222,8 @@ export const useTimelineStore = create<TimelineStore>()(
       waveformsEnabled: true,
       audioDisplayMode: 'detailed' as const,
       audioLayerAdvancedMode: readStoredAudioLayerAdvancedMode(true),
-      audioFocusMode: false,
-      trackFocusMode: 'balanced' as const,
+      audioFocusMode: initialTrackFocusMode === 'audio',
+      trackFocusMode: initialTrackFocusMode,
       audioRegionSelection: null,
       videoBakeRegionSelection: null,
       videoBakeRegions: [] as import('../../types').VideoBakeRegion[],

@@ -30,6 +30,7 @@ import {
 import type { RuntimeFrameProvider } from './mediaRuntime/types';
 import { vfPipelineMonitor } from './vfPipelineMonitor';
 import { wcPipelineMonitor } from './wcPipelineMonitor';
+import { hasTimelineVisualRenderDemand } from './timeline/timelineVisualDemand';
 
 const log = Logger.create('PlaybackHealth');
 
@@ -183,8 +184,14 @@ export class PlaybackHealthMonitor {
   // --- Main check loop ---
 
   private checkHealth(): void {
-    const { isPlaying, clips, playheadPosition } = useTimelineStore.getState();
+    const { isPlaying, clips, tracks, playheadPosition, clipDragPreview } = useTimelineStore.getState();
     const now = performance.now();
+    const hasVisualRenderDemand = hasTimelineVisualRenderDemand({
+      clips,
+      tracks,
+      playheadPosition,
+      clipDragPreview,
+    });
 
     // Gather active video clips at playhead
     const clipsAtTime = clips.filter(
@@ -300,7 +307,7 @@ export class PlaybackHealthMonitor {
     }
 
     // 7. RENDER_STALL
-    if (isPlaying) {
+    if (isPlaying && hasVisualRenderDemand) {
       const rl = engine.getRenderLoop();
       if (rl) {
         const lastRender = rl.getLastSuccessfulRenderTime();
@@ -314,7 +321,7 @@ export class PlaybackHealthMonitor {
 
     // 8. HIGH_DROP_RATE
     const stats = engine.getStats();
-    if (stats.drops && stats.drops.lastSecond > HIGH_DROP_THRESHOLD) {
+    if (hasVisualRenderDemand && stats.drops && stats.drops.lastSecond > HIGH_DROP_THRESHOLD) {
       this.recordAnomaly('HIGH_DROP_RATE', undefined, `${stats.drops.lastSecond} drops/sec`);
     }
 

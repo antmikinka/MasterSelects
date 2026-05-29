@@ -4,12 +4,31 @@ import { useEffect } from 'react';
 import { useTimelineStore } from '../../../stores/timeline';
 import {
   clearInternalPlaybackHold,
+  layerBuilder,
   playheadState,
 } from '../../../services/layerBuilder';
 import { findStopMarkerInPlaybackRange } from '../../../services/timeline/stopMarkers';
+import { hasTimelineVisualRenderDemand } from '../../../services/timeline/timelineVisualDemand';
 
 interface UsePlaybackLoopProps {
   isPlaying: boolean;
+}
+
+function isInteractiveDockLayoutChangeActive(): boolean {
+  if (typeof document === 'undefined') return false;
+  return Boolean(document.querySelector(
+    [
+      '.dock-split.resizing',
+      '.floating-panel.resizing',
+      '.dock-container.dragging',
+      '.dock-resize-handle.active',
+      '.timeline-container.is-track-resizing',
+      '.timeline-container.is-header-width-resizing',
+      '.timeline-container.is-split-dragging',
+      '.track-resize-handle.active',
+      '.timeline-layer-divider-resize-handle.active',
+    ].join(','),
+  ));
 }
 
 /**
@@ -36,7 +55,12 @@ export function usePlaybackLoop({ isPlaying }: UsePlaybackLoopProps) {
     let rafId: number;
     let lastTime = performance.now();
     let lastStateUpdate = 0;
-    const STATE_UPDATE_INTERVAL = 33; // Update store every 33ms (~30fps for UI/subscribers)
+    let lastAudioSync = 0;
+    const VISUAL_STATE_UPDATE_INTERVAL = 33; // ~30fps while video/visual playback is active
+    const AUDIO_ONLY_STATE_UPDATE_INTERVAL = 33; // audio clock stays smooth; UI follows at ~30fps
+    const INTERACTIVE_LAYOUT_STATE_UPDATE_INTERVAL = 90;
+    const AUDIO_SYNC_INTERVAL = 50;
+    const AUDIO_STARTUP_SYNC_INTERVAL = 16;
 
     // Initialize internal position from store and enable high-frequency mode
     playheadState.position = useTimelineStore.getState().playheadPosition;
@@ -68,8 +92,10 @@ export function usePlaybackLoop({ isPlaying }: UsePlaybackLoopProps) {
           loopPlayback: lp,
           pause: ps,
           clips,
+          tracks,
           markers,
           playbackSpeed,
+          clipDragPreview,
         } = state;
         const effectiveEnd = op !== null ? op : dur;
         const effectiveStart = ip !== null ? ip : 0;
@@ -191,8 +217,28 @@ export function usePlaybackLoop({ isPlaying }: UsePlaybackLoopProps) {
         // Update high-frequency position for render loop to read
         playheadState.position = newPosition;
 
+        const hasVisualRenderDemand = hasTimelineVisualRenderDemand({
+          clips,
+          tracks,
+          playheadPosition: newPosition,
+          clipDragPreview,
+        });
+
+        const audioSyncInterval = playheadState.playbackJustStarted
+          ? AUDIO_STARTUP_SYNC_INTERVAL
+          : AUDIO_SYNC_INTERVAL;
+        if (!hasVisualRenderDemand && currentTime - lastAudioSync >= audioSyncInterval) {
+          layerBuilder.syncAudioElements();
+          lastAudioSync = currentTime;
+        }
+
         // PERFORMANCE: Only update store at throttled interval
-        if (currentTime - lastStateUpdate >= STATE_UPDATE_INTERVAL) {
+        const stateUpdateInterval = isInteractiveDockLayoutChangeActive()
+          ? INTERACTIVE_LAYOUT_STATE_UPDATE_INTERVAL
+          : hasVisualRenderDemand
+          ? VISUAL_STATE_UPDATE_INTERVAL
+          : AUDIO_ONLY_STATE_UPDATE_INTERVAL;
+        if (currentTime - lastStateUpdate >= stateUpdateInterval) {
           useTimelineStore.setState({ playheadPosition: newPosition });
           lastStateUpdate = currentTime;
         }

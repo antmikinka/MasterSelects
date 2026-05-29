@@ -5,11 +5,21 @@ import { MIN_ZOOM, MAX_ZOOM, MIN_TRACK_HEADER_WIDTH, MAX_TRACK_HEADER_WIDTH } fr
 import { useMediaStore } from '../mediaStore';
 import { engine } from '../../engine/WebGPUEngine';
 import { getRuntimeFrameProvider } from '../../services/mediaRuntime/runtimePlayback';
-import { playheadState, sanitizePlayheadPosition } from '../../services/layerBuilder/PlayheadState';
+import {
+  playheadState,
+  sanitizePlayheadPosition,
+  stopInternalPosition,
+} from '../../services/layerBuilder/PlayheadState';
 import { resolvePlaybackStartPosition } from './playbackRange';
 import { prewarmProxyFramesForTimelinePosition } from '../../services/proxyFramePrewarm';
-import { persistAudioLayerAdvancedMode } from './viewPreferences';
+import {
+  persistAudioLayerAdvancedMode,
+  persistTimelineSplitRatio,
+  persistTimelineTrackFocusMode,
+  persistTimelineTrackHeaderWidth,
+} from './viewPreferences';
 import { stopTimelineAudioPlayback } from '../../services/audio/timelineAudioPlaybackStopper';
+import { hasTimelineVisualRenderDemand } from '../../services/timeline/timelineVisualDemand';
 
 function createPlaybackWarmupRequestId(): string {
   return `playback-warmup-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -35,11 +45,20 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
       playheadState.position = clampedPosition;
     }
 
-    if (!get().isPlaying && !get().isDraggingPlayhead) {
+    const latestState = get();
+    if (
+      !latestState.isPlaying &&
+      !latestState.isDraggingPlayhead &&
+      hasTimelineVisualRenderDemand({
+        clips: latestState.clips,
+        tracks: latestState.tracks,
+        playheadPosition: clampedPosition,
+        clipDragPreview: latestState.clipDragPreview,
+      })
+    ) {
       engine.requestNewFrameRender();
     }
 
-    const latestState = get();
     if (!latestState.isPlaying) {
       prewarmProxyFramesForTimelinePosition(
         latestState,
@@ -197,6 +216,8 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
 
   stop: () => {
     stopTimelineAudioPlayback();
+    playheadState.position = 0;
+    stopInternalPosition();
     set({ isPlaying: false, playheadPosition: 0, playbackWarmup: null });
   },
 
@@ -209,11 +230,13 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
     const nextWidth = Number.isFinite(width)
       ? Math.max(MIN_TRACK_HEADER_WIDTH, Math.min(MAX_TRACK_HEADER_WIDTH, width))
       : get().trackHeaderWidth;
+    persistTimelineTrackHeaderWidth(nextWidth);
     set({ trackHeaderWidth: nextWidth });
   },
 
   setTimelineSplitRatio: (ratio) => {
     if (ratio === null) {
+      persistTimelineSplitRatio(null);
       set({ timelineSplitRatio: null });
       return;
     }
@@ -221,6 +244,7 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
     const nextRatio = Number.isFinite(ratio)
       ? Math.max(0, Math.min(1, ratio))
       : get().timelineSplitRatio;
+    persistTimelineSplitRatio(nextRatio);
     set({ timelineSplitRatio: nextRatio });
   },
 
@@ -375,20 +399,25 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
   },
 
   setAudioFocusMode: (enabled) => {
-    set({ audioFocusMode: enabled, trackFocusMode: enabled ? 'audio' : 'balanced' });
+    const trackFocusMode = enabled ? 'audio' : 'balanced';
+    persistTimelineTrackFocusMode(trackFocusMode);
+    set({ audioFocusMode: enabled, trackFocusMode });
   },
 
   toggleAudioFocusMode: () => {
     set((state) => {
       const nextEnabled = !state.audioFocusMode;
+      const trackFocusMode = nextEnabled ? 'audio' : 'balanced';
+      persistTimelineTrackFocusMode(trackFocusMode);
       return {
         audioFocusMode: nextEnabled,
-        trackFocusMode: nextEnabled ? 'audio' : 'balanced',
+        trackFocusMode,
       };
     });
   },
 
   setTrackFocusMode: (mode) => {
+    persistTimelineTrackFocusMode(mode);
     set({ trackFocusMode: mode, audioFocusMode: mode === 'audio' });
   },
 

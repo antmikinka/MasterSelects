@@ -2,8 +2,11 @@ import { memo, type CSSProperties, type MouseEvent as ReactMouseEvent, useCallba
 import { createPortal } from 'react-dom';
 import './AudioMixerPanel.css';
 import { useTimelineStore } from '../../../stores/timeline';
+import { useRuntimeAudioMeterSnapshot } from '../../../services/audio/runtimeAudioMeterHooks';
+import type { RuntimeAudioMeterScope } from '../../../services/audio/runtimeAudioMeterBus';
 import type { LabelColor } from '../../../stores/mediaStore/types';
 import type {
+  AudioMeterSnapshot,
   AudioEffectInstance,
   AudioExportPreflightState,
   AudioSendState,
@@ -32,6 +35,8 @@ const DEFAULT_MASTER_AUDIO_STATE: MasterAudioState = {
 };
 
 const MASTER_FOCUS_ID = '__master__';
+const MIXER_METER_FEATURES = ['level', 'stereo', 'phase', 'dynamics'] as const;
+const MIXER_METER_MAX_FPS = 30;
 
 type MixerCssProperties = CSSProperties & {
   '--strip-color'?: string;
@@ -111,6 +116,21 @@ function getEffectRackLabel(effect: AudioEffectInstance): string {
 
 function stopPropagation(event: { stopPropagation: () => void }) {
   event.stopPropagation();
+}
+
+function useMixerRuntimeAudioMeter(
+  scope: FxWindowTarget['scope'] | undefined,
+  trackId?: string,
+): AudioMeterSnapshot | undefined {
+  const busScope: RuntimeAudioMeterScope | undefined = scope === 'track' && trackId
+    ? { kind: 'track', trackId }
+    : scope === 'master'
+      ? { kind: 'master' }
+      : undefined;
+  return useRuntimeAudioMeterSnapshot(busScope, {
+    features: MIXER_METER_FEATURES,
+    maxFps: MIXER_METER_MAX_FPS,
+  });
 }
 
 function MixerMeterScale() {
@@ -206,7 +226,7 @@ function TrackMixerStripComponent({
   onOpenFx: (target: FxWindowTarget) => void;
   onOpenColorMenu: (event: ReactMouseEvent, trackId: string) => void;
 }) {
-  const meter = useTimelineStore(state => state.runtimeAudioMeters.trackMeters[track.id]);
+  const meter = useMixerRuntimeAudioMeter('track', track.id);
   const audioState = getTrackAudioState(track);
   const effectiveMuted = audioState.muted;
   const effectiveSolo = audioState.solo;
@@ -367,7 +387,7 @@ function MasterMixerStripComponent({
   onStaticPreflight: () => void;
   onRenderedPreflight: () => void;
 }) {
-  const meter = useTimelineStore(state => state.runtimeAudioMeters.master);
+  const meter = useMixerRuntimeAudioMeter('master');
   const status = getPreflightStatus(masterAudio.exportPreflight);
   const measurement = masterAudio.exportPreflight?.measurement;
   const effects = masterAudio.effectStack ?? [];
@@ -478,12 +498,11 @@ function MixerFxWindow({
   masterAudio: MasterAudioState;
   onClose: () => void;
 }) {
-  const meter = useTimelineStore(state => {
-    if (!target) return undefined;
-    return target.scope === 'track'
-      ? state.runtimeAudioMeters.trackMeters[target.trackId]
-      : state.runtimeAudioMeters.master;
-  });
+  const runtimeMeter = useMixerRuntimeAudioMeter(
+    target?.scope,
+    target?.scope === 'track' ? target.trackId : undefined,
+  );
+  const runtimeDynamics = runtimeMeter?.dynamics;
   if (!target) return null;
 
   const track = target.scope === 'track'
@@ -515,8 +534,9 @@ function MixerFxWindow({
         title={title}
         className="audio-effect-stack-compact audio-mixer-fx-stack floating"
         effects={effects}
-        runtimeDynamics={meter?.dynamics}
-        runtimeAnalyzer={meter?.spectrumDb ? { postDb: meter.spectrumDb } : undefined}
+        runtimeDynamics={runtimeDynamics}
+        runtimeAnalyzerScope={target.scope}
+        runtimeAnalyzerTrackId={target.scope === 'track' ? target.trackId : undefined}
         emptyLabel={target.scope === 'track' ? 'No track FX' : 'No master FX'}
         onAddEffect={(descriptorId) => {
           if (target.scope === 'track' && track) {

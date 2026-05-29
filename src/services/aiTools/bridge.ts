@@ -20,6 +20,7 @@ import { projectFileService } from '../projectFileService';
 import { loadProjectToStores } from '../project/projectLoad';
 import { compileGuidedToolCall, inspectGuidedToolCall } from '../guidedActions';
 import { getRuntimeDiagnostics } from '../runtimeDiagnostics';
+import { runtimeAudioMeterBus } from '../audio/runtimeAudioMeterBus';
 import { DEFAULT_STEM_MODEL_ID, getStemModelManager } from '../audio/stemSeparation';
 
 const tabId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -647,27 +648,27 @@ function createAudioRuntimeDebugSignature() {
 }
 
 function summarizeRuntimeAudioMeters() {
-  const meters = useTimelineStore.getState().runtimeAudioMeters;
+  // Read directly from the runtime audio meter bus (source of truth). The meter
+  // shape is preserved; `demand` is added as optional diagnostics.
+  const now = performance.now();
+  const debug = runtimeAudioMeterBus.getDebugSnapshot();
+  const summarizeSnapshot = (meter: import('../../types').AudioMeterSnapshot) => ({
+    peakLinear: Math.round(meter.peakLinear * 10000) / 10000,
+    rmsLinear: Math.round(meter.rmsLinear * 10000) / 10000,
+    peakDb: Math.round(meter.peakDb * 10) / 10,
+    rmsDb: Math.round(meter.rmsDb * 10) / 10,
+    updatedAgeMs: Math.round(now - meter.updatedAt),
+  });
   return {
-    master: meters.master
-      ? {
-          peakLinear: Math.round(meters.master.peakLinear * 10000) / 10000,
-          rmsLinear: Math.round(meters.master.rmsLinear * 10000) / 10000,
-          peakDb: Math.round(meters.master.peakDb * 10) / 10,
-          rmsDb: Math.round(meters.master.rmsDb * 10) / 10,
-          updatedAgeMs: Math.round(performance.now() - meters.master.updatedAt),
-        }
-      : null,
-    tracks: Object.fromEntries(Object.entries(meters.trackMeters).map(([trackId, meter]) => [
+    master: debug.master ? summarizeSnapshot(debug.master) : null,
+    tracks: Object.fromEntries(Object.entries(debug.tracks).map(([trackId, meter]) => [
       trackId,
-      {
-        peakLinear: Math.round(meter.peakLinear * 10000) / 10000,
-        rmsLinear: Math.round(meter.rmsLinear * 10000) / 10000,
-        peakDb: Math.round(meter.peakDb * 10) / 10,
-        rmsDb: Math.round(meter.rmsDb * 10) / 10,
-        updatedAgeMs: Math.round(performance.now() - meter.updatedAt),
-      },
+      summarizeSnapshot(meter),
     ])),
+    demand: {
+      master: debug.demand.master,
+      tracks: debug.demand.tracks,
+    },
   };
 }
 

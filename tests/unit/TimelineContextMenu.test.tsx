@@ -94,6 +94,72 @@ afterEach(() => {
 });
 
 describe('TimelineContextMenu regenerate menu', () => {
+  it('shows video-specific effect and thumbnail actions for video clips', () => {
+    const videoClip = createClip({ id: 'clip-video' });
+
+    renderMenu({
+      clips: [videoClip],
+      mediaFile: {
+        id: 'media-video',
+        name: 'Clip.mp4',
+        type: 'video',
+        parentId: null,
+        createdAt: 1,
+        file: new File(['video'], 'Clip.mp4', { type: 'video/mp4' }),
+        url: 'blob:video',
+        duration: 10,
+        hasAudio: false,
+      } as MediaFile,
+    });
+
+    expect(screen.getByText('Effects')).toBeTruthy();
+    expect(screen.getByText('Copy Video Effects')).toBeTruthy();
+    expect(screen.getByText('Paste Video Effects')).toBeTruthy();
+    expect(screen.getByText('Copy Color')).toBeTruthy();
+    expect(screen.getByText('Paste Color')).toBeTruthy();
+    expect(screen.getByText(/Show Thumbnail/)).toBeTruthy();
+    expect(screen.queryByText('Copy Audio Effects')).toBeNull();
+    expect(screen.queryByText('Audio Display')).toBeNull();
+  });
+
+  it('shows audio-specific effects without color clipboard actions for audio clips', () => {
+    const audioClip = createClip({
+      id: 'clip-audio',
+      trackId: 'track-audio',
+      name: 'Clip.wav',
+      mediaFileId: 'media-audio',
+      source: {
+        type: 'audio',
+        audioElement: document.createElement('audio'),
+        naturalDuration: 10,
+        mediaFileId: 'media-audio',
+      },
+    });
+
+    renderMenu({
+      clips: [audioClip],
+      mediaFile: {
+        id: 'media-audio',
+        name: 'Clip.wav',
+        type: 'audio',
+        parentId: null,
+        createdAt: 1,
+        file: new File(['audio'], 'Clip.wav', { type: 'audio/wav' }),
+        url: 'blob:audio',
+        duration: 10,
+      } as MediaFile,
+    });
+
+    expect(screen.getByText('Effects')).toBeTruthy();
+    expect(screen.getByText('Copy Audio Effects')).toBeTruthy();
+    expect(screen.getByText('Paste Audio Effects')).toBeTruthy();
+    expect(screen.getByText('Audio Display')).toBeTruthy();
+    expect(screen.queryByText('Copy Video Effects')).toBeNull();
+    expect(screen.queryByText('Copy Color')).toBeNull();
+    expect(screen.queryByText('Paste Color')).toBeNull();
+    expect(screen.queryByText(/Show Thumbnail/)).toBeNull();
+  });
+
   it('bundles video and audio regeneration actions for clips with linked audio', () => {
     const videoClip = createClip({ id: 'clip-video', linkedClipId: 'clip-audio' });
     const audioClip = createClip({

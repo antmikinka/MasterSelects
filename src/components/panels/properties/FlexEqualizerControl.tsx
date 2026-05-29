@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { normalizeAudioEqParams } from '../../../engine/audio/eq/AudioEqLegacy';
 import {
@@ -54,6 +54,7 @@ import type {
   AudioEqBandType,
   AudioEqAnalyzerMode,
   AudioEqCharacterMode,
+  AudioEqGraphViewModel,
   AudioEqParamsV2,
   AudioEqPhaseMode,
   AudioEqPresetKind,
@@ -70,20 +71,43 @@ import {
 import { DraggableNumber, EffectKeyframeToggle, MultiKeyframeToggle } from './shared';
 import { createAudioEqBandNumericProperty, getAudioEqBandNumericKeyframeEntries } from './audioEqKeyframes';
 import { formatEqualizerFrequency } from './equalizerFormatting';
+import { useRuntimeAnalyzerStream, type RuntimeAnalyzerScope } from './useThrottledRuntimeAnalyzer';
 
 const GRAPH_MIN_FREQUENCY_HZ = 20;
 const GRAPH_MAX_FREQUENCY_HZ = 20000;
 const DEFAULT_GRAPH_WIDTH = 520;
 const DEFAULT_GRAPH_HEIGHT = 220;
-const COMPACT_GRAPH_HEIGHT = 156;
+const FULL_GRAPH_MIN_HEIGHT = 180;
+const FULL_GRAPH_MAX_HEIGHT = 340;
+const COMPACT_GRAPH_MIN_HEIGHT = 132;
+const COMPACT_GRAPH_MAX_HEIGHT = 220;
 const GAIN_STEP_DB = 0.1;
+const MAX_CANVAS_CACHE_ENTRIES = 12;
 
 type FlexEqGraphMode = 'edit' | 'sketch' | 'grab';
 type FlexEqPresetSource = 'factory' | 'user';
 type FlexEqPresetFilter = 'all' | 'favorites' | 'user';
+type FlexEqAdvancedPanel = 'none' | 'dynamics' | 'spectral';
 
 interface FlexEqBrowserPreset extends AudioEqPreset {
   source: FlexEqPresetSource;
+}
+
+interface FlexEqDrawState {
+  view: AudioEqGraphViewModel;
+  params: AudioEqParamsV2;
+  analyzer: AudioEqAnalyzerView | undefined;
+  hoveredBandId: string | undefined;
+  selectedBandIds: readonly string[];
+  soloBandIds: readonly string[];
+  graphMode: FlexEqGraphMode;
+  sketchPoints: readonly AudioEqCurvePoint[];
+  staticVersion: number;
+}
+
+interface FlexEqCanvasRenderCache {
+  overlayCanvas?: HTMLCanvasElement;
+  overlayKey?: string;
 }
 
 const BAND_TYPE_OPTIONS: Array<{ value: AudioEqBandType; label: string }> = [
@@ -133,6 +157,14 @@ function graphYToDb(y: number, height: number, rangeDb: number): number {
   return quantize(rangeDb - normalized * rangeDb * 2, GAIN_STEP_DB);
 }
 
+function getResponsiveGraphHeight(width: number, compact: boolean): number {
+  const safeWidth = Math.max(1, width || DEFAULT_GRAPH_WIDTH);
+  const idealAspectRatio = compact ? 2.6 : 2.35;
+  const minHeight = compact ? COMPACT_GRAPH_MIN_HEIGHT : FULL_GRAPH_MIN_HEIGHT;
+  const maxHeight = compact ? COMPACT_GRAPH_MAX_HEIGHT : FULL_GRAPH_MAX_HEIGHT;
+  return Math.round(clamp(safeWidth / idealAspectRatio, minHeight, maxHeight));
+}
+
 function formatSignedDb(value: number): string {
   const prefix = value > 0 ? '+' : '';
   return `${prefix}${value.toFixed(1)} dB`;
@@ -148,6 +180,48 @@ function hexToRgba(hex: string, alpha: number): string {
   const g = (bigint >> 8) & 255;
   const b = bigint & 255;
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+const graphXPositionCache = new Map<string, Float32Array>();
+const frequencyGridCache = new Map<string, HTMLCanvasElement>();
+
+function pruneCache<T>(cache: Map<string, T>): void {
+  while (cache.size > MAX_CANVAS_CACHE_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) return;
+    cache.delete(oldestKey);
+  }
+}
+
+function getLogSampleXPositions(sampleCount: number, width: number): Float32Array {
+  const count = Math.max(0, sampleCount);
+  if (count === 0) return new Float32Array();
+  const key = `${count}:${Math.round(width * 10) / 10}`;
+  const cached = graphXPositionCache.get(key);
+  if (cached) return cached;
+
+  const positions = new Float32Array(count);
+  const denominator = Math.max(1, count - 1);
+  for (let index = 0; index < count; index += 1) {
+    positions[index] = (index / denominator) * width;
+  }
+  graphXPositionCache.set(key, positions);
+  pruneCache(graphXPositionCache);
+  return positions;
+}
+
+function resampleResponseDb(responseDb: Float32Array, targetIndex: number, targetLength: number): number {
+  if (responseDb.length === 0 || targetLength <= 1) {
+    return 0;
+  }
+
+  const sourcePosition = (targetIndex / (targetLength - 1)) * (responseDb.length - 1);
+  const leftIndex = Math.floor(sourcePosition);
+  const rightIndex = Math.min(responseDb.length - 1, leftIndex + 1);
+  const fraction = sourcePosition - leftIndex;
+  const left = responseDb[leftIndex] ?? 0;
+  const right = responseDb[rightIndex] ?? left;
+  return left + (right - left) * fraction;
 }
 
 function bandNeedsGain(band: AudioEqBand): boolean {
@@ -227,6 +301,41 @@ function drawFrequencyGrid(
   ctx.restore();
 }
 
+function drawCachedFrequencyGrid(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  rangeDb: number,
+  dpr: number,
+): void {
+  if (typeof document === 'undefined') {
+    drawFrequencyGrid(ctx, width, height, rangeDb);
+    return;
+  }
+
+  const pixelWidth = Math.round(width * dpr);
+  const pixelHeight = Math.round(height * dpr);
+  const key = `${pixelWidth}x${pixelHeight}:${rangeDb}:${Math.round(dpr * 100)}`;
+  let layer = frequencyGridCache.get(key);
+
+  if (!layer) {
+    layer = document.createElement('canvas');
+    layer.width = pixelWidth;
+    layer.height = pixelHeight;
+    const layerContext = layer.getContext('2d');
+    if (!layerContext) {
+      drawFrequencyGrid(ctx, width, height, rangeDb);
+      return;
+    }
+    layerContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawFrequencyGrid(layerContext, width, height, rangeDb);
+    frequencyGridCache.set(key, layer);
+    pruneCache(frequencyGridCache);
+  }
+
+  ctx.drawImage(layer, 0, 0, width, height);
+}
+
 function drawSpectralDynamicsOverlays(
   ctx: CanvasRenderingContext2D,
   bands: readonly AudioEqBand[],
@@ -274,10 +383,15 @@ function drawAnalyzer(
   height: number,
   fillColor: string,
   strokeColor: string,
+  responseDb?: Float32Array,
 ): void {
   if (!valuesDb || valuesDb.length < 2) return;
   const minDb = -96;
   const maxDb = -18;
+  const xPositions = getLogSampleXPositions(valuesDb.length, width);
+  const valueAt = (index: number) => valuesDb[index] + (
+    responseDb ? resampleResponseDb(responseDb, index, valuesDb.length) : 0
+  );
   const yForDb = (value: number) => {
     const normalized = (clamp(value, minDb, maxDb) - minDb) / (maxDb - minDb);
     return height - normalized * height;
@@ -287,10 +401,7 @@ function drawAnalyzer(
   ctx.beginPath();
   ctx.moveTo(0, height);
   for (let index = 0; index < valuesDb.length; index += 1) {
-    const normalized = index / Math.max(1, valuesDb.length - 1);
-    const frequency = GRAPH_MIN_FREQUENCY_HZ *
-      Math.pow(GRAPH_MAX_FREQUENCY_HZ / GRAPH_MIN_FREQUENCY_HZ, normalized);
-    ctx.lineTo(frequencyToGraphX(frequency, width), yForDb(valuesDb[index]));
+    ctx.lineTo(xPositions[index], yForDb(valueAt(index)));
   }
   ctx.lineTo(width, height);
   ctx.closePath();
@@ -302,11 +413,8 @@ function drawAnalyzer(
 
   ctx.beginPath();
   for (let index = 0; index < valuesDb.length; index += 1) {
-    const normalized = index / Math.max(1, valuesDb.length - 1);
-    const frequency = GRAPH_MIN_FREQUENCY_HZ *
-      Math.pow(GRAPH_MAX_FREQUENCY_HZ / GRAPH_MIN_FREQUENCY_HZ, normalized);
-    const x = frequencyToGraphX(frequency, width);
-    const y = yForDb(valuesDb[index]);
+    const x = xPositions[index];
+    const y = yForDb(valueAt(index));
     if (index === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   }
@@ -387,16 +495,18 @@ function drawResponseArea(
   alpha: number,
 ): void {
   if (frequencies.length === 0 || valuesDb.length === 0) return;
+  const sampleCount = Math.min(frequencies.length, valuesDb.length);
+  const xPositions = getLogSampleXPositions(sampleCount, width);
   const zeroY = dbToGraphY(0, height, rangeDb);
   ctx.beginPath();
-  ctx.moveTo(frequencyToGraphX(frequencies[0], width), zeroY);
-  for (let index = 0; index < frequencies.length; index += 1) {
+  ctx.moveTo(xPositions[0], zeroY);
+  for (let index = 0; index < sampleCount; index += 1) {
     ctx.lineTo(
-      frequencyToGraphX(frequencies[index], width),
+      xPositions[index],
       dbToGraphY(valuesDb[index] ?? 0, height, rangeDb),
     );
   }
-  ctx.lineTo(frequencyToGraphX(frequencies[frequencies.length - 1], width), zeroY);
+  ctx.lineTo(xPositions[sampleCount - 1], zeroY);
   ctx.closePath();
   ctx.fillStyle = hexToRgba(color, alpha);
   ctx.fill();
@@ -411,12 +521,14 @@ function drawResponseCurve(
   rangeDb: number,
 ): void {
   if (frequencies.length === 0 || valuesDb.length === 0) return;
+  const sampleCount = Math.min(frequencies.length, valuesDb.length);
+  const xPositions = getLogSampleXPositions(sampleCount, width);
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.beginPath();
-  for (let index = 0; index < frequencies.length; index += 1) {
-    const x = frequencyToGraphX(frequencies[index], width);
+  for (let index = 0; index < sampleCount; index += 1) {
+    const x = xPositions[index];
     const y = dbToGraphY(valuesDb[index] ?? 0, height, rangeDb);
     if (index === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
@@ -430,48 +542,18 @@ function drawResponseCurve(
   ctx.restore();
 }
 
-function drawEqualizerCanvas(
-  canvas: HTMLCanvasElement,
+function drawEqualizerStaticOverlay(
+  ctx: CanvasRenderingContext2D,
+  view: AudioEqGraphViewModel,
   params: AudioEqParamsV2,
-  analyzer: AudioEqAnalyzerView | undefined,
   hoveredBandId: string | undefined,
   selectedBandIds: readonly string[],
   soloBandIds: readonly string[],
   graphMode: FlexEqGraphMode,
   sketchPoints: readonly AudioEqCurvePoint[],
-  grabPeaks: readonly AudioEqSpectrumGrabPeak[],
 ): void {
-  const rect = canvas.getBoundingClientRect();
-  const width = Math.max(1, Math.round(rect.width || DEFAULT_GRAPH_WIDTH));
-  const height = Math.max(1, Math.round(rect.height || DEFAULT_GRAPH_HEIGHT));
-  const dpr = Math.max(1, window.devicePixelRatio || 1);
-  canvas.width = Math.round(width * dpr);
-  canvas.height = Math.round(height * dpr);
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  const view = createAudioEqGraphViewModel(params, {
-    width,
-    height,
-    devicePixelRatio: dpr,
-    analyzer,
-    hoveredBandId,
-  });
-
-  drawFrequencyGrid(ctx, width, height, view.rangeDb);
-  const analyzerMode = params.display.analyzerMode === 'off' ? 'post' : params.display.analyzerMode;
-  if (analyzerMode === 'pre' || analyzerMode === 'pre-post') {
-    drawAnalyzer(ctx, view.analyzer?.preDb, width, height, 'rgba(156, 161, 178, 0.22)', 'rgba(210, 218, 232, 0.34)');
-  }
-  if (analyzerMode === 'post' || analyzerMode === 'pre-post') {
-    drawAnalyzer(ctx, view.analyzer?.postDb, width, height, 'rgba(241, 211, 79, 0.13)', 'rgba(241, 211, 79, 0.42)');
-  }
+  const { width, height } = view;
   drawSpectralDynamicsOverlays(ctx, params.audible.bands, width, height, selectedBandIds);
-  if (graphMode === 'grab') {
-    drawSpectrumGrabPeaks(ctx, grabPeaks, width, height);
-  }
 
   const soloSet = new Set(soloBandIds);
   const hasSolo = soloSet.size > 0;
@@ -512,8 +594,111 @@ function drawEqualizerCanvas(
   }
 }
 
-function useElementSize(ref: { current: HTMLElement | null }, fallbackHeight: number) {
-  const [size, setSize] = useState({ width: DEFAULT_GRAPH_WIDTH, height: fallbackHeight });
+function drawCachedEqualizerStaticOverlay(
+  ctx: CanvasRenderingContext2D,
+  cache: FlexEqCanvasRenderCache,
+  view: AudioEqGraphViewModel,
+  params: AudioEqParamsV2,
+  hoveredBandId: string | undefined,
+  selectedBandIds: readonly string[],
+  soloBandIds: readonly string[],
+  graphMode: FlexEqGraphMode,
+  sketchPoints: readonly AudioEqCurvePoint[],
+  dpr: number,
+  staticVersion: number,
+): void {
+  if (typeof document === 'undefined') {
+    drawEqualizerStaticOverlay(ctx, view, params, hoveredBandId, selectedBandIds, soloBandIds, graphMode, sketchPoints);
+    return;
+  }
+
+  const pixelWidth = Math.round(view.width * dpr);
+  const pixelHeight = Math.round(view.height * dpr);
+  const overlayKey = `${pixelWidth}x${pixelHeight}:${Math.round(dpr * 100)}:${staticVersion}`;
+  let overlay = cache.overlayKey === overlayKey ? cache.overlayCanvas : undefined;
+
+  if (!overlay) {
+    overlay = document.createElement('canvas');
+    overlay.width = pixelWidth;
+    overlay.height = pixelHeight;
+    const overlayContext = overlay.getContext('2d');
+    if (!overlayContext) {
+      drawEqualizerStaticOverlay(ctx, view, params, hoveredBandId, selectedBandIds, soloBandIds, graphMode, sketchPoints);
+      return;
+    }
+    overlayContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawEqualizerStaticOverlay(overlayContext, view, params, hoveredBandId, selectedBandIds, soloBandIds, graphMode, sketchPoints);
+    cache.overlayCanvas = overlay;
+    cache.overlayKey = overlayKey;
+  }
+
+  ctx.drawImage(overlay, 0, 0, view.width, view.height);
+}
+
+function drawEqualizerCanvas(
+  canvas: HTMLCanvasElement,
+  cache: FlexEqCanvasRenderCache,
+  view: AudioEqGraphViewModel,
+  params: AudioEqParamsV2,
+  analyzer: AudioEqAnalyzerView | undefined,
+  hoveredBandId: string | undefined,
+  selectedBandIds: readonly string[],
+  soloBandIds: readonly string[],
+  graphMode: FlexEqGraphMode,
+  sketchPoints: readonly AudioEqCurvePoint[],
+  staticVersion: number,
+): void {
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width || DEFAULT_GRAPH_WIDTH));
+  const height = Math.max(1, Math.round(rect.height || DEFAULT_GRAPH_HEIGHT));
+  const dpr = Math.max(1, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
+  const pixelWidth = Math.round(width * dpr);
+  const pixelHeight = Math.round(height * dpr);
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  drawCachedFrequencyGrid(ctx, width, height, view.rangeDb, dpr);
+  const analyzerMode = params.display.analyzerMode === 'off' ? 'post' : params.display.analyzerMode;
+  const sourceAnalyzerDb = analyzer?.preDb ?? analyzer?.postDb;
+  if (analyzerMode === 'pre' || analyzerMode === 'pre-post') {
+    drawAnalyzer(ctx, sourceAnalyzerDb, width, height, 'rgba(156, 161, 178, 0.22)', 'rgba(210, 218, 232, 0.34)');
+  }
+  if (analyzerMode === 'post' || analyzerMode === 'pre-post') {
+    drawAnalyzer(ctx, sourceAnalyzerDb, width, height, 'rgba(241, 211, 79, 0.13)', 'rgba(241, 211, 79, 0.42)', view.summedResponseDb);
+  }
+  if (graphMode === 'grab') {
+    const grabPeaks = detectAudioEqSpectrumGrabPeaks(sourceAnalyzerDb, { maxPeaks: 8 });
+    drawSpectrumGrabPeaks(ctx, grabPeaks, width, height);
+  }
+
+  drawCachedEqualizerStaticOverlay(
+    ctx,
+    cache,
+    view,
+    params,
+    hoveredBandId,
+    selectedBandIds,
+    soloBandIds,
+    graphMode,
+    sketchPoints,
+    dpr,
+    staticVersion,
+  );
+}
+
+function useEqualizerGraphSize(ref: { current: HTMLElement | null }, compact: boolean) {
+  const [size, setSize] = useState({
+    width: DEFAULT_GRAPH_WIDTH,
+    height: getResponsiveGraphHeight(DEFAULT_GRAPH_WIDTH, compact),
+  });
 
   useLayoutEffect(() => {
     const element = ref.current;
@@ -521,9 +706,11 @@ function useElementSize(ref: { current: HTMLElement | null }, fallbackHeight: nu
 
     const update = () => {
       const rect = element.getBoundingClientRect();
+      const width = Math.max(1, Math.round(rect.width || DEFAULT_GRAPH_WIDTH));
+      const height = getResponsiveGraphHeight(width, compact);
       setSize({
-        width: Math.max(1, Math.round(rect.width || DEFAULT_GRAPH_WIDTH)),
-        height: Math.max(1, Math.round(rect.height || fallbackHeight)),
+        width,
+        height,
       });
     };
 
@@ -536,7 +723,7 @@ function useElementSize(ref: { current: HTMLElement | null }, fallbackHeight: nu
     const observer = new ResizeObserver(update);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [fallbackHeight, ref]);
+  }, [compact, ref]);
 
   return size;
 }
@@ -547,6 +734,8 @@ export interface FlexEqualizerControlProps {
   disabled?: boolean;
   ariaLabel?: string;
   analyzer?: AudioEqAnalyzerView;
+  runtimeAnalyzerScope?: RuntimeAnalyzerScope;
+  runtimeAnalyzerTrackId?: string;
   keyframeClipId?: string;
   effectId?: string;
   onUpdateParamPath?: (path: string, value: AudioEffectParamValue) => void;
@@ -559,6 +748,8 @@ export function FlexEqualizerControl({
   disabled = false,
   ariaLabel = 'Equalizer',
   analyzer,
+  runtimeAnalyzerScope,
+  runtimeAnalyzerTrackId,
   keyframeClipId,
   effectId,
   onUpdateParamPath,
@@ -569,8 +760,12 @@ export function FlexEqualizerControl({
   const activePointerIdRef = useRef<number | null>(null);
   const activeBandIdRef = useRef<string | null>(null);
   const activeSketchPointerIdRef = useRef<number | null>(null);
-  const graphHeight = compact ? COMPACT_GRAPH_HEIGHT : DEFAULT_GRAPH_HEIGHT;
-  const size = useElementSize(stageRef, graphHeight);
+  const drawStateRef = useRef<FlexEqDrawState | null>(null);
+  const drawFrameRef = useRef<number | null>(null);
+  const analyzerRef = useRef<AudioEqAnalyzerView | undefined>(analyzer);
+  const renderCacheRef = useRef<FlexEqCanvasRenderCache>({});
+  const staticVersionRef = useRef(0);
+  const size = useEqualizerGraphSize(stageRef, compact);
   const normalized = useMemo(() => normalizeAudioEqParams(params), [params]);
   const selectedBandIds = useMemo(
     () => normalized.display.selectedBandIds ?? [],
@@ -593,27 +788,108 @@ export function FlexEqualizerControl({
   const [presetQuery, setPresetQuery] = useState('');
   const [presetTagFilter, setPresetTagFilter] = useState('');
   const [presetFilter, setPresetFilter] = useState<FlexEqPresetFilter>('all');
+  const [showPresetBrowser, setShowPresetBrowser] = useState(false);
+  const [advancedPanel, setAdvancedPanel] = useState<FlexEqAdvancedPanel>('none');
 
   const view = useMemo(() => createAudioEqGraphViewModel(normalized, {
     width: size.width,
     height: size.height,
-    analyzer,
     hoveredBandId,
-  }), [analyzer, hoveredBandId, normalized, size.height, size.width]);
-  const grabPeaks = useMemo(
-    () => detectAudioEqSpectrumGrabPeaks(analyzer?.postDb ?? analyzer?.preDb, { maxPeaks: 8 }),
-    [analyzer?.postDb, analyzer?.preDb],
-  );
+  }), [hoveredBandId, normalized, size.height, size.width]);
   const selectedBandAllKeyframeEntries = useMemo(
     () => selectedBand && effectId ? getAudioEqBandNumericKeyframeEntries(effectId, selectedBand) : [],
     [effectId, selectedBand],
   );
 
+  const scheduleCanvasDraw = useCallback(() => {
+    if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+      const canvas = canvasRef.current;
+      const drawState = drawStateRef.current;
+      if (canvas && drawState) {
+        drawState.analyzer = analyzerRef.current;
+        drawEqualizerCanvas(
+          canvas,
+          renderCacheRef.current,
+          drawState.view,
+          drawState.params,
+          drawState.analyzer,
+          drawState.hoveredBandId,
+          drawState.selectedBandIds,
+          drawState.soloBandIds,
+          drawState.graphMode,
+          drawState.sketchPoints,
+          drawState.staticVersion,
+        );
+      }
+      return;
+    }
+
+    if (drawFrameRef.current !== null) return;
+    drawFrameRef.current = window.requestAnimationFrame(() => {
+      drawFrameRef.current = null;
+      const canvas = canvasRef.current;
+      const drawState = drawStateRef.current;
+      if (!canvas || !drawState) return;
+      drawState.analyzer = analyzerRef.current;
+      drawEqualizerCanvas(
+        canvas,
+        renderCacheRef.current,
+        drawState.view,
+        drawState.params,
+        drawState.analyzer,
+        drawState.hoveredBandId,
+        drawState.selectedBandIds,
+        drawState.soloBandIds,
+        drawState.graphMode,
+        drawState.sketchPoints,
+        drawState.staticVersion,
+      );
+    });
+  }, []);
+
+  const usesRuntimeAnalyzer = runtimeAnalyzerScope === 'master' ||
+    (runtimeAnalyzerScope === 'track' && Boolean(runtimeAnalyzerTrackId));
+  const runtimeHasAnalyzer = useRuntimeAnalyzerStream(
+    usesRuntimeAnalyzer ? runtimeAnalyzerScope : undefined,
+    runtimeAnalyzerTrackId,
+    analyzerRef,
+    scheduleCanvasDraw,
+  );
+  const hasAnalyzer = usesRuntimeAnalyzer ? runtimeHasAnalyzer : Boolean(analyzer);
+
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    drawEqualizerCanvas(canvas, normalized, analyzer, hoveredBandId, selectedBandIds, soloBandIds, graphMode, sketchPoints, grabPeaks);
-  }, [analyzer, grabPeaks, graphMode, hoveredBandId, normalized, selectedBandIds, size.height, size.width, sketchPoints, soloBandIds]);
+    if (usesRuntimeAnalyzer) return;
+    analyzerRef.current = analyzer;
+    scheduleCanvasDraw();
+  }, [analyzer, scheduleCanvasDraw, usesRuntimeAnalyzer]);
+
+  useEffect(() => {
+    staticVersionRef.current += 1;
+    drawStateRef.current = {
+      view,
+      params: normalized,
+      analyzer: analyzerRef.current,
+      hoveredBandId,
+      selectedBandIds,
+      soloBandIds,
+      graphMode,
+      sketchPoints,
+      staticVersion: staticVersionRef.current,
+    };
+    scheduleCanvasDraw();
+  }, [graphMode, hoveredBandId, normalized, scheduleCanvasDraw, selectedBandIds, sketchPoints, soloBandIds, view]);
+
+  useEffect(() => () => {
+    drawStateRef.current = null;
+    if (
+      drawFrameRef.current !== null &&
+      typeof window !== 'undefined' &&
+      typeof window.cancelAnimationFrame === 'function'
+    ) {
+      window.cancelAnimationFrame(drawFrameRef.current);
+      drawFrameRef.current = null;
+    }
+  }, []);
 
   const browserPresets = useMemo<FlexEqBrowserPreset[]>(() => {
     const favorites = new Set(favoritePresetIds);
@@ -725,7 +1001,7 @@ export function FlexEqualizerControl({
     return copy;
   };
 
-  const currentSpectrumSnapshot = () => copySpectrumSnapshot(analyzer?.postDb ?? analyzer?.preDb);
+  const currentSpectrumSnapshot = () => copySpectrumSnapshot(analyzerRef.current?.postDb ?? analyzerRef.current?.preDb);
 
   const captureMatchSource = () => {
     if (disabled) return;
@@ -750,6 +1026,10 @@ export function FlexEqualizerControl({
   const nearestGrabPeak = (x: number): AudioEqSpectrumGrabPeak | null => {
     let best: AudioEqSpectrumGrabPeak | null = null;
     let bestDistance = Number.POSITIVE_INFINITY;
+    const grabPeaks = detectAudioEqSpectrumGrabPeaks(
+      analyzerRef.current?.postDb ?? analyzerRef.current?.preDb,
+      { maxPeaks: 8 },
+    );
     for (const peak of grabPeaks) {
       const distance = Math.abs(frequencyToGraphX(peak.frequencyHz, size.width) - x);
       if (distance < bestDistance) {
@@ -1012,68 +1292,79 @@ export function FlexEqualizerControl({
   return (
     <div className={`flex-eq ${compact ? 'compact' : ''}`}>
       <div className="flex-eq-toolbar">
-        <div className="flex-eq-segments" role="group" aria-label="EQ preset">
-          {PRESET_OPTIONS.map(option => (
+        <div className="flex-eq-primary-tools">
+          <div className="flex-eq-segments" role="group" aria-label="EQ preset">
+            {PRESET_OPTIONS.map(option => (
+              <button
+                key={option.value}
+                type="button"
+                className={normalized.audible.presetKind === option.value ? 'active' : ''}
+                disabled={disabled}
+                onClick={() => updatePresetKind(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <select
+            value={normalized.audible.phaseMode}
+            disabled={disabled}
+            aria-label="EQ phase mode"
+            onChange={(event) => updatePath('eq.audible.phaseMode', event.currentTarget.value as AudioEqPhaseMode)}
+          >
+            <option value="zero-latency">Zero</option>
+            <option value="natural">Natural</option>
+            <option value="linear">Linear</option>
+          </select>
+          <select
+            value={normalized.audible.characterMode}
+            disabled={disabled}
+            aria-label="EQ character mode"
+            onChange={(event) => updatePath('eq.audible.characterMode', event.currentTarget.value as AudioEqCharacterMode)}
+          >
+            <option value="clean">Clean</option>
+            <option value="subtle">Subtle</option>
+            <option value="warm">Warm</option>
+          </select>
+        </div>
+
+        <div className="flex-eq-secondary-tools">
+          <div className="flex-eq-ab-controls" role="group" aria-label="EQ A/B">
             <button
-              key={option.value}
               type="button"
-              className={normalized.audible.presetKind === option.value ? 'active' : ''}
+              className={abState.activeSlot === 'A' ? 'active' : ''}
               disabled={disabled}
-              onClick={() => updatePresetKind(option.value)}
+              onClick={() => switchABSlot('A')}
             >
-              {option.label}
+              A
             </button>
-          ))}
-        </div>
-        <select
-          value={normalized.audible.phaseMode}
-          disabled={disabled}
-          aria-label="EQ phase mode"
-          onChange={(event) => updatePath('eq.audible.phaseMode', event.currentTarget.value as AudioEqPhaseMode)}
-        >
-          <option value="zero-latency">Zero</option>
-          <option value="natural">Natural</option>
-          <option value="linear">Linear</option>
-        </select>
-        <select
-          value={normalized.audible.characterMode}
-          disabled={disabled}
-          aria-label="EQ character mode"
-          onChange={(event) => updatePath('eq.audible.characterMode', event.currentTarget.value as AudioEqCharacterMode)}
-        >
-          <option value="clean">Clean</option>
-          <option value="subtle">Subtle</option>
-          <option value="warm">Warm</option>
-        </select>
-      </div>
-
-      <div className="flex-eq-workflow-row">
-        <div className="flex-eq-ab-controls" role="group" aria-label="EQ A/B">
+            <button
+              type="button"
+              className={abState.activeSlot === 'B' ? 'active' : ''}
+              disabled={disabled}
+              onClick={() => switchABSlot('B')}
+            >
+              B
+            </button>
+            <button type="button" disabled={disabled} onClick={syncActiveABSlot}>Store</button>
+          </div>
           <button
             type="button"
-            className={abState.activeSlot === 'A' ? 'active' : ''}
+            className={`flex-eq-tool-button ${showPresetBrowser ? 'active' : ''}`}
             disabled={disabled}
-            onClick={() => switchABSlot('A')}
+            onClick={() => setShowPresetBrowser(current => !current)}
           >
-            A
+            Presets
           </button>
-          <button
-            type="button"
-            className={abState.activeSlot === 'B' ? 'active' : ''}
-            disabled={disabled}
-            onClick={() => switchABSlot('B')}
-          >
-            B
-          </button>
-          <button type="button" disabled={disabled} onClick={syncActiveABSlot}>Store</button>
-        </div>
-        <div className="flex-eq-clipboard-controls" role="group" aria-label="EQ clipboard">
-          <button type="button" disabled={disabled} onClick={() => void handleCopyCurve()}>Copy</button>
-          <button type="button" disabled={disabled || !selectedBand} onClick={() => void handleCopyBands()}>Band</button>
-          <button type="button" disabled={disabled} onClick={() => void handlePaste()}>Paste</button>
+          <div className="flex-eq-clipboard-controls" role="group" aria-label="EQ clipboard">
+            <button type="button" disabled={disabled} onClick={() => void handleCopyCurve()}>Copy</button>
+            <button type="button" disabled={disabled || !selectedBand} onClick={() => void handleCopyBands()}>Band</button>
+            <button type="button" disabled={disabled} onClick={() => void handlePaste()}>Paste</button>
+          </div>
         </div>
       </div>
 
+      {showPresetBrowser && (
       <div className="flex-eq-preset-browser">
         <div className="flex-eq-preset-tools">
           <input
@@ -1142,6 +1433,7 @@ export function FlexEqualizerControl({
           ))}
         </div>
       </div>
+      )}
 
       <div className="flex-eq-generator-row">
         <div className="flex-eq-mode-controls" role="group" aria-label="EQ graph mode">
@@ -1170,17 +1462,17 @@ export function FlexEqualizerControl({
           <button
             type="button"
             className={graphMode === 'grab' ? 'active' : ''}
-            disabled={disabled || grabPeaks.length === 0}
+            disabled={disabled || !hasAnalyzer}
             onClick={() => setGraphMode(graphMode === 'grab' ? 'edit' : 'grab')}
           >
             Grab
           </button>
         </div>
         <div className="flex-eq-match-controls" role="group" aria-label="EQ match">
-          <button type="button" disabled={disabled || !analyzer} className={matchSource ? 'active' : ''} onClick={captureMatchSource}>
+          <button type="button" disabled={disabled || !hasAnalyzer} className={matchSource ? 'active' : ''} onClick={captureMatchSource}>
             Src
           </button>
-          <button type="button" disabled={disabled || !analyzer} className={matchTarget ? 'active' : ''} onClick={captureMatchTarget}>
+          <button type="button" disabled={disabled || !hasAnalyzer} className={matchTarget ? 'active' : ''} onClick={captureMatchTarget}>
             Ref
           </button>
           <button type="button" disabled={disabled || !matchSource || !matchTarget} onClick={applyCapturedMatch}>
@@ -1196,7 +1488,7 @@ export function FlexEqualizerControl({
               <button
                 key={option.value}
                 type="button"
-                disabled={disabled || !analyzer}
+                disabled={disabled || !hasAnalyzer}
                 className={currentAnalyzerMode === option.value ? 'active' : ''}
                 onClick={() => updatePath('eq.display.analyzerMode', option.value)}
               >
@@ -1210,7 +1502,10 @@ export function FlexEqualizerControl({
       <div
         ref={stageRef}
         className="flex-eq-stage"
-        style={{ minHeight: graphHeight }}
+        style={{
+          width: '100%',
+          height: size.height,
+        }}
       >
         <canvas
           ref={canvasRef}
@@ -1322,6 +1617,22 @@ export function FlexEqualizerControl({
           </button>
           <button
             type="button"
+            className={advancedPanel === 'dynamics' || selectedBand.dynamic?.enabled ? 'active' : ''}
+            disabled={disabled}
+            onClick={() => setAdvancedPanel(current => current === 'dynamics' ? 'none' : 'dynamics')}
+          >
+            Dyn
+          </button>
+          <button
+            type="button"
+            className={advancedPanel === 'spectral' || selectedBand.spectralDynamics?.enabled ? 'active' : ''}
+            disabled={disabled || selectedBand.type === 'all-pass'}
+            onClick={() => setAdvancedPanel(current => current === 'spectral' ? 'none' : 'spectral')}
+          >
+            Spec
+          </button>
+          <button
+            type="button"
             disabled={disabled || normalized.audible.bands.length <= 1}
             onClick={() => commitParams(removeAudioEqBand(normalized, selectedBand.id))}
           >
@@ -1329,6 +1640,7 @@ export function FlexEqualizerControl({
           </button>
         </div>
 
+        {advancedPanel === 'dynamics' && (
         <div className="flex-eq-dynamics-row">
           <button
             type="button"
@@ -1403,7 +1715,9 @@ export function FlexEqualizerControl({
             sensitivity={2}
           />
         </div>
+        )}
 
+        {advancedPanel === 'spectral' && (
         <div className="flex-eq-spectral-row">
           <button
             type="button"
@@ -1488,6 +1802,7 @@ export function FlexEqualizerControl({
             <option value="mastering">Mast</option>
           </select>
         </div>
+        )}
         </>
       )}
 

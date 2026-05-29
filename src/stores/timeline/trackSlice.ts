@@ -3,9 +3,9 @@
 import type {
   AudioEffectInstance,
   AudioExportPreflightState,
-  AudioMeterSnapshot,
   AudioSendState,
   MasterAudioState,
+  RuntimeAudioMeterState,
   TimelineTrack,
   TrackAudioState,
 } from '../../types';
@@ -13,10 +13,7 @@ import type { TrackActions, SliceCreator } from './types';
 import { MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT } from './constants';
 import { Logger } from '../../services/logger';
 import { generateClipId, generateEffectId } from './helpers/idGenerator';
-import {
-  aggregateAudioMeterSnapshots,
-  createSilentAudioMeterSnapshot,
-} from '../../services/audio/audioMetering';
+import { runtimeAudioMeterBus } from '../../services/audio/runtimeAudioMeterBus';
 import {
   getAudioEffect,
   getAudioEffectDefaultParams,
@@ -165,54 +162,72 @@ function reorderEffectStack(
   return nextStack;
 }
 
-const RUNTIME_AUDIO_METER_MAX_AGE_MS = 450;
 const AUDIO_EXPORT_PREFLIGHT_HISTORY_LIMIT = 8;
+const RUNTIME_AUDIO_METER_STORE_MIRROR_INTERVAL_MS = 250;
 
-function updateRuntimeMeterState(
-  currentTrackMeters: Record<string, AudioMeterSnapshot>,
-  patch: Record<string, AudioMeterSnapshot | undefined>,
-  now: number,
-  maxAgeMs = RUNTIME_AUDIO_METER_MAX_AGE_MS,
-  currentMaster?: AudioMeterSnapshot,
-  masterPatch?: AudioMeterSnapshot,
-) {
-  const trackMeters: Record<string, AudioMeterSnapshot> = {};
+let runtimeAudioMeterMirrorTimer: ReturnType<typeof setTimeout> | null = null;
+let runtimeAudioMeterMirrorFrame: number | null = null;
+let runtimeAudioMeterMirrorLastFlush = 0;
 
-  for (const [trackId, snapshot] of Object.entries(currentTrackMeters)) {
-    if (now - snapshot.updatedAt > maxAgeMs) continue;
-    trackMeters[trackId] = snapshot;
+function runtimeNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+function shouldFlushRuntimeAudioMeterMirrorImmediately(): boolean {
+  return import.meta.env?.MODE === 'test';
+}
+
+function flushRuntimeAudioMeterMirror(
+  getRuntimeMeters: () => RuntimeAudioMeterState,
+  setRuntimeMeters: (next: RuntimeAudioMeterState) => void,
+): void {
+  runtimeAudioMeterMirrorLastFlush = runtimeNow();
+  const next = runtimeAudioMeterBus.getState();
+  if (getRuntimeMeters() !== next) {
+    setRuntimeMeters(next);
   }
+}
 
-  for (const [trackId, snapshot] of Object.entries(patch)) {
-    if (!snapshot) {
-      delete trackMeters[trackId];
-      continue;
+function cancelRuntimeAudioMeterMirrorFlush(): void {
+  if (runtimeAudioMeterMirrorTimer !== null) {
+    clearTimeout(runtimeAudioMeterMirrorTimer);
+    runtimeAudioMeterMirrorTimer = null;
+  }
+  if (
+    runtimeAudioMeterMirrorFrame !== null &&
+    typeof window !== 'undefined' &&
+    typeof window.cancelAnimationFrame === 'function'
+  ) {
+    window.cancelAnimationFrame(runtimeAudioMeterMirrorFrame);
+    runtimeAudioMeterMirrorFrame = null;
+  }
+}
+
+function scheduleRuntimeAudioMeterMirrorFlush(
+  getRuntimeMeters: () => RuntimeAudioMeterState,
+  setRuntimeMeters: (next: RuntimeAudioMeterState) => void,
+): void {
+  if (shouldFlushRuntimeAudioMeterMirrorImmediately()) {
+    flushRuntimeAudioMeterMirror(getRuntimeMeters, setRuntimeMeters);
+    return;
+  }
+  if (runtimeAudioMeterMirrorTimer !== null || runtimeAudioMeterMirrorFrame !== null) return;
+
+  const elapsed = runtimeNow() - runtimeAudioMeterMirrorLastFlush;
+  const delayMs = Math.max(0, RUNTIME_AUDIO_METER_STORE_MIRROR_INTERVAL_MS - elapsed);
+  runtimeAudioMeterMirrorTimer = setTimeout(() => {
+    runtimeAudioMeterMirrorTimer = null;
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      runtimeAudioMeterMirrorFrame = window.requestAnimationFrame(() => {
+        runtimeAudioMeterMirrorFrame = null;
+        flushRuntimeAudioMeterMirror(getRuntimeMeters, setRuntimeMeters);
+      });
+      return;
     }
-    trackMeters[trackId] = snapshot;
-  }
-
-  return {
-    trackMeters,
-    master: masterPatch
-      ?? (currentMaster && now - currentMaster.updatedAt <= maxAgeMs
-        ? currentMaster
-        : aggregateAudioMeterSnapshots(Object.values(trackMeters), now)),
-  };
-}
-
-function isSilentRuntimeMeter(snapshot: AudioMeterSnapshot | undefined): boolean {
-  return !snapshot || (snapshot.peakLinear === 0 && snapshot.rmsLinear === 0);
-}
-
-function areRuntimeMeterStatesEqual(
-  current: { trackMeters: Record<string, AudioMeterSnapshot>; master?: AudioMeterSnapshot },
-  next: { trackMeters: Record<string, AudioMeterSnapshot>; master?: AudioMeterSnapshot },
-): boolean {
-  if (!Object.is(current.master, next.master)) return false;
-  const currentKeys = Object.keys(current.trackMeters);
-  const nextKeys = Object.keys(next.trackMeters);
-  if (currentKeys.length !== nextKeys.length) return false;
-  return currentKeys.every((trackId) => Object.is(current.trackMeters[trackId], next.trackMeters[trackId]));
+    flushRuntimeAudioMeterMirror(getRuntimeMeters, setRuntimeMeters);
+  }, delayMs);
 }
 
 function withAudioExportPreflightMeasurementHistory(
@@ -294,15 +309,13 @@ export const createTrackSlice: SliceCreator<TrackActions> = (set, get) => ({
     if (track && nextTargetTrackIdByType[track.type] === id) {
       delete nextTargetTrackIdByType[track.type];
     }
-    const runtimeAudioMeters = updateRuntimeMeterState(
-      get().runtimeAudioMeters.trackMeters,
-      { [id]: undefined },
-      performance.now(),
-    );
+    // Runtime meters live on the dedicated bus; drop this track's snapshot there
+    // and mirror the resulting bus state back into the store.
+    runtimeAudioMeterBus.clearTrack(id);
     set({
       tracks: nextTracks,
       clips: clips.filter(c => c.trackId !== id),
-      runtimeAudioMeters,
+      runtimeAudioMeters: runtimeAudioMeterBus.getState(),
       targetTrackIdByType: nextTargetTrackIdByType,
     });
   },
@@ -666,55 +679,41 @@ export const createTrackSlice: SliceCreator<TrackActions> = (set, get) => ({
   },
 
   updateRuntimeAudioMeter: (trackId, snapshot, masterSnapshot) => {
-    const { runtimeAudioMeters } = get();
-    const currentTrackSnapshot = runtimeAudioMeters.trackMeters[trackId];
-    if (
-      isSilentRuntimeMeter(snapshot) &&
-      isSilentRuntimeMeter(currentTrackSnapshot) &&
-      isSilentRuntimeMeter(masterSnapshot) &&
-      isSilentRuntimeMeter(runtimeAudioMeters.master)
-    ) {
-      return;
-    }
-
-    const next = updateRuntimeMeterState(
-      runtimeAudioMeters.trackMeters,
-      { [trackId]: snapshot },
-      snapshot.updatedAt,
-      RUNTIME_AUDIO_METER_MAX_AGE_MS,
-      undefined,
-      masterSnapshot,
+    // The runtime meter bus is the source of truth (silent suppression, master
+    // aggregation and stale handling all live there). The store keeps only a
+    // throttled diagnostic mirror so high-frequency meters do not re-render the
+    // timeline while playback or panel resizing is active.
+    runtimeAudioMeterBus.publishTrack(trackId, snapshot, masterSnapshot);
+    scheduleRuntimeAudioMeterMirrorFlush(
+      () => get().runtimeAudioMeters,
+      (runtimeAudioMeters) => set({ runtimeAudioMeters }),
     );
-    if (areRuntimeMeterStatesEqual(runtimeAudioMeters, next)) return;
-    set({ runtimeAudioMeters: next });
   },
 
-  clearStaleRuntimeAudioMeters: (maxAgeMs = RUNTIME_AUDIO_METER_MAX_AGE_MS, now = performance.now()) => {
-    const { runtimeAudioMeters } = get();
-    const next = updateRuntimeMeterState(
-      runtimeAudioMeters.trackMeters,
-      {},
-      now,
-      maxAgeMs,
-      runtimeAudioMeters.master,
-    );
-    const hadTrackMeters = Object.keys(runtimeAudioMeters.trackMeters).length > 0;
-    const hasTrackMeters = Object.keys(next.trackMeters).length > 0;
-
-    if (!hadTrackMeters && !hasTrackMeters) {
-      if (!runtimeAudioMeters.master || runtimeAudioMeters.master.peakLinear === 0) return;
-      set({ runtimeAudioMeters: { trackMeters: {}, master: createSilentAudioMeterSnapshot(now) } });
+  clearStaleRuntimeAudioMeters: (maxAgeMs, now) => {
+    runtimeAudioMeterBus.clearStale(maxAgeMs, now);
+    if (maxAgeMs !== undefined && maxAgeMs <= 0) {
+      cancelRuntimeAudioMeterMirrorFlush();
+      flushRuntimeAudioMeterMirror(
+        () => get().runtimeAudioMeters,
+        (runtimeAudioMeters) => set({ runtimeAudioMeters }),
+      );
       return;
     }
-
-    if (areRuntimeMeterStatesEqual(runtimeAudioMeters, next)) return;
-    set({ runtimeAudioMeters: next });
+    scheduleRuntimeAudioMeterMirrorFlush(
+      () => get().runtimeAudioMeters,
+      (runtimeAudioMeters) => set({ runtimeAudioMeters }),
+    );
   },
 
   setTrackHeight: (id, height) => {
     const { tracks } = get();
+    const nextHeight = clampTrackHeight(height);
+    const currentTrack = tracks.find(track => track.id === id);
+    if (!currentTrack || currentTrack.height === nextHeight) return;
+
     set({
-      tracks: tracks.map(t => t.id === id ? { ...t, height: clampTrackHeight(height) } : t),
+      tracks: tracks.map(t => t.id === id ? { ...t, height: nextHeight } : t),
     });
   },
 
@@ -738,17 +737,19 @@ export const createTrackSlice: SliceCreator<TrackActions> = (set, get) => ({
 
     if (!allSameHeight && delta !== 0) {
       // Sync all to max height first
+      if (tracksOfType.every(t => t.height === maxHeight)) return;
       set({
         tracks: tracks.map(t =>
-          t.type === type ? { ...t, height: maxHeight } : t
+          t.type === type && t.height !== maxHeight ? { ...t, height: maxHeight } : t
         ),
       });
     } else {
       // All already synced, scale uniformly
       const newHeight = clampTrackHeight(maxHeight + delta);
+      if (tracksOfType.every(t => t.height === newHeight)) return;
       set({
         tracks: tracks.map(t =>
-          t.type === type ? { ...t, height: newHeight } : t
+          t.type === type && t.height !== newHeight ? { ...t, height: newHeight } : t
         ),
       });
     }

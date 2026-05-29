@@ -1,7 +1,7 @@
 // Render waveform for audio clips using canvas for better performance
 // Supports trimming: only displays the portion of waveform between inPoint and outPoint
 
-import { memo, useRef, useEffect } from 'react';
+import { memo, useCallback, useRef, useEffect, useState } from 'react';
 import type { TimelineAudioDisplayMode } from '../../../stores/timeline/types';
 import type { AnimatableProperty, ClipAudioEditOperation, ClipAudioRegionGainPreview, EasingType, Keyframe } from '../../../types';
 import {
@@ -20,6 +20,7 @@ import {
 
 const MAX_RENDERED_WAVEFORM_CHANNELS = 8;
 const WAVEFORM_AUTOMATION_PROPERTY = 'opacity' as AnimatableProperty;
+const DOCK_LAYOUT_TRANSITION_EVENT_NAME = 'masterselects:dock-layout-transition';
 
 type WaveformAutomationKeyframe = {
   id?: string;
@@ -511,134 +512,188 @@ export const ClipWaveform = memo(function ClipWaveform({
   renderWidth?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [canvasElement, setCanvasElement] = useState<HTMLCanvasElement | null>(null);
+  const [layoutRevision, setLayoutRevision] = useState(0);
+  const setCanvasRef = useCallback((node: HTMLCanvasElement | null) => {
+    canvasRef.current = node;
+    setCanvasElement(node);
+  }, []);
+  const hasLegacyWaveform = Boolean(waveform?.length || waveformChannels?.some(channel => channel.length > 0));
+  const hasDrawableWaveform = Boolean(pyramid || hasLegacyWaveform);
   const renderChannelIndexes = resolveWaveformChannelIndexes(pyramid, waveformChannels, height);
   const renderChannelCount = renderChannelIndexes.length;
 
   useEffect(() => {
-    let cancelled = false;
-    const schedule = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
+    if (!canvasElement || typeof window === 'undefined') return;
+
+    let frameId: number | null = null;
+    const timeoutIds: number[] = [];
+    const scheduleFrame = typeof window.requestAnimationFrame === 'function'
       ? window.requestAnimationFrame.bind(window)
-      : (callback: FrameRequestCallback) => {
-          callback(0);
-          return 0;
-        };
-    const cancel = typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function'
+      : (callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 16);
+    const cancelFrame = typeof window.cancelAnimationFrame === 'function'
       ? window.cancelAnimationFrame.bind(window)
-      : () => {};
+      : window.clearTimeout.bind(window);
+    const bumpLayoutRevision = () => {
+      if (frameId !== null) return;
+      frameId = scheduleFrame(() => {
+        frameId = null;
+        setLayoutRevision((revision) => (revision + 1) % 1000000);
+      });
+    };
+    const bumpAcrossLayoutTransition = () => {
+      bumpLayoutRevision();
+      [80, 180, 360, 620].forEach((delayMs) => {
+        timeoutIds.push(window.setTimeout(bumpLayoutRevision, delayMs));
+      });
+    };
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(bumpLayoutRevision);
 
-    const frameId = schedule(() => {
+    resizeObserver?.observe(canvasElement);
+    if (canvasElement.parentElement) {
+      resizeObserver?.observe(canvasElement.parentElement);
+    }
+
+    window.addEventListener('resize', bumpLayoutRevision);
+    window.addEventListener(DOCK_LAYOUT_TRANSITION_EVENT_NAME, bumpAcrossLayoutTransition);
+    document.addEventListener('visibilitychange', bumpLayoutRevision);
+    bumpLayoutRevision();
+
+    return () => {
+      if (frameId !== null) {
+        cancelFrame(frameId);
+      }
+      timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', bumpLayoutRevision);
+      window.removeEventListener(DOCK_LAYOUT_TRANSITION_EVENT_NAME, bumpAcrossLayoutTransition);
+      document.removeEventListener('visibilitychange', bumpLayoutRevision);
+    };
+  }, [canvasElement]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !hasDrawableWaveform || width <= 0 || naturalDuration <= 0) return;
+
+    let cancelled = false;
+    const scheduleFrame = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
+      ? window.requestAnimationFrame.bind(window)
+      : (callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 16);
+    const cancelFrame = typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function'
+      ? window.cancelAnimationFrame.bind(window)
+      : window.clearTimeout.bind(window);
+
+    const frameId = scheduleFrame(() => {
       if (cancelled) return;
-
-      const canvas = canvasRef.current;
-      const hasLegacyWaveform = Boolean(waveform?.length || waveformChannels?.some(channel => channel.length > 0));
-      if (!canvas || (!pyramid && !hasLegacyWaveform) || width <= 0 || naturalDuration <= 0) return;
 
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      const clipWidth = Math.max(1, width);
-      const startPx = Math.max(0, Math.min(clipWidth, renderStartPx));
-      const targetWidth = Math.max(1, Math.min(
-        clipWidth - startPx,
-        renderWidth ?? clipWidth,
-      ));
-      const MAX_CANVAS_WIDTH = 16384;
-      const canvasWidth = Math.min(targetWidth, MAX_CANVAS_WIDTH);
-      const sourceSpan = Math.max(0, outPoint - inPoint);
-      const visibleInPoint = inPoint + sourceSpan * (startPx / clipWidth);
-      const visibleOutPoint = inPoint + sourceSpan * ((startPx + canvasWidth) / clipWidth);
-      const resolvedClipDuration = Math.max(
-        0.001,
-        Number.isFinite(clipDuration)
-          ? clipDuration ?? 0
-          : pixelsPerSecond && pixelsPerSecond > 0
-            ? width / pixelsPerSecond
-            : sourceSpan,
-      );
-      const visibleClipStart = resolvedClipDuration * (startPx / clipWidth);
-      const visibleClipEnd = resolvedClipDuration * ((startPx + canvasWidth) / clipWidth);
+    const clipWidth = Math.max(1, width);
+    const startPx = Math.max(0, Math.min(clipWidth, renderStartPx));
+    const targetWidth = Math.max(1, Math.min(
+      clipWidth - startPx,
+      renderWidth ?? clipWidth,
+    ));
+    const MAX_CANVAS_WIDTH = 16384;
+    const canvasWidth = Math.min(targetWidth, MAX_CANVAS_WIDTH);
+    const sourceSpan = Math.max(0, outPoint - inPoint);
+    const visibleInPoint = inPoint + sourceSpan * (startPx / clipWidth);
+    const visibleOutPoint = inPoint + sourceSpan * ((startPx + canvasWidth) / clipWidth);
+    const resolvedClipDuration = Math.max(
+      0.001,
+      Number.isFinite(clipDuration)
+        ? clipDuration ?? 0
+        : pixelsPerSecond && pixelsPerSecond > 0
+          ? width / pixelsPerSecond
+          : sourceSpan,
+    );
+    const visibleClipStart = resolvedClipDuration * (startPx / clipWidth);
+    const visibleClipEnd = resolvedClipDuration * ((startPx + canvasWidth) / clipWidth);
 
-      // Set canvas size (account for device pixel ratio for sharpness)
-      const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
-      // Also limit by dpr to avoid exceeding canvas limits.
-      const effectiveDpr = Math.min(dpr, MAX_CANVAS_WIDTH / canvasWidth);
+    // Set canvas size (account for device pixel ratio for sharpness)
+    const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1;
+    // Also limit by dpr to avoid exceeding canvas limits.
+    const effectiveDpr = Math.min(dpr, MAX_CANVAS_WIDTH / canvasWidth);
 
-      canvas.width = Math.max(1, Math.floor(canvasWidth * effectiveDpr));
-      canvas.height = Math.max(1, Math.floor(height * effectiveDpr));
-      ctx.setTransform(effectiveDpr, 0, 0, effectiveDpr, 0, 0);
+    canvas.width = Math.max(1, Math.floor(canvasWidth * effectiveDpr));
+    canvas.height = Math.max(1, Math.floor(height * effectiveDpr));
+    ctx.setTransform(effectiveDpr, 0, 0, effectiveDpr, 0, 0);
 
-      ctx.clearRect(0, 0, canvasWidth, height);
-      ctx.fillStyle = displayMode === 'spectral'
-        ? 'rgba(6, 10, 18, 0.24)'
-        : 'rgba(6, 10, 18, 0.12)';
-      ctx.fillRect(0, 0, canvasWidth, height);
+    ctx.clearRect(0, 0, canvasWidth, height);
+    ctx.fillStyle = displayMode === 'spectral'
+      ? 'rgba(6, 10, 18, 0.24)'
+      : 'rgba(6, 10, 18, 0.12)';
+    ctx.fillRect(0, 0, canvasWidth, height);
 
-      const channelIndexes = resolveWaveformChannelIndexes(pyramid, waveformChannels, height);
-      const laneGap = channelIndexes.length > 1 ? 2 : 0;
-      const laneHeight = Math.max(8, (height - laneGap * (channelIndexes.length - 1)) / channelIndexes.length);
+    const channelIndexes = resolveWaveformChannelIndexes(pyramid, waveformChannels, height);
+    const laneGap = channelIndexes.length > 1 ? 2 : 0;
+    const laneHeight = Math.max(8, (height - laneGap * (channelIndexes.length - 1)) / channelIndexes.length);
 
-      for (let laneIndex = 0; laneIndex < channelIndexes.length; laneIndex += 1) {
-        const channelIndex = channelIndexes[laneIndex];
-        const laneTop = laneIndex * (laneHeight + laneGap);
-        if (laneIndex > 0) {
-          drawChannelSeparator(ctx, canvasWidth, laneTop - laneGap / 2);
-        }
-
-        const lod = buildWaveformLod({
-          waveform: waveform ?? [],
-          waveformChannels,
-          pyramid,
-          width: canvasWidth,
-          inPoint: visibleInPoint,
-          outPoint: visibleOutPoint,
-          naturalDuration,
-          pixelsPerSecond,
-          channelIndex,
-        });
-        if (!lod || lod.columns.length === 0) continue;
-
-        const smoothedColumns = lod.source === 'pyramid'
-          ? smoothWaveformColumns(lod.columns, channelIndexes.length > 1 ? 0 : 1, 0.35)
-          : smoothWaveformColumns(
-              lod.columns,
-              getLegacySmoothingRadius(lod.pixelsPerSecond, lod.sourceSamplesPerSecond),
-              0.78,
-            );
-        const normalizedColumns = normalizeWaveformColumnsForDisplay(smoothedColumns, {
-          targetPeak: displayMode === 'compact' ? 0.52 : 0.66,
-          minReferencePeak: displayMode === 'spectral' ? 0.025 : 0.032,
-          maxGain: displayMode === 'spectral' ? 20 : 16,
-        });
-        const automatedColumns = applyVolumeAutomationToColumns(normalizedColumns, {
-          clipStart: visibleClipStart,
-          clipEnd: visibleClipEnd,
-          keyframes: volumeAutomationKeyframes,
-        });
-        const editedColumns = applyAudioEditPreviewToColumns(automatedColumns, {
-          clipId,
-          channelIndex,
-          sourceStart: visibleInPoint,
-          sourceEnd: visibleOutPoint,
-          editStack: audioEditStack,
-          regionGainPreview: audioRegionGainPreview,
-        });
-        const columns = applyDisplayGain(editedColumns, displayGain);
-
-        ctx.save();
-        ctx.translate(0, laneTop);
-        drawWaveformColumns(ctx, columns, canvasWidth, laneHeight, displayMode);
-        ctx.restore();
-        drawChannelLabel(ctx, getChannelLabel(channelIndex, channelIndexes.length), laneTop, laneHeight);
+    for (let laneIndex = 0; laneIndex < channelIndexes.length; laneIndex += 1) {
+      const channelIndex = channelIndexes[laneIndex];
+      const laneTop = laneIndex * (laneHeight + laneGap);
+      if (laneIndex > 0) {
+        drawChannelSeparator(ctx, canvasWidth, laneTop - laneGap / 2);
       }
+
+      const lod = buildWaveformLod({
+        waveform: waveform ?? [],
+        waveformChannels,
+        pyramid,
+        width: canvasWidth,
+        inPoint: visibleInPoint,
+        outPoint: visibleOutPoint,
+        naturalDuration,
+        pixelsPerSecond,
+        channelIndex,
+      });
+      if (!lod || lod.columns.length === 0) continue;
+
+      const smoothedColumns = lod.source === 'pyramid'
+        ? smoothWaveformColumns(lod.columns, channelIndexes.length > 1 ? 0 : 1, 0.35)
+        : smoothWaveformColumns(
+            lod.columns,
+            getLegacySmoothingRadius(lod.pixelsPerSecond, lod.sourceSamplesPerSecond),
+            0.78,
+          );
+      const normalizedColumns = normalizeWaveformColumnsForDisplay(smoothedColumns, {
+        targetPeak: displayMode === 'compact' ? 0.52 : 0.66,
+        minReferencePeak: displayMode === 'spectral' ? 0.025 : 0.032,
+        maxGain: displayMode === 'spectral' ? 20 : 16,
+      });
+      const automatedColumns = applyVolumeAutomationToColumns(normalizedColumns, {
+        clipStart: visibleClipStart,
+        clipEnd: visibleClipEnd,
+        keyframes: volumeAutomationKeyframes,
+      });
+      const editedColumns = applyAudioEditPreviewToColumns(automatedColumns, {
+        clipId,
+        channelIndex,
+        sourceStart: visibleInPoint,
+        sourceEnd: visibleOutPoint,
+        editStack: audioEditStack,
+        regionGainPreview: audioRegionGainPreview,
+      });
+      const columns = applyDisplayGain(editedColumns, displayGain);
+
+      ctx.save();
+      ctx.translate(0, laneTop);
+      drawWaveformColumns(ctx, columns, canvasWidth, laneHeight, displayMode);
+      ctx.restore();
+      drawChannelLabel(ctx, getChannelLabel(channelIndex, channelIndexes.length), laneTop, laneHeight);
+    }
     });
 
     return () => {
       cancelled = true;
-      cancel(frameId);
+      cancelFrame(frameId);
     };
-  }, [waveform, waveformChannels, width, height, inPoint, outPoint, naturalDuration, clipDuration, displayMode, pixelsPerSecond, pyramid, waveformVariant, displayGain, volumeAutomationKeyframes, audioEditStack, audioRegionGainPreview, clipId, renderStartPx, renderWidth]);
+  }, [waveform, waveformChannels, width, height, inPoint, outPoint, naturalDuration, clipDuration, displayMode, pixelsPerSecond, pyramid, waveformVariant, displayGain, volumeAutomationKeyframes, audioEditStack, audioRegionGainPreview, clipId, renderStartPx, renderWidth, hasDrawableWaveform, layoutRevision]);
 
-  if ((!pyramid && (!waveform?.length && !waveformChannels?.some(channel => channel.length > 0))) || width <= 0 || renderWidth === 0) return null;
+  if (!hasDrawableWaveform || width <= 0) return null;
 
   const clipWidth = Math.max(1, width);
   const canvasLeft = Math.max(0, Math.min(clipWidth, renderStartPx));
@@ -649,7 +704,7 @@ export const ClipWaveform = memo(function ClipWaveform({
 
   return (
     <canvas
-      ref={canvasRef}
+      ref={setCanvasRef}
       className={`waveform-canvas waveform-canvas-${displayMode} waveform-canvas-${waveformVariant} ${renderChannelCount > 1 ? 'waveform-canvas-multichannel' : ''}`}
       data-waveform-variant={waveformVariant}
       data-waveform-channels={renderChannelCount}

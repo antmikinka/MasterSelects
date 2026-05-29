@@ -367,6 +367,18 @@ export function TimelineContextMenu({
   const canModifyTargets = !hasLockedTarget;
   const canLinkClips = targetClipIds.length >= 2 && !hasLockedClipLinkTarget;
   const canUnlinkClips = hasClipLinkTarget && !hasLockedClipLinkTarget;
+  const effectCopyLabel = isAudio
+    ? 'Copy Audio Effects'
+    : isVideo
+    ? 'Copy Video Effects'
+    : 'Copy Effects';
+  const effectPasteLabel = isAudio
+    ? 'Paste Audio Effects'
+    : isVideo
+    ? 'Paste Video Effects'
+    : 'Paste Effects';
+  const showColorClipboardInEffects = Boolean(isVideo);
+  const showColorClipboardTopLevel = !isAudio && !showColorClipboardInEffects;
 
   // Resolve the media item ID and current label color for the clip
   const resolveMediaItemColor = (): { mediaItemId: string | null; currentColor: LabelColor } => {
@@ -560,7 +572,7 @@ export function TimelineContextMenu({
                 setContextMenu(null);
               }}
             >
-              {thumbnailsEnabled ? '\u2713 ' : ''}Thumbnails
+              {thumbnailsEnabled ? '\u2713 ' : ''}Show Thumbnail
             </div>
           )}
           {isAudio && (
@@ -602,48 +614,84 @@ export function TimelineContextMenu({
       )}
 
       <div className="context-menu-separator" />
-      <div
-        className="context-menu-item"
-        onClick={() => {
-          if (contextMenu.clipId) {
-            copyClipEffects(contextMenu.clipId);
-          }
-          setContextMenu(null);
-        }}
-      >
-        Copy Effects
+      <div className="context-menu-item has-submenu" onMouseEnter={handleSubmenuHover} onMouseLeave={handleSubmenuLeave}>
+        <span>Effects</span>
+        <span className="submenu-arrow">{'\u25B6'}</span>
+        <div className="context-submenu">
+          <div
+            className="context-menu-item"
+            onClick={() => {
+              if (contextMenu.clipId) {
+                copyClipEffects(contextMenu.clipId);
+              }
+              setContextMenu(null);
+            }}
+          >
+            {effectCopyLabel}
+          </div>
+          <div
+            className={`context-menu-item ${!canPasteEffects || !canModifyTargets ? 'disabled' : ''}`}
+            onClick={() => {
+              if (!canPasteEffects || !canModifyTargets) return;
+              pasteClipEffects(targetClipIds);
+              setContextMenu(null);
+            }}
+          >
+            {effectPasteLabel}
+          </div>
+          {showColorClipboardInEffects && (
+            <>
+              <div className="context-menu-separator" />
+              <div
+                className="context-menu-item"
+                onClick={() => {
+                  if (contextMenu.clipId) {
+                    copyClipColor(contextMenu.clipId);
+                  }
+                  setContextMenu(null);
+                }}
+              >
+                Copy Color
+              </div>
+              <div
+                className={`context-menu-item ${!canPasteColor || !canModifyTargets ? 'disabled' : ''}`}
+                onClick={() => {
+                  if (!canPasteColor || !canModifyTargets) return;
+                  pasteClipColor(targetClipIds);
+                  setContextMenu(null);
+                }}
+              >
+                Paste Color
+              </div>
+            </>
+          )}
+        </div>
       </div>
-      <div
-        className="context-menu-item"
-        onClick={() => {
-          if (contextMenu.clipId) {
-            copyClipColor(contextMenu.clipId);
-          }
-          setContextMenu(null);
-        }}
-      >
-        Copy Color
-      </div>
-      <div
-        className={`context-menu-item ${!canPasteEffects || !canModifyTargets ? 'disabled' : ''}`}
-        onClick={() => {
-          if (!canPasteEffects || !canModifyTargets) return;
-          pasteClipEffects(targetClipIds);
-          setContextMenu(null);
-        }}
-      >
-        Paste Effects
-      </div>
-      <div
-        className={`context-menu-item ${!canPasteColor || !canModifyTargets ? 'disabled' : ''}`}
-        onClick={() => {
-          if (!canPasteColor || !canModifyTargets) return;
-          pasteClipColor(targetClipIds);
-          setContextMenu(null);
-        }}
-      >
-        Paste Color
-      </div>
+      {showColorClipboardTopLevel && (
+        <>
+          <div
+            className="context-menu-item"
+            onClick={() => {
+              if (contextMenu.clipId) {
+                copyClipColor(contextMenu.clipId);
+              }
+              setContextMenu(null);
+            }}
+          >
+            Copy Color
+          </div>
+          <div
+            className={`context-menu-item ${!canPasteColor || !canModifyTargets ? 'disabled' : ''}`}
+            onClick={() => {
+              if (!canPasteColor || !canModifyTargets) return;
+              pasteClipColor(targetClipIds);
+              setContextMenu(null);
+            }}
+          >
+            Paste Color
+          </div>
+        </>
+      )}
 
       <div className="context-menu-separator" />
       <div
@@ -873,7 +921,7 @@ export function TimelineContextMenu({
           setContextMenu(null);
         }}
       >
-        Delete Clip
+        Delete Clip From Timeline
       </div>
     </div>
   );

@@ -28,7 +28,13 @@ vi.mock('../../src/engine/WebGPUEngine', () => ({
 type PlaybackTestStore = Partial<TimelineStore> & ReturnType<typeof createPlaybackSlice>;
 
 function createPlaybackTestStore(initialState: Partial<TimelineStore>): PlaybackTestStore {
-  const state = { ...initialState } as PlaybackTestStore;
+  const state = {
+    clips: [],
+    tracks: [],
+    markers: [],
+    clipDragPreview: null,
+    ...initialState,
+  } as PlaybackTestStore;
   const set: Parameters<typeof createPlaybackSlice>[0] = (partial) => {
     const next = typeof partial === 'function' ? partial(state as TimelineStore) : partial;
     Object.assign(state, next);
@@ -44,6 +50,12 @@ describe('playbackSlice HTML readiness gate', () => {
     requestNewFrameRender.mockReset();
     playheadState.position = 0;
     playheadState.isUsingInternalPosition = false;
+    playheadState.playbackJustStarted = false;
+    playheadState.hasMasterAudio = false;
+    playheadState.masterAudioElement = null;
+    playheadState.masterAudioClock = null;
+    playheadState.heldPlaybackPosition = null;
+    playheadState.heldPlaybackClipId = null;
   });
 
   afterEach(() => {
@@ -191,9 +203,54 @@ describe('playbackSlice HTML readiness gate', () => {
     expect(playheadState.position).toBe(20);
   });
 
-  it('requests a fresh render when moving the paused playhead without dragging', () => {
+  it('stop clears the internal playhead clock before resetting to the start', () => {
+    const audio = {} as HTMLAudioElement;
     const state = createPlaybackTestStore({
       clips: [],
+      playheadPosition: 23,
+      duration: 60,
+      isPlaying: true,
+      playbackWarmup: { requestId: 'warmup', startedAt: 0, targetTime: 23, pendingVideoCount: 0, totalVideoCount: 0 },
+    } as Partial<TimelineStore>);
+
+    playheadState.position = 23;
+    playheadState.isUsingInternalPosition = true;
+    playheadState.playbackJustStarted = true;
+    playheadState.hasMasterAudio = true;
+    playheadState.masterAudioElement = audio;
+    playheadState.heldPlaybackPosition = 23;
+    playheadState.heldPlaybackClipId = 'clip-1';
+
+    state.stop();
+
+    expect(state.isPlaying).toBe(false);
+    expect(state.playheadPosition).toBe(0);
+    expect(state.playbackWarmup).toBeNull();
+    expect(playheadState.position).toBe(0);
+    expect(playheadState.isUsingInternalPosition).toBe(false);
+    expect(playheadState.playbackJustStarted).toBe(false);
+    expect(playheadState.hasMasterAudio).toBe(false);
+    expect(playheadState.masterAudioElement).toBeNull();
+    expect(playheadState.heldPlaybackPosition).toBeNull();
+  });
+
+  it('requests a fresh render when moving the paused playhead without dragging', () => {
+    const state = createPlaybackTestStore({
+      clips: [
+        {
+          id: 'clip-1',
+          trackId: 'video-1',
+          startTime: 0,
+          duration: 10,
+        },
+      ],
+      tracks: [
+        {
+          id: 'video-1',
+          type: 'video',
+          visible: true,
+        },
+      ],
       playheadPosition: 0,
       duration: 60,
       isPlaying: false,

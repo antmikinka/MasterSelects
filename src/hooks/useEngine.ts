@@ -18,6 +18,10 @@ import { framePhaseMonitor } from '../services/framePhaseMonitor';
 import { playbackHealthMonitor } from '../services/playbackHealthMonitor';
 import { Logger } from '../services/logger';
 import { effectStackNeedsContinuousRender } from '../effects';
+import {
+  hasActiveTimelineVisualClip,
+  hasTimelineVisualRenderDemand,
+} from '../services/timeline/timelineVisualDemand';
 
 const log = Logger.create('Engine');
 const MASK_TEXTURE_DRAG_THROTTLE_MS = 80;
@@ -416,6 +420,13 @@ export function useEngine() {
   // Update engine playing/scrubbing state for frame rate limiting
   useEffect(() => {
     if (!isEngineReady) return;
+    const timelineState = useTimelineStore.getState();
+    engine.setTimelineVisualDemand(hasTimelineVisualRenderDemand({
+      clips: timelineState.clips,
+      tracks: timelineState.tracks,
+      playheadPosition: timelineState.playheadPosition,
+      clipDragPreview: timelineState.clipDragPreview,
+    }));
     engine.setIsPlaying(isPlaying);
   }, [isEngineReady, isPlaying]);
 
@@ -423,7 +434,20 @@ export function useEngine() {
     if (!isEngineReady) return;
     const unsub = useTimelineStore.subscribe(
       (state) => state.isDraggingPlayhead,
-      (isDragging) => { engine.setIsScrubbing(isDragging); }
+      (isDragging) => {
+        const timelineState = useTimelineStore.getState();
+        const hasVisualDemand = hasTimelineVisualRenderDemand({
+          clips: timelineState.clips,
+          tracks: timelineState.tracks,
+          playheadPosition: timelineState.playheadPosition,
+          clipDragPreview: timelineState.clipDragPreview,
+        });
+        engine.setTimelineVisualDemand(hasVisualDemand);
+        engine.setIsScrubbing(isDragging);
+        if (!hasVisualDemand) {
+          layerBuilder.syncAudioElements();
+        }
+      }
     );
     return unsub;
   }, [isEngineReady]);
@@ -496,6 +520,17 @@ export function useEngine() {
           timelineState.tracks,
           currentPlayhead
         );
+        const hasActiveVisualClip = hasActiveTimelineVisualClip(
+          timelineClips,
+          timelineState.tracks,
+          currentPlayhead
+        );
+        const hasActiveBackgroundLayer = layerPlaybackManager.hasActiveLayers();
+        const hasVisualRenderDemand =
+          hasActiveVisualClip ||
+          hasActiveTemporalClip ||
+          hasActiveBackgroundLayer;
+        engine.setTimelineVisualDemand(hasVisualRenderDemand);
         engine.setContinuousRender(hasActiveTemporalClip);
 
         // Track playhead changes for idle detection
@@ -503,7 +538,9 @@ export function useEngine() {
         // When stopped/scrubbing, only renders when playhead actually moves
         if (currentPlayhead !== lastPlayhead) {
           lastPlayhead = currentPlayhead;
-          engine.requestRender();
+          if (hasVisualRenderDemand) {
+            engine.requestRender();
+          }
         }
 
         const hasMaskKeyframes = Array.from(timelineState.clipKeyframes.values())
@@ -513,8 +550,18 @@ export function useEngine() {
         }
 
         // Keep engine awake when background layers are playing (independent of global playhead)
-        if (layerPlaybackManager.hasActiveLayers()) {
+        if (hasActiveBackgroundLayer) {
           engine.requestRender();
+        }
+
+        if (!hasVisualRenderDemand) {
+          if (!timelineState.isPlaying) {
+            const syncAudioStart = performance.now();
+            layerBuilder.syncAudioElements();
+            syncAudioMs += performance.now() - syncAudioStart;
+          }
+          recordFramePhases('skipped');
+          return;
         }
 
         // Try cached RAM Preview frame first (instant scrubbing over pre-rendered frames).
@@ -616,7 +663,19 @@ export function useEngine() {
     // Playhead position changes (scrubbing, playback)
     const unsubPlayhead = useTimelineStore.subscribe(
       (state) => state.playheadPosition,
-      () => engine.requestRender()
+      (playheadPosition) => {
+        const timelineState = useTimelineStore.getState();
+        if (hasTimelineVisualRenderDemand({
+          clips: timelineState.clips,
+          tracks: timelineState.tracks,
+          playheadPosition,
+          clipDragPreview: timelineState.clipDragPreview,
+        })) {
+          engine.requestRender();
+        } else if (timelineState.isDraggingPlayhead) {
+          layerBuilder.syncAudioElements();
+        }
+      }
     );
 
     // Clips changes (content, transforms, effects, etc.)

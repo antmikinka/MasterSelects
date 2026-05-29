@@ -2,6 +2,8 @@
 
 ## -1. Arbeitsprinzip / Top Memory
 
+Man kann nie sicher sein, dass man allein in einem Branch arbeitet. Behandle alle fremden Aenderungen als aktive Arbeit anderer Personen oder Agenten: niemals Aenderungen zuruecksetzen, ueberschreiben, aufraeumen, umformatieren oder anderweitig rueckgaengig machen, die du nicht selbst gemacht hast, ausser der User verlangt genau diese Operation explizit.
+
 MasterSelects wird nicht fuer kurzfristige Loesungen optimiert. Da das Projekt AI-powered sehr schnell entwickelt werden kann und aktuell keine externen User blockiert, sind grosse, richtige Architekturentscheidungen ausdruecklich erlaubt und bevorzugt.
 
 Default ist: langfristig denken, echte Zielarchitektur bauen, keine MVPs, keine Mocks, keine Wegwerf-Prototypen und keine kleinen Zwischenloesungen, wenn die robuste Loesung direkt erreichbar ist. Kurzfristige Hacks nur dann verwenden, wenn der User sie explizit verlangt oder ein harter technischer Blocker keine bessere Umsetzung erlaubt.
@@ -130,6 +132,20 @@ Grosse Kommandoausgaben sind token- und zeitintensiv. Bei Zwischenstaenden kurze
 | `staging` | Entwicklung - hierhin committen |
 | `master` | Production - nur via PR |
 
+### Issue-Bearbeitung
+Wenn ein GitHub-Issue uebernommen wird, immer so vorgehen:
+
+1. Im Issue `I am on it` kommentieren.
+2. Das Issue `sportinger` zuweisen.
+3. Einen neuen Git-Branch fuer das Issue erstellen und auf GitHub mit dem Issue verknuepfen.
+4. Diesen Branch in einen neuen separaten Ordner clonen und dann in diesem Ordner arbeiten, damit andere Agents in ihren eigenen Ordnern bleiben koennen.
+5. Das Issue in diesem Branch-Ordner bearbeiten.
+6. Nach Ermessen committen und in den Issue-Branch pushen, sobald die Arbeit zusammenhaengend und lokal geprueft ist.
+7. Wenn der User sagt, dass alles geht, den Issue-Branch nach `master` mergen, ohne auf GitHub-Checks zu warten.
+8. Danach das Issue mit dem Ergebnis kommentieren.
+
+Dieser Issue-Workflow ist eine ausdrueckliche Ausnahme von der allgemeinen Regel, nicht selbststaendig zu pushen, aber nur fuer den erstellten Issue-Branch. Der Merge nach `master` braucht weiterhin die Bestaetigung des Users, dass alles geht.
+
 ### Test- und Commit-Regeln
 ```bash
 # VOR jedem Commit: ALLE Checks durchführen!
@@ -149,7 +165,7 @@ Während laufender Arbeit gezielt prüfen: passende Unit-/Smoke-Tests, Build ode
 **NIEMALS:**
 - Direkt auf `master` committen
 - Selbstständig zu `master` mergen
-- Selbstständig pushen (nur wenn User es explizit verlangt)
+- Selbstständig pushen (nur wenn User es explizit verlangt; Ausnahme: Issue-Branches aus dem Issue-Workflow)
 - Committen, wenn Build, Lint oder Tests fehlschlagen
 
 ### Merge zu Master (nur wenn User es verlangt!)

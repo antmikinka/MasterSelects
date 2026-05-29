@@ -11,6 +11,7 @@ import { DraggableNumber, EffectKeyframeToggle, MultiKeyframeToggle } from './sh
 import { createAudioDynamicsViewModel } from './audioDynamicsView';
 import { FlexEqualizerControl } from './FlexEqualizerControl';
 import { getAudioEqAllNumericKeyframeEntries } from './audioEqKeyframes';
+import type { RuntimeAnalyzerScope } from './useThrottledRuntimeAnalyzer';
 
 export interface AudioEffectStackControlProps {
   title?: string;
@@ -22,6 +23,8 @@ export interface AudioEffectStackControlProps {
   keyframeClipId?: string;
   runtimeDynamics?: Readonly<Record<string, AudioDynamicsReductionSnapshot>>;
   runtimeAnalyzer?: AudioEqAnalyzerView;
+  runtimeAnalyzerScope?: RuntimeAnalyzerScope;
+  runtimeAnalyzerTrackId?: string;
   onAddEffect: (descriptorId: string) => void;
   onUpdateEffect: (effect: AudioEffectInstance, paramName: string, value: AudioEffectParamValue) => void;
   onSetEffectEnabled: (effectId: string, enabled: boolean) => void;
@@ -97,6 +100,8 @@ export function AudioEffectStackControl({
   keyframeClipId,
   runtimeDynamics,
   runtimeAnalyzer,
+  runtimeAnalyzerScope,
+  runtimeAnalyzerTrackId,
   onAddEffect,
   onUpdateEffect,
   onSetEffectEnabled,
@@ -228,6 +233,8 @@ export function AudioEffectStackControl({
                     disabled={!enabled}
                     ariaLabel={`${descriptor.name} graph`}
                     analyzer={runtimeAnalyzer}
+                    runtimeAnalyzerScope={runtimeAnalyzerScope}
+                    runtimeAnalyzerTrackId={runtimeAnalyzerTrackId}
                     keyframeClipId={keyframeClipId}
                     effectId={effect.id}
                     onUpdateParamPath={(path, value) => onUpdateEffect(effect, path, value)}

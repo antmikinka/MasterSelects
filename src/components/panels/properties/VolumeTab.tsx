@@ -7,6 +7,7 @@ import { DraggableNumber, EffectKeyframeToggle, MultiKeyframeToggle } from './sh
 import { MIDIParameterLabel } from './MIDIParameterLabel';
 import { AudioEffectStackControl } from './AudioEffectStackControl';
 import { FlexEqualizerControl } from './FlexEqualizerControl';
+import { useRuntimeAudioMeterSnapshot } from '../../../services/audio/runtimeAudioMeterHooks';
 import {
   AUDIO_EQ_DEFAULT_BAND_DYNAMICS,
   AUDIO_EQ_DEFAULT_BAND_SPECTRAL_DYNAMICS,
@@ -25,6 +26,7 @@ const SILENCE_THRESHOLD_DB = -60;
 const gainToDb = (gain: number): number => gain <= 0 ? SILENCE_THRESHOLD_DB : Math.max(SILENCE_THRESHOLD_DB, 20 * Math.log10(gain));
 const dbToGain = (db: number): number => db <= SILENCE_THRESHOLD_DB ? 0 : Math.pow(10, db / 20);
 const LEGACY_VOLUME_EFFECT_IDS = new Set(['audio-volume']);
+const EMPTY_KEYFRAMES: readonly Keyframe[] = [];
 type LegacyAudioEffectType = 'audio-volume' | 'audio-eq';
 
 interface VolumeTabProps {
@@ -144,15 +146,13 @@ function interpolateAudioEffectStack(
 export function VolumeTab({ clipId, effects }: VolumeTabProps) {
   // Reactive data - subscribe to specific values only
   const playheadPosition = useTimelineStore(state => state.playheadPosition);
-  const clips = useTimelineStore(state => state.clips);
-  const runtimeMeter = useTimelineStore(state => {
-    const currentClip = state.clips.find(candidate => candidate.id === clipId);
-    return currentClip
-      ? state.runtimeAudioMeters.trackMeters[currentClip.trackId]
-      : undefined;
-  });
-  const runtimeDynamics = runtimeMeter?.dynamics;
-  const runtimeAnalyzer = runtimeMeter?.spectrumDb ? { postDb: runtimeMeter.spectrumDb } : undefined;
+  const clip = useTimelineStore(state => state.clips.find(candidate => candidate.id === clipId));
+  const trackId = clip?.trackId;
+  const runtimeDynamicsMeter = useRuntimeAudioMeterSnapshot(
+    trackId ? { kind: 'track', trackId } : undefined,
+    { features: ['dynamics'], maxFps: 30 },
+  );
+  const runtimeDynamics = runtimeDynamicsMeter?.dynamics;
   const keyframeStateToken = useTimelineStore(state => {
     const keyframes = state.clipKeyframes.get(clipId) ?? [];
     const recordingKeys = Array.from(state.keyframeRecordingEnabled)
@@ -178,12 +178,11 @@ export function VolumeTab({ clipId, effects }: VolumeTabProps) {
     removeClipAudioEffectInstance,
     reorderClipAudioEffectInstance,
   } = useTimelineStore.getState();
-  const clip = clips.find(c => c.id === clipId);
   const clipLocalTime = clip ? playheadPosition - clip.startTime : 0;
   void keyframeStateToken;
   const interpolatedEffects = getInterpolatedEffects(clipId, clipLocalTime);
   const preservesPitch = clip?.preservesPitch !== false; // default true
-  const clipKeyframes = useTimelineStore.getState().clipKeyframes.get(clipId) ?? [];
+  const clipKeyframes = useTimelineStore(state => state.clipKeyframes.get(clipId) ?? EMPTY_KEYFRAMES);
   const clipAudioEffectStack = interpolateAudioEffectStack(
     clip?.audioState?.effectStack ?? [],
     clipKeyframes,
@@ -329,7 +328,8 @@ export function VolumeTab({ clipId, effects }: VolumeTabProps) {
 
           <FlexEqualizerControl
             params={eqParams}
-            analyzer={runtimeAnalyzer}
+            runtimeAnalyzerScope={trackId ? 'track' : undefined}
+            runtimeAnalyzerTrackId={trackId}
             ariaLabel="Legacy clip equalizer"
             disabled={actualEqEffect.enabled === false}
             keyframeClipId={clipId}
@@ -347,7 +347,8 @@ export function VolumeTab({ clipId, effects }: VolumeTabProps) {
           excludeDescriptorIds={LEGACY_VOLUME_EFFECT_IDS}
           keyframeClipId={clipId}
           runtimeDynamics={runtimeDynamics}
-          runtimeAnalyzer={runtimeAnalyzer}
+          runtimeAnalyzerScope={trackId ? 'track' : undefined}
+          runtimeAnalyzerTrackId={trackId}
           onAddEffect={(descriptorId) => addClipAudioEffectInstance(clipId, descriptorId)}
           onUpdateEffect={handleAudioEffectStackUpdate}
           onSetEffectEnabled={(effectId, enabled) => setClipAudioEffectInstanceEnabled(clipId, effectId, enabled)}

@@ -1318,12 +1318,6 @@ function TimelineHeaderComponent({
     '--audio-strip-control-scale'?: string;
     '--audio-strip-fader-scale'?: string;
   };
-  const audioMeter = useTimelineStore(state => showAdvancedAudioControls
-    ? state.runtimeAudioMeters.trackMeters[track.id]
-    : undefined);
-  const collapsedAudioSummaryMeter = useTimelineStore(state => showAudioSummaryMeter
-    ? state.runtimeAudioMeters.master
-    : undefined);
   const targetTrackId = useTimelineStore(state => state.targetTrackIdByType[track.type]);
   const setTargetTrack = useTimelineStore(state => state.setTargetTrack);
   const isTargeted = targetTrackId === track.id;
@@ -1464,7 +1458,8 @@ function TimelineHeaderComponent({
       >
         {showAudioSummaryMeter && (
           <AudioLevelMeter
-            meter={collapsedAudioSummaryMeter}
+            streamScope={{ kind: 'master' }}
+            streamFeatures={['level']}
             label="Summed audio level"
             className="audio-summary-background-meter"
           />
@@ -1708,7 +1703,8 @@ function TimelineHeaderComponent({
             onPointerDown={(event) => event.stopPropagation()}
           >
             <AudioLevelMeter
-              meter={audioMeter}
+              streamScope={{ kind: 'track', trackId: track.id }}
+              streamFeatures={['level', 'stereo', 'phase']}
               label={`${track.name} level`}
               orientation="vertical"
               display="auto"
@@ -1750,6 +1746,8 @@ function TimelineHeaderComponent({
               title={`${track.name} FX`}
               className="audio-effect-stack-compact"
               effects={track.audioState?.effectStack ?? []}
+              runtimeAnalyzerScope="track"
+              runtimeAnalyzerTrackId={track.id}
               emptyLabel="No track FX"
               onAddEffect={(descriptorId) => useTimelineStore.getState().addTrackAudioEffectInstance(track.id, descriptorId)}
               onUpdateEffect={(effect, paramName, value) => useTimelineStore.getState().updateTrackAudioEffectInstance(track.id, effect.id, { [paramName]: value })}

@@ -470,6 +470,10 @@ export class WebGPUEngine {
     this.renderLoop?.setHasActiveVideo(hasVideo);
   }
 
+  setTimelineVisualDemand(hasDemand: boolean): void {
+    this.renderLoop?.setTimelineVisualDemand(hasDemand);
+  }
+
   setIsPlaying(playing: boolean): void {
     this._isPlaying = playing;
     if (playing) this.hasEverPlayed = true;

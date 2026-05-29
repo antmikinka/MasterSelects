@@ -75,7 +75,6 @@ function TimelineControlsComponent({
   const viewDropdownRef = useRef<HTMLDivElement>(null);
   const masterDropdownRef = useRef<HTMLDivElement>(null);
   const masterAudioState = useTimelineStore(state => state.masterAudioState);
-  const masterMeter = useTimelineStore(state => state.runtimeAudioMeters.master);
   const runAudioExportPreflight = useTimelineStore(state => state.runAudioExportPreflight);
   const timelineTracks = useTimelineStore(state => state.tracks);
   const armedAudioTracks = useMemo(
@@ -294,7 +293,7 @@ function TimelineControlsComponent({
         >
           Master {masterAudio.volumeDb.toFixed(1)} dB
         </button>
-        <AudioLevelMeter meter={masterMeter} label="Master level" className="timeline-master-audio-meter" />
+        <AudioLevelMeter streamScope={{ kind: 'master' }} streamFeatures={['level', 'phase']} label="Master level" className="timeline-master-audio-meter" />
         {masterDropdownOpen && (
           <div
             className="timeline-master-audio-popover"
@@ -356,6 +355,7 @@ function TimelineControlsComponent({
               title="Master FX"
               className="audio-effect-stack-compact"
               effects={masterAudio.effectStack ?? []}
+              runtimeAnalyzerScope="master"
               emptyLabel="No master FX"
               onAddEffect={(descriptorId) => useTimelineStore.getState().addMasterAudioEffectInstance(descriptorId)}
               onUpdateEffect={(effect, paramName, value) => useTimelineStore.getState().updateMasterAudioEffectInstance(effect.id, { [paramName]: value })}

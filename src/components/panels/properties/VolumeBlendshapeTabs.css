@@ -389,6 +389,8 @@
 }
 
 .flex-eq-toolbar,
+.flex-eq-primary-tools,
+.flex-eq-secondary-tools,
 .flex-eq-workflow-row,
 .flex-eq-generator-row,
 .flex-eq-preset-tools,
@@ -404,6 +406,12 @@
 
 .flex-eq-toolbar {
   justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.flex-eq-primary-tools,
+.flex-eq-secondary-tools {
+  flex-wrap: wrap;
 }
 
 .flex-eq-toolbar select,
@@ -440,6 +448,7 @@
 .flex-eq-segments button,
 .flex-eq-workflow-row button,
 .flex-eq-generator-row button,
+.flex-eq-tool-button,
 .flex-eq-preset-tools button,
 .flex-eq-preset-list button,
 .flex-eq-add-row button,
@@ -459,6 +468,13 @@
   padding: 0 8px;
 }
 
+.flex-eq-tool-button {
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--border-color) 64%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-primary) 56%, transparent);
+}
+
 .flex-eq-segments button + button {
   border-left: 1px solid color-mix(in srgb, var(--border-color) 58%, transparent);
 }
@@ -466,6 +482,8 @@
 .flex-eq-segments button.active,
 .flex-eq-workflow-row button.active,
 .flex-eq-generator-row button.active,
+.flex-eq-tool-button.active,
+.flex-eq-tool-button:hover,
 .flex-eq-preset-tools button.active,
 .flex-eq-preset-list button.active,
 .flex-eq-dynamics-row button.active,
@@ -489,6 +507,7 @@
 
 .flex-eq-generator-row {
   justify-content: space-between;
+  flex-wrap: wrap;
 }
 
 .flex-eq-workflow-row select {
@@ -629,6 +648,7 @@
 
 .flex-eq-stage {
   position: relative;
+  width: 100%;
   min-width: 0;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--border-color) 76%, transparent);
@@ -640,14 +660,14 @@
 }
 
 .flex-eq.compact .flex-eq-stage {
-  min-height: 156px;
+  min-height: 0;
 }
 
 .flex-eq-canvas {
   display: block;
   width: 100%;
   height: 100%;
-  min-height: inherit;
+  min-height: 0;
   cursor: crosshair;
   touch-action: none;
   user-select: none;
@@ -675,7 +695,7 @@
 
 .flex-eq-selected-band {
   display: grid;
-  grid-template-columns: auto minmax(86px, 1fr) repeat(3, minmax(70px, 0.8fr)) auto auto auto;
+  grid-template-columns: auto minmax(86px, 1fr) repeat(3, minmax(70px, 0.8fr)) repeat(5, auto);
   padding: 6px;
   border: 1px solid color-mix(in srgb, var(--border-color) 62%, transparent);
   border-radius: var(--radius-sm);
@@ -859,6 +879,8 @@
   }
 
   .flex-eq-toolbar,
+  .flex-eq-primary-tools,
+  .flex-eq-secondary-tools,
   .flex-eq-workflow-row,
   .flex-eq-generator-row,
   .flex-eq-add-row {
@@ -867,8 +889,13 @@
 
   .flex-eq-toolbar {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
     align-items: start;
+  }
+
+  .flex-eq-primary-tools,
+  .flex-eq-secondary-tools {
+    width: 100%;
   }
 
   .flex-eq-segments {

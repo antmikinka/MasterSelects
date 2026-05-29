@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { VolumeTab } from '../../src/components/panels/properties/VolumeTab';
 import { useTimelineStore } from '../../src/stores/timeline';
+import { runtimeAudioMeterBus } from '../../src/services/audio/runtimeAudioMeterBus';
 import { normalizeAudioEqParams } from '../../src/engine/audio/eq/AudioEqLegacy';
 import type { AudioEffectInstance } from '../../src/types';
 import { createMockClip, createMockTrack } from '../helpers/mockData';
@@ -30,6 +31,7 @@ function addStackEqFromSelect(container: HTMLElement): AudioEffectInstance {
 
 describe('VolumeTab', () => {
   beforeEach(() => {
+    runtimeAudioMeterBus.resetForTest();
     useTimelineStore.setState({
       clips: [
         createMockClip({
@@ -106,20 +108,15 @@ describe('VolumeTab', () => {
   });
 
   it('lets the user switch the EQ spectrum between source and adjusted views', () => {
-    useTimelineStore.setState({
-      runtimeAudioMeters: {
-        trackMeters: {
-          'audio-1': {
-            peakLinear: 0.2,
-            rmsLinear: 0.1,
-            peakDb: -14,
-            rmsDb: -20,
-            clipping: false,
-            spectrumDb: new Float32Array(128).fill(-60),
-            updatedAt: 1,
-          },
-        },
-      },
+    // The live analyzer spectrum now streams through the runtime audio meter bus.
+    runtimeAudioMeterBus.publishTrack('audio-1', {
+      peakLinear: 0.2,
+      rmsLinear: 0.1,
+      peakDb: -14,
+      rmsDb: -20,
+      clipping: false,
+      spectrumDb: new Float32Array(128).fill(-60),
+      updatedAt: 1,
     });
 
     const { container } = render(<VolumeTab clipId="clip-1" effects={[]} />);

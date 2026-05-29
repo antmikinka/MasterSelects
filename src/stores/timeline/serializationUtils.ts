@@ -23,6 +23,7 @@ import { sanitizePlayheadPosition } from '../../services/layerBuilder/PlayheadSt
 import { thumbnailCacheService } from '../../services/thumbnailCacheService';
 import { cloneClipNodeGraph } from '../../services/nodeGraph';
 import { clonePersistedClipAudioState } from '../../services/audio/clipAudioStatePersistence';
+import { runtimeAudioMeterBus } from '../../services/audio/runtimeAudioMeterBus';
 import type { WebCodecsPlayer } from '../../engine/WebCodecsPlayer';
 import {
   DEFAULT_GAUSSIAN_SPLAT_SETTINGS,
@@ -2012,6 +2013,9 @@ export const createSerializationUtils: SliceCreator<SerializationUtils> = (set, 
     // pass a closed VideoFrame to importExternalTexture → GPU crash.
     const { tracks } = get();
     const nextTimelineSessionId = get().timelineSessionId + 1;
+    // Clear the runtime meter bus (source of truth) before resetting the store
+    // mirror, so a pending bus write cannot repopulate stale meters after load.
+    runtimeAudioMeterBus.clearAll();
     set({
       clips: [],
       layers: [],

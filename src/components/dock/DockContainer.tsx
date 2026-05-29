@@ -179,7 +179,7 @@ function captureDockLayoutAnimationSnapshot(container: HTMLElement, durationMs: 
       title: element.dataset.dockLayoutAnimTitle ?? '',
       rect: toAnimationRect(rect),
       clone: cloneElementForLayoutTransition(element, 'dock-layout-transition-clone'),
-      liveElement: isPreviewLayoutAnimationId(id) ? element : undefined,
+      liveElement: shouldAnimateLiveLayoutElement(id) ? element : undefined,
       childItems: captureDockLayoutChildAnimationItems(element),
     });
   });
@@ -254,6 +254,10 @@ function isPreviewLayoutAnimationId(id: string): boolean {
     || id.startsWith('panel:preview-')
     || id === 'panel:multi-preview'
     || id.startsWith('panel:multi-preview-');
+}
+
+function shouldAnimateLiveLayoutElement(id: string): boolean {
+  return isPreviewLayoutAnimationId(id) || id === 'panel:timeline';
 }
 
 function getDockLayoutOverlayZIndex(id: string, kind: 'panel' | 'child'): string {
@@ -560,7 +564,7 @@ function animateDockLayoutTransition(container: HTMLElement, snapshot: DockLayou
 
       if (!didMove && !didResize) return;
 
-      if (isPreviewLayoutAnimationId(id)) {
+      if (shouldAnimateLiveLayoutElement(id)) {
         pushLiveElementLayoutAnimation({
           element,
           deltaX,
@@ -614,7 +618,7 @@ function animateDockLayoutTransition(container: HTMLElement, snapshot: DockLayou
     const endRect = toRelativeRect(nextRect, containerRect);
     const startRect = getDockLayoutEdgeRect(endRect, containerRect);
 
-    if (isPreviewLayoutAnimationId(id)) {
+    if (shouldAnimateLiveLayoutElement(id)) {
       pushLiveElementLayoutAnimation({
         element,
         deltaX: startRect.left - endRect.left,
@@ -659,7 +663,7 @@ function animateDockLayoutTransition(container: HTMLElement, snapshot: DockLayou
     const timing = getPuzzleAnimationTiming(id, previous.rect, containerRect, snapshot.durationMs, movementDistance);
     const panelTiming = getDockLayoutEffectiveTiming(id, snapshot.durationMs, timing.delayMs, timing.durationMs);
 
-    const exitElement = isPreviewLayoutAnimationId(id) && previous.liveElement
+    const exitElement = shouldAnimateLiveLayoutElement(id) && previous.liveElement
       ? previous.liveElement
       : previous.clone;
 

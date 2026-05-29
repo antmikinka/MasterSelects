@@ -40,6 +40,7 @@ import { createPositioningUtils } from '../../src/stores/timeline/positioningUti
 import { MAX_ZOOM, MIN_ZOOM } from '../../src/stores/timeline/constants';
 import { resolvePlaybackStartPosition } from '../../src/stores/timeline/playbackRange';
 import { lockTimelineEditActions } from '../../src/stores/timeline/exportEditLock';
+import { runtimeAudioMeterBus } from '../../src/services/audio/runtimeAudioMeterBus';
 
 // Minimal initial state sufficient for testing slices
 function getInitialState(): Partial<TimelineStore> {
@@ -135,6 +136,9 @@ function getInitialState(): Partial<TimelineStore> {
  * Pass overrides to set initial state for specific tests.
  */
 export function createTestTimelineStore(overrides?: Partial<TimelineStore>) {
+  // The runtime meter bus is a process-wide singleton; reset it so each isolated
+  // test store starts from a clean meter state.
+  runtimeAudioMeterBus.resetForTest();
   return createStore<TimelineStore>()((set, get) => {
     const selectionActions = createSelectionSlice(set, get);
     const trackActions = createTrackSlice(set, get);

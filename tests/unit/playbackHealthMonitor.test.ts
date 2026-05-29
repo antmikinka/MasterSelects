@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { engine } from '../../src/engine/WebGPUEngine';
 import { layerBuilder } from '../../src/services/layerBuilder';
 import { PlaybackHealthMonitor } from '../../src/services/playbackHealthMonitor';
-import type { TimelineClip } from '../../src/types';
+import type { TimelineClip, TimelineTrack } from '../../src/types';
 
 const hoisted = vi.hoisted(() => ({
   timelineState: {
     isPlaying: false,
     playheadPosition: 0,
     clips: [] as TimelineClip[],
+    tracks: [] as TimelineTrack[],
   },
   logInfo: vi.fn(),
   logWarn: vi.fn(),
@@ -70,6 +71,7 @@ const testLayerBuilder = layerBuilder as LayerBuilderHealthTestAccess;
 function createClip(video: HTMLVideoElement, webCodecsPlayer?: { isFullMode?: () => boolean }): TimelineClip {
   return {
     id: 'clip-1',
+    trackId: 'video-1',
     startTime: 0,
     duration: 10,
     source: {
@@ -104,6 +106,7 @@ describe('PlaybackHealthMonitor', () => {
     hoisted.timelineState.isPlaying = false;
     hoisted.timelineState.playheadPosition = 0;
     hoisted.timelineState.clips = [];
+    hoisted.timelineState.tracks = [];
 
     hoisted.logInfo.mockReset();
     hoisted.logWarn.mockReset();
@@ -191,6 +194,9 @@ describe('PlaybackHealthMonitor', () => {
         lastSecond: 25,
       },
     }));
+    hoisted.timelineState.playheadPosition = 1;
+    hoisted.timelineState.clips = [createClip(createVideo())];
+    hoisted.timelineState.tracks = [{ id: 'video-1', type: 'video', visible: true } as TimelineTrack];
 
     const monitor = new PlaybackHealthMonitor() as PlaybackHealthMonitorTestAccess;
 

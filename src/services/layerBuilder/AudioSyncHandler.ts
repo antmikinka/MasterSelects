@@ -52,9 +52,8 @@ interface TailMeterPoll {
  */
 export class AudioSyncHandler {
   // Scrub audio state
-  private lastScrubPosition = -1;
-  private lastScrubTime = 0;
-  private scrubAudioTimeout: ReturnType<typeof setTimeout> | null = null;
+  private scrubStates = new WeakMap<HTMLMediaElement, { lastPosition: number; lastTime: number }>();
+  private scrubAudioTimeouts = new Map<HTMLMediaElement, ReturnType<typeof setTimeout>>();
   private tailMeterPolls = new Map<string, TailMeterPoll>();
 
   /**
@@ -130,12 +129,15 @@ export class AudioSyncHandler {
     masterRoute?: AudioSyncTarget['masterRoute'],
     meterTrackId?: string
   ): void {
-    const timeSinceLastScrub = ctx.now - this.lastScrubTime;
-    const positionChanged = Math.abs(ctx.playheadPosition - this.lastScrubPosition) > 0.005;
+    const scrubState = this.scrubStates.get(element) ?? { lastPosition: -1, lastTime: 0 };
+    const timeSinceLastScrub = ctx.now - scrubState.lastTime;
+    const positionChanged = Math.abs(ctx.playheadPosition - scrubState.lastPosition) > 0.005;
 
     if (positionChanged && timeSinceLastScrub > LAYER_BUILDER_CONSTANTS.SCRUB_TRIGGER_INTERVAL) {
-      this.lastScrubPosition = ctx.playheadPosition;
-      this.lastScrubTime = ctx.now;
+      this.scrubStates.set(element, {
+        lastPosition: ctx.playheadPosition,
+        lastTime: ctx.now,
+      });
       element.playbackRate = 1;
       this.applyScrubEffects(element, volume, eqGains, pan, processors, masterRoute, meterTrackId);
       this.playScrubAudio(element, clipTime);
@@ -182,13 +184,13 @@ export class AudioSyncHandler {
     element.currentTime = time;
     element.play().catch(() => {});
 
-    // Only set new timeout if none active
-    if (!this.scrubAudioTimeout) {
-      this.scrubAudioTimeout = setTimeout(() => {
-        element.pause();
-        this.scrubAudioTimeout = null;
-      }, LAYER_BUILDER_CONSTANTS.SCRUB_AUDIO_DURATION);
-    }
+    // One timeout per element so stacked audio tracks can scrub together.
+    this.clearScrubAudioTimeout(element);
+    const timeout = setTimeout(() => {
+      element.pause();
+      this.scrubAudioTimeouts.delete(element);
+    }, LAYER_BUILDER_CONSTANTS.SCRUB_AUDIO_DURATION);
+    this.scrubAudioTimeouts.set(element, timeout);
   }
 
   /**
@@ -209,6 +211,8 @@ export class AudioSyncHandler {
     masterRoute?: AudioSyncTarget['masterRoute'],
     meterTrackId?: string
   ): void {
+    this.clearScrubAudioTimeout(element);
+
     // Set playback rate
     const targetRate = absSpeed > 0.1 ? absSpeed : 1;
     if (Math.abs(element.playbackRate - targetRate) > 0.01) {
@@ -253,10 +257,20 @@ export class AudioSyncHandler {
       if (currentDrift > 0.1) {
         element.currentTime = clipTime;
       }
-      element.play().catch(err => {
-        log.warn(`[Audio ${type}] Failed to play: ${err.message}`);
-        state.hasAudioError = true;
-      });
+      element.play()
+        .then(() => {
+          const timelineState = useTimelineStore.getState();
+          if (!timelineState.isPlaying || timelineState.isDraggingPlayhead) {
+            element.pause();
+          }
+        })
+        .catch(err => {
+          if (err instanceof DOMException && err.name === 'AbortError') {
+            return;
+          }
+          log.warn(`[Audio ${type}] Failed to play: ${err.message}`);
+          state.hasAudioError = true;
+        });
     }
 
     // Set as master audio if eligible. The master may still be settling after
@@ -298,9 +312,16 @@ export class AudioSyncHandler {
    * Pause element if currently playing
    */
   private pauseIfPlaying(element: HTMLAudioElement | HTMLVideoElement): void {
-    if (!element.paused) {
-      element.pause();
-    }
+    this.clearScrubAudioTimeout(element);
+    element.pause();
+  }
+
+  private clearScrubAudioTimeout(element: HTMLAudioElement | HTMLVideoElement): void {
+    const timeout = this.scrubAudioTimeouts.get(element);
+    if (!timeout) return;
+
+    clearTimeout(timeout);
+    this.scrubAudioTimeouts.delete(element);
   }
 
   /**
@@ -401,17 +422,18 @@ export class AudioSyncHandler {
    * Reset scrub state (call when not scrubbing)
    */
   resetScrubState(): void {
-    this.lastScrubPosition = -1;
+    this.scrubStates = new WeakMap<HTMLMediaElement, { lastPosition: number; lastTime: number }>();
   }
 
   /**
    * Stop scrub audio (call when scrubbing ends)
    */
   stopScrubAudio(): void {
-    if (this.scrubAudioTimeout) {
-      clearTimeout(this.scrubAudioTimeout);
-      this.scrubAudioTimeout = null;
+    for (const [element, timeout] of this.scrubAudioTimeouts) {
+      clearTimeout(timeout);
+      element.pause();
     }
+    this.scrubAudioTimeouts.clear();
   }
 }
 

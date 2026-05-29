@@ -267,12 +267,29 @@ const youtubeHandlers: Record<string, (args: Record<string, unknown>, callerCont
 
 function collectDockLayoutDebugState(): Record<string, unknown> {
   const dockState = useDockStore.getState();
+  const collectElementDebug = (element: HTMLElement) => {
+    const rect = element.getBoundingClientRect();
+    const style = window.getComputedStyle(element);
+    return {
+      id: element.dataset.dockLayoutAnimId ?? element.dataset.dockLayoutChildAnimId ?? element.dataset.clipId ?? null,
+      className: element.className,
+      rect: {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      },
+      visibility: style.visibility,
+      display: style.display,
+      opacity: style.opacity,
+      inlineVisibility: element.style.visibility,
+    };
+  };
   const previewElements = typeof document === 'undefined'
     ? []
     : Array.from(document.querySelectorAll<HTMLElement>(
       '[data-dock-layout-anim-id="panel:preview"], [data-dock-layout-anim-id^="panel:preview-"], [data-dock-layout-anim-id="panel:multi-preview"], [data-dock-layout-anim-id^="panel:multi-preview-"]',
     )).map((element) => {
-      const rect = element.getBoundingClientRect();
       const canvases = Array.from(element.querySelectorAll<HTMLCanvasElement>('canvas')).map((canvas) => ({
         width: canvas.width,
         height: canvas.height,
@@ -283,17 +300,51 @@ function collectDockLayoutDebugState(): Record<string, unknown> {
       }));
 
       return {
-        id: element.dataset.dockLayoutAnimId,
+        ...collectElementDebug(element),
+        visibility: window.getComputedStyle(element).visibility,
+        display: window.getComputedStyle(element).display,
+        canvasCount: canvases.length,
+        canvases,
+      };
+    });
+  const timelineElements = typeof document === 'undefined'
+    ? []
+    : Array.from(document.querySelectorAll<HTMLElement>(
+      '[data-dock-layout-anim-id="panel:timeline"], [data-dock-layout-anim-id="group:timeline-group"], .timeline-container, .track-lane.audio, .timeline-clip.audio, .clip-waveform',
+    )).map((element) => collectElementDebug(element));
+  const waveformCanvases = typeof document === 'undefined'
+    ? []
+    : Array.from(document.querySelectorAll<HTMLCanvasElement>('.waveform-canvas')).map((canvas) => {
+      const rect = canvas.getBoundingClientRect();
+      const style = window.getComputedStyle(canvas);
+      const parent = canvas.parentElement;
+      const parentRect = parent?.getBoundingClientRect();
+      return {
+        className: canvas.className,
+        width: canvas.width,
+        height: canvas.height,
+        clientWidth: canvas.clientWidth,
+        clientHeight: canvas.clientHeight,
         rect: {
           left: Math.round(rect.left),
           top: Math.round(rect.top),
           width: Math.round(rect.width),
           height: Math.round(rect.height),
         },
-        visibility: window.getComputedStyle(element).visibility,
-        display: window.getComputedStyle(element).display,
-        canvasCount: canvases.length,
-        canvases,
+        parentRect: parentRect
+          ? {
+              left: Math.round(parentRect.left),
+              top: Math.round(parentRect.top),
+              width: Math.round(parentRect.width),
+              height: Math.round(parentRect.height),
+            }
+          : null,
+        visibility: style.visibility,
+        display: style.display,
+        opacity: style.opacity,
+        inlineVisibility: canvas.style.visibility,
+        cssWidth: canvas.style.width,
+        cssLeft: canvas.style.left,
       };
     });
 
@@ -306,6 +357,8 @@ function collectDockLayoutDebugState(): Record<string, unknown> {
       factory: layout.factory === true,
     })),
     previewElements,
+    timelineElements,
+    waveformCanvases,
   };
 }
 

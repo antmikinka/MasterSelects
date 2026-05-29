@@ -35,6 +35,7 @@ export class RenderLoop {
   private hasActiveVideo = false;
   private isPlaying = false;
   private isScrubbing = false;
+  private timelineVisualDemand = true;
   private continuousRender = false;
   private newFrameReady = false; // Set by RVFC to bypass scrub limiter
   private lastRenderTime = 0;
@@ -94,7 +95,10 @@ export class RenderLoop {
         log.info('Idle suppression lifted (warmup timeout)');
       }
 
-      if (this.continuousRender || this.isPlaying || this.isScrubbing) {
+      const playbackRenderActive = this.isPlaying && this.timelineVisualDemand;
+      const scrubRenderActive = this.isScrubbing && this.timelineVisualDemand;
+
+      if (this.continuousRender || playbackRenderActive || scrubRenderActive) {
         this.isIdle = false;
         this.lastActivityTime = timestamp;
       } else if (!this.idleSuppressed) {
@@ -130,15 +134,15 @@ export class RenderLoop {
       // Without this, a 30fps video on a 120Hz display causes hasActiveVideo
       // to oscillate (75% cache-hits → false), disabling the limiter and
       // rendering at 120fps — double the GPU work for zero visual benefit.
-      if (this.hasActiveVideo || this.isPlaying || this.continuousRender) {
+      if (this.hasActiveVideo || playbackRenderActive || scrubRenderActive || this.continuousRender) {
         const timeSinceLastRender = timestamp - this.lastRenderTime;
-        if (this.isPlaying || this.continuousRender) {
+        if (playbackRenderActive || this.continuousRender) {
           // Playback: ~60fps target
           if (timeSinceLastRender < this.VIDEO_FRAME_TIME) {
             this.animationId = requestAnimationFrame(loop);
             return;
           }
-        } else if (this.isScrubbing) {
+        } else if (scrubRenderActive) {
           // Scrubbing: ~30fps baseline to avoid wasted renders while video seeks.
           // BUT: if RVFC signaled a new decoded frame is ready, render immediately
           // to minimize latency between decode completion and display.
@@ -228,8 +232,8 @@ export class RenderLoop {
       // expected idle state. This can happen in background/unfocused tabs before
       // the RAF loop gets a chance to flip `isIdle` itself.
       const hasRenderDemand =
-        this.isPlaying ||
-        this.isScrubbing ||
+        (this.isPlaying && this.timelineVisualDemand) ||
+        (this.isScrubbing && this.timelineVisualDemand) ||
         this.continuousRender ||
         this.renderRequested ||
         this.idleSuppressed ||
@@ -296,6 +300,16 @@ export class RenderLoop {
     this.hasActiveVideo = hasVideo;
   }
 
+  setTimelineVisualDemand(hasDemand: boolean): void {
+    if (this.timelineVisualDemand === hasDemand) return;
+
+    this.timelineVisualDemand = hasDemand;
+    if (hasDemand && (this.isPlaying || this.isScrubbing)) {
+      this.lastRenderTime = 0;
+      this.requestRender();
+    }
+  }
+
   /**
    * Suppress idle detection — engine renders every frame until unsuppressed.
    * Used after page reload before the first play to keep video GPU surfaces warm.
@@ -318,7 +332,7 @@ export class RenderLoop {
       this.idleSuppressed = false;
       log.info('Idle suppression lifted (first play)');
     }
-    if (playing) {
+    if (playing && this.timelineVisualDemand) {
       // Resume should wake idle immediately and bypass the previous frame limiter window.
       this.lastRenderTime = 0;
       this.requestRender();
@@ -339,12 +353,19 @@ export class RenderLoop {
     return this.continuousRender;
   }
 
+  getTimelineVisualDemand(): boolean {
+    return this.timelineVisualDemand;
+  }
+
   setIsScrubbing(scrubbing: boolean): void {
     const wasScrubbing = this.isScrubbing;
     this.isScrubbing = scrubbing;
     if (scrubbing) {
       // Reset render time so first scrub frame renders immediately
       this.lastRenderTime = 0;
+      if (this.timelineVisualDemand) {
+        this.requestRender();
+      }
     }
     // Scrub stopped: ensure at least one more render cycle runs
     // so the settle-seek in VideoSyncManager can fire and the

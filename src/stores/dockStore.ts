@@ -447,6 +447,15 @@ function areDockLayoutsEqual(left: DockLayout, right: DockLayout): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function getMatchingEditableSavedLayout(
+  savedLayouts: SavedDockLayout[],
+  layout: DockLayout,
+): SavedDockLayout | null {
+  return savedLayouts.find((savedLayout) => (
+    areDockLayoutsEqual(savedLayout.layout, layout) && !isProtectedFactoryDockLayout(savedLayout)
+  )) ?? null;
+}
+
 // Default editing layout: Media left, Preview center, Properties right, Timeline bottom.
 const DEFAULT_LAYOUT: DockLayout = {
   root: {
@@ -1479,13 +1488,32 @@ export const useDockStore = create<DockState>()(
         saveLayoutAsDefault: () => {
           const { layout } = get();
           const cleanedLayout = cleanupPersistedLayout(cloneDockLayout(layout));
+          const timelineLayout = captureTimelineLayout();
           localStorage.setItem(LEGACY_DEFAULT_LAYOUT_STORAGE_KEY, JSON.stringify(cleanedLayout));
-          localStorage.setItem(DEFAULT_TIMELINE_LAYOUT_STORAGE_KEY, JSON.stringify(captureTimelineLayout()));
+          localStorage.setItem(DEFAULT_TIMELINE_LAYOUT_STORAGE_KEY, JSON.stringify(timelineLayout));
 
-          const matchingSavedLayout = get().savedLayouts.find((savedLayout) => (
-            areDockLayoutsEqual(savedLayout.layout, cleanedLayout)
-          ));
-          set({ defaultSavedLayoutId: matchingSavedLayout?.id ?? null });
+          const matchingSavedLayout = getMatchingEditableSavedLayout(get().savedLayouts, cleanedLayout);
+          if (matchingSavedLayout) {
+            const updatedLayout: SavedDockLayout = {
+              ...matchingSavedLayout,
+              layout: cleanedLayout,
+              timeline: timelineLayout,
+              updatedAt: Date.now(),
+            };
+            set((state) => ({
+              savedLayouts: [
+                updatedLayout,
+                ...state.savedLayouts.filter((savedLayout) => savedLayout.id !== updatedLayout.id),
+              ],
+              defaultSavedLayoutId: updatedLayout.id,
+              activeSavedLayoutId: state.activeSavedLayoutId === matchingSavedLayout.id
+                ? updatedLayout.id
+                : state.activeSavedLayoutId,
+            }));
+            return;
+          }
+
+          set({ defaultSavedLayoutId: null });
         },
 
         getLayoutForProject: () => {

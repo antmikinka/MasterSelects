@@ -293,6 +293,7 @@ describe('dock store saved layouts', () => {
 
     useDockStore.getState().setSplitRatio('root-split', 0.42);
     useTimelineStore.getState().setTrackFocusMode('audio');
+    useTimelineStore.getState().setTimelineSplitRatio(0.36);
     useTimelineStore.getState().setTrackHeight('audio-1', 96);
 
     const updatedLayout = useDockStore.getState().saveCurrentNamedLayout();
@@ -300,6 +301,7 @@ describe('dock store saved layouts', () => {
     expect(updatedLayout?.id).toBe(savedLayout!.id);
     expect(updatedLayout?.name).toBe('Current Layout');
     expect(updatedLayout?.timeline?.trackFocusMode).toBe('audio');
+    expect(updatedLayout?.timeline?.timelineSplitRatio).toBe(0.36);
     expect(updatedLayout?.timeline?.trackHeights?.['audio-1']).toBe(96);
     expect(updatedLayout?.layout.root.kind).toBe('split');
     if (updatedLayout?.layout.root.kind === 'split') {
@@ -310,5 +312,19 @@ describe('dock store saved layouts', () => {
   it('returns null when there is no current named layout to overwrite', () => {
     useDockStore.setState({ activeSavedLayoutId: null });
     expect(useDockStore.getState().saveCurrentNamedLayout()).toBeNull();
+  });
+
+  it('updates the matching saved layout timeline data when setting the current layout as default', () => {
+    const savedLayout = useDockStore.getState().saveNamedLayout('Default Candidate');
+    expect(savedLayout).not.toBeNull();
+
+    useTimelineStore.getState().setTrackFocusMode('video');
+    useTimelineStore.getState().setTimelineSplitRatio(0.64);
+    useDockStore.getState().saveLayoutAsDefault();
+
+    const restoredLayout = useDockStore.getState().savedLayouts.find((layout) => layout.id === savedLayout!.id);
+    expect(useDockStore.getState().defaultSavedLayoutId).toBe(savedLayout!.id);
+    expect(restoredLayout?.timeline?.trackFocusMode).toBe('video');
+    expect(restoredLayout?.timeline?.timelineSplitRatio).toBe(0.64);
   });
 });

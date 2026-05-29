@@ -8,6 +8,8 @@ This file is the Codex counterpart to `CLAUDE.md`. When workflow, branch rules, 
 
 ## -1. Working Principle / Top Memory
 
+You can never assume that you are the only person or agent working in the current branch. Treat all unrelated changes as someone else's active work: never revert, overwrite, clean up, reformat, or otherwise undo changes you did not make unless the user explicitly asks for that exact operation.
+
 MasterSelects is not optimized for short-term fixes. Because this project can move very quickly with AI-powered development and currently has no external users blocked by changes, large and correct architectural decisions are explicitly allowed and preferred.
 
 Default behavior: think long term, build the real target architecture, do not build MVPs, mocks, throwaway prototypes, or small temporary solutions when the robust solution is directly reachable. Use short-term hacks only when the user explicitly requests them or when a hard technical blocker leaves no better implementation path.
@@ -156,6 +158,21 @@ Large command outputs are token- and time-expensive. For intermediate status, re
 | `staging` | Development, default target for ongoing work |
 | `master` | Production, only through PR |
 
+### Issue Handling Workflow
+
+When taking over a GitHub issue, always use this flow:
+
+1. Comment `I am on it` on the issue.
+2. Assign the issue to `sportinger`.
+3. Create a new Git branch for the issue and link it to the issue on GitHub.
+4. Clone that branch into a new separate folder, then work from that folder so other agents can stay in their own working directories.
+5. Implement the issue in that branch folder.
+6. Commit and push to the issue branch at the agent's discretion when the work is coherent and locally checked.
+7. When the user says that everything works, merge the issue branch to `master` without waiting for GitHub checks.
+8. After the merge, comment on the issue with the result.
+
+This issue workflow is an explicit exception to the general "do not push independently" rule, but only for the created issue branch. Merging to `master` still requires the user's confirmation that everything works.
+
 ### Test, Commit, and Push Rules
 
 During ongoing work, test deliberately: choose relevant unit/smoke tests, build, or lint according to risk and change scope. The full suite is not required after every small intermediate change and should not be run routinely because of time/token cost.
@@ -172,7 +189,7 @@ Rules:
 
 - Never commit directly to `master`.
 - Never merge to `master` independently.
-- Never push independently unless the user explicitly asks for it.
+- Never push independently unless the user explicitly asks for it, except for issue branches created through the Issue Handling Workflow.
 - Prefer small, coherent changes.
 - Do not commit if build, lint, or tests fail.
 
