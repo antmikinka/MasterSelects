@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useHistoryStore, initHistoryStoreRefs, setHistoryCallbacks, captureSnapshot as captureSnapshotFn, undo as undoFn, redo as redoFn, startBatch as startBatchFn, endBatch as endBatchFn, serializeHistoryStateForProject, hydrateHistoryStateFromProject } from '../../src/stores/historyStore';
+import { useHistoryStore, initHistoryStoreRefs, setHistoryCallbacks, captureSnapshot as captureSnapshotFn, undo as undoFn, redo as redoFn, startBatch as startBatchFn, endBatch as endBatchFn, serializeHistoryStateForProject, hydrateHistoryStateFromProject, setHistoryDisabledForDebug, isHistoryDisabledForDebug } from '../../src/stores/historyStore';
 import type { Layer, TimelineClip } from '../../src/types';
 import { createMockClip } from '../helpers/mockData';
 
@@ -157,6 +157,8 @@ describe('historyStore', () => {
   let mocks: ReturnType<typeof createMockStores>;
 
   beforeEach(() => {
+    setHistoryDisabledForDebug(false);
+
     // Reset history store state
     useHistoryStore.setState({
       undoStack: [],
@@ -205,6 +207,20 @@ describe('historyStore', () => {
     useHistoryStore.setState({ isApplying: true });
     useHistoryStore.getState().captureSnapshot('should-not-capture');
     expect(useHistoryStore.getState().currentSnapshot).toBeNull();
+  });
+
+  it('debug disable: suppresses captures and batches', () => {
+    setHistoryDisabledForDebug(true);
+    expect(isHistoryDisabledForDebug()).toBe(true);
+
+    useHistoryStore.getState().captureSnapshot('hidden');
+    useHistoryStore.getState().startBatch('hidden batch');
+    useHistoryStore.getState().endBatch();
+
+    const state = useHistoryStore.getState();
+    expect(state.currentSnapshot).toBeNull();
+    expect(state.undoStack).toEqual([]);
+    expect(state.batchId).toBeNull();
   });
 
   it('captureSnapshot: does not capture during batch', () => {

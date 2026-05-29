@@ -2434,7 +2434,7 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
   const { isDragging, dragMode, dragHandle, hoverHandle, handleOverlayMouseDown, handleOverlayMouseMove, handleOverlayMouseUp } =
     useLayerDrag({
       editMode: layerTransformMode, overlayRef, canvasSize, canvasInContainer, viewZoom,
-      layers, clips, selectedLayerId, selectedClipId,
+      layers, clips, tracks, selectedLayerId, selectedClipId,
       selectClip, selectLayer, updateClipTransform, updateLayer,
       calculateLayerBounds, findLayerAtPosition, findHandleAtPosition,
     });

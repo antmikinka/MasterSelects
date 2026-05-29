@@ -51,6 +51,61 @@ const MAX_HISTORY_BRANCHES = 24;
 const MAX_PERSISTED_HISTORY_SNAPSHOTS = 32;
 const PERSIST_HISTORY_SNAPSHOTS = false;
 const HISTORY_CAPTURE_WARN_MS = 24;
+export const HISTORY_DEBUG_DISABLE_STORAGE_KEY = 'masterselects.debug.disableHistory';
+
+type HistoryDebugWindow = Window & {
+  __MS_DISABLE_HISTORY__?: boolean;
+  __MS_HISTORY_DEBUG__?: {
+    disable: () => void;
+    enable: () => void;
+    isDisabled: () => boolean;
+    storageKey: string;
+  };
+};
+
+function readHistoryDebugStorage(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const stored = window.localStorage?.getItem(HISTORY_DEBUG_DISABLE_STORAGE_KEY);
+    return stored === '1' || stored === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export function isHistoryDisabledForDebug(): boolean {
+  if (typeof window === 'undefined') return false;
+  const debugWindow = window as HistoryDebugWindow;
+  return debugWindow.__MS_DISABLE_HISTORY__ === true || readHistoryDebugStorage();
+}
+
+export function setHistoryDisabledForDebug(disabled: boolean): void {
+  if (typeof window === 'undefined') return;
+  const debugWindow = window as HistoryDebugWindow;
+  debugWindow.__MS_DISABLE_HISTORY__ = disabled;
+  try {
+    if (disabled) {
+      window.localStorage?.setItem(HISTORY_DEBUG_DISABLE_STORAGE_KEY, '1');
+    } else {
+      window.localStorage?.removeItem(HISTORY_DEBUG_DISABLE_STORAGE_KEY);
+    }
+  } catch {
+    // localStorage can be unavailable in restricted browser contexts.
+  }
+}
+
+function installHistoryDebugControls(): void {
+  if (typeof window === 'undefined') return;
+  const debugWindow = window as HistoryDebugWindow;
+  debugWindow.__MS_HISTORY_DEBUG__ = {
+    disable: () => setHistoryDisabledForDebug(true),
+    enable: () => setHistoryDisabledForDebug(false),
+    isDisabled: isHistoryDisabledForDebug,
+    storageKey: HISTORY_DEBUG_DISABLE_STORAGE_KEY,
+  };
+}
+
+installHistoryDebugControls();
 
 // Snapshot of undoable state from all stores
 interface StateSnapshot {
@@ -1027,6 +1082,8 @@ export const useHistoryStore = create<HistoryState>()(
     batchLabel: null,
 
     captureSnapshot: (label: string) => {
+      if (isHistoryDisabledForDebug()) return;
+
       const { isApplying, undoStack, currentSnapshot, redoStack, branches, maxHistorySize, batchId } = get();
 
       // Don't capture during undo/redo application
@@ -1076,6 +1133,8 @@ export const useHistoryStore = create<HistoryState>()(
     },
 
     undo: () => {
+      if (isHistoryDisabledForDebug()) return null;
+
       if (isTimelineHistoryLocked()) {
         log.warn('Blocked undo during timeline export');
         return null;
@@ -1126,6 +1185,8 @@ export const useHistoryStore = create<HistoryState>()(
     },
 
     redo: () => {
+      if (isHistoryDisabledForDebug()) return null;
+
       if (isTimelineHistoryLocked()) {
         log.warn('Blocked redo during timeline export');
         return null;
@@ -1174,9 +1235,11 @@ export const useHistoryStore = create<HistoryState>()(
       return { operation: 'redo', label: nextSnapshot.label };
     },
 
-    canUndo: () => get().undoStack.length > 0,
-    canRedo: () => get().redoStack.length > 0,
+    canUndo: () => !isHistoryDisabledForDebug() && get().undoStack.length > 0,
+    canRedo: () => !isHistoryDisabledForDebug() && get().redoStack.length > 0,
     getHistoryEntries: () => {
+      if (isHistoryDisabledForDebug()) return [];
+
       const {
         undoStack,
         currentSnapshot,
@@ -1196,6 +1259,8 @@ export const useHistoryStore = create<HistoryState>()(
     },
 
     recordEvent: (type, label) => {
+      if (isHistoryDisabledForDebug()) return;
+
       if (type === 'autosave') return;
 
       const timestamp = Date.now();
@@ -1213,6 +1278,8 @@ export const useHistoryStore = create<HistoryState>()(
     },
 
     restoreEntry: (entry) => {
+      if (isHistoryDisabledForDebug()) return null;
+
       if (entry.kind === 'branch' && entry.branchId) {
         return get().restoreBranch(entry.branchId, entry.stackIndex);
       }
@@ -1289,6 +1356,8 @@ export const useHistoryStore = create<HistoryState>()(
     },
 
     restoreBranch: (branchId, snapshotIndex) => {
+      if (isHistoryDisabledForDebug()) return null;
+
       if (isTimelineHistoryLocked()) {
         log.warn('Blocked branch restore during timeline export');
         return null;
@@ -1356,6 +1425,8 @@ export const useHistoryStore = create<HistoryState>()(
     },
 
     startBatch: (label: string) => {
+      if (isHistoryDisabledForDebug()) return;
+
       const { batchId, currentSnapshot } = get();
       if (batchId !== null) return; // Already batching
 
@@ -1373,6 +1444,10 @@ export const useHistoryStore = create<HistoryState>()(
     endBatch: () => {
       const { batchId, batchLabel, undoStack, currentSnapshot, redoStack, branches, maxHistorySize } = get();
       if (batchId === null) return;
+      if (isHistoryDisabledForDebug()) {
+        set({ batchId: null, batchLabel: null });
+        return;
+      }
 
       // Create final snapshot with batch label
       const captureStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -1428,6 +1503,19 @@ export const useHistoryStore = create<HistoryState>()(
     }),
 
     serializeForProject: () => {
+      if (isHistoryDisabledForDebug()) {
+        return {
+          schemaVersion: 1,
+          undoStack: [],
+          redoStack: [],
+          currentSnapshot: null,
+          eventLog: [],
+          visibleEntries: [],
+          branches: [],
+          maxHistorySize: get().maxHistorySize,
+        };
+      }
+
       const {
         undoStack,
         redoStack,
@@ -1475,6 +1563,24 @@ export const useHistoryStore = create<HistoryState>()(
 
     hydrateFromProject: (history) => {
       const maxHistorySize = Math.max(1, Math.floor(history?.maxHistorySize ?? get().maxHistorySize));
+
+      if (isHistoryDisabledForDebug()) {
+        set({
+          undoStack: [],
+          redoStack: [],
+          eventLog: [],
+          branches: [],
+          currentSnapshot: null,
+          maxHistorySize,
+          navigationEntries: null,
+          navigationSnapshotsByEntryId: {},
+          activeEntryId: null,
+          isApplying: false,
+          batchId: null,
+          batchLabel: null,
+        });
+        return;
+      }
 
       if (!history || history.schemaVersion !== 1) {
         set({

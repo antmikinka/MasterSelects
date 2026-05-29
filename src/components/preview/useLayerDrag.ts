@@ -1,7 +1,7 @@
 // Layer drag logic: move/scale layers in edit mode with document-level listeners + overlay drawing
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Layer, TimelineClip } from '../../types';
+import type { Layer, TimelineClip, TimelineTrack } from '../../types';
 import {
   getLayerOverlayHandles,
   resolvePositionDeltaForCanvasDelta,
@@ -19,6 +19,7 @@ interface UseLayerDragParams {
   viewZoom: number;
   layers: Layer[];
   clips: TimelineClip[];
+  tracks: TimelineTrack[];
   selectedLayerId: string | null;
   selectedClipId: string | null;
   selectClip: (id: string | null) => void;
@@ -50,6 +51,11 @@ function findClipForLayer(clips: TimelineClip[], layer: Layer): TimelineClip | u
     : clips.find((clip) => clip.name === layer.name);
 }
 
+function isClipOnLockedTrack(clip: TimelineClip | undefined, tracks: TimelineTrack[]): boolean {
+  if (!clip) return false;
+  return tracks.find((track) => track.id === clip.trackId)?.locked === true;
+}
+
 interface MovePositionBasis {
   baseBounds: LayerOverlayBounds;
   xPlusBounds: LayerOverlayBounds;
@@ -78,6 +84,7 @@ export function useLayerDrag({
   viewZoom,
   layers,
   clips,
+  tracks,
   selectedLayerId,
   selectedClipId,
   selectClip,
@@ -97,6 +104,7 @@ export function useLayerDrag({
   const currentDragPos = useRef({ x: 0, y: 0 });
   const layersRef = useRef(layers);
   const clipsRef = useRef(clips);
+  const tracksRef = useRef(tracks);
   const movePositionBasis = useRef<MovePositionBasis | null>(null);
   const scaleDragBounds = useRef<LayerOverlayBounds | null>(null);
   const pendingDragUpdate = useRef<PendingDragUpdate | null>(null);
@@ -110,12 +118,21 @@ export function useLayerDrag({
     clipsRef.current = clips;
   }, [clips]);
 
+  useEffect(() => {
+    tracksRef.current = tracks;
+  }, [tracks]);
+
   const flushPendingDragUpdate = useCallback(() => {
     dragUpdateFrame.current = null;
     const pending = pendingDragUpdate.current;
     pendingDragUpdate.current = null;
 
     if (!pending) return;
+
+    const clip = pending.clipId
+      ? clipsRef.current.find((candidate) => candidate.id === pending.clipId)
+      : undefined;
+    if (isClipOnLockedTrack(clip, tracksRef.current)) return;
 
     if (pending.mode === 'move') {
       updateLayer(pending.layerId, { position: pending.position });
@@ -339,6 +356,7 @@ export function useLayerDrag({
       const layer = layersRef.current.find(l => l?.id === dragLayerId);
       if (!layer) return;
       const clip = findClipForLayer(clipsRef.current, layer);
+      if (isClipOnLockedTrack(clip, tracksRef.current)) return;
 
       const dx = e.clientX - dragStart.current.x;
       const dy = e.clientY - dragStart.current.y;

@@ -23,10 +23,20 @@ import {
   captureSnapshot,
   undo,
   redo,
+  isHistoryDisabledForDebug,
 } from '../stores/historyStore';
 import { Logger } from '../services/logger';
 
 const log = Logger.create('History');
+
+function isHistoryCaptureSuppressed(): boolean {
+  const historyState = useHistoryStore.getState();
+  return (
+    isHistoryDisabledForDebug() ||
+    historyState.isApplying ||
+    historyState.batchId !== null
+  );
+}
 
 export interface HistoryFeedbackNotice {
   id: number;
@@ -319,6 +329,7 @@ export function useGlobalHistory() {
     // Register callbacks so undo/redo can flush pending captures
     setHistoryCallbacks({
       flushPendingCapture: () => {
+        if (isHistoryDisabledForDebug()) return;
         if (pendingTimer.current) {
           clearTimeout(pendingTimer.current);
           const label = pendingLabel.current;
@@ -334,6 +345,12 @@ export function useGlobalHistory() {
       },
     });
 
+    if (isHistoryDisabledForDebug()) {
+      useHistoryStore.getState().clearHistory();
+      log.warn('Undo/redo system disabled by debug flag');
+      return;
+    }
+
     // Capture initial state
     captureSnapshot('initial');
 
@@ -344,17 +361,17 @@ export function useGlobalHistory() {
   useEffect(() => {
     // Debounced capture — stores timer ID and label so undo/redo can flush it
     const debouncedCapture = (label: string) => {
+      if (isHistoryDisabledForDebug()) return;
       if (pendingTimer.current) clearTimeout(pendingTimer.current);
-      pendingLabel.current = label;
-      pendingTimer.current = setTimeout(() => {
-        pendingTimer.current = null;
-        pendingLabel.current = '';
+        pendingLabel.current = label;
+        pendingTimer.current = setTimeout(() => {
+          pendingTimer.current = null;
+          pendingLabel.current = '';
+
+        if (isHistoryCaptureSuppressed()) return;
 
         // Suppress captures shortly after undo/redo to prevent cascade re-captures
         if (Date.now() < suppressUntil.current) return;
-
-        // Don't capture during undo/redo application
-        if (useHistoryStore.getState().isApplying) return;
 
         const now = Date.now();
         // Minimum 100ms between captures
@@ -364,26 +381,32 @@ export function useGlobalHistory() {
       }, 150);
     };
 
+    if (isHistoryDisabledForDebug()) {
+      return;
+    }
+
     // Subscribe to timeline changes (clips, tracks, keyframes, markers)
     // Using shallowEqual so callback only fires when these specific properties change,
     // not on every store update (playheadPosition, isPlaying, etc.)
     const unsubTimeline = useTimelineStore.subscribe(
       (state) => ({
         clips: state.clips,
-        clipsHistorySignature: createTimelineClipsHistorySignature(state.clips),
         tracks: state.tracks,
         clipKeyframes: state.clipKeyframes,
         markers: state.markers,
         masterAudioState: (state as { masterAudioState?: unknown }).masterAudioState,
       }),
       (curr, prev) => {
-        if (useHistoryStore.getState().isApplying) return;
+        if (isHistoryCaptureSuppressed()) return;
 
         // Skip captures during mask dragging — vertex updates fire at 60fps
         // and would cause expensive deep-clone snapshots every 150ms
         if (useTimelineStore.getState().maskDragging) return;
 
-        if (curr.clipsHistorySignature !== prev.clipsHistorySignature) {
+        if (
+          curr.clips !== prev.clips &&
+          createTimelineClipsHistorySignature(curr.clips) !== createTimelineClipsHistorySignature(prev.clips)
+        ) {
           if (curr.clips.length !== prev.clips.length) {
             debouncedCapture(curr.clips.length > prev.clips.length ? 'Add clip' : 'Remove clip');
           } else {
@@ -406,12 +429,7 @@ export function useGlobalHistory() {
     const unsubMedia = useMediaStore.subscribe(
       (state) => ({
         files: state.files,
-        filesHistorySignature: createMediaFilesHistorySignature(state.files),
         compositions: state.compositions,
-        compositionHistorySignature: createCompositionHistorySignature(
-          state.compositions,
-          state.activeCompositionId
-        ),
         activeCompositionId: state.activeCompositionId,
         folders: state.folders,
         textItems: state.textItems,
@@ -420,17 +438,23 @@ export function useGlobalHistory() {
         motionShapeItems: state.motionShapeItems,
       }),
       (curr, prev) => {
-        if (useHistoryStore.getState().isApplying) return;
+        if (isHistoryCaptureSuppressed()) return;
 
-        if (curr.filesHistorySignature !== prev.filesHistorySignature) {
+        if (
+          curr.files !== prev.files &&
+          createMediaFilesHistorySignature(curr.files) !== createMediaFilesHistorySignature(prev.files)
+        ) {
           debouncedCapture(curr.files.length > prev.files.length ? 'Import file' : 'Remove file');
         } else if (
           curr.compositions !== prev.compositions &&
-          curr.compositionHistorySignature !== prev.compositionHistorySignature &&
+          createCompositionHistorySignature(
+            curr.compositions,
+            curr.activeCompositionId
+          ) !== createCompositionHistorySignature(prev.compositions, prev.activeCompositionId) &&
           createCompositionHistorySignature(
             curr.compositions,
             prev.activeCompositionId
-          ) !== prev.compositionHistorySignature
+          ) !== createCompositionHistorySignature(prev.compositions, prev.activeCompositionId)
         ) {
           debouncedCapture('Modify composition');
         } else if (curr.folders !== prev.folders) {
@@ -452,7 +476,7 @@ export function useGlobalHistory() {
     const unsubDock = useDockStore.subscribe(
       (state) => state.layout,
       (curr, prev) => {
-        if (useHistoryStore.getState().isApplying) return;
+        if (isHistoryCaptureSuppressed()) return;
         if (isAIExecutionRunning()) return;
         if (
           curr !== prev &&
@@ -467,17 +491,25 @@ export function useGlobalHistory() {
     const unsubFlashBoard = useFlashBoardStore.subscribe(
       (state) => ({
         activeBoardId: state.activeBoardId,
-        boardsSignature: JSON.stringify(normalizeFlashBoardBoardsForHistory(state.boards)),
-        composerSignature: JSON.stringify(normalizeFlashBoardComposerForHistory(state.composer)),
+        boards: state.boards,
+        composer: state.composer,
       }),
       (curr, prev) => {
-        if (useHistoryStore.getState().isApplying) return;
+        if (isHistoryCaptureSuppressed()) return;
 
         if (curr.activeBoardId !== prev.activeBoardId) {
           debouncedCapture('Switch board');
-        } else if (curr.composerSignature !== prev.composerSignature) {
+        } else if (
+          curr.composer !== prev.composer &&
+          JSON.stringify(normalizeFlashBoardComposerForHistory(curr.composer)) !==
+            JSON.stringify(normalizeFlashBoardComposerForHistory(prev.composer))
+        ) {
           debouncedCapture('Modify composer');
-        } else if (curr.boardsSignature !== prev.boardsSignature) {
+        } else if (
+          curr.boards !== prev.boards &&
+          JSON.stringify(normalizeFlashBoardBoardsForHistory(curr.boards)) !==
+            JSON.stringify(normalizeFlashBoardBoardsForHistory(prev.boards))
+        ) {
           debouncedCapture('Modify board');
         }
       },
@@ -491,7 +523,7 @@ export function useGlobalHistory() {
         selectedPresetId: state.selectedPresetId,
       }),
       (curr, prev) => {
-        if (useHistoryStore.getState().isApplying) return;
+        if (isHistoryCaptureSuppressed()) return;
 
         if (curr.presets !== prev.presets) {
           debouncedCapture('Modify export presets');
@@ -559,7 +591,7 @@ export function useGlobalHistory() {
     redo,
     historyNotice,
     clearHistoryNotice,
-    canUndo: useHistoryStore((state) => state.undoStack.length > 0),
-    canRedo: useHistoryStore((state) => state.redoStack.length > 0),
+    canUndo: useHistoryStore((state) => !isHistoryDisabledForDebug() && state.undoStack.length > 0),
+    canRedo: useHistoryStore((state) => !isHistoryDisabledForDebug() && state.redoStack.length > 0),
   };
 }

@@ -3,6 +3,7 @@
 import { useCallback, useState, useRef, useEffect } from 'react';
 import type { FloatingPanel as FloatingPanelType } from '../../types/dock';
 import { useDockStore } from '../../stores/dockStore';
+import { startBatch, endBatch } from '../../stores/historyStore';
 import { DockPanelContent } from './DockPanelContent';
 
 interface FloatingPanelProps {
@@ -20,6 +21,7 @@ export function FloatingPanel({ floating }: FloatingPanelProps) {
   const handleHeaderMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
     e.preventDefault();
+    startBatch('Move floating panel');
     bringToFront(floating.id);
     setIsDragging(true);
     dragOffset.current = {
@@ -33,6 +35,7 @@ export function FloatingPanel({ floating }: FloatingPanelProps) {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    startBatch('Resize floating panel');
     bringToFront(floating.id);
     setIsResizing(true);
     resizeStart.current = {
@@ -64,6 +67,7 @@ export function FloatingPanel({ floating }: FloatingPanelProps) {
     const handleMouseUp = () => {
       setIsDragging(false);
       setIsResizing(false);
+      endBatch();
     };
 
     window.addEventListener('mousemove', handleMouseMove);
@@ -72,6 +76,7 @@ export function FloatingPanel({ floating }: FloatingPanelProps) {
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
+      endBatch();
     };
   }, [isDragging, isResizing, floating.id, updateFloatingPosition, updateFloatingSize]);
 

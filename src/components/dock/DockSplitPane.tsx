@@ -3,6 +3,7 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import type { DockSplit } from '../../types/dock';
 import { useDockStore } from '../../stores/dockStore';
+import { startBatch, endBatch } from '../../stores/historyStore';
 import { DockNode } from './DockNode';
 import { nodeContainsPanel } from '../../utils/dockLayout';
 
@@ -30,6 +31,7 @@ export function DockSplitPane({ split }: DockSplitPaneProps) {
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    startBatch('Resize dock split');
     setIsResizing(true);
   }, []);
 
@@ -63,6 +65,7 @@ export function DockSplitPane({ split }: DockSplitPaneProps) {
 
     const handleMouseUp = () => {
       setIsResizing(false);
+      endBatch();
     };
 
     window.addEventListener('mousemove', handleMouseMove);
@@ -71,6 +74,7 @@ export function DockSplitPane({ split }: DockSplitPaneProps) {
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
+      endBatch();
     };
   }, [isResizing, isHorizontal, split.id, setSplitRatio]);
 
