@@ -605,6 +605,7 @@ export interface AddClipOptions {
 export interface GenerateClipAudioAnalysisOptions {
   force?: boolean;
   previewOnly?: boolean;
+  derivedOnly?: boolean;
 }
 
 // Core clip actions (remain in clipSlice)

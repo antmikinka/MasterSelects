@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createCompositionHistorySignature } from '../../src/hooks/useGlobalHistory';
-import type { Composition } from '../../src/stores/mediaStore/types';
+import {
+  createCompositionHistorySignature,
+  createMediaFilesHistorySignature,
+  createTimelineClipsHistorySignature,
+} from '../../src/hooks/useGlobalHistory';
+import type { Composition, MediaFile } from '../../src/stores/mediaStore/types';
+import { createMockClip } from '../helpers/mockData';
 
 function composition(overrides: Partial<Composition> = {}): Composition {
   return {
@@ -100,5 +105,95 @@ describe('createCompositionHistorySignature', () => {
 
     expect(createCompositionHistorySignature([after], 'comp-1'))
       .not.toBe(createCompositionHistorySignature([before], 'comp-1'));
+  });
+});
+
+describe('history trigger signatures', () => {
+  it('ignores transient clip audio-analysis fields', () => {
+    const before = createMockClip({
+      id: 'clip-a',
+      trackId: 'audio-1',
+      audioState: {
+        sourceAnalysisRefs: { waveformPyramidId: 'source-waveform-a' },
+      },
+    });
+    const after = {
+      ...before,
+      waveformGenerating: true,
+      waveformProgress: 42,
+      audioAnalysisJob: {
+        jobId: 'job-a',
+        kind: 'processed-waveform-pyramid',
+        label: 'Processed Waveform',
+        artifactKinds: ['processed-waveform-pyramid'],
+        processed: true,
+        progress: 42,
+        phase: 'rendering-processed-audio',
+        startedAt: '2026-05-29T08:00:00.000Z',
+        updatedAt: '2026-05-29T08:00:01.000Z',
+      },
+      audioState: {
+        ...before.audioState,
+        sourceAnalysisRefs: { waveformPyramidId: 'source-waveform-b' },
+        processedAnalysisRefs: { processedWaveformPyramidId: 'processed-waveform-b' },
+      },
+    };
+
+    expect(createTimelineClipsHistorySignature([after]))
+      .toBe(createTimelineClipsHistorySignature([before]));
+  });
+
+  it('tracks real clip edits after ignoring analysis metadata', () => {
+    const before = createMockClip({ id: 'clip-a', trackId: 'audio-1', effects: [] });
+    const after = createMockClip({
+      ...before,
+      effects: [
+        { id: 'fx-1', name: 'EQ', type: 'audio-eq', enabled: true, params: { band1k: 3 } },
+      ],
+    });
+
+    expect(createTimelineClipsHistorySignature([after]))
+      .not.toBe(createTimelineClipsHistorySignature([before]));
+  });
+
+  it('ignores transient media waveform fields', () => {
+    const before: MediaFile = {
+      id: 'media-a',
+      name: 'dialog.wav',
+      type: 'audio',
+      parentId: null,
+      createdAt: 1,
+      url: 'blob:before',
+    };
+    const after: MediaFile = {
+      ...before,
+      url: 'blob:after',
+      waveformProgress: 87,
+      waveformStatus: 'generating',
+      waveform: [0.1, 0.4],
+      waveformChannels: [[0.1, 0.4]],
+      audioAnalysisRefs: { waveformPyramidId: 'waveform-a' },
+    };
+
+    expect(createMediaFilesHistorySignature([after]))
+      .toBe(createMediaFilesHistorySignature([before]));
+  });
+
+  it('tracks real media file edits after ignoring waveform metadata', () => {
+    const before: MediaFile = {
+      id: 'media-a',
+      name: 'dialog.wav',
+      type: 'audio',
+      parentId: null,
+      createdAt: 1,
+      url: 'blob:before',
+    };
+    const after: MediaFile = {
+      ...before,
+      name: 'renamed-dialog.wav',
+    };
+
+    expect(createMediaFilesHistorySignature([after]))
+      .not.toBe(createMediaFilesHistorySignature([before]));
   });
 });

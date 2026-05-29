@@ -11,7 +11,8 @@ import type {
   FlashBoardComposerState,
   FlashBoardJobState,
 } from '../stores/flashboardStore';
-import type { Composition } from '../stores/mediaStore/types';
+import type { Composition, MediaFile } from '../stores/mediaStore/types';
+import type { TimelineClip } from '../types';
 import type { DockLayout, DockNode, DockPanel, FloatingPanel } from '../types/dock';
 import { getShortcutRegistry } from '../services/shortcutRegistry';
 import { isAIExecutionRunning } from '../services/aiTools/executionState';
@@ -127,6 +128,99 @@ export function createCompositionHistorySignature(
 ): string {
   return JSON.stringify(
     compositions.map((composition) => normalizeCompositionForHistory(composition, activeCompositionId))
+  );
+}
+
+const CLIP_HISTORY_SIGNATURE_SKIP_KEYS = new Set([
+  'file',
+  'mediaElement',
+  'videoElement',
+  'audioElement',
+  'waveform',
+  'waveformChannels',
+  'waveformGenerating',
+  'waveformProgress',
+  'audioAnalysisJob',
+  'sourceAnalysisRefs',
+  'processedAnalysisRefs',
+  'mixdownBuffer',
+  'thumbnailUrl',
+  'proxyVideoUrl',
+]);
+
+const MEDIA_FILE_HISTORY_SIGNATURE_SKIP_KEYS = new Set([
+  'file',
+  'url',
+  'thumbnailUrl',
+  'proxyVideoUrl',
+  'waveform',
+  'waveformChannels',
+  'waveformProgress',
+  'waveformStatus',
+  'audioAnalysisRefs',
+]);
+
+function isHistorySignatureBinaryPayload(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return true;
+  if (typeof AudioBuffer !== 'undefined' && value instanceof AudioBuffer) return true;
+  return false;
+}
+
+function isHistorySignatureDomPayload(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  if (typeof Element !== 'undefined' && value instanceof Element) return true;
+  if (typeof HTMLMediaElement !== 'undefined' && value instanceof HTMLMediaElement) return true;
+  if (typeof File !== 'undefined' && value instanceof File) return true;
+  return false;
+}
+
+function normalizeValueForHistorySignature(
+  value: unknown,
+  skipKeys: Set<string>,
+  seen = new WeakSet<object>(),
+): unknown {
+  if (value === null) return null;
+  if (typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'object') return null;
+  if (isHistorySignatureBinaryPayload(value) || isHistorySignatureDomPayload(value)) return null;
+
+  if (seen.has(value)) return '[Circular]';
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value.map(item => normalizeValueForHistorySignature(item, skipKeys, seen));
+  }
+
+  const proto = Object.getPrototypeOf(value);
+  if (proto && proto !== Object.prototype) return null;
+
+  const normalized: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) {
+    if (skipKeys.has(key)) continue;
+    const nested = normalizeValueForHistorySignature(
+      (value as Record<string, unknown>)[key],
+      skipKeys,
+      seen,
+    );
+    if (nested !== undefined) {
+      normalized[key] = nested;
+    }
+  }
+
+  return normalized;
+}
+
+export function createTimelineClipsHistorySignature(clips: TimelineClip[]): string {
+  return JSON.stringify(
+    clips.map(clip => normalizeValueForHistorySignature(clip, CLIP_HISTORY_SIGNATURE_SKIP_KEYS))
+  );
+}
+
+export function createMediaFilesHistorySignature(files: MediaFile[]): string {
+  return JSON.stringify(
+    files.map(file => normalizeValueForHistorySignature(file, MEDIA_FILE_HISTORY_SIGNATURE_SKIP_KEYS))
   );
 }
 
@@ -276,6 +370,7 @@ export function useGlobalHistory() {
     const unsubTimeline = useTimelineStore.subscribe(
       (state) => ({
         clips: state.clips,
+        clipsHistorySignature: createTimelineClipsHistorySignature(state.clips),
         tracks: state.tracks,
         clipKeyframes: state.clipKeyframes,
         markers: state.markers,
@@ -288,7 +383,7 @@ export function useGlobalHistory() {
         // and would cause expensive deep-clone snapshots every 150ms
         if (useTimelineStore.getState().maskDragging) return;
 
-        if (curr.clips !== prev.clips) {
+        if (curr.clipsHistorySignature !== prev.clipsHistorySignature) {
           if (curr.clips.length !== prev.clips.length) {
             debouncedCapture(curr.clips.length > prev.clips.length ? 'Add clip' : 'Remove clip');
           } else {
@@ -311,6 +406,7 @@ export function useGlobalHistory() {
     const unsubMedia = useMediaStore.subscribe(
       (state) => ({
         files: state.files,
+        filesHistorySignature: createMediaFilesHistorySignature(state.files),
         compositions: state.compositions,
         compositionHistorySignature: createCompositionHistorySignature(
           state.compositions,
@@ -326,7 +422,7 @@ export function useGlobalHistory() {
       (curr, prev) => {
         if (useHistoryStore.getState().isApplying) return;
 
-        if (curr.files !== prev.files) {
+        if (curr.filesHistorySignature !== prev.filesHistorySignature) {
           debouncedCapture(curr.files.length > prev.files.length ? 'Import file' : 'Remove file');
         } else if (
           curr.compositions !== prev.compositions &&

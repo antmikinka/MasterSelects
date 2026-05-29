@@ -458,10 +458,16 @@ function cloneClipForHistory<T extends { audioState?: ClipAudioState }>(clip: T)
     audioState,
     waveform: _waveform,
     waveformChannels: _waveformChannels,
+    waveformGenerating: _waveformGenerating,
+    waveformProgress: _waveformProgress,
+    audioAnalysisJob: _audioAnalysisJob,
     ...rest
   } = clip as T & {
     waveform?: unknown;
     waveformChannels?: unknown;
+    waveformGenerating?: unknown;
+    waveformProgress?: unknown;
+    audioAnalysisJob?: unknown;
   };
   const cloned = deepClone(rest) as T;
   const clonedAudioState = cloneClipAudioState(audioState);
@@ -511,6 +517,8 @@ function cloneMediaFileForHistory(file: MediaFile): MediaFile {
     audioAnalysisRefs,
     waveform: _waveform,
     waveformChannels: _waveformChannels,
+    waveformProgress: _waveformProgress,
+    waveformStatus: _waveformStatus,
     ...rest
   } = file;
   const cloned = deepClone(rest) as MediaFile;

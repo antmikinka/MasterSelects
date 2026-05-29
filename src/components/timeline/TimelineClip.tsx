@@ -1182,9 +1182,12 @@ function TimelineClipComponent({
       if (!clipRequiresProcessedWaveformPyramid(currentClip, keyframes)) {
         return;
       }
+      if (!canDeriveProcessedWaveformPyramid(currentClip, keyframes)) {
+        return;
+      }
 
       inFlightProcessedWaveformPyramidUpgrades.add(processedWaveformRequestKey);
-      void store.generateProcessedWaveformForClip(currentClip.id)
+      void store.generateProcessedWaveformForClip(currentClip.id, { derivedOnly: true })
         .finally(() => {
           inFlightProcessedWaveformPyramidUpgrades.delete(processedWaveformRequestKey);
         });

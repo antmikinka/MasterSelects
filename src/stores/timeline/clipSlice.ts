@@ -1182,6 +1182,11 @@ export const createClipSlice: SliceCreator<CoreClipActions> = (set, get) => ({
     if (!options.force && clip.audioState?.processedAnalysisRefs?.processedWaveformPyramidId) {
       return;
     }
+    const canDeriveProcessedWaveform = canDeriveProcessedWaveformPyramid(clip, keyframes);
+    const sourceWaveformPyramidId = clip.audioState?.sourceAnalysisRefs?.waveformPyramidId;
+    if (options.derivedOnly && (!canDeriveProcessedWaveform || !sourceWaveformPyramidId)) {
+      return;
+    }
 
     set({
       clips: updateClipById(get().clips, clipId, createAudioAnalysisJobUpdate({
@@ -1199,8 +1204,7 @@ export const createClipSlice: SliceCreator<CoreClipActions> = (set, get) => ({
           clips: updateAudioAnalysisJobProgress(get().clips, clipId, 1, 'preparing', 'Preparing processed waveform'),
         });
 
-        const sourceWaveformPyramidId = clip.audioState?.sourceAnalysisRefs?.waveformPyramidId;
-        if (sourceWaveformPyramidId && canDeriveProcessedWaveformPyramid(clip, keyframes)) {
+        if (sourceWaveformPyramidId && canDeriveProcessedWaveform) {
           set({
             clips: updateAudioAnalysisJobProgress(
               get().clips,
@@ -1271,6 +1275,12 @@ export const createClipSlice: SliceCreator<CoreClipActions> = (set, get) => ({
             clipId,
             sourceWaveformPyramidId,
           });
+        }
+
+        if (options.derivedOnly) {
+          log.debug('Skipping rendered processed waveform for derived-only request', { clipId });
+          set({ clips: updateClipById(get().clips, clipId, clearAudioAnalysisJobUpdate()) });
+          return;
         }
 
         let sourceBuffer: AudioBuffer | null = null;

@@ -250,6 +250,47 @@ describe('audio history snapshots', () => {
     expectNoAudioPayloadFields(snapshot);
   });
 
+  it('strips transient waveform job state from snapshots', () => {
+    mocks.setTimelineState({
+      clips: [
+        createMockClip({
+          id: 'clip-generating',
+          trackId: 'a1',
+          waveformGenerating: true,
+          waveformProgress: 44,
+          audioAnalysisJob: {
+            jobId: 'job-generating',
+            kind: 'processed-waveform-pyramid',
+            label: 'Processed Waveform',
+            artifactKinds: ['processed-waveform-pyramid'],
+            processed: true,
+            progress: 44,
+            phase: 'rendering-processed-audio',
+            startedAt: '2026-05-29T08:00:00.000Z',
+            updatedAt: '2026-05-29T08:00:01.000Z',
+          },
+        }),
+      ],
+    });
+    mocks.setMediaState({
+      files: [
+        mockMediaFile({
+          id: 'media-generating',
+          waveformProgress: 44,
+          waveformStatus: 'generating',
+        }),
+      ],
+    });
+
+    useHistoryStore.getState().captureSnapshot('generating waveform');
+    const serialized = JSON.stringify(useHistoryStore.getState().currentSnapshot);
+
+    expect(serialized).not.toContain('audioAnalysisJob');
+    expect(serialized).not.toContain('waveformGenerating');
+    expect(serialized).not.toContain('waveformProgress');
+    expect(serialized).not.toContain('waveformStatus');
+  });
+
   it('undo and redo restore audio state refs without payload-shaped fields', () => {
     const clipAudioState: ClipAudioState = {
       sourceAudioRevisionId: 'rev-before',

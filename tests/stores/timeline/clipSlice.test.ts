@@ -28,6 +28,35 @@ describe('clipSlice', () => {
     vi.restoreAllMocks();
   });
 
+  describe('generateProcessedWaveformForClip', () => {
+    it('does not start rendered processed-waveform work for derived-only requests', async () => {
+      const clip = createMockClip({
+        id: 'clip-1',
+        trackId: 'audio-1',
+        source: { type: 'audio', naturalDuration: 10, mediaFileId: 'media-1' },
+        audioState: {
+          sourceAnalysisRefs: { waveformPyramidId: 'source-waveform' },
+          effectStack: [
+            {
+              id: 'compressor-1',
+              descriptorId: 'audio-compressor',
+              enabled: true,
+              params: { thresholdDb: -18, ratio: 3 },
+            },
+          ],
+        },
+      });
+      store = createTestTimelineStore({ clips: [clip] });
+
+      await store.getState().generateProcessedWaveformForClip('clip-1', { derivedOnly: true });
+
+      const updated = store.getState().clips.find(c => c.id === 'clip-1')!;
+      expect(updated.waveformGenerating).not.toBe(true);
+      expect(updated.audioAnalysisJob).toBeUndefined();
+      expect(updated.audioState?.processedAnalysisRefs).toBeUndefined();
+    });
+  });
+
   describe('clip linking', () => {
     it('links exactly two clips with reciprocal linkedClipId values', () => {
       const first = createMockClip({ id: 'clip-1', trackId: 'video-1' });
