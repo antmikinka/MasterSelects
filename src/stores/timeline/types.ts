@@ -43,7 +43,7 @@ import type {
   VideoBakeRegion,
   ClipAudioStemState,
 } from '../../types';
-import type { MidiNote } from '../../types/midiClip';
+import type { MidiNote, MidiInstrument } from '../../types/midiClip';
 import type { MotionColor, MotionLayerDefinition, ShapePrimitive } from '../../types/motionDesign';
 import type { Composition } from '../mediaStore';
 import type { LabelColor } from '../mediaStore/types';
@@ -487,6 +487,8 @@ export interface TrackActions {
   // Track parenting (layer linking)
   setTrackParent: (trackId: string, parentTrackId: string | null) => void;
   getTrackChildren: (trackId: string) => TimelineTrack[];
+  // MIDI instrument (issue #182): patch the synth/instrument on a MIDI track.
+  setTrackMidiInstrument: (trackId: string, patch: Partial<MidiInstrument>) => void;
 }
 
 // Clip actions interface

@@ -51,3 +51,26 @@ export function createDefaultMidiInstrument(): MidiInstrument {
     gain: 0.8,
   };
 }
+
+/**
+ * Selectable instruments. Single entry today, but this is the extension point:
+ * add a `kind` here (+ a synth implementation) and it appears in every picker
+ * (track header dropdown, properties tab) with no further UI work.
+ */
+export const MIDI_INSTRUMENT_OPTIONS: ReadonlyArray<{ kind: MidiInstrument['kind']; label: string }> = [
+  { kind: 'simple-synth', label: 'Simple Synth' },
+];
+
+/** Oscillator waveforms offered for the simple synth. */
+export const MIDI_WAVEFORM_OPTIONS: ReadonlyArray<{ value: OscillatorType; label: string }> = [
+  { value: 'triangle', label: 'Triangle' },
+  { value: 'sine', label: 'Sine' },
+  { value: 'sawtooth', label: 'Sawtooth' },
+  { value: 'square', label: 'Square' },
+];
+
+/** Human-readable label for an instrument (e.g. "Simple Synth"). */
+export function getMidiInstrumentLabel(instrument: MidiInstrument | undefined | null): string | null {
+  if (!instrument) return null;
+  return MIDI_INSTRUMENT_OPTIONS.find(option => option.kind === instrument.kind)?.label ?? 'Instrument';
+}

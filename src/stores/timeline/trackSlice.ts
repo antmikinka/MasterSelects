@@ -13,7 +13,7 @@ import type { TrackActions, SliceCreator } from './types';
 import { MIN_TRACK_HEIGHT, MAX_TRACK_HEIGHT } from './constants';
 import { Logger } from '../../services/logger';
 import { generateClipId, generateEffectId } from './helpers/idGenerator';
-import { createDefaultMidiInstrument } from '../../types/midiClip';
+import { createDefaultMidiInstrument, type MidiInstrument } from '../../types/midiClip';
 import { runtimeAudioMeterBus } from '../../services/audio/runtimeAudioMeterBus';
 import {
   getAudioEffect,
@@ -824,5 +824,23 @@ export const createTrackSlice: SliceCreator<TrackActions> = (set, get) => ({
   getTrackChildren: (trackId) => {
     const { tracks } = get();
     return tracks.filter(t => t.parentTrackId === trackId);
+  },
+
+  setTrackMidiInstrument: (trackId, patch) => {
+    const { tracks } = get();
+    set({
+      tracks: tracks.map(track => {
+        if (track.id !== trackId || track.type !== 'midi') return track;
+        const current: MidiInstrument = track.midiInstrument ?? createDefaultMidiInstrument();
+        return {
+          ...track,
+          midiInstrument: {
+            ...current,
+            ...patch,
+            adsr: { ...current.adsr, ...(patch.adsr ?? {}) },
+          },
+        };
+      }),
+    });
   },
 });

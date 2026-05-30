@@ -11,6 +11,7 @@ import { useMediaStore } from '../../../stores/mediaStore';
 import { engine } from '../../../engine/WebGPUEngine';
 import { proxyFrameCache } from '../../../services/proxyFrameCache';
 import { audioManager, audioStatusTracker } from '../../../services/audioManager';
+import { ensureMidiPlaybackScheduler } from '../../../services/audio/midiPlaybackScheduler';
 import { Logger } from '../../../services/logger';
 import { getInterpolatedClipTransform } from '../../../utils/keyframeInterpolation';
 import { getEffectiveScale } from '../../../utils/transformScale';
@@ -319,6 +320,12 @@ export function useLayerSync({
         pendingRafRef.current = null;
       }
     };
+  }, []);
+
+  // Ensure the internal MIDI synth scheduler is running (issue #182, Phase 4).
+  // It subscribes to transport state globally; this just guarantees one-time init.
+  useEffect(() => {
+    ensureMidiPlaybackScheduler();
   }, []);
 
   // Main layer sync effect

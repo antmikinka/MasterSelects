@@ -1,7 +1,7 @@
 # MIDI Tracks — Implementation Plan
 
 > Issue #182 · branch `182-create-midi-tracks`
-> Status: **planning** (no code written yet)
+> Status: **in progress** — Phases 1–4 implemented; Phase 5 (export + persistence) remaining.
 
 ## 1. Goal
 
@@ -106,11 +106,34 @@ Adding `'midi'` to the track-type union touches ~50 spots that reference `'video
 
 ## 4. Phased delivery (checkpoint after each)
 
-1. **Data model + Add MIDI Track** — types, `addTrack('midi')`, context-menu entries, basic MIDI lane rendering. Verify: can create a MIDI track.
-2. **Pencil tool** — tool registration + draw-to-create MIDI clips. Verify: can paint clips on the MIDI track.
-3. **Piano-roll detached window** — boot module + component + double-click, draw/delete notes, live playhead cursor. Verify: edit notes in a second window, cursor tracks playback.
-4. **Synth + playback** — `MidiSynth`, transport scheduling, draw-preview. Verify: clips are audible during playback.
-5. **Export + persistence** — offline render path + save/load. Verify: exports contain synth audio; project reload keeps tracks/clips/notes.
+1. **Data model + Add MIDI Track** — ✅ done (commit `a2b43e41`).
+2. **Pencil tool** — ✅ done (commit `a2b43e41`).
+3. **Piano-roll detached window** — ✅ done (commit `a2b43e41`).
+4. **Synth + playback** — ✅ implemented. `src/engine/audio/MidiSynth.ts` (triangle/osc + ADSR, polyphonic), `src/services/audio/midiPlaybackScheduler.ts` (look-ahead scheduler subscribed to transport, 1x-forward only, flush on stop/pause/seek), draw/click preview in the piano roll, `audioManager.getContext()/getMixerInput()` accessors. Verify: clips audible during playback.
+5. **Export + persistence** — TODO. Offline render path (`AudioMixer`/`AudioExportPipeline`, `OfflineAudioContext`) + serialize `midiInstrument`/`midiData.notes` in projectSave/projectLoad/serializationUtils. Verify: exports contain synth audio; reload keeps tracks/clips/notes.
+
+### Phase 4b — Mixer routing + instrument UI (issue #182, staged)
+The synth no longer plays straight to the destination — each MIDI track gets a
+**per-track synth bus** so it behaves like a normal mixer channel.
+
+**Step 1 (done):**
+- `midiPlaybackScheduler` builds, per MIDI track, `synth → pan → volume → analyser → destination` (+ stereo splitter meter taps). Volume (`getTrackVolumeDb`→linear), pan (`getTrackPan`), and mute/solo (`getTrackAudioMuted/Solo`) read from `track.audioState`; live meters publish via `updateRuntimeAudioMeter(track.id, …)`.
+- `AudioMixerPanel` now lists MIDI tracks as channel strips (volume/pan/mute/solo + live meter work end-to-end).
+- Properties panel: MIDI tracks show **TRACK Controls** (shared `AudioTrackControlsTab`) + a new **TRACK Instrument** tab (`MidiInstrumentTab`: synth picker, waveform, gain, ADSR) backed by the new `setTrackMidiInstrument` action.
+- Piano-roll preview routes through the track bus (respects volume/pan).
+
+**Step 2 (done):** Full mixer parity — EQ + the complete audio-effect stack + sends + master-bus routing for MIDI tracks.
+- `audioRoutingManager` now exposes a **generalized node route**: `ensureSharedContext()`, `applyNodeEffects(key, sourceNode, volume, eqGains, pan, processors, master)`, `getNodeMeterSnapshot(key)`, `removeNodeRoute(key)`. The `AudioRoute.sourceNode` type was widened from `MediaElementAudioSourceNode` to `AudioNode`, so a generated source (the synth bus) reuses the **exact same** gain/FX/EQ/pan/meter chain and feeds the shared master bus — no duplicated effect engine.
+- `audioGraphRouteSettings.createTrackLiveAudioRouteSettings({ track, masterAudioState })` builds the track + master route settings (volume, EQ gains, FX processors, sends-return gain, pan, mute) for a clip-less source, mirroring `createLiveAudioRouteSettings`.
+- `midiPlaybackScheduler` shares the AudioRoutingManager context; each MIDI track's `MidiSynth → sourceGain` is handed to `applyNodeEffects` per tick, and the meter is published from `getNodeMeterSnapshot`. The old self-contained Step 1 bus (pan/volume/analyser/destination) is gone.
+- Properties panel: the Effects + Sends tab buttons are now gated on `hasBusControls` (audio **or** MIDI), so MIDI tracks expose the full audio effect palette + sends UI (the content panels were never track-type-gated). MIDI tracks therefore have: Controls + Instrument + Effects + Sends, identical to audio tracks plus the synth instrument tab.
+
+Still TODO: instrument **chip in the MIDI track header** (`TimelineTrack.tsx`) — the Properties Instrument tab covers "which synth is playing" for now.
+
+### Phase 4 implementation notes
+- `MidiSynth` is context-agnostic (accepts a `BaseAudioContext`), so the same `scheduleNote` path can later render into an `OfflineAudioContext` for export (Phase 5).
+- The scheduler prefers the shared `audioManager` context but falls back to its own `AudioContext` (the master chain is not guaranteed to be `init()`ed), matching the stem-buffer-mixer / composition-mixer pattern.
+- Scheduler is initialized once via `ensureMidiPlaybackScheduler()` from `useLayerSync`; it then drives playback purely through a store subscription (no per-frame RAF coupling).
 
 ## 5. Files (anticipated)
 

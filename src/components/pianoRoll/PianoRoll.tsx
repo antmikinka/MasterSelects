@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTimelineStore } from '../../stores/timeline';
+import { previewMidiNote } from '../../services/audio/midiPlaybackScheduler';
 import type { MidiNote } from '../../types/midiClip';
 
 const ROW_H = 16;          // px per pitch row
@@ -167,6 +168,10 @@ export function PianoRoll({ clipId, onRequestClose }: PianoRollProps) {
     const { x, y } = localPoint(e.clientX, e.clientY);
     const pitch = yToPitch(y);
     const startTime = Math.max(0, x / PX_PER_SEC);
+    // Audible feedback for the note being drawn (issue #182, Phase 4) — routed
+    // through the track's synth bus so preview respects its volume/pan.
+    const track = useTimelineStore.getState().tracks.find((t) => t.id === clip?.trackId);
+    previewMidiNote(track?.midiInstrument, pitch, 0.85, clip?.trackId);
     dragRef.current = { kind: 'create', noteId: null, pitch, startTime };
     pendingRef.current = { pitch, start: startTime, duration: 0.02 };
     setPendingNote(pendingRef.current);
@@ -177,6 +182,10 @@ export function PianoRoll({ clipId, onRequestClose }: PianoRollProps) {
   const startMove = (e: React.MouseEvent, note: MidiNote) => {
     if (e.button !== 0) return;
     e.stopPropagation();
+    // Audible feedback for the clicked note (issue #182, Phase 4) — routed
+    // through the track's synth bus so preview respects its volume/pan.
+    const track = useTimelineStore.getState().tracks.find((t) => t.id === clip?.trackId);
+    previewMidiNote(track?.midiInstrument, note.pitch, note.velocity, clip?.trackId);
     const { x } = localPoint(e.clientX, e.clientY);
     const grabTime = x / PX_PER_SEC;
     dragRef.current = { kind: 'move', noteId: note.id, grabOffsetTime: grabTime - note.start };
