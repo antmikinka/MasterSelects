@@ -45,7 +45,7 @@ The browser loads account state from two endpoints in parallel:
 
 That summary feeds the visible plan, credit balance, entitlements, hosted AI availability, and Stripe customer/subscription state used by the account and pricing dialogs.
 
-Hosted AI uses two different server routes:
+Hosted AI uses three server routes:
 
 - `/api/ai/chat` is OpenAI-backed and credit-gated
 - `/api/ai/audio` is ElevenLabs-backed for hosted FlashBoard text-to-speech and Kie.ai/Suno-backed for hosted music generation, also credit-gated
@@ -129,6 +129,7 @@ On the local dev server, hosted secrets are available only through Wrangler/Clou
 - The current plan set is `free`, `starter`, `pro`, and `studio`.
 - The summary endpoint surfaces monthly credits, entitlement flags, and the current Stripe subscription state.
 - Free and Starter still include hosted AI chat entitlement in the current plan snapshot.
-- Pro adds Kling generation and priority queue entitlement.
+- Pro adds `kling_generation` and priority queue entitlement metadata.
 - Studio adds API access in addition to the Pro entitlements.
+- Current hosted video/image generation is enforced by sign-in and credit balance in `/api/ai/video`; the plan-specific `kling_generation` flag is surfaced as entitlement metadata but is not currently the server-side gate for that route.
 - `dev-login` can seed local sessions with a selected plan for backend-free UI testing.

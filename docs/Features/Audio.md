@@ -36,7 +36,7 @@ The main runtime path is `LayerBuilderService` -> `AudioTrackSyncManager` -> `Au
 
 ## Stem Separation
 
-- Stem generation runs as a background job and publishes generated WAV stems into the project media library instead of storing heavy stem payloads on timeline clips.
+- Stem generation runs as a background job and publishes generated WAV stems into the project media library when the project/media write path succeeds instead of storing heavy stem payloads on timeline clips. If that publish step cannot complete, the stem result can still remain as artifact-backed project state until it is regenerated or relinked.
 - Clips with completed linked stems show a bottom-left `S` badge. Opening it prewarms the source and stem audio files, then shows compact source/stem buttons with pictogram icons.
 - Selecting Source, Vocals, Drums, Bass, or another stem switches the clip's media source while preserving trim, timing, effects, and audio edit state.
 - Stem source switching is live during playback. The audio sync manager drops stale clip proxy/handoff elements when the active `mediaFileId` changes, so the audible source follows the selected button without stopping playback.
@@ -179,7 +179,7 @@ FFmpeg exports can still receive raw audio because they use `exportRawAudio()`.
 - Live playback and export render enabled track sends into the master mix as send-return audio. Dedicated return-bus effect chains are still part of the broader mixer work.
 - Compressor, de-esser, limiter, noise gate, expander, delay, reverb, pan, parametric EQ, hum notch, de-click, noise reduction, spectral gate, saturation, polarity invert, mono sum, channel swap, and stereo split have live-routing support plus offline/export render support. Normalize has processed-analysis, bake, and export render support. Full noise-profile restoration and full de-click restoration suites are still broader workstation work.
 - Region RMS loudness matching exists through the non-destructive repair stack, and registry Normalize covers Peak/RMS/LUFS render-time normalization. Deeper true-peak loudness auditing beyond the current preview/ceiling path remains broader mastering work.
-- Spectral Audio mode has artifact-backed spectrogram display, time/frequency region edit operations, renderable spectral masks, and deterministic image-in-spectrum layers with layer keyframes. Brush editing and full phase-synthesized image resynthesis are still in progress.
+- Spectral Audio mode has artifact-backed spectrogram display, time/frequency and brush-style region edit operations, renderable spectral masks, phase-preserving spectral resynthesis, and deterministic image-in-spectrum layers with layer keyframes. Image-in-spectrum replacement can resynthesize silent source bands with phase-continuous bins, but higher-level restoration/noise-profile workflows remain broader workstation work.
 - Live audio is limited by browser `playbackRate` behavior and cannot play backwards.
 
 ## Sources

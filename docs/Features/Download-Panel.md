@@ -22,7 +22,7 @@ Downloads are no longer a standalone dock tab. The old `download` and `youtube` 
 
 The workflow detects common platforms up front and otherwise falls back to a generic `yt-dlp` flow.
 
-| Platform | URL Detection | Project Subfolder |
+| Platform | URL Detection | File System Access Project Subfolder |
 |----------|---------------|-------------------|
 | YouTube | `youtube.com`, `youtu.be` | `Downloads/YT/` |
 | TikTok | `tiktok.com` | `Downloads/TikTok/` |
@@ -64,8 +64,9 @@ Downloads require the Native Helper for the actual media transfer.
 4. The helper runs the bundled Windows `yt-dlp.exe` or a system `yt-dlp` with the selected `formatId`
 5. Progress callbacks feed percent and transfer speed back into the shared Media queue
 6. The downloaded file is fetched from the helper
-7. If a project is open, the file is written into `Downloads/<Platform>/`
-8. The saved file is imported into the Media panel under a Downloads/platform folder
+7. In File System Access projects, the file is written into `Downloads/<Platform>/`
+8. In Native Helper projects, the fetched helper file is imported through the normal project media copy path, so the durable media copy lives under `Raw/`
+9. The saved/imported file is shown in the Media panel under a Downloads/platform folder
 
 If no project is open, the downloaded file stays in memory as a `File`.
 
@@ -82,7 +83,7 @@ Each queue card can show:
 - progress bar
 - retry for failed downloads
 
-When a project is open, the queue checks whether `Downloads/<Platform>/<SanitizedTitle>.mp4` already exists and imports that file instead of downloading it again.
+When a File System Access project is open, the queue checks whether `Downloads/<Platform>/<SanitizedTitle>.mp4` already exists and imports that file instead of downloading it again. Native Helper projects do not currently use the same download-folder existence check; their completed helper downloads are copied back through normal media import.
 
 ---
 
@@ -139,7 +140,7 @@ If YouTube blocks anonymous extraction, the helper retries with Chrome cookies b
 
 ## Project Storage
 
-When a project is open, downloads are saved here:
+For File System Access projects, downloads are saved here:
 
 ```text
 ProjectFolder/
@@ -157,6 +158,8 @@ ProjectFolder/
 
 File names are sanitized from the source title and saved as `.mp4`.
 
+For Native Helper-backed project persistence, completed downloads are fetched from the helper and then copied into the normal project media path under `Raw/`. The Media panel still groups the imported media under Downloads/platform folders for organization.
+
 ---
 
 ## Limitations
@@ -164,7 +167,7 @@ File names are sanitized from the source title and saved as `.mp4`.
 - The helper is required for the actual download path
 - Non-YouTube metadata lookup also depends on the helper
 - Search without a YouTube API key is limited to pasted URLs/IDs
-- Duplicate detection is filename/title based inside the project download folders; it is not a remote content hash
+- Duplicate detection is filename/title based inside the File System Access project download folders; it is not a remote content hash
 
 ---
 

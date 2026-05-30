@@ -52,9 +52,11 @@ The source monitor shows a raw media file in the preview panel instead of the co
 ### Behavior
 
 - Video sources always use the panel-local HTML `<video>` path in this branch.
+- Audio sources use a panel-local audio playback path with waveform display and scrubbing.
 - Images render through a plain `<img>` element in the same panel surface.
 - Supports images, but images do not show transport controls.
 - Time display, play/pause, scrubbing, start/end buttons, and frame stepping are provided for video sources.
+- Audio sources provide waveform scrubbing, playback controls, In/Out marking, and placement actions for inserting or dragging the selected range into the timeline.
 - `Space` toggles playback and `Escape` closes the monitor without also triggering the timeline shortcut.
 
 ### Limitation

@@ -60,14 +60,13 @@ Proxies are stored in the project folder under `Proxy/{mediaId}/`.
 
 ### Current On-Disk Layout
 
-- Proxy frames are written as `frame_000000.webp`, `frame_000001.webp`, and so on.
-- Audio proxy is written as `audio.m4a`.
+- Proxy frames are written as `frame_000000.jpg`, `frame_000001.jpg`, and so on. Older `.webp` frame names are still read for compatibility.
+- Audio proxies are written as WAV files under the project audio-proxy folder, using a sanitized storage-key filename such as `<mediaId>.wav`. Older `Proxy/{mediaId}/audio.wav` and `Proxy/{mediaId}/audio.m4a` files are still read for compatibility.
 - A `proxy.mp4` file is supported by the storage facade, but this branch does not use that path in the active generation flow.
 
-### Important Drift
+### Backend Caveat
 
-- The generator currently writes JPEG blobs, even though the frame files are named with a `.webp` extension.
-- Browsers load the files by bytes, so playback still works, but the extension does not match the encoded content.
+- Video proxy frame storage currently uses the File System Access project handle path. Native Helper-backed projects can persist audio proxies through the native backend, but video proxy frames are not written through the same native path yet.
 
 ### Deduplication
 
@@ -124,7 +123,7 @@ After the video frames finish, the code attempts to extract audio in the backgro
 
 - Audio extraction is non-blocking after the frame sequence completes.
 - Audio proxy failures are treated as non-fatal.
-- If extraction succeeds, the audio is saved as `audio.m4a`.
+- If extraction succeeds, the current audio proxy is saved as WAV. Legacy `audio.m4a` proxy files remain readable.
 
 ### Limitation
 
@@ -134,8 +133,8 @@ After the video frames finish, the code attempts to extract audio in the backgro
 
 ## Current Limitations
 
-- Frame files are named `.webp` even though the generator writes JPEG blobs.
 - `proxy.mp4` storage support exists but is not part of the active generation flow.
+- Native Helper-backed projects do not currently persist video proxy frames through the same frame writer path.
 - Proxy generation is browser-session based and relies on WebCodecs and OffscreenCanvas support.
 - Only one generation can run at a time.
 

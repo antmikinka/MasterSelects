@@ -12,6 +12,7 @@ Security model, secret handling, and trust boundaries for MasterSelects.
 - [Secret Handling](#secret-handling)
 - [Log Redaction](#log-redaction)
 - [Bridge Security](#bridge-security)
+- [Hosted AI Chat Logging](#hosted-ai-chat-logging)
 - [Known Limitations](#known-limitations)
 - [Reporting Issues](#reporting-issues)
 
@@ -34,6 +35,8 @@ The main trust boundaries are:
 External services are only contacted when the user enables a feature that needs them, such as AI chat, transcription, AI video generation, or multicam EDL generation.
 
 Local Lemonade chat is treated as a local provider rather than a MasterSelects bridge. The app sends chat prompts, timeline summaries, tool definitions, and tool results to the configured Lemonade Server, but the configured endpoint is restricted to loopback hosts (`localhost`, `127.0.0.1`, or `::1`).
+
+Hosted OpenAI/Cloud chat is different from local editing and local Lemonade chat. Authenticated hosted chat requests are sent to the Cloudflare Functions backend, are credit-gated, and are logged best-effort in D1 for account history, billing/debugging, abuse handling, and support.
 
 ---
 
@@ -158,6 +161,27 @@ The Lemonade request includes `Authorization: Bearer lemonade` because Lemonade'
 
 ---
 
+## Hosted AI Chat Logging
+
+Hosted `/api/ai/chat` requests write rows into the D1 `chat_logs` table when logging succeeds. Logging is best-effort and does not block the chat response.
+
+Stored fields can include:
+
+- authenticated user id and model id
+- request messages and prompt payload
+- assistant response payload
+- tool-call payloads
+- token counts, credit cost, duration, status, and error state
+
+Users can inspect hosted chat history through:
+
+- `GET /api/ai/chat-history`
+- `GET /api/ai/chat-history?id=<log-id>`
+
+Local Lemonade chat and purely local tool execution do not write to `chat_logs`, but the local provider can still see the prompt, timeline summary, tool definitions, and tool results sent to it.
+
+---
+
 ## Known Limitations
 
 1. IndexedDB encryption is only defense against casual inspection. A same-origin script or extension with storage access can still read the keys.
@@ -167,6 +191,7 @@ The Lemonade request includes `Authorization: Bearer lemonade` because Lemonade'
 5. The Native Helper can be started with `--no-auth`, but that disables the auth boundary entirely and is not recommended.
 6. API keys are still sent to external services over HTTPS when you enable AI features that need them.
 7. Lemonade runs outside the app. Any local process that controls the configured local Lemonade server can see the chat prompt, timeline summary, tool definitions, and tool results sent to it.
+8. Hosted OpenAI/Cloud chat prompts, responses, tool calls, token/cost metadata, duration, status, and error state are stored in D1 when the hosted chat route is used.
 
 ---
 
@@ -181,4 +206,4 @@ If you discover a security vulnerability:
 
 ---
 
-*Source: `src/services/security/redact.ts`, `src/services/logger.ts`, `src/services/security/fileAccessBroker.ts`, `src/services/security/devBridgeAuth.ts`, `src/services/lemonadeProvider.ts`, `vite.config.ts`, `tools/native-helper/src/server.rs`, `tools/native-helper/src/main.rs`, `src/components/panels/AIChatPanel.tsx`*
+*Source: `src/services/security/redact.ts`, `src/services/logger.ts`, `src/services/security/fileAccessBroker.ts`, `src/services/security/devBridgeAuth.ts`, `src/services/lemonadeProvider.ts`, `vite.config.ts`, `tools/native-helper/src/server.rs`, `tools/native-helper/src/main.rs`, `src/components/panels/AIChatPanel.tsx`, `functions/api/ai/chat.ts`, `functions/api/ai/chat-history.ts`, `functions/lib/chatLog.ts`*

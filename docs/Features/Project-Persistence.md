@@ -46,7 +46,7 @@ For Firefox users:
 ### Select Project Folder
 1. Click **"New Project"**
 2. Choose or create a folder for your project
-3. App creates the project folder with `project.json` plus the standard subfolders (`Raw/`, `Downloads/`, `Proxy/`, `Cache/`, `Analysis/`, `Transcripts/`, `Renders/`, `Backups/`)
+3. App creates the project folder with `project.json` plus the standard subfolders (`Raw/`, `Downloads/`, `Proxy/`, `Audio Proxies/`, `Cache/`, `Analysis/`, `Transcripts/`, `Renders/`, `Backups/`, `Prompts/`)
 4. Folder handle stored in IndexedDB (FSA) or path stored in localStorage (`ms-native-last-project-path`) for future sessions
 
 ### Continue Without Saving
@@ -127,7 +127,7 @@ MyProject/
 |   +-- scan/              # Imported PLY/splat sequence frames
 |   |   +-- scan000000.ply
 |   |   +-- scan000001.ply
-+-- Downloads/             # Downloaded videos (platform subfolders)
++-- Downloads/             # FSA download copies (platform subfolders)
 |   +-- YT/
 |   |   +-- video_title.mp4
 |   +-- TikTok/
@@ -140,7 +140,8 @@ MyProject/
 +-- Backups/               # Auto-backup folder
 |   +-- project_2026-01-11_14-00-00.json
 |   +-- ... (last 20 backups)
-+-- Proxy/                 # Generated proxy video/audio files
++-- Proxy/                 # Generated proxy video frame folders and legacy proxy media
++-- Audio Proxies/         # Current WAV audio proxy files
 +-- Cache/                 # Cached derived data
 |   +-- thumbnails/        # Media thumbnails (WebP, keyed by file hash)
 |   +-- splats/            # Cached Gaussian splat runtimes
@@ -386,8 +387,9 @@ Temporary camera `NO KF` live offsets are intentionally not saved. They only aff
 | `.keys.enc` | Encrypted API keys |
 | `Backups/` | Auto-backup files |
 | `Raw/` | Copied media files |
-| `Downloads/` | Downloaded videos (per platform) |
-| `Proxy/` | Proxy video/audio files |
+| `Downloads/` | Downloaded videos (per platform) for File System Access projects; Native Helper projects import completed downloads through `Raw/` |
+| `Proxy/` | Proxy video frame folders and legacy proxy media |
+| `Audio Proxies/` | Current WAV audio proxy files |
 | `Cache/thumbnails/` | Media thumbnails (WebP) |
 | `Cache/waveforms/` | Waveform data |
 | `Analysis/` | Clip analysis cache |

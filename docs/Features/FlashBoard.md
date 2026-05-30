@@ -94,7 +94,7 @@ The compact composer exposes the richer FlashBoard catalog.
 3. `FlashBoardJobService` queues the node.
 4. The Media Panel queue renders a preview card with status and elapsed time while the job is queued or processing.
 5. Jobs run with a concurrency cap of 3 overall, but only 1 Kie.ai job at a time.
-6. The selected video/image service submits the remote task and polls until completion.
+6. The selected media service submits the remote task and polls until completion when the provider is asynchronous.
 7. ElevenLabs audio jobs create speech directly and return an audio `File` without remote polling. BYO development jobs call ElevenLabs from the browser with the user's local key; Cloud jobs call `/api/ai/audio` and spend hosted credits.
 8. Suno music jobs use Cloudflare `/api/ai/audio` in production, where the server calls Kie.ai with `KIEAI_API_KEY`, spends hosted credits, polls the task until a generated audio URL is available, then imports the downloaded audio. Non-production BYO jobs can still call Kie.ai with the local default key.
 9. On success, `FlashBoardMediaBridge` imports the asset into the Media Pool and marks the node complete.
@@ -156,11 +156,10 @@ Hosted Suno music uses the Cloudflare `KIEAI_API_KEY` secret and is charged as M
 ## Source Map
 
 - `src/components/panels/media/MediaAIGenerativeTray.tsx`
+- `src/components/panels/media/MediaAIGenerationQueue.tsx`
 - `src/components/panels/flashboard/useFlashBoardRuntime.ts`
-- `src/components/panels/flashboard/FlashBoardWorkspace.tsx`
-- `src/components/panels/flashboard/FlashBoardToolbar.tsx`
-- `src/components/panels/flashboard/FlashBoardCanvas.tsx`
 - `src/components/panels/flashboard/FlashBoardComposer.tsx`
+- `src/components/panels/flashboard/FlashBoard.css`
 - `src/services/flashboard/FlashBoardJobService.ts`
 - `src/services/flashboard/FlashBoardMediaBridge.ts`
 - `src/services/flashboard/FlashBoardPricing.ts`
