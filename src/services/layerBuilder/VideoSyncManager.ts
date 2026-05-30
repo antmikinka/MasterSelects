@@ -1886,6 +1886,35 @@ export class VideoSyncManager {
       });
   }
 
+  /**
+   * Cold-clip warmup for the active scrub target without play().
+   *
+   * The play()-based startTargetedWarmup can't run during an active scrub
+   * because play() fights the per-frame seek. createImageBitmap is the only
+   * browser API that forces a real decode of a cold GPU surface without
+   * playing, so we use it to populate the last-frame cache. The LayerCollector
+   * then holds that frame ('gpu-cached'/'seeking-cache') instead of dropping to
+   * an empty-hold while the first scrub seek is still decoding.
+   *
+   * Deliberately does NOT mark the video gpu-ready: importExternalTexture can
+   * still return black until the surface has actually played, so we keep routing
+   * through the cached last-frame until the normal seek/RVFC path confirms a
+   * presented frame. Guarded by forceDecodeInProgress (one in-flight decode) and
+   * a retry cooldown so a not-yet-ready element can't spam decodes every frame.
+   */
+  private forceDecodeColdScrubFrame(clipId: string, video: HTMLVideoElement): void {
+    if (this.forceDecodeInProgress.has(clipId)) return;
+    this.forceDecodeInProgress.add(clipId);
+    this.warmupRetryCooldown.set(video, performance.now());
+    vfPipelineMonitor.record('vf_gpu_cold', { clipId, scrub: 'true' });
+    void engine
+      .preCacheVideoFrame(video, clipId)
+      .finally(() => {
+        this.forceDecodeInProgress.delete(clipId);
+        engine.requestNewFrameRender();
+      });
+  }
+
   private startTargetedWarmup(
     clipId: string,
     video: HTMLVideoElement,
@@ -2087,6 +2116,19 @@ export class VideoSyncManager {
         requestRender: true,
       });
       return; // Skip normal sync â€” warmup is handling video state
+    }
+
+    // During an active scrub the play()-based warmup above is skipped (play
+    // fights the seek), so a clip first touched mid-scrub has a cold GPU surface
+    // and drops to empty-hold. Kick a one-shot createImageBitmap decode (no
+    // play()) so the LayerCollector can hold a real frame while the first seek
+    // resolves. Fire-and-forget: the normal seek below still runs.
+    if (isInteractivePreview && hasSrc && cooldownOk &&
+        (video.played?.length ?? 0) === 0 &&
+        !this.gpuWarmedUp.has(video) &&
+        !this.warmingUpVideos.has(video) &&
+        !this.forceDecodeInProgress.has(clip.id)) {
+      this.forceDecodeColdScrubFrame(clip.id, video);
     }
 
     // Normal video sync

@@ -13,6 +13,7 @@ type EngineTestAccess = typeof engine & {
   captureVideoFrameAtTime: ReturnType<typeof vi.fn>;
   markVideoGpuReady: ReturnType<typeof vi.fn>;
   requestRender: ReturnType<typeof vi.fn>;
+  preCacheVideoFrame: ReturnType<typeof vi.fn>;
 };
 
 type VideoSyncManagerTestAccess = {
@@ -66,6 +67,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     testEngine.captureVideoFrameAtTime = vi.fn(() => false);
     testEngine.markVideoGpuReady = vi.fn();
     testEngine.requestRender = vi.fn();
+    testEngine.preCacheVideoFrame = vi.fn(() => Promise.resolve(true));
   });
 
   it('keeps driving the clip player while the scrub runtime is still cold', () => {
@@ -660,6 +662,65 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     });
 
     expect(ensureVideoFrameCached).toHaveBeenCalledWith(video, 'clip-owner');
+  });
+
+  it('force-decodes a cold clip with createImageBitmap when first scrubbed onto', () => {
+    flags.useFullWebCodecsPlayback = false;
+
+    const manager = createManager();
+    let currentTime = 1.5;
+    const video = {
+      src: 'blob:cold-clip',
+      paused: true,
+      seeking: false,
+      readyState: 4,
+      played: { length: 0 }, // never played â€” cold GPU surface
+      pause: vi.fn(),
+      play: vi.fn(() => Promise.resolve()),
+      playbackRate: 1,
+      addEventListener: vi.fn(),
+    };
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      get: () => currentTime,
+      set: (value: number) => { currentTime = value; },
+    });
+
+    const ctx = {
+      isPlaying: false,
+      isDraggingPlayhead: true,
+      proxyEnabled: false,
+      playbackSpeed: 1,
+      now: 1000,
+      playheadPosition: 1.5,
+      hasKeyframes: () => false,
+      getInterpolatedSpeed: () => 1,
+      getSourceTimeForClip: () => 1.5,
+    };
+    const clip = {
+      id: 'clip-cold',
+      trackId: 'track-v1',
+      startTime: 0,
+      inPoint: 0,
+      outPoint: 10,
+      duration: 10,
+      reversed: false,
+      source: { videoElement: video },
+    };
+
+    manager.syncClipVideo(clip, ctx);
+    expect(testEngine.preCacheVideoFrame).toHaveBeenCalledWith(video, 'clip-cold');
+
+    // A clip that has already played is warm â€” no redundant force-decode.
+    testEngine.preCacheVideoFrame.mockClear();
+    const warmVideo = { ...video, played: { length: 1 } };
+    Object.defineProperty(warmVideo, 'currentTime', {
+      configurable: true,
+      get: () => currentTime,
+      set: (value: number) => { currentTime = value; },
+    });
+    manager.syncClipVideo({ ...clip, id: 'clip-warm', source: { videoElement: warmVideo } }, ctx);
+    expect(testEngine.preCacheVideoFrame).not.toHaveBeenCalled();
   });
 
   it('rate-limits drag precise seeks when fastSeek is unavailable', () => {
