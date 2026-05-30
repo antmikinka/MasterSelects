@@ -624,8 +624,12 @@ export function useLayerSync({
                 });
             }
 
-            // Try nearest cached frame for smooth scrubbing, then fall back to previous frame
-            const nearestFrame = proxyFrameCache.getNearestCachedFrameEntry(mediaFile.id, frameIndex, 30)?.image || cached?.image;
+            // Try nearest cached frame for smooth scrubbing, then fall back to previous frame.
+            // While dragging the playhead, reach as far as the preloader fetches ahead (±90 ≈ 3s,
+            // matching proxyFrameCache SCRUB_PRELOAD_RANGE) so cold-region scrubs use a preloaded
+            // frame instead of holding stale; paused keeps the tight ±30 default.
+            const nearestSearchDistance = isDraggingPlayhead ? 90 : 30;
+            const nearestFrame = proxyFrameCache.getNearestCachedFrameEntry(mediaFile.id, frameIndex, nearestSearchDistance)?.image || cached?.image;
             if (nearestFrame) {
               const transform = getInterpolatedTransform(clip.id, keyframeLocalTime);
               newLayers[layerIndex] = {

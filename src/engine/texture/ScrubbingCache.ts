@@ -57,8 +57,18 @@ export class ScrubbingCache {
   // Time is quantized to frame boundaries (1/30s) for better cache hit rate
   // Uses Map insertion order for O(1) LRU operations
   private scrubbingCache: Map<string, ScrubbingTextureEntry> = new Map();
-  private maxScrubbingCacheFrames = 300; // ~10 seconds at 30fps, ~2.4GB VRAM at 1080p
+  // Frame count is the soft cap; the 1GB byte cap below is the real ceiling.
+  // With resolution-aware downscaling (SCRUB_CACHE_MAX_DIMENSION), a downscaled
+  // 1080p frame is ~2MB, so ~480 frames (~16s at 30fps) fit inside 1GB.
+  private maxScrubbingCacheFrames = 480;
   private readonly maxScrubbingCacheBytes = 1024 * 1024 * 1024; // Cap scrub textures at 1GB VRAM
+  // Scrub-preview frames are stored downscaled so cache coverage (seconds of
+  // timeline) is decoupled from source resolution: a 4K source gets the same
+  // coverage as 1080p instead of ~4x fewer frames. The longest side is capped
+  // here; frames already smaller are stored as-is (never upscaled). The settled
+  // live/exact frame still renders at full resolution, so this only softens the
+  // image during active scrubbing — the same tradeoff proxy mode makes.
+  private readonly SCRUB_CACHE_MAX_DIMENSION = 960;
   private readonly SCRUB_CACHE_FPS = 30; // Quantization granularity for scrubbing cache keys
   private scrubbingCacheBytes = 0;
   private scrubbingCacheEvictions = 0;
@@ -154,6 +164,20 @@ export class ScrubbingCache {
       view: entry.view,
       mediaTime: this.getScrubbingKeyTime(key),
     };
+  }
+
+  // Aspect-correct downscale so the longest side is at most
+  // SCRUB_CACHE_MAX_DIMENSION. Returns the original size when already within the
+  // cap (never upscales). Rounds to even dimensions for clean texture sizing.
+  private computeScrubCacheSize(width: number, height: number): { width: number; height: number } {
+    const longest = Math.max(width, height);
+    if (longest <= this.SCRUB_CACHE_MAX_DIMENSION || longest <= 0) {
+      return { width, height };
+    }
+    const scale = this.SCRUB_CACHE_MAX_DIMENSION / longest;
+    const scaledWidth = Math.max(2, Math.round((width * scale) / 2) * 2);
+    const scaledHeight = Math.max(2, Math.round((height * scale) / 2) * 2);
+    return { width: scaledWidth, height: scaledHeight };
   }
 
   private addScrubbingFrameFromSource(
@@ -573,7 +597,15 @@ export class ScrubbingCache {
     if (typeof createImageBitmap === 'function') {
       let bitmap: ImageBitmap | null = null;
       try {
-        bitmap = await createImageBitmap(video);
+        // Decode and downscale in one step: createImageBitmap's resize options
+        // hand the GPU a smaller frame, so a downscaled 4K source costs the same
+        // VRAM per scrub frame as 1080p and fits far more of the timeline.
+        const target = this.computeScrubCacheSize(video.videoWidth, video.videoHeight);
+        bitmap = await createImageBitmap(video, {
+          resizeWidth: target.width,
+          resizeHeight: target.height,
+          resizeQuality: 'medium',
+        });
         return this.addScrubbingFrameFromSource(
           bitmap,
           session.videoSrc,

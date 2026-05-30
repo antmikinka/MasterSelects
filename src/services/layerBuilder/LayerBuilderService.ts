@@ -51,6 +51,13 @@ import { mathSceneRenderer } from '../mathScene/MathSceneRenderer';
 const log = Logger.create('LayerBuilder');
 const SCRUB_PROXY_HOLD_MAX_DRIFT_SECONDS = 0.15;
 const PAUSED_PROXY_HOLD_MAX_DRIFT_SECONDS = 0.5;
+// Cold-region scrub fallback: how far the nearest-cached-proxy search reaches.
+// While dragging the playhead, match proxyFrameCache's SCRUB_PRELOAD_RANGE (90 ≈ 3s)
+// so the frames the preloader already fetched ahead are actually used instead of
+// falling through to an empty-hold. Paused previews keep the tight default so they
+// never show a visibly wrong frame.
+const PROXY_NEAREST_DISTANCE_DEFAULT = 30;
+const PROXY_NEAREST_DISTANCE_SCRUB = 90;
 
 /**
  * LayerBuilderService - Builds render layers from timeline state
@@ -897,8 +904,9 @@ export class LayerBuilderService {
       timeInfo.clipTime
     );
     const allowSharedPreviewSession = canUseSharedPreviewRuntimeSession(clip, ctx.clipsAtTime);
+    const isInteractivePreview = ctx.isDraggingPlayhead || ctx.hasClipDragPreview;
     const keepScrubRuntimeActive =
-      ctx.isDraggingPlayhead || scrubSettleState.isPending(clip.id);
+      isInteractivePreview || scrubSettleState.isPending(clip.id);
     const useScrubRuntime = keepScrubRuntimeActive;
     const previewRuntimeSource = useScrubRuntime
       ? getScrubRuntimeSource(
@@ -915,7 +923,7 @@ export class LayerBuilderService {
     const preferFreshPausedRuntime = useScrubRuntime;
     const preferHtmlScrubPreview =
       !flags.disableHtmlPreviewFallback &&
-      ctx.isDraggingPlayhead &&
+      isInteractivePreview &&
       !!clip.source?.videoElement &&
       (!flags.useFullWebCodecsPlayback || !clip.source?.webCodecsPlayer?.isFullMode?.());
     const playingVisualProvider =
@@ -989,8 +997,13 @@ export class LayerBuilderService {
 
     this.ensureProxyImageFrameLoaded(mediaFile.id, frameIndex, clipTime, proxyFps, cacheKey);
 
-    // Try to get nearest cached frame for smooth scrubbing
-    const nearestFrame = proxyFrameCache.getNearestCachedFrameEntry(mediaFile.id, frameIndex, 30);
+    // Try to get nearest cached frame for smooth scrubbing. During an active
+    // playhead drag, reach as far as the preloader fetches ahead (±3s) so a
+    // cold-region teleport lands on a preloaded frame instead of empty-hold.
+    const nearestDistance = ctx.isDraggingPlayhead
+      ? PROXY_NEAREST_DISTANCE_SCRUB
+      : PROXY_NEAREST_DISTANCE_DEFAULT;
+    const nearestFrame = proxyFrameCache.getNearestCachedFrameEntry(mediaFile.id, frameIndex, nearestDistance);
     if (nearestFrame) {
       return this.buildImageLayerFromProxy(
         clip,
@@ -1018,6 +1031,19 @@ export class LayerBuilderService {
         displayedMediaTime: cached.frameIndex / proxyFps,
         targetMediaTime: clipTime,
         previewPath: 'proxy-image-frame-hold',
+        proxyFrameIndex: cached.frameIndex,
+      });
+    }
+
+    // Guaranteed floor during an active drag: once this clip has rendered any
+    // proxy frame, hold it (ignoring the drift gate) rather than dropping to an
+    // empty-hold while a fast fling outruns the preloader. The correct frame
+    // snaps in as soon as ensureProxyImageFrameLoaded resolves (~1 frame later).
+    if (ctx.isDraggingPlayhead && cached?.image) {
+      return this.buildImageLayerFromProxy(clip, layerIndex, cached.image, clipTime, ctx, opacityOverride, {
+        displayedMediaTime: cached.frameIndex / proxyFps,
+        targetMediaTime: clipTime,
+        previewPath: 'proxy-image-frame-hold-stale',
         proxyFrameIndex: cached.frameIndex,
       });
     }
@@ -1795,7 +1821,10 @@ export class LayerBuilderService {
 
     this.ensureProxyImageFrameLoaded(mediaFile.id, frameIndex, nestedClipTime, proxyFps, cacheKey);
 
-    const nearestFrame = proxyFrameCache.getNearestCachedFrameEntry(mediaFile.id, frameIndex, 30);
+    const nearestDistance = isDraggingPlayhead
+      ? PROXY_NEAREST_DISTANCE_SCRUB
+      : PROXY_NEAREST_DISTANCE_DEFAULT;
+    const nearestFrame = proxyFrameCache.getNearestCachedFrameEntry(mediaFile.id, frameIndex, nearestDistance);
     if (nearestFrame) {
       return this.buildNestedProxyImageLayer(
         baseLayer,
@@ -1819,6 +1848,19 @@ export class LayerBuilderService {
         heldFrame.frameIndex,
         nestedClipTime,
         'nested-proxy-image-frame-hold',
+      );
+    }
+
+    // Guaranteed floor during an active drag (mirrors tryBuildProxyLayer): hold
+    // any prior proxy frame for this nested clip rather than dropping to empty.
+    if (isDraggingPlayhead && heldFrame?.image) {
+      return this.buildNestedProxyImageLayer(
+        baseLayer,
+        heldFrame.image,
+        mediaFile,
+        heldFrame.frameIndex,
+        nestedClipTime,
+        'nested-proxy-image-frame-hold-stale',
       );
     }
 
