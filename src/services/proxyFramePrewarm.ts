@@ -31,6 +31,10 @@ function hasVideoProxyCandidate(clip: TimelineClip, mediaFile: MediaFile): boole
     return false;
   }
 
+  if (mediaFile.proxyFormat === 'mp4-all-intra') {
+    return false;
+  }
+
   if (mediaFile.proxyStatus === 'ready') {
     return true;
   }
@@ -103,9 +107,9 @@ export function prewarmProxyFramesForTimelinePosition(
     }
     lastPrewarmFrameByMediaId.set(request.mediaFileId, request.frameIndex);
 
-    proxyFrameCache.getCachedVideoFrame(request.mediaFileId, request.frameIndex);
+    proxyFrameCache.getCachedFrame(request.mediaFileId, request.frameIndex, request.fps);
     void proxyFrameCache
-      .getVideoFrame(request.mediaFileId, request.mediaTime, request.fps)
+      .getFrame(request.mediaFileId, request.mediaTime, request.fps)
       .catch(() => {
         // Proxy prewarm is opportunistic; the render path still has normal fallbacks.
       });

@@ -5,7 +5,10 @@ import { classifyMediaType } from '../../timeline/helpers/mediaTypeHelpers';
 import { calculateFileHash } from './fileHashHelpers';
 import { getMediaInfo } from './mediaInfoHelpers';
 import { createThumbnail, handleThumbnailDedup } from './thumbnailHelpers';
-import { getExpectedProxyFps, getExpectedProxyFrameCount } from './proxyCompleteness';
+import {
+  getExpectedProxyFps,
+  isProxyFrameIndexSetComplete,
+} from './proxyCompleteness';
 import { projectFileService } from '../../../services/projectFileService';
 import { fileSystemService } from '../../../services/fileSystemService';
 import { projectDB } from '../../../services/projectDB';
@@ -194,17 +197,16 @@ async function checkExistingProxy(
     return { proxyStatus: 'none' };
   }
 
-  const hasProxyVideo = await projectFileService.hasProxyVideo(fileHash);
-  if (hasProxyVideo) {
-    const proxyFps = getExpectedProxyFps(fps);
-    const frameCount = getExpectedProxyFrameCount(duration, proxyFps) ?? undefined;
-    log.debug(`Found existing MP4 proxy: ${fileHash.slice(0, 8)}`);
+  const proxyFps = getExpectedProxyFps(fps);
+  const frameIndices = await projectFileService.getProxyFrameIndices(fileHash);
+  if (isProxyFrameIndexSetComplete(frameIndices, duration, proxyFps)) {
+    log.debug(`Found existing JPEG proxy: ${fileHash.slice(0, 8)}`);
     return {
       proxyStatus: 'ready',
-      proxyFrameCount: frameCount,
+      proxyFrameCount: frameIndices.size,
       proxyFps,
       proxyProgress: 100,
-      proxyFormat: 'mp4-all-intra',
+      proxyFormat: 'jpeg-sequence',
     };
   }
 

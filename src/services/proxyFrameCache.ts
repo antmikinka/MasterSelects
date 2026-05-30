@@ -31,7 +31,7 @@ import { calculateAudioMeterSnapshot } from './audio/audioMetering';
 // Cache settings - tuned for fast scrubbing
 const MAX_CACHE_SIZE = 900; // 30 seconds at 30fps - larger cache for scrubbing
 const MAX_VIDEO_FRAME_CACHE_SIZE = 120;
-const LEGACY_JPEG_PROXY_FRAMES_ENABLED = false;
+const JPEG_PROXY_FRAMES_ENABLED = true;
 const PRELOAD_AHEAD_FRAMES = 60; // 2 seconds ahead for playback
 const PRELOAD_BEHIND_FRAMES = 30; // 1 second behind for reverse scrubbing
 const PARALLEL_LOAD_COUNT = 16; // More parallel loads for faster preload
@@ -39,14 +39,14 @@ const SCRUB_PRELOAD_RANGE = 90; // 3 seconds around scrub position
 const SCRUB_TELEPORT_SECONDS = 2; // Large jumps should abandon stale queued scrub preloads
 const SCRUB_STATIONARY_EPSILON_SECONDS = 0.003;
 const SCRUB_STATIONARY_STOP_MS = 140;
-const SCRUB_GRAIN_DURATION_SECONDS = 0.065;
-const SCRUB_GRAIN_SPACING_SECONDS = 0.018;
-const SCRUB_GRAIN_FADE_SECONDS = 0.006;
-const SCRUB_GRAIN_SCHEDULE_AHEAD_SECONDS = 0.16;
+const SCRUB_GRAIN_DURATION_SECONDS = 0.09;
+const SCRUB_GRAIN_SPACING_SECONDS = 0.075;
+const SCRUB_GRAIN_FADE_SECONDS = 0.008;
+const SCRUB_GRAIN_SCHEDULE_AHEAD_SECONDS = 0.075;
 const SCRUB_GRAIN_PEAK_GAIN = 0.42;
 const SCRUB_RESYNC_POSITION_DELTA_SECONDS = 0.045;
+const SCRUB_RESYNC_FADE_OUT_SECONDS = 0.012;
 const SCRUB_FAST_VELOCITY_SECONDS_PER_SECOND = 2.5;
-const SCRUB_PENDING_GRAIN_KEEP_AHEAD_SECONDS = 0.012;
 const SCRUB_REVERSE_THRESHOLD_SECONDS_PER_SECOND = -0.04;
 const MAX_AUDIO_BUFFER_CACHE_BYTES = 192 * 1024 * 1024;
 const MAX_AUDIO_BUFFER_CACHE_ENTRIES = 3;
@@ -919,7 +919,7 @@ class ProxyFrameCache {
   // Synchronously get a frame if it's already in memory cache
   // Also triggers preloading of upcoming frames (even if current frame not cached)
   getCachedFrame(mediaFileId: string, frameIndex: number, fps: number = 30): HTMLImageElement | null {
-    return LEGACY_JPEG_PROXY_FRAMES_ENABLED
+    return JPEG_PROXY_FRAMES_ENABLED
       ? this.getCachedLegacyImageFrame(mediaFileId, frameIndex, fps)
       : null;
   }
@@ -953,7 +953,7 @@ class ProxyFrameCache {
     frameIndex: number,
     maxDistance: number = 30
   ): ProxyCachedFrame | null {
-    return LEGACY_JPEG_PROXY_FRAMES_ENABLED
+    return JPEG_PROXY_FRAMES_ENABLED
       ? this.getNearestCachedLegacyImageFrameEntry(mediaFileId, frameIndex, maxDistance)
       : null;
   }
@@ -1188,7 +1188,7 @@ class ProxyFrameCache {
 
   // Get a frame from cache or load it
   async getFrame(mediaFileId: string, time: number, fps: number = 30): Promise<HTMLImageElement | null> {
-    return LEGACY_JPEG_PROXY_FRAMES_ENABLED
+    return JPEG_PROXY_FRAMES_ENABLED
       ? this.getLegacyImageFrame(mediaFileId, time, fps)
       : null;
   }
@@ -1835,8 +1835,8 @@ class ProxyFrameCache {
 
   /**
    * Granular scrub audio - call continuously while dragging the playhead.
-   * Short overlapping grains avoid the gated/stalled sound of one long
-   * playbackRate-driven buffer source and allow backward scrub feedback.
+   * Short overlapping, pitch-stable grains avoid the gated/stalled sound of
+   * one long buffer source and allow backward scrub feedback.
    */
   playScrubAudio(
     mediaFileId: string,
@@ -1955,13 +1955,32 @@ class ProxyFrameCache {
   }
 
   private resyncScrubGrainSchedule(currentTime: number): void {
-    this.stopPendingScrubGrains(currentTime + SCRUB_PENDING_GRAIN_KEEP_AHEAD_SECONDS);
+    this.stopScrubGrainsForResync(currentTime);
     this.scrubNextGrainTime = currentTime;
   }
 
-  private stopPendingScrubGrains(startAfter: number): void {
+  private stopScrubGrainsForResync(currentTime: number): void {
     for (const grain of Array.from(this.scrubGrains)) {
-      if (grain.startTime <= startAfter) continue;
+      if (grain.startTime <= currentTime) {
+        this.fadeOutScrubGrain(grain, currentTime);
+        continue;
+      }
+      try {
+        grain.source.onended = null;
+        grain.source.stop();
+      } catch { /* ignore */ }
+      this.cleanupScrubGrain(grain);
+    }
+  }
+
+  private fadeOutScrubGrain(grain: ScrubGrain, currentTime: number): void {
+    const stopTime = currentTime + SCRUB_RESYNC_FADE_OUT_SECONDS;
+    try {
+      grain.gain.gain.cancelScheduledValues(currentTime);
+      grain.gain.gain.setValueAtTime(Math.max(0, grain.gain.gain.value), currentTime);
+      grain.gain.gain.linearRampToValueAtTime(0, stopTime);
+      grain.source.stop(stopTime);
+    } catch {
       try {
         grain.source.onended = null;
         grain.source.stop();
@@ -2023,7 +2042,7 @@ class ProxyFrameCache {
     const gain = ctx.createGain();
 
     source.buffer = sourceBuffer;
-    source.playbackRate.value = this.getScrubGrainPlaybackRate(velocity);
+    source.playbackRate.value = 1;
     this.shapeScrubGrainGain(gain.gain, startTime, playbackDuration);
 
     source.connect(gain);
@@ -2054,12 +2073,6 @@ class ProxyFrameCache {
   ): number {
     const maxOffset = Math.max(0, buffer.duration - duration);
     return Math.max(0, Math.min(position, maxOffset));
-  }
-
-  private getScrubGrainPlaybackRate(velocity: number): number {
-    const speed = Math.abs(velocity);
-    if (!Number.isFinite(speed) || speed < 0.001) return 1;
-    return Math.max(0.75, Math.min(2.25, speed));
   }
 
   private shapeScrubGrainGain(gain: AudioParam, startTime: number, duration: number): void {

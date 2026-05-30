@@ -16,7 +16,7 @@ import type {
 import type { SignalArtifact, SignalGraph, SignalOperatorDescriptor } from '../../../signals';
 import { DEFAULT_COMPOSITION } from '../constants';
 import { generateId } from '../helpers/importPipeline';
-import { getExpectedProxyFps, getExpectedProxyFrameCount } from '../helpers/proxyCompleteness';
+import { getExpectedProxyFps, isProxyFrameIndexSetComplete } from '../helpers/proxyCompleteness';
 import { projectDB, type StoredProject } from '../../../services/projectDB';
 import { projectFileService } from '../../../services/projectFileService';
 import { fileSystemService } from '../../../services/fileSystemService';
@@ -140,14 +140,13 @@ export const createProjectSlice: MediaSliceCreator<ProjectActions> = (set, get) 
           if (stored.type === 'video' && projectFileService.isProjectOpen()) {
             // Try fileHash first, then fall back to mediaId (for backwards compatibility)
             const storageKey = stored.fileHash || mediaFile.id;
-            const hasProxyVideo = await projectFileService.hasProxyVideo(storageKey);
-            if (hasProxyVideo) {
-              const duration = stored.duration ?? mediaFile.duration;
+            const frameIndices = await projectFileService.getProxyFrameIndices(storageKey);
+            if (isProxyFrameIndexSetComplete(frameIndices, stored.duration ?? mediaFile.duration, stored.fps ?? mediaFile.fps)) {
               proxyFps = getExpectedProxyFps(stored.fps ?? mediaFile.fps);
               proxyStatus = 'ready';
-              proxyFrameCount = getExpectedProxyFrameCount(duration, proxyFps) ?? undefined;
+              proxyFrameCount = frameIndices.size;
               proxyProgress = 100;
-              proxyFormat = 'mp4-all-intra';
+              proxyFormat = 'jpeg-sequence';
             }
           }
 

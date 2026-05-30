@@ -841,28 +841,29 @@ class CompositionRendererService {
 
         const shouldUseProxy = mediaStore.proxyEnabled &&
           nestedMediaFile?.proxyFps &&
+          nestedMediaFile.proxyFormat !== 'mp4-all-intra' &&
           (nestedMediaFile.proxyStatus === 'ready' || nestedMediaFile.proxyStatus === 'generating');
 
         if (shouldUseProxy && nestedMediaFile) {
           const proxyFps = nestedMediaFile.proxyFps || 30;
           const frameIndex = Math.floor(nestedClipTime * proxyFps);
-          const cachedFrame = proxyFrameCache.getCachedVideoFrame(nestedMediaFile.id, frameIndex);
+          const cachedFrame = proxyFrameCache.getCachedFrame(nestedMediaFile.id, frameIndex, proxyFps);
 
           if (cachedFrame) {
             nestedLayers.push({
               ...baseLayer,
               source: {
-                type: 'video',
-                videoFrame: cachedFrame,
+                type: 'image',
+                imageElement: cachedFrame,
                 mediaTime: frameIndex / proxyFps,
                 targetMediaTime: nestedClipTime,
-                previewPath: 'nested-proxy-video-frame',
+                previewPath: 'nested-proxy-image-frame',
                 proxyFrameIndex: frameIndex,
               },
             } as Layer);
             continue;
           }
-          void proxyFrameCache.getVideoFrame(nestedMediaFile.id, nestedClipTime, proxyFps);
+          void proxyFrameCache.getFrame(nestedMediaFile.id, nestedClipTime, proxyFps);
         }
 
         nestedLayers.push({

@@ -37,7 +37,7 @@ export interface ProjectMediaFile {
 
   // Proxy status
   hasProxy: boolean;
-  proxyFormat?: 'mp4-all-intra';
+  proxyFormat?: 'jpeg-sequence' | 'mp4-all-intra';
   hasAudioProxy?: boolean;
   audioProxyStorageKey?: string;
 

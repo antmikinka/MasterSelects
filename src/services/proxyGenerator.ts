@@ -1,6 +1,6 @@
-// Proxy video generator using WebCodecs VideoDecoder + VideoEncoder.
-// Decodes source video, resizes frames on an OffscreenCanvas, and writes a
-// H.264 all-intra MP4 (`proxy.mp4`) for fast random-access scrubbing.
+// Proxy generator using WebCodecs VideoDecoder. The active proxy path decodes
+// source video, transfers frames to Dedicated Workers for resize/JPEG encoding,
+// and lets project storage decide how those JPEG frames are persisted.
 
 import { Logger } from './logger';
 import * as MP4BoxModule from 'mp4box';
@@ -28,6 +28,8 @@ const PROXY_H264_BITS_PER_PIXEL_SECOND = 0.16;
 const PROXY_MIN_BITRATE = 4_000_000;
 const PROXY_MAX_BITRATE = 30_000_000;
 const CANVAS_POOL_SIZE = 8;       // Parallel encoding canvases
+const WORKER_ENCODER_MAX_COUNT = 8;
+const WORKER_ENCODER_RESERVED_THREADS = 2;
 const DECODE_BATCH_SIZE = 30;     // Feed 30 samples at a time before yielding
 const MAX_PENDING_ENCODE_FRAMES = CANVAS_POOL_SIZE * 8;
 const BACKPRESSURE_TARGET_FRAMES = CANVAS_POOL_SIZE * 4;
@@ -177,6 +179,144 @@ interface CanvasSlot {
   ctx: OffscreenCanvasRenderingContext2D;
 }
 
+interface EncodedProxyImageFrame {
+  frameIndex: number;
+  blob: Blob;
+  drawMs: number;
+  jpegMs: number;
+  size: number;
+}
+
+interface ProxyFrameWorkerEncodedMessage extends EncodedProxyImageFrame {
+  type: 'encoded';
+  requestId: number;
+}
+
+interface ProxyFrameWorkerReadyMessage {
+  type: 'ready';
+}
+
+interface ProxyFrameWorkerErrorMessage {
+  type: 'error';
+  requestId?: number;
+  message: string;
+}
+
+type ProxyFrameWorkerMessage =
+  | ProxyFrameWorkerEncodedMessage
+  | ProxyFrameWorkerReadyMessage
+  | ProxyFrameWorkerErrorMessage;
+
+class ProxyFrameEncodeWorkerClient {
+  private readonly worker: Worker;
+  private readonly pending = new Map<number, {
+    resolve: (frame: EncodedProxyImageFrame) => void;
+    reject: (error: Error) => void;
+  }>();
+  private readonly ready: Promise<void>;
+  private readyResolve: (() => void) | null = null;
+  private readyReject: ((error: Error) => void) | null = null;
+  private nextRequestId = 1;
+  private disposed = false;
+
+  constructor(width: number, height: number, quality: number) {
+    this.worker = new Worker(new URL('../workers/proxyFrameEncodeWorker.ts', import.meta.url), {
+      type: 'module',
+    });
+
+    this.ready = new Promise((resolve, reject) => {
+      this.readyResolve = resolve;
+      this.readyReject = reject;
+    });
+
+    this.worker.onmessage = (event: MessageEvent<ProxyFrameWorkerMessage>) => {
+      this.handleMessage(event.data);
+    };
+    this.worker.onerror = (event) => {
+      const error = new Error(event.message || 'Proxy frame encoder worker failed');
+      this.readyReject?.(error);
+      this.rejectPending(error);
+    };
+    this.worker.postMessage({
+      type: 'init',
+      width,
+      height,
+      quality,
+    });
+  }
+
+  async encode(frameIndex: number, frame: VideoFrame): Promise<EncodedProxyImageFrame> {
+    if (this.disposed) {
+      throw new Error('Proxy frame encoder worker was disposed');
+    }
+
+    await this.ready;
+    const requestId = this.nextRequestId++;
+
+    return new Promise((resolve, reject) => {
+      this.pending.set(requestId, { resolve, reject });
+      try {
+        this.worker.postMessage(
+          {
+            type: 'encode',
+            requestId,
+            frameIndex,
+            frame,
+          },
+          [frame as unknown as Transferable]
+        );
+      } catch (error) {
+        this.pending.delete(requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.readyReject?.(new Error('Proxy frame encoder worker disposed'));
+    this.worker.terminate();
+    this.rejectPending(new Error('Proxy frame encoder worker disposed'));
+  }
+
+  private handleMessage(message: ProxyFrameWorkerMessage): void {
+    if (message.type === 'ready') {
+      this.readyResolve?.();
+      return;
+    }
+
+    if (message.type === 'error') {
+      const error = new Error(message.message);
+      if (typeof message.requestId === 'number') {
+        const pending = this.pending.get(message.requestId);
+        this.pending.delete(message.requestId);
+        pending?.reject(error);
+      } else {
+        this.readyReject?.(error);
+        this.rejectPending(error);
+      }
+      return;
+    }
+
+    const pending = this.pending.get(message.requestId);
+    this.pending.delete(message.requestId);
+    pending?.resolve({
+      frameIndex: message.frameIndex,
+      blob: message.blob,
+      drawMs: message.drawMs,
+      jpegMs: message.jpegMs,
+      size: message.size,
+    });
+  }
+
+  private rejectPending(error: Error): void {
+    for (const pending of this.pending.values()) {
+      pending.reject(error);
+    }
+    this.pending.clear();
+  }
+}
+
 type ProxyOutputMode = 'jpeg-sequence' | 'all-intra-mp4';
 
 class ProxyGeneratorWebCodecs {
@@ -198,6 +338,7 @@ class ProxyGeneratorWebCodecs {
   private processingFrameIndices = new Set<number>();
   private encodeQueue: EncodeQueueItem[] = [];
   private encodeWorkers: Promise<void>[] = [];
+  private frameEncodeWorkers: ProxyFrameEncodeWorkerClient[] = [];
   private encodeWakeResolvers: Array<() => void> = [];
   private decodeDone = false;
   private encodeStopRequested = false;
@@ -283,13 +424,6 @@ class ProxyGeneratorWebCodecs {
         const initialProgress = Math.min(99, Math.round((this.processedFrames / this.totalFrames) * 100));
         this.onProgress?.(initialProgress);
         log.info(`Resume progress: ${initialProgress}% (${this.processedFrames}/${this.totalFrames} frames)`);
-      }
-
-      // Initialize canvas pool for parallel encoding
-      for (let i = 0; i < CANVAS_POOL_SIZE; i++) {
-        const canvas = new OffscreenCanvas(this.outputWidth, this.outputHeight);
-        const ctx = canvas.getContext('2d')!;
-        this.canvasPool.push({ canvas, ctx });
       }
 
       // Initialize decoder
@@ -792,10 +926,57 @@ class ProxyGeneratorWebCodecs {
   }
 
   private startEncodeWorkers(): void {
-    const slots = this.outputMode === 'all-intra-mp4'
-      ? this.canvasPool.slice(0, 1)
-      : this.canvasPool;
-    this.encodeWorkers = slots.map((slot) => this.encodeWorker(slot));
+    if (this.outputMode === 'all-intra-mp4') {
+      const slots = this.canvasPool.slice(0, 1);
+      this.encodeWorkers = slots.map((slot) => this.encodeWorker(slot));
+      return;
+    }
+
+    if (this.canUseDedicatedFrameWorkers()) {
+      const workerCount = this.getDedicatedFrameWorkerCount();
+      this.frameEncodeWorkers = Array.from(
+        { length: workerCount },
+        () => new ProxyFrameEncodeWorkerClient(this.outputWidth, this.outputHeight, JPEG_QUALITY)
+      );
+      this.encodeWorkers = this.frameEncodeWorkers.map((worker) => this.encodeWorkerWithDedicatedWorker(worker));
+      log.info(`Using ${workerCount} Dedicated Workers for JPEG proxy frame encoding`);
+      return;
+    }
+
+    this.initializeCanvasPool(CANVAS_POOL_SIZE);
+    this.encodeWorkers = this.canvasPool.map((slot) => this.encodeWorker(slot));
+    log.warn('Dedicated proxy frame workers unavailable; using main-thread OffscreenCanvas encode pool');
+  }
+
+  private initializeCanvasPool(size: number): void {
+    if (this.canvasPool.length > 0) return;
+
+    for (let i = 0; i < size; i++) {
+      const canvas = new OffscreenCanvas(this.outputWidth, this.outputHeight);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('Failed to create proxy canvas context');
+      }
+      this.canvasPool.push({ canvas, ctx });
+    }
+  }
+
+  private canUseDedicatedFrameWorkers(): boolean {
+    return (
+      typeof Worker !== 'undefined' &&
+      typeof OffscreenCanvas !== 'undefined' &&
+      typeof VideoFrame !== 'undefined'
+    );
+  }
+
+  private getDedicatedFrameWorkerCount(): number {
+    const hardwareConcurrency = typeof navigator !== 'undefined' && Number.isFinite(navigator.hardwareConcurrency)
+      ? navigator.hardwareConcurrency
+      : 4;
+    return Math.max(
+      2,
+      Math.min(WORKER_ENCODER_MAX_COUNT, Math.max(2, hardwareConcurrency - WORKER_ENCODER_RESERVED_THREADS))
+    );
   }
 
   private async encodeWorker(slot: CanvasSlot): Promise<void> {
@@ -816,6 +997,55 @@ class ProxyGeneratorWebCodecs {
       }
 
       await this.waitForEncodeWork();
+    }
+  }
+
+  private async encodeWorkerWithDedicatedWorker(worker: ProxyFrameEncodeWorkerClient): Promise<void> {
+    while (true) {
+      if (this.encodeStopRequested) {
+        this.closeQueuedEncodeFrames();
+        return;
+      }
+
+      const item = this.encodeQueue.shift();
+      if (item) {
+        await this.encodeAndSaveFrameInDedicatedWorker(worker, item);
+        continue;
+      }
+
+      if (this.decodeDone) {
+        return;
+      }
+
+      await this.waitForEncodeWork();
+    }
+  }
+
+  private async encodeAndSaveFrameInDedicatedWorker(
+    worker: ProxyFrameEncodeWorkerClient,
+    item: EncodeQueueItem
+  ): Promise<void> {
+    try {
+      const encoded = await worker.encode(item.frameIndex, item.frame);
+      this.metrics.drawMs += encoded.drawMs;
+      this.metrics.jpegMs += encoded.jpegMs;
+      this.metrics.savedBytes += encoded.size;
+
+      const saveStart = performance.now();
+      await this.saveFrame!({ frameIndex: encoded.frameIndex, blob: encoded.blob });
+      this.metrics.saveMs += performance.now() - saveStart;
+
+      this.savedFrameIndices.add(encoded.frameIndex);
+      this.processedFrames++;
+      this.reportProgress();
+    } finally {
+      this.processingFrameIndices.delete(item.frameIndex);
+      try {
+        item.frame.close();
+      } catch {
+        // Frame ownership may have moved to a Dedicated Worker.
+      }
+      this.wakeEncodeWorkers();
     }
   }
 
@@ -944,12 +1174,20 @@ class ProxyGeneratorWebCodecs {
   }
 
   private resetEncodePipeline(): void {
+    this.disposeFrameEncodeWorkers();
     this.closeQueuedEncodeFrames();
     this.processingFrameIndices.clear();
     this.encodeWakeResolvers = [];
     this.encodeWorkers = [];
     this.decodeDone = false;
     this.encodeStopRequested = false;
+  }
+
+  private disposeFrameEncodeWorkers(): void {
+    for (const worker of this.frameEncodeWorkers) {
+      worker.dispose();
+    }
+    this.frameEncodeWorkers = [];
   }
 
   private logPerformance(totalMs: number): void {
@@ -1168,6 +1406,7 @@ class ProxyGeneratorWebCodecs {
     this.wakeEncodeWorkers();
     this.closeDecodedFrames();
     this.closeQueuedEncodeFrames();
+    this.disposeFrameEncodeWorkers();
     this.processingFrameIndices.clear();
     this.canvasPool = [];
     this.decoder = null;

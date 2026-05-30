@@ -1408,20 +1408,15 @@ describe('LayerBuilderService paused visual provider selection', () => {
     const service = new LayerBuilderService();
     const file = new File(['video'], 'nested.mp4', { type: 'video/mp4' });
     const video = document.createElement('video');
-    const proxyVideoFrame = {
-      displayWidth: 640,
-      displayHeight: 360,
-      codedWidth: 640,
-      codedHeight: 360,
-    } as VideoFrame;
+    const proxyImage = document.createElement('img');
     const mockedProxyFrameCache = proxyFrameCache as typeof proxyFrameCache & {
-      getCachedVideoFrame: ReturnType<typeof vi.fn>;
-      getNearestCachedVideoFrameEntry: ReturnType<typeof vi.fn>;
-      getVideoFrame: ReturnType<typeof vi.fn>;
+      getCachedFrame: ReturnType<typeof vi.fn>;
+      getNearestCachedFrameEntry: ReturnType<typeof vi.fn>;
+      getFrame: ReturnType<typeof vi.fn>;
     };
-    mockedProxyFrameCache.getCachedVideoFrame = vi.fn().mockReturnValue(proxyVideoFrame);
-    mockedProxyFrameCache.getNearestCachedVideoFrameEntry = vi.fn().mockReturnValue(null);
-    mockedProxyFrameCache.getVideoFrame = vi.fn().mockResolvedValue(proxyVideoFrame);
+    mockedProxyFrameCache.getCachedFrame = vi.fn().mockReturnValue(proxyImage);
+    mockedProxyFrameCache.getNearestCachedFrameEntry = vi.fn().mockReturnValue(null);
+    mockedProxyFrameCache.getFrame = vi.fn().mockResolvedValue(proxyImage);
 
     const getMediaStateSpy = vi.spyOn(useMediaStore, 'getState').mockReturnValue({
       ...initialMediaState,
@@ -1511,26 +1506,26 @@ describe('LayerBuilderService paused visual provider selection', () => {
     const nestedLayers = (layers[0]?.source as NestedCompositionSource | undefined)?.nestedComposition?.layers as Array<{
       source?: {
         type?: string;
-        videoFrame?: VideoFrame;
+        imageElement?: HTMLImageElement;
         proxyFrameIndex?: number;
         previewPath?: string;
         mediaFileId?: string;
       };
     }> | undefined;
 
-    expect(mockedProxyFrameCache.getCachedVideoFrame).toHaveBeenCalledWith('media-video-1', 24);
+    expect(mockedProxyFrameCache.getCachedFrame).toHaveBeenCalledWith('media-video-1', 24, 24);
     expect(nestedLayers).toHaveLength(1);
     expect(nestedLayers?.[0]?.source).toMatchObject({
-      type: 'video',
-      videoFrame: proxyVideoFrame,
+      type: 'image',
+      imageElement: proxyImage,
       proxyFrameIndex: 24,
-      previewPath: 'nested-proxy-video-frame',
+      previewPath: 'nested-proxy-image-frame',
       mediaFileId: 'media-video-1',
     });
 
-    delete mockedProxyFrameCache.getCachedVideoFrame;
-    delete mockedProxyFrameCache.getNearestCachedVideoFrameEntry;
-    delete mockedProxyFrameCache.getVideoFrame;
+    delete mockedProxyFrameCache.getCachedFrame;
+    delete mockedProxyFrameCache.getNearestCachedFrameEntry;
+    delete mockedProxyFrameCache.getFrame;
     getMediaStateSpy.mockRestore();
   });
 });

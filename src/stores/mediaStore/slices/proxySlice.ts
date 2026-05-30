@@ -4,7 +4,9 @@ import type { MediaFile, MediaSliceCreator, MediaState, ProxyStatus } from '../t
 import {
   getExpectedProxyFps,
   getExpectedProxyFrameCount,
+  getProxyProgressFromFrameIndices,
   isProxyFrameCountComplete,
+  isProxyFrameIndexSetComplete,
 } from '../helpers/proxyCompleteness';
 import { projectFileService } from '../../../services/projectFileService';
 import { useTimelineStore } from '../../timeline';
@@ -17,6 +19,7 @@ const activeProxyGenerations = new Map<string, { cancelled: boolean }>();
 
 /** Check if a proxy is complete (>= 98% of expected frames) */
 function isProxyComplete(file: MediaFile, frameCountOverride?: number): boolean {
+  if (file.proxyFormat === 'mp4-all-intra') return false;
   return isProxyFrameCountComplete(frameCountOverride ?? file.proxyFrameCount, file.duration, file.proxyFps ?? file.fps);
 }
 
@@ -169,9 +172,11 @@ export const createProxySlice: MediaSliceCreator<ProxyActions> = (set, get) => (
         await projectFileService.deleteEntry('PROXY', storageKey, { recursive: true });
       }
 
-      const hasExistingProxyVideo = !options.force && await projectFileService.hasProxyVideo(storageKey);
-      if (hasExistingProxyVideo && isProxyComplete(mediaFile, getExpectedProxyFrameCount(mediaFile.duration, proxyFps) ?? undefined)) {
-        const frameCount = getExpectedProxyFrameCount(mediaFile.duration, proxyFps) ?? mediaFile.proxyFrameCount;
+      const existingFrameIndices = options.force
+        ? new Set<number>()
+        : await projectFileService.getProxyFrameIndices(storageKey);
+      if (!options.force && isProxyFrameIndexSetComplete(existingFrameIndices, mediaFile.duration, proxyFps)) {
+        const frameCount = existingFrameIndices.size;
         log.debug('Already complete:', mediaFile.name);
         set((s) => ({
           files: s.files.map((f) =>
@@ -182,7 +187,7 @@ export const createProxySlice: MediaSliceCreator<ProxyActions> = (set, get) => (
                   proxyProgress: 100,
                   proxyFrameCount: frameCount,
                   proxyFps,
-                  proxyFormat: 'mp4-all-intra' as const,
+                  proxyFormat: 'jpeg-sequence' as const,
                 }
               : f
           ),
@@ -201,9 +206,9 @@ export const createProxySlice: MediaSliceCreator<ProxyActions> = (set, get) => (
             ? {
                 ...f,
                 proxyStatus: 'generating' as ProxyStatus,
-                proxyProgress: 0,
+                proxyProgress: getProxyProgressFromFrameIndices(existingFrameIndices, mediaFile.duration, proxyFps),
                 proxyFps,
-                proxyFormat: 'mp4-all-intra' as const,
+                proxyFormat: 'jpeg-sequence' as const,
               }
             : f
         ),
@@ -218,16 +223,17 @@ export const createProxySlice: MediaSliceCreator<ProxyActions> = (set, get) => (
         }));
       };
 
-      // Generate video proxy
-      const result = await generateVideoProxy(
+      // Generate JPEG image sequence proxy
+      const result = await generateImageProxy(
         mediaFile,
         storageKey,
         controller,
-        updateProgress
+        updateProgress,
+        existingFrameIndices
       );
 
       if (result && !controller.cancelled) {
-        const resultComplete = isProxyFrameCountComplete(result.frameCount, mediaFile.duration, result.fps);
+        const resultComplete = isProxyFrameIndexSetComplete(result.frameIndices, mediaFile.duration, result.fps);
         if (!result || !resultComplete) {
           log.error('Generation incomplete:', {
             name: mediaFile.name,
@@ -256,13 +262,13 @@ export const createProxySlice: MediaSliceCreator<ProxyActions> = (set, get) => (
                   proxyProgress: 100,
                   proxyFrameCount: completeResult.frameCount,
                   proxyFps: completeResult.fps,
-                  proxyFormat: 'mp4-all-intra' as const,
+                  proxyFormat: 'jpeg-sequence' as const,
                 }
               : f
           ),
         }));
 
-        log.info(`Complete: ${completeResult.frameCount} all-intra MP4 proxy frames for ${mediaFile.name}`);
+        log.info(`Complete: ${completeResult.frameCount} JPEG proxy frames for ${mediaFile.name}`);
 
         // Extract audio proxy in background (non-blocking)
         if (mediaFile.hasAudio === true || mediaFile.audioCodec) {
@@ -458,31 +464,45 @@ export const createProxySlice: MediaSliceCreator<ProxyActions> = (set, get) => (
   },
 });
 
-async function generateVideoProxy(
+async function generateImageProxy(
   mediaFile: MediaFile,
   storageKey: string,
   controller: { cancelled: boolean },
-  updateProgress: (progress: number) => void
-): Promise<{ frameCount: number; fps: number } | null> {
+  updateProgress: (progress: number) => void,
+  existingFrameIndices: Set<number>
+): Promise<{ frameCount: number; fps: number; frameIndices: Set<number> } | null> {
   const { getProxyGenerator } = await import('../../../services/proxyGenerator');
   const generator = getProxyGenerator();
+  const writer = await projectFileService.createProxyFrameWriter(storageKey);
+  if (!writer) {
+    throw new Error('Failed to create JPEG proxy frame writer');
+  }
 
-  const result = await generator.generateAllIntraVideo(
+  const result = await generator.generate(
     mediaFile.file!,
     mediaFile.id,
     updateProgress,
-    () => controller.cancelled
-  );
+    () => controller.cancelled,
+    async (frame) => {
+      const saved = await writer.saveFrame(frame.frameIndex, frame.blob);
+      if (!saved) {
+        throw new Error(`Failed to save JPEG proxy frame ${frame.frameIndex}`);
+      }
+    },
+    existingFrameIndices
+  ).finally(async () => {
+    try {
+      await writer.close?.();
+    } catch (error) {
+      log.warn('Failed to close JPEG proxy frame writer:', error);
+    }
+  });
   if (!result) return null;
 
-  const saved = await projectFileService.saveProxyVideo(storageKey, result.blob);
-  if (!saved) {
-    throw new Error('Failed to save all-intra MP4 proxy');
-  }
-
   return {
-    frameCount: result.frameCount,
+    frameCount: result.frameIndices.size,
     fps: result.fps,
+    frameIndices: result.frameIndices,
   };
 }
 

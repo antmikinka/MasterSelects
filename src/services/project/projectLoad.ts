@@ -7,6 +7,7 @@ import { getMediaInfo } from '../../stores/mediaStore/helpers/mediaInfoHelpers';
 import {
   getExpectedProxyFrameCount,
   getExpectedProxyFps,
+  isProxyFrameIndexSetComplete,
 } from '../../stores/mediaStore/helpers/proxyCompleteness';
 import { updateTimelineClips } from '../../stores/mediaStore/slices/fileManageSlice';
 import {
@@ -551,15 +552,15 @@ async function convertProjectMediaToStore(
         proxyStatus = 'ready';
         proxyFrameCount = getExpectedProxyFrameCount(pm.duration, proxyFps) ?? undefined;
         proxyProgress = 100;
-        proxyFormat = 'mp4-all-intra';
+        proxyFormat = 'jpeg-sequence';
       } else {
         const proxyStorageKey = pm.fileHash || pm.id;
-        const hasProxyVideo = await projectFileService.hasProxyVideo(proxyStorageKey);
-        if (hasProxyVideo) {
+        const frameIndices = await projectFileService.getProxyFrameIndices(proxyStorageKey);
+        if (isProxyFrameIndexSetComplete(frameIndices, pm.duration, proxyFps)) {
           proxyStatus = 'ready';
-          proxyFrameCount = getExpectedProxyFrameCount(pm.duration, proxyFps) ?? undefined;
+          proxyFrameCount = frameIndices.size;
           proxyProgress = 100;
-          proxyFormat = 'mp4-all-intra';
+          proxyFormat = 'jpeg-sequence';
         }
       }
     }
@@ -1650,14 +1651,14 @@ async function restoreDeferredMediaCacheState(
       try {
         const proxyFps = getExpectedProxyFps(pm.frameRate);
         const proxyStorageKey = pm.fileHash || pm.id;
-        onProgress?.(completed, projectMedia.length, `${pm.name} - proxy video`, 0.5);
-        const hasProxyVideo = await projectFileService.hasProxyVideo(proxyStorageKey);
-        if (hasProxyVideo) {
+        onProgress?.(completed, projectMedia.length, `${pm.name} - proxy frames`, 0.5);
+        const frameIndices = await projectFileService.getProxyFrameIndices(proxyStorageKey);
+        if (isProxyFrameIndexSetComplete(frameIndices, pm.duration, proxyFps)) {
           updates.proxyStatus = 'ready';
-          updates.proxyFrameCount = getExpectedProxyFrameCount(pm.duration, proxyFps) ?? undefined;
+          updates.proxyFrameCount = frameIndices.size;
           updates.proxyFps = proxyFps;
           updates.proxyProgress = 100;
-          updates.proxyFormat = 'mp4-all-intra';
+          updates.proxyFormat = 'jpeg-sequence';
         } else {
           updates.proxyStatus = 'none';
           updates.proxyFrameCount = undefined;
