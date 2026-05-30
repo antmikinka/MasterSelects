@@ -16,6 +16,8 @@ import type { TimelineClip } from '../types';
 import type { DockLayout, DockNode, DockPanel, FloatingPanel } from '../types/dock';
 import { getShortcutRegistry } from '../services/shortcutRegistry';
 import { isAIExecutionRunning } from '../services/aiTools/executionState';
+import { engine } from '../engine/WebGPUEngine';
+import { layerBuilder } from '../services/layerBuilder';
 import {
   useHistoryStore,
   initHistoryStoreRefs,
@@ -342,6 +344,17 @@ export function useGlobalHistory() {
       },
       suppressCaptures: () => {
         suppressUntil.current = Date.now() + 250;
+      },
+      // After an undo/redo restores state, rebuild layers from the restored clips
+      // and render so the preview reflects them (e.g. restored deleted clips).
+      afterApply: () => {
+        try {
+          layerBuilder.invalidateCache();
+          const layers = layerBuilder.buildLayersFromStore();
+          engine.render(layers);
+        } catch {
+          engine.requestNewFrameRender();
+        }
       },
     });
 

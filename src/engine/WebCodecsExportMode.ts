@@ -22,6 +22,8 @@ export interface ExportModePlayer {
   setCurrentFrame(frame: VideoFrame | null): void;
   isSimpleMode(): boolean;
   seekAsync(time: number): Promise<void>;
+  // Recreate a fresh VideoDecoder after the current one errored/closed mid-export.
+  recreateExportDecoder?(): VideoDecoder | null;
 }
 
 export class WebCodecsExportMode {
@@ -171,7 +173,17 @@ export class WebCodecsExportMode {
   }
 
   private async reconfigureDecoderForExport(context: string): Promise<void> {
-    const decoder = this.getConfiguredDecoderOrThrow(context);
+    let decoder = this.player.getDecoder();
+    // Recover from a decoder that errored out (closed) mid-export by recreating
+    // it, instead of throwing — one bad warmup decode shouldn't kill the export.
+    if (!decoder || decoder.state === 'closed') {
+      decoder = this.player.recreateExportDecoder?.() ?? null;
+      if (!decoder || decoder.state === 'closed') {
+        throw new Error(`FAST export decoder unavailable during ${context}`);
+      }
+      log.warn(`Recreated FAST export decoder after it closed (${context})`);
+    }
+
     const codecConfig = this.player.getCodecConfig();
     if (!codecConfig) {
       throw new Error(`FAST export codec config missing during ${context}`);
@@ -583,11 +595,15 @@ export class WebCodecsExportMode {
       }
     }
 
+    // A closed decoder must restart from a keyframe (which recreates it) — decoding
+    // more samples on a dead decoder would just keep throwing.
+    const decoderClosed = (this.player.getDecoder()?.state ?? 'closed') === 'closed';
     if (
+      decoderClosed ||
       targetCts < minCtsInBuffer ||
       targetSampleIndex < this.decodeCursorIndex - WebCodecsExportMode.KEEP_FRAMES_BEHIND
     ) {
-      log.info(`Restarting FAST decode window around ${timeSeconds.toFixed(3)}s`);
+      log.info(`Restarting FAST decode window around ${timeSeconds.toFixed(3)}s${decoderClosed ? ' (decoder closed — recovering)' : ''}`);
       await this.restartFromKeyframe(targetSampleIndex);
     } else {
       if (targetCts > maxCtsInBuffer) {

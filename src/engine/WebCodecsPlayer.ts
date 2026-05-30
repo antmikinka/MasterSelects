@@ -162,6 +162,17 @@ export class WebCodecsPlayer implements ExportModePlayer {
 
   // ExportModePlayer interface implementation
   getDecoder(): VideoDecoder | null { return this.decoder; }
+  // Recreate a fresh decoder after the current one errored/closed mid-export, so
+  // export can recover from a transient decode failure instead of aborting.
+  recreateExportDecoder(): VideoDecoder | null {
+    if (this.decoder && this.decoder.state !== 'closed') {
+      try { this.decoder.close(); } catch {}
+    }
+    this.decoder = null;
+    this.decoderInitialized = false;
+    this.initDecoder();
+    return this.decoder;
+  }
   getSamples(): Sample[] { return this.samples; }
   getSampleIndex(): number { return this.sampleIndex; }
   setSampleIndex(index: number): void { this.sampleIndex = index; this.feedIndex = index; }
