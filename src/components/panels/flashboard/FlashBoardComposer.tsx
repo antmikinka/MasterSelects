@@ -598,6 +598,8 @@ export function FlashBoardComposer({
   const apiKeyDefaults = useSettingsStore((s) => s.apiKeyDefaults);
   const lemonadeEndpoint = useSettingsStore((s) => s.lemonadeEndpoint);
   const openSettings = useSettingsStore((s) => s.openSettings);
+  const aiApprovalMode = useSettingsStore((s) => s.aiApprovalMode);
+  const setAiApprovalMode = useSettingsStore((s) => s.setAiApprovalMode);
   const useOpenAiKeyByDefault = Boolean(apiKeysUnlocked && apiKeyDefaults.openai && openAiApiKey.trim());
   const useAnthropicKeyByDefault = Boolean(apiKeysUnlocked && apiKeyDefaults.anthropic && anthropicApiKey.trim());
   const usePiApiKeyByDefault = Boolean(apiKeysUnlocked && apiKeyDefaults.piapi && piApiKey.trim());
@@ -3725,11 +3727,16 @@ export function FlashBoardComposer({
             >
               {chatTemperatureSupported ? `Temp ${chatTemperature.toFixed(1)}` : 'Fixed temp'}
             </button>
-            {chatCreditLabel && (
-              <span className="fb-pill fb-chat-cost-pill" title={chatChargeTitle}>
-                {chatCreditLabel}/round
-              </span>
-            )}
+            <button
+              className={`fb-pill fb-chat-approval-pill ${aiApprovalMode === 'auto' ? 'active' : ''}`}
+              type="button"
+              onClick={() => setAiApprovalMode(aiApprovalMode === 'auto' ? 'confirm-destructive' : 'auto')}
+              title={aiApprovalMode === 'auto'
+                ? 'Auto-approve ON — the chat runs edits (incl. executeBatch and imports) without asking. Click to require confirmation.'
+                : 'Auto-approve OFF — edits that need confirmation (executeBatch, local imports) are blocked in chat. Click to let the chat run them automatically.'}
+            >
+              {aiApprovalMode === 'auto' ? '● Auto' : '○ Auto'}
+            </button>
             <button
               className="fb-pill fb-chat-clear-pill"
               type="button"

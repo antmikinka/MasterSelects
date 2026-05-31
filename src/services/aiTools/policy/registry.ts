@@ -220,11 +220,21 @@ const TOOL_POLICY_MAP = new Map<string, ToolPolicyEntry>([
 ]);
 
 /**
+ * Normalize a model-supplied tool name. Some providers (notably OpenAI tool
+ * calling) prefix the function name with a `functions.` namespace, e.g.
+ * `functions.addClipSegment`. Strip that prefix so policy lookup and dispatch
+ * match the registered tool name instead of failing as "Unknown tool".
+ */
+export function normalizeToolName(toolName: string): string {
+  return toolName.trim().replace(/^functions\./, '');
+}
+
+/**
  * Look up the policy entry for a tool.
  * Returns undefined for unknown tools (fail closed).
  */
 export function getToolPolicy(toolName: string): ToolPolicyEntry | undefined {
-  return TOOL_POLICY_MAP.get(toolName);
+  return TOOL_POLICY_MAP.get(normalizeToolName(toolName));
 }
 
 /**
@@ -235,12 +245,13 @@ export function checkToolAccess(
   toolName: string,
   caller: CallerContext,
 ): { allowed: boolean; reason?: string } {
-  const policy = TOOL_POLICY_MAP.get(toolName);
+  const name = normalizeToolName(toolName);
+  const policy = TOOL_POLICY_MAP.get(name);
   if (!policy) {
-    return { allowed: false, reason: `Unknown tool: ${toolName}` };
+    return { allowed: false, reason: `Unknown tool: ${name}` };
   }
   if (!policy.allowedCallers.includes(caller)) {
-    return { allowed: false, reason: `Tool "${toolName}" is not allowed for caller "${caller}"` };
+    return { allowed: false, reason: `Tool "${name}" is not allowed for caller "${caller}"` };
   }
   return { allowed: true };
 }
