@@ -85,15 +85,23 @@ export class WavetableSynth implements IMidiSynth {
       gain.gain.setValueAtTime(peak, Math.max(attackEnd, endsAt - 0.01));
       gain.gain.exponentialRampToValueAtTime(0.0001, endsAt);
     } else {
-      // Sustained melodic note: decay to sustain, hold until note-off, then release.
+      // Sustained melodic note: ramp toward sustain over the decay, then RELEASE at
+      // the actual note-off (not when decay finishes). Real GM decays are long — a
+      // piano's is tens of seconds — so note-off usually interrupts the decay; we hold
+      // the envelope's current value there and fade out. cancelAndHoldAtTime keeps the
+      // mid-decay level; fall back to the sustain level where it's unavailable.
       const decay = Math.max(0.001, env.decay);
       const release = Math.max(0.005, env.release);
       const sustain = clamp01(env.sustain);
       const sustainLevel = Math.max(0.0001, peak * sustain);
       const decayEnd = attackEnd + decay;
       gain.gain.exponentialRampToValueAtTime(sustainLevel, decayEnd);
-      const noteOff = Math.max(decayEnd, startAt + Math.max(0.02, duration));
-      gain.gain.setValueAtTime(sustainLevel, noteOff);
+      const noteOff = Math.max(attackEnd, startAt + Math.max(0.02, duration));
+      if (typeof gain.gain.cancelAndHoldAtTime === 'function') {
+        gain.gain.cancelAndHoldAtTime(noteOff);
+      } else {
+        gain.gain.setValueAtTime(sustainLevel, noteOff);
+      }
       endsAt = noteOff + release;
       gain.gain.exponentialRampToValueAtTime(0.0001, endsAt);
     }

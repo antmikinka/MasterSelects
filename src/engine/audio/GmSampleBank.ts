@@ -192,15 +192,16 @@ class GmSampleBank {
     if (zoneIdx < 0) return null;
     const zone = asset.zones[zoneIdx];
 
-    const buffer = this.getBuffer(id, zoneIdx, zone, asset.sampleRate);
+    const sampleRate = zone.sampleRate ?? asset.sampleRate;
+    const buffer = this.getBuffer(id, zoneIdx, zone, sampleRate);
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.playbackRate.value = computePlaybackRate(pitch, zone.rootKey, isDrum);
 
     if (!isDrum && zone.loopStart >= 0 && zone.loopEnd > zone.loopStart) {
       source.loop = true;
-      source.loopStart = zone.loopStart / asset.sampleRate;
-      source.loopEnd = zone.loopEnd / asset.sampleRate;
+      source.loopStart = zone.loopStart / sampleRate;
+      source.loopEnd = zone.loopEnd / sampleRate;
     }
     return { source, zone };
   }

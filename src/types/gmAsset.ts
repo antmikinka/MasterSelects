@@ -20,17 +20,19 @@ export interface GmEnvelope {
 export interface GmZone {
   loKey: number;    // lowest MIDI note this zone covers (0–127)
   hiKey: number;    // highest MIDI note this zone covers (0–127)
-  rootKey: number;  // MIDI note the sample was recorded at (pitch reference)
+  rootKey: number;  // MIDI note the sample was recorded at (pitch reference; may be fractional after tuning)
   loopStart: number; // loop start in sample frames; -1 = no loop (one-shot)
   loopEnd: number;   // loop end in sample frames
   envelope: GmEnvelope;
-  pcm: string;       // base64 of a Float32 mono PCM buffer at the asset sampleRate
+  pcm: string;       // base64 of a Float32 mono PCM buffer
+  /** Sample rate of this zone's PCM. Falls back to the asset sampleRate when absent. */
+  sampleRate?: number;
 }
 
 export interface GmInstrumentAsset {
   program: number;    // 0–127 GM program (or drum kit id)
   name: string;
   isDrum: boolean;    // true = percussion kit (per-note sample, native rate)
-  sampleRate: number; // rate the PCM was decoded at
+  sampleRate: number; // default rate for zones that don't specify their own
   zones: GmZone[];
 }

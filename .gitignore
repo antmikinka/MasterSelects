@@ -96,3 +96,14 @@ _fremd/
 # Windows artifacts
 nul
 .gstack/
+
+# Source SoundFonts for the GM converter (#193 2b). Large (~150MB), never committed.
+# Generate with scripts/build-gm-instruments.mjs; the working copy lives in soundfonts/.
+*.sf2
+*.sf3
+soundfonts/
+
+# Generated GM instrument assets (#193 2b). Large; produced from the .sf2 by the
+# converter and kept local (full-quality) / served from a CDN later — NOT committed.
+# The picker degrades gracefully when an asset is absent. README stays tracked.
+public/instruments/gm/**/*.json
