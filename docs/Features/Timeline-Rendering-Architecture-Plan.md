@@ -149,6 +149,31 @@ The clip canvas redraws only when something it depends on changes:
 
 Once the clip canvas is stable, move its drawing to an `OffscreenCanvas` controlled by a Web Worker. Thumbnails (`ImageBitmap`) and waveform pyramids (transferable `Float32Array`) are worker-friendly. Result: the entire timeline clip render happens **off the main thread**, so even React reconciliation of the chrome can't stutter it. This is the path to rock-solid 60fps with very large comps. Optional, not required for the first big win.
 
+### 2.9 God-object decomposition (`TimelineClip.tsx` is 4,328 lines)
+
+**This is a first-class workstream, not a side effect of the canvas migration.** The canvas removes only the *rendering* responsibility from `TimelineClip`. The component also carries a large amount of *interaction/business logic* (audio-region editing, spectral selection, stem separation, video bake, trim/fade/slip gestures, keyframe drag, context menus). That logic does not disappear — it moves to the active-clip overlay. If we move 4,328 lines wholesale into the overlay, we still have a god object, just rendered for one clip.
+
+So `TimelineClip` is decomposed by responsibility, independent of (and partly ahead of) the canvas work:
+
+| Responsibility (today all inside `TimelineClip`) | Target home |
+|---|---|
+| Geometry / trim math (`displayStartTime`, slip window, clamps) | pure `utils` + small hooks |
+| Audio-region editing (selection, gain, fades, fx presets) | own component, **mounted only for audio clips** |
+| Spectral selection / spectrogram region edits | own module |
+| Stem-separation UI (jobs, choices, prewarm) | own module |
+| Video-bake regions | own module |
+| Thumbnails / filmstrip | → canvas (Phase 1) |
+| Waveform | already `ClipWaveform` (reuse) |
+| Pointer / tool dispatch | already partly `timelineToolPointerDispatcher` (finish extracting) |
+| Label-color resolution | indexed-map lookup (see 0c) |
+| 51 store subscriptions | **split by feature** — a video clip must not instantiate the ~30 audio-only subscriptions |
+
+Two payoffs that do **not** depend on the canvas:
+1. **Immediate performance:** splitting subscriptions by clip kind removes ~30 audio-feature subscriptions + their `.find()` scans from every video clip. This helps even the zoomed-out-to-fit case where all clips are genuinely in view.
+2. **De-risks the canvas migration:** the interaction logic ends up in cohesive, testable modules feeding the single active-clip overlay, instead of a monolith that must be moved atomically.
+
+Decomposition rule: the only thing that needs to render for *every* clip is the visual body (→ canvas). Everything else only needs to exist for the **1–2 clips being interacted with** → mount those modules in the active-clip overlay, lazily, by clip kind.
+
 ---
 
 ## 3. Migration plan (incremental, app stays working)
@@ -159,7 +184,8 @@ Each phase is shippable and behind a feature flag where it changes rendering.
 - **0a.** Fix culling bypass: in `TimelineTrack.tsx:282`, only force-render a selected/dragged clip if it is also within `[visibleStartTime, visibleEndTime]` (+overscan). Selected clips off-screen don't need DOM — selection is restored when scrolled into view. Keep dragged/trimmed clips always rendered.
 - **0b.** Repair `areTimelineTrackPropsEqual` (`TimelineTrack.tsx:430`) to do a real shallow compare in the non-drag case too, so tracks stop re-rendering on every parent render.
 - **0c.** Replace the O(n) `.find()` selectors in `TimelineClip` `mediaLabelHex` and friends with lookups into indexed maps (`filesById`, `compositionsById`) provided by the stores.
-- **Expected:** select-all on 100 clips drops from 100 → ~15 DOM clips; idle paint loop stops. Measure `rafGap` via bridge before/after.
+- **0d.** Begin the god-object split (§2.9): gate the ~30 audio-only store subscriptions behind `isAudioClip` so video clips stop instantiating them. First, safe slice of the decomposition; biggest per-clip subscription win and helps the zoomed-out case.
+- **Expected:** select-all on 100 clips drops from 100 → ~15 DOM clips; idle paint loop stops; video clips shed ~30 subscriptions each. Measure `rafGap` via bridge before/after.
 
 ### Phase 1 — Read-only clip canvas behind a flag (the real fix)
 - Add `featureFlags.timelineCanvasClips`.
@@ -174,9 +200,9 @@ Each phase is shippable and behind a feature flag where it changes rendering.
 - Drag/trim/slip previews via canvas redraw.
 - **Exit criteria:** every interaction available in the DOM path works on the canvas path; QA sign-off.
 
-### Phase 3 — Make canvas the default, remove DOM clip path
+### Phase 3 — Make canvas the default, finish god-object decomposition, remove DOM clip path
 - Flip the flag on by default; delete the per-clip DOM rendering once parity is confirmed.
-- `TimelineClip.tsx` shrinks to the interaction-overlay component only (the 4,328-line monolith is retired/split).
+- Complete the §2.9 decomposition: `TimelineClip.tsx` is dissolved into the active-clip overlay + focused per-feature modules (audio-region, spectral, stem, video-bake) mounted lazily by clip kind. The 4,328-line monolith no longer exists; nothing renders for non-active clips except the canvas body.
 
 ### Phase 4 (optional) — OffscreenCanvas worker
 - Move clip drawing off the main thread for very large comps.
