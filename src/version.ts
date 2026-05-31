@@ -1,6 +1,6 @@
 // App version
 // Format: MAJOR.MINOR.PATCH
-export const APP_VERSION = '2.0.6';
+export const APP_VERSION = '2.0.7';
 
 export interface ChangelogNotice {
   type: 'info' | 'warning' | 'success' | 'danger';
@@ -27,8 +27,8 @@ export const FEATURED_VIDEO: {
   title: 'MasterSelects Demo',
   banner: {
     type: 'success',
-    title: 'MasterSelects 2.0.6',
-    message: 'Timeline editing now gets clearer waveform detail, right-drag scrubbing over clips and empty space, faster pointer-centered zoom, and denser audio track controls.',
+    title: 'MasterSelects 2.0.7',
+    message: 'MIDI tracks arrive: add a MIDI track, paint clips with the pencil tool, edit notes in a detached piano-roll window, and hear them through a built-in synth that mixes and exports like any audio track.',
     animated: true,
   },
 };
@@ -36,8 +36,8 @@ export const FEATURED_VIDEO: {
 // Build/Platform notice shown at top of changelog (set to null to hide)
 export const BUILD_NOTICE: ChangelogNotice | null = {
   type: 'success',
-  title: 'MasterSelects 2.0.6',
-  message: 'This release improves timeline waveform readability, empty-space edit menus, drop-to-timeline import handling, mouse-anchored zoom, and compact audio header pan controls.',
+  title: 'MasterSelects 2.0.7',
+  message: 'This release adds DAW-style MIDI tracks with a pencil tool, a detached piano-roll editor, and a built-in synth with mixer parity and export support.',
   animated: true,
 };
 

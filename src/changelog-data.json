@@ -1,5 +1,12 @@
 [
   {
+    "date": "2026-05-31",
+    "type": "new",
+    "title": "MasterSelects 2.0.7",
+    "description": "DAW-style MIDI tracks: right-click the timeline's audio section to add a MIDI track, paint clip regions with the new pencil tool, and double-click a clip to open a detached piano-roll editor where you draw, move, resize, and delete notes freely. A built-in triangle-wave synth with ADSR makes clips audible during playback, with full mixer parity and export support.",
+    "section": "Release"
+  },
+  {
     "date": "2026-05-29",
     "type": "improve",
     "title": "MasterSelects 2.0.6",
