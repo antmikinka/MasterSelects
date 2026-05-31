@@ -9,6 +9,7 @@ import {
 } from '../../../stores/dockStore';
 import type { ToolResult } from '../types';
 import type { CallerContext } from '../policy';
+import { normalizeToolName } from '../policy';
 
 // Import handlers by category
 import {
@@ -417,6 +418,10 @@ export async function executeToolInternal(
   mediaStore: ReturnType<typeof useMediaStore.getState>,
   callerContext: CallerContext = 'internal',
 ): Promise<ToolResult> {
+  // Strip provider namespace prefixes (e.g. OpenAI's `functions.addClipSegment`)
+  // so dispatch matches the registered handler name.
+  toolName = normalizeToolName(toolName);
+
   // Check timeline handlers first
   if (toolName in timelineHandlers) {
     return timelineHandlers[toolName](args, timelineStore, callerContext);

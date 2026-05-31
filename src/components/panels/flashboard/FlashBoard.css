@@ -2034,6 +2034,18 @@
   cursor: not-allowed;
 }
 
+/* Auto-approve toggle: green when ON signals the confirmation gate is open. */
+.fb-chat-approval-pill.active {
+  background: #2e7d32;
+  border-color: #43a047;
+  color: #fff;
+}
+
+.fb-chat-approval-pill.active:hover {
+  background: #338a37;
+  color: #fff;
+}
+
 .fb-pill svg { flex-shrink: 0; }
 
 .fb-pill-icon {
