@@ -1,13 +1,16 @@
 # GM Sampler — Implementation Plan
 
 > Issue #193 · branch `193-gm-sound-for-midi-tracks`
-> Status: **Phases 1 + 3 + 4 done** — factory seam; schema + GmSampleBank + WavetableSynth,
-> GM selectable, hand-built test asset; preload orchestration (live on-select/on-start +
-> export-before-clip-loop). Build/lint/test green; browser-verified (GM audible live and
-> in export, first note no longer drops).
-> **Phase 2 split** (per decision): schema-as-types landed inside Phase 3; the real
-> `.sf2`→JSON converter + FluidR3 assets (2b) are deferred until the runtime is proven.
-> Pending: **Phase 5** (drums), **6** (full asset set + UI), **2b** (converter).
+> Status: **Phases 1 + 3 + 4 + 5 + 6 done** — factory seam; schema + GmSampleBank +
+> WavetableSynth; preload orchestration; drums (own asset namespace, per-note samples,
+> unmapped-silent); full 128-program names + 16 families + drum kits, grouped program /
+> drum-kit picker UI, GM program-name labels, persistence. Build/lint/test green;
+> browser-verified end to end (picker renders 16 optgroups / 128 programs + 9 kits;
+> labels resolve; unbuilt programs degrade gracefully silent).
+> **Phase 2 split** (per decision): schema-as-types landed inside Phase 3.
+> **Only remaining work: 2b** — the offline FluidR3 `.sf2`→JSON converter to generate
+> real assets (today only program 0 = placeholder sine and drum kit 0 = placeholder kit
+> resolve; the other 127 programs / 8 kits list in the UI but are silent until built).
 > Builds on the MIDI Tracks subsystem (issue #182, see `MIDI-Tracks-Plan.md`).
 
 ## 1. Goal

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   decodeBase64ToFloat32,
   selectZone,
+  selectZoneIndex,
   computePlaybackRate,
 } from '../../src/engine/audio/GmSampleBank';
 import type { GmZone } from '../../src/types/gmAsset';
@@ -67,6 +68,32 @@ describe('selectZone', () => {
     const only = zone({ loKey: 0, hiKey: 127, rootKey: 69 });
     expect(selectZone([only], 0)).toBe(only);
     expect(selectZone([only], 127)).toBe(only);
+  });
+});
+
+describe('selectZoneIndex (drums vs melodic)', () => {
+  const kick = zone({ loKey: 36, hiKey: 36, rootKey: 36 });
+  const snare = zone({ loKey: 38, hiKey: 38, rootKey: 38 });
+  const kit = [kick, snare];
+
+  it('returns the index of the covering zone', () => {
+    expect(selectZoneIndex(kit, 36, true)).toBe(0);
+    expect(selectZoneIndex(kit, 38, true)).toBe(1);
+  });
+
+  it('returns -1 for an unmapped drum note (no wrong-sample substitution)', () => {
+    expect(selectZoneIndex(kit, 40, true)).toBe(-1);
+    expect(selectZone(kit, 40, true)).toBeNull();
+  });
+
+  it('melodic falls back to the nearest zone by rootKey when uncovered', () => {
+    expect(selectZoneIndex(kit, 40, false)).toBe(1); // nearer snare root 38 than kick 36
+    expect(selectZoneIndex(kit, 36, false)).toBe(0);
+  });
+
+  it('returns -1 for an empty zone list either way', () => {
+    expect(selectZoneIndex([], 36, true)).toBe(-1);
+    expect(selectZoneIndex([], 60, false)).toBe(-1);
   });
 });
 

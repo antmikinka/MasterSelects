@@ -7,6 +7,10 @@ fetched at runtime relative to the app base URL.
 ## Status
 - `0000.json` is a **hand-built placeholder** (a pure sine tone) used to prove the
   runtime pipeline in Phase 3. It is NOT a real instrument sound.
+- `drums/0000.json` is a **hand-built placeholder** drum kit (synthesized
+  kick/snare/hi-hats/crash on GM notes 36/38/42/46/49) proving the percussion path
+  in Phase 5. Drum kits live in their own `drums/` namespace because a melodic
+  program and a drum kit can share the same program number.
 
 ## Real assets (Phase 2b, pending)
 Generated offline from the **FluidR3 GM** SoundFont (MIT licensed — free for

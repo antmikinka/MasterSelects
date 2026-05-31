@@ -8,6 +8,7 @@
 // picks the right one from a track's instrument.
 
 import type { MidiInstrument } from '../../types/midiClip';
+import type { GmSoundRef } from './GmSampleBank';
 
 export interface IMidiSynth {
   /**
@@ -29,10 +30,10 @@ export interface IMidiSynth {
   stopAll(): void;
 
   /**
-   * Ensure any samples needed for the given GM programs are loaded before notes
-   * are scheduled. No-op for synths that need no assets (the simple synth).
+   * Ensure samples for the given GM sounds (program + drum flag) are loaded before
+   * notes are scheduled. No-op for synths that need no assets (the simple synth).
    */
-  preload(programs: number[]): Promise<void>;
+  preload(refs: GmSoundRef[]): Promise<void>;
 
   /** Number of currently tracked voices (diagnostics/tests). */
   readonly voiceCount: number;

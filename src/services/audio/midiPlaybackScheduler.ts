@@ -23,7 +23,7 @@ import { useTimelineStore } from '../../stores/timeline';
 import type { TimelineTrack } from '../../types';
 import type { IMidiSynth } from '../../engine/audio/IMidiSynth';
 import { createSynthForInstrument } from '../../engine/audio/createSynthForInstrument';
-import { getGmSampleBank } from '../../engine/audio/GmSampleBank';
+import { getGmSampleBank, type GmSoundRef } from '../../engine/audio/GmSampleBank';
 import { createDefaultMidiInstrument, type MidiInstrument } from '../../types/midiClip';
 import { audioRoutingManager } from '../audioRoutingManager';
 import {
@@ -67,8 +67,9 @@ class MidiPlaybackScheduler {
   private anchorTimeline = 0;
   // Notes already scheduled in the current run, keyed to avoid double-trigger.
   private scheduled = new Set<string>();
-  // GM programs already requested from the bank, so preload runs once per program.
-  private preloadedPrograms = new Set<number>();
+  // GM sounds already requested from the bank (keyed melodic/drum + program), so
+  // preload runs once per distinct sound.
+  private preloadedSounds = new Set<string>();
 
   /** Idempotent: subscribe to transport state so playback drives the synth. */
   init(): void {
@@ -85,22 +86,24 @@ class MidiPlaybackScheduler {
     // user hits play), so the first note isn't dropped while the asset loads.
     useTimelineStore.subscribe(
       (state) => state.tracks,
-      (tracks) => this.preloadGmPrograms(tracks),
+      (tracks) => this.preloadGmSounds(tracks),
     );
     log.debug('MIDI playback scheduler initialized');
   }
 
-  /** Fetch GM samples for any GM track program not already requested (deduped). */
-  private preloadGmPrograms(tracks: TimelineTrack[]): void {
-    const programs: number[] = [];
+  /** Fetch samples for any GM sound (melodic program or drum kit) not yet requested. */
+  private preloadGmSounds(tracks: TimelineTrack[]): void {
+    const refs: GmSoundRef[] = [];
     for (const track of tracks) {
       const instrument = track.type === 'midi' ? track.midiInstrument : undefined;
       if (instrument?.kind !== 'gm') continue;
-      if (this.preloadedPrograms.has(instrument.program)) continue;
-      this.preloadedPrograms.add(instrument.program);
-      programs.push(instrument.program);
+      const isDrum = instrument.isDrum ?? false;
+      const key = `${isDrum ? 'd' : 'm'}${instrument.program}`;
+      if (this.preloadedSounds.has(key)) continue;
+      this.preloadedSounds.add(key);
+      refs.push({ program: instrument.program, isDrum });
     }
-    if (programs.length > 0) void getGmSampleBank().ensureLoaded(programs);
+    if (refs.length > 0) void getGmSampleBank().ensureLoaded(refs);
   }
 
   /**
@@ -216,7 +219,7 @@ class MidiPlaybackScheduler {
     void this.context.resume?.().catch(() => {});
     // Preload GM samples for current tracks (covers a freshly loaded project where no
     // instrument-change event fired since init).
-    this.preloadGmPrograms(useTimelineStore.getState().tracks);
+    this.preloadGmSounds(useTimelineStore.getState().tracks);
     this.running = true;
     this.needReanchor = false;
     this.reanchor();

@@ -57,4 +57,33 @@ describe('MIDI persistence round-trip', () => {
     expect(restoredNotes[0]).toMatchObject({ pitch: 64, start: 0.25, duration: 0.5, velocity: 0.7 });
     expect(restoredNotes[1]).toMatchObject({ pitch: 67, start: 1.0, duration: 0.75, velocity: 0.9 });
   });
+
+  it('preserves a GM program / drum-kit selection through serialize/load', async () => {
+    const store = useTimelineStore.getState();
+    const trackId = store.addTrack('midi');
+
+    // Switch to GM, pick a melodic program, then flip to a drum kit.
+    store.setTrackMidiInstrument(trackId, { kind: 'gm' });
+    store.setTrackMidiInstrument(trackId, { program: 40 }); // Violin
+    let instrument = useTimelineStore.getState().tracks.find(t => t.id === trackId)?.midiInstrument;
+    expect(instrument).toMatchObject({ kind: 'gm', program: 40 });
+
+    store.setTrackMidiInstrument(trackId, { isDrum: true, program: 0 }); // Standard Kit
+    instrument = useTimelineStore.getState().tracks.find(t => t.id === trackId)?.midiInstrument;
+    expect(instrument).toMatchObject({ kind: 'gm', program: 0, isDrum: true });
+    // The shape swap must not leave stale simple-synth fields behind.
+    expect(instrument && 'waveform' in instrument).toBe(false);
+    expect(instrument && 'adsr' in instrument).toBe(false);
+
+    const serialized = useTimelineStore.getState().getSerializableState();
+    expect(serialized.tracks.find(t => t.id === trackId)?.midiInstrument).toMatchObject({
+      kind: 'gm', program: 0, isDrum: true,
+    });
+
+    resetTimeline();
+    await useTimelineStore.getState().loadState(serialized);
+
+    const restored = useTimelineStore.getState().tracks.find(t => t.id === trackId)?.midiInstrument;
+    expect(restored).toMatchObject({ kind: 'gm', program: 0, isDrum: true });
+  });
 });

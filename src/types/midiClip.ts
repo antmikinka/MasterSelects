@@ -1,3 +1,5 @@
+import { getGmProgramName, getGmDrumKitName } from './gmPrograms';
+
 // MIDI track/clip/synth subsystem types.
 //
 // IMPORTANT: This is unrelated to `src/types/midi.ts`, which models hardware
@@ -97,8 +99,17 @@ export const MIDI_WAVEFORM_OPTIONS: ReadonlyArray<{ value: OscillatorType; label
   { value: 'square', label: 'Square' },
 ];
 
-/** Human-readable label for an instrument (e.g. "Simple Synth"). */
+/**
+ * Human-readable label for an instrument. GM instruments report their concrete
+ * program (or drum-kit) name — e.g. "Acoustic Grand Piano" / "Standard Kit" —
+ * rather than the generic "General MIDI"; the simple synth reports its kind label.
+ */
 export function getMidiInstrumentLabel(instrument: MidiInstrument | undefined | null): string | null {
   if (!instrument) return null;
+  if (instrument.kind === 'gm') {
+    return instrument.isDrum
+      ? getGmDrumKitName(instrument.program)
+      : getGmProgramName(instrument.program);
+  }
   return MIDI_INSTRUMENT_OPTIONS.find(option => option.kind === instrument.kind)?.label ?? 'Instrument';
 }

@@ -12,6 +12,7 @@ import {
   MIDI_WAVEFORM_OPTIONS,
   type MidiInstrument,
 } from '../../../types/midiClip';
+import { GM_FAMILIES, GM_PROGRAM_NAMES, GM_DRUM_KITS } from '../../../types/gmPrograms';
 
 interface MidiInstrumentTabProps {
   track: TimelineTrack;
@@ -36,6 +37,47 @@ export function MidiInstrumentTab({ track }: MidiInstrumentTabProps) {
             ))}
           </select>
         </label>
+        {instrument.kind === 'gm' && (
+          <label className="audio-bus-control-row audio-bus-control-row-compact">
+            <span>Percussion</span>
+            <input
+              type="checkbox"
+              checked={instrument.isDrum ?? false}
+              // Reset to program 0 so the landing value is always a valid program/kit.
+              onChange={(event) => setTrackMidiInstrument(track.id, { isDrum: event.currentTarget.checked, program: 0 })}
+            />
+          </label>
+        )}
+        {instrument.kind === 'gm' && !instrument.isDrum && (
+          <label className="audio-bus-control-row audio-bus-control-row-compact">
+            <span>Program</span>
+            <select
+              value={instrument.program}
+              onChange={(event) => setTrackMidiInstrument(track.id, { program: Number(event.currentTarget.value) })}
+            >
+              {GM_FAMILIES.map(family => (
+                <optgroup key={family.name} label={family.name}>
+                  {family.programs.map(program => (
+                    <option key={program} value={program}>{GM_PROGRAM_NAMES[program]}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+        )}
+        {instrument.kind === 'gm' && instrument.isDrum && (
+          <label className="audio-bus-control-row audio-bus-control-row-compact">
+            <span>Drum Kit</span>
+            <select
+              value={instrument.program}
+              onChange={(event) => setTrackMidiInstrument(track.id, { program: Number(event.currentTarget.value) })}
+            >
+              {GM_DRUM_KITS.map(kit => (
+                <option key={kit.program} value={kit.program}>{kit.name}</option>
+              ))}
+            </select>
+          </label>
+        )}
         {instrument.kind === 'simple-synth' && (
           <label className="audio-bus-control-row audio-bus-control-row-compact">
             <span>Waveform</span>

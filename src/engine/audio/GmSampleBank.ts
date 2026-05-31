@@ -37,22 +37,33 @@ export function decodeBase64ToFloat32(b64: string): Float32Array {
 }
 
 /**
- * Select the zone covering `pitch` (loKey..hiKey inclusive). Falls back to the
- * nearest zone by rootKey if none covers the pitch, then to the first zone — so a
- * single-zone v1 asset (loKey 0..hiKey 127) always resolves and out-of-range notes
- * never go silent.
+ * Index of the zone to play for `pitch`, or -1 for none.
+ *
+ * - A zone whose key range (loKey..hiKey inclusive) covers `pitch` always wins.
+ * - Melodic (`isDrum` false): if none covers, fall back to the nearest zone by
+ *   rootKey, so a single-zone v1 asset (0..127) always resolves and out-of-range
+ *   notes still sound (pitch-shifted).
+ * - Drums (`isDrum` true): NO fallback — an unmapped percussion note returns -1
+ *   (silent) rather than substituting some other drum's sample.
  */
-export function selectZone(zones: GmZone[], pitch: number): GmZone | null {
-  if (zones.length === 0) return null;
-  const covering = zones.find((z) => pitch >= z.loKey && pitch <= z.hiKey);
-  if (covering) return covering;
-  let nearest = zones[0];
-  let bestDist = Math.abs(pitch - nearest.rootKey);
-  for (const z of zones) {
-    const d = Math.abs(pitch - z.rootKey);
-    if (d < bestDist) { bestDist = d; nearest = z; }
+export function selectZoneIndex(zones: GmZone[], pitch: number, isDrum = false): number {
+  if (zones.length === 0) return -1;
+  const covering = zones.findIndex((z) => pitch >= z.loKey && pitch <= z.hiKey);
+  if (covering >= 0) return covering;
+  if (isDrum) return -1;
+  let best = 0;
+  let bestDist = Math.abs(pitch - zones[0].rootKey);
+  for (let i = 1; i < zones.length; i++) {
+    const d = Math.abs(pitch - zones[i].rootKey);
+    if (d < bestDist) { bestDist = d; best = i; }
   }
-  return nearest;
+  return best;
+}
+
+/** Convenience over selectZoneIndex returning the zone (or null). */
+export function selectZone(zones: GmZone[], pitch: number, isDrum = false): GmZone | null {
+  const i = selectZoneIndex(zones, pitch, isDrum);
+  return i >= 0 ? zones[i] : null;
 }
 
 /**
@@ -70,79 +81,93 @@ export interface GmBuiltSource {
   zone: GmZone;
 }
 
-function gmAssetUrl(program: number): string {
+/**
+ * Identifies one loadable GM sound. A melodic program and a drum kit can share the
+ * same `program` number but are entirely different assets, so the cache + fetch are
+ * keyed by both.
+ */
+export interface GmSoundRef {
+  program: number;
+  isDrum: boolean;
+}
+
+/** Cache/identity key for a sound (melodic vs drum kit at the same program). */
+function refId(program: number, isDrum: boolean): string {
+  return `${isDrum ? 'd' : 'm'}${program}`;
+}
+
+function gmAssetUrl(program: number, isDrum: boolean): string {
   // Relative to the deployed base path (works under a subpath); BASE_URL ends in '/'.
   const base = import.meta.env.BASE_URL ?? '/';
   const name = String(program).padStart(4, '0');
-  return `${base}instruments/gm/${name}.json`;
+  // Drum kits live in their own namespace so they never collide with melodic programs.
+  return isDrum ? `${base}instruments/gm/drums/${name}.json` : `${base}instruments/gm/${name}.json`;
 }
 
 // ── Bank singleton ──────────────────────────────────────────────────────────────
 
 class GmSampleBank {
-  private assets = new Map<number, GmInstrumentAsset>();   // program → parsed asset
-  private inflight = new Map<number, Promise<void>>();      // dedup concurrent fetches
-  private missing = new Set<number>();                      // known-404, don't refetch
-  private decoded = new Map<string, Float32Array>();        // `${program}:${zoneIdx}` → PCM
-  private buffers = new Map<string, AudioBuffer>();         // `${program}:${zoneIdx}` → buffer
+  // All keyed by refId (melodic vs drum kit, see refId), not raw program number.
+  private assets = new Map<string, GmInstrumentAsset>();    // refId → parsed asset
+  private inflight = new Map<string, Promise<void>>();       // dedup concurrent fetches
+  private missing = new Set<string>();                       // known-404, don't refetch
+  private decoded = new Map<string, Float32Array>();         // `${refId}:${zoneIdx}` → PCM
+  private buffers = new Map<string, AudioBuffer>();          // `${refId}:${zoneIdx}` → buffer
 
-  /** Fetch + parse the JSON for any not-yet-loaded program. Deduped + cached. */
-  async ensureLoaded(programs: number[]): Promise<void> {
-    await Promise.all([...new Set(programs)].map((p) => this.loadProgram(p)));
+  /** Fetch + parse the JSON for any not-yet-loaded sound. Deduped + cached. */
+  async ensureLoaded(refs: GmSoundRef[]): Promise<void> {
+    const unique = new Map<string, GmSoundRef>();
+    for (const ref of refs) unique.set(refId(ref.program, ref.isDrum), ref);
+    await Promise.all([...unique.values()].map((ref) => this.loadRef(ref.program, ref.isDrum)));
   }
 
-  isLoaded(program: number): boolean {
-    return this.assets.has(program);
+  isLoaded(program: number, isDrum: boolean): boolean {
+    return this.assets.has(refId(program, isDrum));
   }
 
-  private loadProgram(program: number): Promise<void> {
-    if (this.assets.has(program) || this.missing.has(program)) return Promise.resolve();
-    const existing = this.inflight.get(program);
+  private loadRef(program: number, isDrum: boolean): Promise<void> {
+    const id = refId(program, isDrum);
+    if (this.assets.has(id) || this.missing.has(id)) return Promise.resolve();
+    const existing = this.inflight.get(id);
     if (existing) return existing;
-    const p = this.fetchProgram(program).finally(() => this.inflight.delete(program));
-    this.inflight.set(program, p);
+    const p = this.fetchAsset(program, isDrum, id).finally(() => this.inflight.delete(id));
+    this.inflight.set(id, p);
     return p;
   }
 
-  private async fetchProgram(program: number): Promise<void> {
-    const url = gmAssetUrl(program);
+  private async fetchAsset(program: number, isDrum: boolean, id: string): Promise<void> {
+    const url = gmAssetUrl(program, isDrum);
     try {
       const res = await fetch(url);
       if (!res.ok) {
-        // Missing program degrades gracefully: silent track, no crash.
-        this.missing.add(program);
-        log.warn('GM program asset missing', { program, url, status: res.status });
+        // Missing asset degrades gracefully: silent track, no crash.
+        this.missing.add(id);
+        log.warn('GM asset missing', { program, isDrum, url, status: res.status });
         return;
       }
       const asset = (await res.json()) as GmInstrumentAsset;
       if (!asset?.zones?.length) {
-        this.missing.add(program);
-        log.warn('GM program asset has no zones', { program, url });
+        this.missing.add(id);
+        log.warn('GM asset has no zones', { program, isDrum, url });
         return;
       }
-      this.assets.set(program, asset);
-      log.debug('Loaded GM program', { program, name: asset.name, zones: asset.zones.length });
+      this.assets.set(id, asset);
+      log.debug('Loaded GM asset', { program, isDrum, name: asset.name, zones: asset.zones.length });
     } catch (error) {
-      this.missing.add(program);
-      log.warn('Failed to load GM program asset', { program, url, error });
+      this.missing.add(id);
+      log.warn('Failed to load GM asset', { program, isDrum, url, error });
     }
   }
 
-  private getDecoded(program: number, zoneIdx: number, zone: GmZone): Float32Array {
-    const key = `${program}:${zoneIdx}`;
-    let pcm = this.decoded.get(key);
-    if (!pcm) {
-      pcm = decodeBase64ToFloat32(zone.pcm);
-      this.decoded.set(key, pcm);
-    }
-    return pcm;
-  }
-
-  private getBuffer(program: number, zoneIdx: number, zone: GmZone, sampleRate: number): AudioBuffer {
-    const key = `${program}:${zoneIdx}`;
+  private getBuffer(id: string, zoneIdx: number, zone: GmZone, sampleRate: number): AudioBuffer {
+    const key = `${id}:${zoneIdx}`;
     let buffer = this.buffers.get(key);
     if (!buffer) {
-      const pcm = this.getDecoded(program, zoneIdx, zone);
+      let pcm = this.decoded.get(key);
+      if (!pcm) {
+        pcm = decodeBase64ToFloat32(zone.pcm);
+        this.decoded.set(key, pcm);
+      }
       // Build at the asset's own sample rate; WebAudio resamples to the playing
       // context automatically, so one buffer serves live AND offline export.
       buffer = new AudioBuffer({ numberOfChannels: 1, length: pcm.length, sampleRate });
@@ -155,18 +180,19 @@ class GmSampleBank {
 
   /**
    * Build a (one-use) AudioBufferSourceNode for a note in the given context, with
-   * pitch + loop applied. Returns null if the program isn't loaded yet — callers
-   * preload, but must tolerate a miss (the note is simply skipped).
+   * pitch + loop applied. Returns null if the asset isn't loaded yet OR (for drums)
+   * the note number has no mapped sample — callers preload but must tolerate a miss.
+   * Drums play at native rate with no loop; melodic notes are pitch-shifted and loop.
    */
   buildSource(program: number, pitch: number, isDrum: boolean, ctx: BaseAudioContext): GmBuiltSource | null {
-    const asset = this.assets.get(program);
+    const id = refId(program, isDrum);
+    const asset = this.assets.get(id);
     if (!asset) return null;
-    const zoneIdx = asset.zones.findIndex((z) => pitch >= z.loKey && pitch <= z.hiKey);
-    const idx = zoneIdx >= 0 ? zoneIdx : 0;
-    const zone = selectZone(asset.zones, pitch);
-    if (!zone) return null;
+    const zoneIdx = selectZoneIndex(asset.zones, pitch, isDrum);
+    if (zoneIdx < 0) return null;
+    const zone = asset.zones[zoneIdx];
 
-    const buffer = this.getBuffer(program, idx, zone, asset.sampleRate);
+    const buffer = this.getBuffer(id, zoneIdx, zone, asset.sampleRate);
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.playbackRate.value = computePlaybackRate(pitch, zone.rootKey, isDrum);

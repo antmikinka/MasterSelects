@@ -450,14 +450,16 @@ export class AudioExportPipeline {
     // Preload all GM wavetable samples once, before the clip loop. renderMidiClipToBuffer
     // schedules notes synchronously then renders immediately, so samples must already be
     // in the shared bank or GM clips render silent (the async↔sync gap, #193 Phase 4).
-    const gmPrograms = new Set<number>();
+    const gmSounds = new Map<string, { program: number; isDrum: boolean }>();
     for (const clip of clips) {
       if (clip.source?.type !== 'midi') continue;
       const instrument = tracks.find(t => t.id === clip.trackId)?.midiInstrument;
-      if (instrument?.kind === 'gm') gmPrograms.add(instrument.program);
+      if (instrument?.kind !== 'gm') continue;
+      const isDrum = instrument.isDrum ?? false;
+      gmSounds.set(`${isDrum ? 'd' : 'm'}${instrument.program}`, { program: instrument.program, isDrum });
     }
-    if (gmPrograms.size > 0) {
-      await getGmSampleBank().ensureLoaded([...gmPrograms]);
+    if (gmSounds.size > 0) {
+      await getGmSampleBank().ensureLoaded([...gmSounds.values()]);
     }
 
     for (let i = 0; i < clips.length; i++) {

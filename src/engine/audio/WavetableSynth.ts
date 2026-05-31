@@ -8,7 +8,7 @@
 
 import type { MidiInstrument } from '../../types/midiClip';
 import type { IMidiSynth } from './IMidiSynth';
-import { getGmSampleBank } from './GmSampleBank';
+import { getGmSampleBank, type GmSoundRef } from './GmSampleBank';
 import { Logger } from '../../services/logger';
 
 const log = Logger.create('WavetableSynth');
@@ -35,9 +35,9 @@ export class WavetableSynth implements IMidiSynth {
     this.destination = destination;
   }
 
-  /** Ensure the bank has the given GM programs decoded before notes are scheduled. */
-  async preload(programs: number[]): Promise<void> {
-    await this.bank.ensureLoaded(programs);
+  /** Ensure the bank has the given GM sounds decoded before notes are scheduled. */
+  async preload(refs: GmSoundRef[]): Promise<void> {
+    await this.bank.ensureLoaded(refs);
   }
 
   scheduleNote(
@@ -55,9 +55,10 @@ export class WavetableSynth implements IMidiSynth {
     const isDrum = instrument.isDrum ?? false;
     const built = this.bank.buildSource(instrument.program, pitch, isDrum, ctx);
     if (!built) {
-      // Not loaded yet — kick off a load so subsequent notes sound. Phase 4 makes
-      // preload proactive (on scheduler start / instrument change) so this rarely hits.
-      void this.bank.ensureLoaded([instrument.program]);
+      // Not loaded yet (or, for drums, this note has no mapped sample) — kick off a
+      // load so subsequent notes sound. Preload is proactive (Phase 4), so for loaded
+      // assets a null here means an unmapped drum note and the load is a cheap no-op.
+      void this.bank.ensureLoaded([{ program: instrument.program, isDrum }]);
       return;
     }
 
@@ -68,31 +69,41 @@ export class WavetableSynth implements IMidiSynth {
     const env = zone.envelope;
     const startAt = Math.max(when, ctx.currentTime);
     const attack = Math.max(0.001, env.attack);
-    const decay = Math.max(0.001, env.decay);
-    const release = Math.max(0.005, env.release);
-    const sustain = clamp01(env.sustain);
-    const sustainLevel = Math.max(0.0001, peak * sustain);
 
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0.0001, startAt);
     const attackEnd = startAt + attack;
     gain.gain.exponentialRampToValueAtTime(peak, attackEnd);
-    const decayEnd = attackEnd + decay;
-    gain.gain.exponentialRampToValueAtTime(sustainLevel, decayEnd);
 
-    // Hold at sustain until note-off, then release. Drums (no loop) ring out to the
-    // sample's natural end; the release just fades whatever remains.
-    const noteOff = Math.max(decayEnd, startAt + Math.max(0.02, duration));
-    gain.gain.setValueAtTime(sustainLevel, noteOff);
-    const releaseEnd = noteOff + release;
-    gain.gain.exponentialRampToValueAtTime(0.0001, releaseEnd);
+    let endsAt: number;
+    if (isDrum) {
+      // One-shot percussion: hold peak and let the sample play out fully — the PCM
+      // already encodes the decay, and a drum hit isn't gated by note duration. A
+      // short tail fade avoids a click if the sample doesn't end exactly at zero.
+      const sampleDuration = source.buffer ? source.buffer.duration : 0.5;
+      endsAt = startAt + Math.max(attack, sampleDuration);
+      gain.gain.setValueAtTime(peak, Math.max(attackEnd, endsAt - 0.01));
+      gain.gain.exponentialRampToValueAtTime(0.0001, endsAt);
+    } else {
+      // Sustained melodic note: decay to sustain, hold until note-off, then release.
+      const decay = Math.max(0.001, env.decay);
+      const release = Math.max(0.005, env.release);
+      const sustain = clamp01(env.sustain);
+      const sustainLevel = Math.max(0.0001, peak * sustain);
+      const decayEnd = attackEnd + decay;
+      gain.gain.exponentialRampToValueAtTime(sustainLevel, decayEnd);
+      const noteOff = Math.max(decayEnd, startAt + Math.max(0.02, duration));
+      gain.gain.setValueAtTime(sustainLevel, noteOff);
+      endsAt = noteOff + release;
+      gain.gain.exponentialRampToValueAtTime(0.0001, endsAt);
+    }
 
     source.connect(gain);
     gain.connect(this.destination);
     source.start(startAt);
-    source.stop(releaseEnd + 0.02);
+    source.stop(endsAt + 0.02);
 
-    const voice: ActiveVoice = { source, gain, endsAt: releaseEnd };
+    const voice: ActiveVoice = { source, gain, endsAt };
     this.voices.add(voice);
     source.onended = () => {
       try {
@@ -107,10 +118,10 @@ export class WavetableSynth implements IMidiSynth {
   /** Play an immediate short note (piano-roll draw/click preview). */
   previewNote(instrument: MidiInstrument, pitch: number, velocity = 0.85, duration = 0.3): void {
     if (!('currentTime' in this.context)) return;
-    if (instrument.kind === 'gm' && !this.bank.isLoaded(instrument.program)) {
+    if (instrument.kind === 'gm' && !this.bank.isLoaded(instrument.program, instrument.isDrum ?? false)) {
       // Load, then blip once ready so the first preview is audible.
       void this.bank
-        .ensureLoaded([instrument.program])
+        .ensureLoaded([{ program: instrument.program, isDrum: instrument.isDrum ?? false }])
         .then(() => this.scheduleNote(instrument, pitch, velocity, this.context.currentTime, duration));
       return;
     }
