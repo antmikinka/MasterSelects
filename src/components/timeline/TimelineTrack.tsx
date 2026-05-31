@@ -310,17 +310,17 @@ function TimelineTrackComponent({
   }, [allTrackClips, timeToPixel]);
   const useCanvasClips = flags.timelineCanvasClips &&
     trackContentWidth <= MAX_CANVAS_WIDTH_PX;
-  // Phase 2 interaction: the canvas is display-only. The clips the user is
-  // currently acting on — selected, hovered, dragged, trimmed — are rendered as
-  // real interactive DOM clips on top, and the canvas skips them (excludeIds) so
-  // there is no double-draw/ghost. Hover is resolved by hit-testing the row.
+  // Phase 2 interaction: the canvas is display-only. Only the clips the user is
+  // currently ACTING ON — hovered, dragged, trimmed — are rendered as real
+  // interactive DOM clips on top; the canvas skips them (excludeIds) so there is
+  // no double-draw/ghost. Selection is NOT included here: the canvas already
+  // draws the selected state, so a select-all must not remount 100 heavy DOM
+  // clips (that regressed perf to ~3fps, issue #228). A selected clip becomes
+  // DOM only when hovered (to interact) or dragged (multiSelectClipIds).
   const [hoveredClipId, setHoveredClipId] = useState<string | null>(null);
   const domClipIds = useMemo(() => {
     const ids = new Set<string>();
     if (!useCanvasClips) return ids;
-    for (const clip of allTrackClips) {
-      if (selectedClipIds.has(clip.id)) ids.add(clip.id);
-    }
     if (hoveredClipId) ids.add(hoveredClipId);
     if (clipDrag) {
       ids.add(clipDrag.clipId);
@@ -328,7 +328,7 @@ function TimelineTrackComponent({
     }
     if (clipTrim?.clipId) ids.add(clipTrim.clipId);
     return ids;
-  }, [useCanvasClips, allTrackClips, selectedClipIds, hoveredClipId, clipDrag, clipTrim]);
+  }, [useCanvasClips, hoveredClipId, clipDrag, clipTrim]);
   const domOverlayClips = useMemo(
     () => (useCanvasClips ? allTrackClips.filter((clip) => domClipIds.has(clip.id)) : []),
     [useCanvasClips, allTrackClips, domClipIds],
