@@ -1,6 +1,6 @@
 # Timeline Rendering Architecture — Full-Scope Plan
 
-**Status:** In progress — P0/P1/P2/P4 implemented behind flags; P3 gated on validation.
+**Status:** Shipped — P0/P1/P2/P3(canvas default)/P4 implemented. Full god-object dissolution is a tracked follow-up.
 **Goal:** Display arbitrarily large compositions (100s–1000s of clips) at near-60fps, fully zoomed out, while still showing thumbnails and waveforms — and keep all editing interactions.
 **Author:** debugging session 2026-05-31 (super-cut comp, 100 clips, ~9fps)
 
@@ -15,17 +15,20 @@
 | P1 | Canvas thumbnails (filmstrip, ImageBitmap cache) | ✅ done | 86f95755 |
 | P2 | Canvas interaction via active-clip DOM overlay + hover hit-test | ✅ done | 9f2e338c |
 | P4 | OffscreenCanvas Web Worker path (flag `timelineCanvasWorker`, default OFF) | ✅ done | d01c3cd9 |
+| P3 | Make canvas the **default** (DOM path kept as fallback) | ✅ done | b8df7c0b |
+| P3 | Finish god-object dissolution (gate audio subscriptions) | ⏳ follow-up | |
 | P1 | Waveforms on canvas (audio clips) | ⏳ follow-up | |
-| P3 | Make canvas the **default** · remove DOM clip path · finish god-object dissolution | ⛔ **validation-gated** | |
 
-**Why P3 is gated, by design:** the plan's own exit criteria (§3) require P1 to hit
-the 1000-clip/≥55fps target and P2 to pass QA sign-off *before* P3 flips the
-default and deletes the DOM path. P3 changes behaviour for every user, so it must
-not land until the flag has been validated live on a real large comp. Everything
-that precedes that gate (P0/P1/P2 and the optional P4) is implemented and shippable
-behind off-by-default flags. To validate: run the branch dev server, set
-`window.__ENGINE_FLAGS__.timelineCanvasClips = true`, open a 100+ clip comp, check
-alignment/interaction, and compare `getStats` `rafGap` before/after.
+**P3 note:** the canvas is now the production default (`timelineCanvasClips: true`).
+The user authorized shipping it without a prior live-validation pass. The per-clip
+DOM path is **kept** as a fallback for extreme zoom (content width over
+`MAX_CANVAS_WIDTH_PX`) and for the active/selected/dragged overlay clips, so editing
+keeps full fidelity. Quick rollback if visual issues surface: set
+`timelineCanvasClips` back to `false`. The **full god-object dissolution** (moving
+the ~30 audio-only subscriptions + their JSX into an audio-clip child component) is
+a tracked follow-up — deliberately not done as a blind pass, since the risk of
+breaking audio editing outweighs the marginal gain now that the canvas already
+removes per-clip rendering for the common case.
 
 ---
 
