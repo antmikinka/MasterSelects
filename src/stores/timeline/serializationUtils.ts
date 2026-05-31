@@ -253,6 +253,11 @@ export const createSerializationUtils: SliceCreator<SerializationUtils> = (set, 
 
   // Load timeline state from composition data
   loadState: async (data: CompositionTimelineData | undefined) => {
+    // Suppress autosave for the ENTIRE restore (incl. the chunked yields below) so
+    // a partially-loaded timeline can never be persisted over the full project.
+    // The depth-counter guard holds across awaits/yields (issue #228 data-loss guard).
+    const { withProjectStoreSyncGuard } = await import('../../services/project/projectSave');
+    return withProjectStoreSyncGuard(async () => {
     const { pause, clearTimeline } = get();
     const wakePreviewAfterRestore = () => {
       layerBuilder.invalidateCache();
@@ -495,7 +500,14 @@ export const createSerializationUtils: SliceCreator<SerializationUtils> = (set, 
       };
     };
 
+    let restoreYieldCounter = 0;
     for (const serializedClip of data.clips) {
+      // Yield every few clips so a large comp loads in responsive chunks instead of
+      // one long task that freezes the whole tab. Safe now: autosave is suppressed by
+      // the withProjectStoreSyncGuard wrapper around this restore (issue #228).
+      if (++restoreYieldCounter % 8 === 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
       // Handle composition clips specially
       if (serializedClip.isComposition && serializedClip.compositionId) {
         const composition = mediaStore.compositions.find(c => c.id === serializedClip.compositionId);
@@ -2038,6 +2050,7 @@ export const createSerializationUtils: SliceCreator<SerializationUtils> = (set, 
     }
 
     get().relinkClipStemSeparationJobsFromMediaLibrary();
+    });
   },
 
   // Clear all timeline data
