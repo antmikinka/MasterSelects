@@ -57,11 +57,24 @@ export class ScrubbingCache {
   // Time is quantized to frame boundaries (1/30s) for better cache hit rate
   // Uses Map insertion order for O(1) LRU operations
   private scrubbingCache: Map<string, ScrubbingTextureEntry> = new Map();
-  private maxScrubbingCacheFrames = 300; // ~10 seconds at 30fps, ~2.4GB VRAM at 1080p
+  // Frame count is the soft cap; the 1GB byte cap below is the real ceiling.
+  // With resolution-aware downscaling (SCRUB_CACHE_MAX_DIMENSION), a downscaled
+  // 1080p frame is ~2MB, so ~480 frames (~16s at 30fps) fit inside 1GB.
+  private maxScrubbingCacheFrames = 480;
   private readonly maxScrubbingCacheBytes = 1024 * 1024 * 1024; // Cap scrub textures at 1GB VRAM
+  // Scrub-preview frames are stored downscaled so cache coverage (seconds of
+  // timeline) is decoupled from source resolution: a 4K source gets the same
+  // coverage as 1080p instead of ~4x fewer frames. The longest side is capped
+  // here; frames already smaller are stored as-is (never upscaled). The settled
+  // live/exact frame still renders at full resolution, so this only softens the
+  // image during active scrubbing — the same tradeoff proxy mode makes.
+  private readonly SCRUB_CACHE_MAX_DIMENSION = 960;
   private readonly SCRUB_CACHE_FPS = 30; // Quantization granularity for scrubbing cache keys
   private scrubbingCacheBytes = 0;
   private scrubbingCacheEvictions = 0;
+  // Keys with an in-flight downscale capture, so per-frame cacheFrameAtTime calls
+  // don't spawn duplicate createImageBitmap work for the same frame.
+  private pendingScrubCaptures = new Set<string>();
   private backgroundPreloadSessions: Map<string, BackgroundPreloadSession> = new Map();
   private backgroundPreloadFilled = 0;
   private backgroundPreloadSkipped = 0;
@@ -156,6 +169,20 @@ export class ScrubbingCache {
     };
   }
 
+  // Aspect-correct downscale so the longest side is at most
+  // SCRUB_CACHE_MAX_DIMENSION. Returns the original size when already within the
+  // cap (never upscales). Rounds to even dimensions for clean texture sizing.
+  private computeScrubCacheSize(width: number, height: number): { width: number; height: number } {
+    const longest = Math.max(width, height);
+    if (longest <= this.SCRUB_CACHE_MAX_DIMENSION || longest <= 0) {
+      return { width, height };
+    }
+    const scale = this.SCRUB_CACHE_MAX_DIMENSION / longest;
+    const scaledWidth = Math.max(2, Math.round((width * scale) / 2) * 2);
+    const scaledHeight = Math.max(2, Math.round((height * scale) / 2) * 2);
+    return { width: scaledWidth, height: scaledHeight };
+  }
+
   private addScrubbingFrameFromSource(
     source: HTMLVideoElement | ImageBitmap,
     videoSrc: string,
@@ -210,17 +237,42 @@ export class ScrubbingCache {
     }
   }
 
-  // Cache a frame at a specific time for instant scrubbing access
+  // Cache a frame at a specific time for instant scrubbing access.
+  // Sources larger than the scrub-cache cap are downscaled (resolution-aware),
+  // so several clips scrubbed at once stay within the VRAM budget instead of
+  // thrashing. createImageBitmap snapshots the current frame at call time, so the
+  // captured frame still matches `time`.
   cacheFrameAtTime(video: HTMLVideoElement, time: number): void {
     if (video.videoWidth === 0 || video.readyState < 2) return;
 
-    this.addScrubbingFrameFromSource(
-      video,
-      video.src,
-      time,
-      video.videoWidth,
-      video.videoHeight
-    );
+    const target = this.computeScrubCacheSize(video.videoWidth, video.videoHeight);
+    const needsDownscale = target.width !== video.videoWidth || target.height !== video.videoHeight;
+
+    if (!needsDownscale || typeof createImageBitmap !== 'function') {
+      // Already within the cap (or no resize support) — fast synchronous copy.
+      this.addScrubbingFrameFromSource(video, video.src, time, video.videoWidth, video.videoHeight);
+      return;
+    }
+
+    const videoSrc = video.src;
+    if (!videoSrc) return;
+    const key = this.getScrubbingKey(videoSrc, time);
+    if (this.scrubbingCache.has(key) || this.pendingScrubCaptures.has(key)) return;
+
+    this.pendingScrubCaptures.add(key);
+    void createImageBitmap(video, {
+      resizeWidth: target.width,
+      resizeHeight: target.height,
+      resizeQuality: 'medium',
+    })
+      .then((bitmap) => {
+        this.addScrubbingFrameFromSource(bitmap, videoSrc, time, bitmap.width, bitmap.height);
+        bitmap.close();
+      })
+      .catch(() => { /* frame unavailable — skip */ })
+      .finally(() => {
+        this.pendingScrubCaptures.delete(key);
+      });
   }
 
   preloadAroundTime(
@@ -573,7 +625,15 @@ export class ScrubbingCache {
     if (typeof createImageBitmap === 'function') {
       let bitmap: ImageBitmap | null = null;
       try {
-        bitmap = await createImageBitmap(video);
+        // Decode and downscale in one step: createImageBitmap's resize options
+        // hand the GPU a smaller frame, so a downscaled 4K source costs the same
+        // VRAM per scrub frame as 1080p and fits far more of the timeline.
+        const target = this.computeScrubCacheSize(video.videoWidth, video.videoHeight);
+        bitmap = await createImageBitmap(video, {
+          resizeWidth: target.width,
+          resizeHeight: target.height,
+          resizeQuality: 'medium',
+        });
         return this.addScrubbingFrameFromSource(
           bitmap,
           session.videoSrc,

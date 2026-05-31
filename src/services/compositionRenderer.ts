@@ -841,6 +841,7 @@ class CompositionRendererService {
 
         const shouldUseProxy = mediaStore.proxyEnabled &&
           nestedMediaFile?.proxyFps &&
+          nestedMediaFile.proxyFormat !== 'mp4-all-intra' &&
           (nestedMediaFile.proxyStatus === 'ready' || nestedMediaFile.proxyStatus === 'generating');
 
         if (shouldUseProxy && nestedMediaFile) {
@@ -854,10 +855,15 @@ class CompositionRendererService {
               source: {
                 type: 'image',
                 imageElement: cachedFrame,
+                mediaTime: frameIndex / proxyFps,
+                targetMediaTime: nestedClipTime,
+                previewPath: 'nested-proxy-image-frame',
+                proxyFrameIndex: frameIndex,
               },
             } as Layer);
             continue;
           }
+          void proxyFrameCache.getFrame(nestedMediaFile.id, nestedClipTime, proxyFps);
         }
 
         nestedLayers.push({

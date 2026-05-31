@@ -3,6 +3,14 @@
 import './TimelineClip.css';
 import { memo, type CSSProperties, useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import {
+  IconDisc,
+  IconFileMusic,
+  IconGuitarPick,
+  IconMicrophone,
+  IconMusic,
+  IconWaveSine,
+} from '@tabler/icons-react';
 import type { TimelineClipProps } from './types';
 import { THUMB_WIDTH } from './constants';
 import { useTimelineStore } from '../../stores/timeline';
@@ -41,7 +49,6 @@ import {
 import { resolveProcessedAudioAnalysisDisplayStatus } from './utils/audioAnalysisDisplayStatus';
 import { resolveAudioWaveformDiagnostics } from './utils/audioWaveformDiagnostics';
 import { resolveAudioVolumeAutomationCurveKeyframes } from './utils/audioAutomationCurve';
-import { STEM_SOURCE_LAYER_ID } from '../../services/audio/stemSeparation';
 import {
   frequencyHzFromSpectralY,
   getSpectralMaxFrequencyHz,
@@ -50,6 +57,7 @@ import {
   spectralYFromFrequencyHz,
 } from './utils/spectralSelection';
 import type {
+  ClipStemSeparationJobStemChoice,
   TimelineAudioRegionSelection,
   TimelineSpectralRegionEditType,
   TimelineVideoBakeRegionSelection,
@@ -63,6 +71,7 @@ import {
 } from './tools/pointer/timelineToolPointerDispatcher';
 import { getTrimHandleArrowDirections } from './utils/trimHandleDirections';
 import type { ClipAudioEditOperation, VideoBakeRegion } from '../../types';
+import type { AudioStemKind } from '../../types/audio';
 
 const KEYFRAME_TICK_SNAP_THRESHOLD_PX = 10;
 const TIMELINE_VIEWPORT_FALLBACK_PX = 1600;
@@ -80,6 +89,7 @@ const AUDIO_REGION_GAIN_SILENCE_THRESHOLD_DB = -96;
 const AUDIO_REGION_GAIN_SILENCE_ZONE_PERCENT = 2;
 const AUDIO_REGION_GAIN_DEFAULT_FADE_SECONDS = 0.035;
 const VIDEO_BAKE_REGION_TIMELINE_EPSILON = 0.001;
+const EMPTY_STEM_CHOICES: ClipStemSeparationJobStemChoice[] = [];
 const log = Logger.create('TimelineClip');
 const ACTIVE_STEM_JOB_PHASES = new Set([
   'queued',
@@ -108,6 +118,27 @@ function formatStemJobPhase(phase: string): string {
       return 'Stem separation';
   }
 }
+
+function StemChoiceIcon({ kind }: { kind: AudioStemKind }) {
+  switch (kind) {
+    case 'vocals':
+    case 'dialogue':
+      return <IconMicrophone className="clip-stem-choice-icon" size={15} stroke={2.3} aria-hidden="true" />;
+    case 'drums':
+      return <IconDisc className="clip-stem-choice-icon" size={15} stroke={2.3} aria-hidden="true" />;
+    case 'bass':
+    case 'instrumental':
+      return <IconGuitarPick className="clip-stem-choice-icon" size={15} stroke={2.3} aria-hidden="true" />;
+    case 'music':
+      return <IconMusic className="clip-stem-choice-icon" size={15} stroke={2.3} aria-hidden="true" />;
+    case 'mix':
+    case 'other':
+    case 'sfx':
+    default:
+      return <IconWaveSine className="clip-stem-choice-icon" size={15} stroke={2.3} aria-hidden="true" />;
+  }
+}
+
 const AUDIO_REGION_FX_PRESETS: Array<{
   key: string;
   label: string;
@@ -539,6 +570,8 @@ function TimelineClipComponent({
   isFading,
   isLinkedToDragging,
   isLinkedToTrimming,
+  isTrimFollower,
+  isClipDragActive,
   clipDrag,
   clipTrim,
   clipFade: _clipFade,
@@ -565,7 +598,6 @@ function TimelineClipComponent({
   keyframeTimeGroups,
   onMoveKeyframeGroup,
   timeToPixel,
-  pixelToTime,
   formatTime,
 }: TimelineClipProps) {
   const thumbnailsEnabled = useTimelineStore(s => s.thumbnailsEnabled);
@@ -583,11 +615,15 @@ function TimelineClipComponent({
     }
 
     const linkedJob = clip.linkedClipId ? s.clipStemSeparationJobs[clip.linkedClipId] : undefined;
-    if (linkedJob && (linkedJob.clipId === clip.id || linkedJob.requestedClipId === clip.id)) {
+    if (linkedJob && (linkedJob.clipId === clip.id || linkedJob.requestedClipId === clip.id || linkedJob.clipId === clip.linkedClipId)) {
       return linkedJob;
     }
 
-    return null;
+    return Object.values(s.clipStemSeparationJobs).find(job =>
+      job.clipId === clip.id ||
+      job.requestedClipId === clip.id ||
+      (clip.linkedClipId ? job.clipId === clip.linkedClipId || job.requestedClipId === clip.linkedClipId : false)
+    ) ?? null;
   });
   const setTimelineToolPreview = useTimelineStore(s => s.setTimelineToolPreview);
   const applyTimelineEditOperation = useTimelineStore(s => s.applyTimelineEditOperation);
@@ -632,44 +668,21 @@ function TimelineClipComponent({
   const clearClipAudioEditStack = useTimelineStore(s => s.clearClipAudioEditStack);
   const bakeClipAudioEditStack = useTimelineStore(s => s.bakeClipAudioEditStack);
   const unbakeClipAudioEditStack = useTimelineStore(s => s.unbakeClipAudioEditStack);
+  const setClipSourceToStem = useTimelineStore(s => s.setClipSourceToStem);
+  const prewarmStemSourceMediaFiles = useTimelineStore(s => s.prewarmStemSourceMediaFiles);
+  const mediaFiles = useMediaStore(s => s.files);
   const selectClip = useTimelineStore(s => s.selectClip);
   const clipAudioKeyframes = useTimelineStore(s => s.clipKeyframes.get(clip.id) ?? EMPTY_CLIP_KEYFRAMES);
   const processedWaveformPyramidRef = clip.audioState?.processedAnalysisRefs?.processedWaveformPyramidId;
   const sourceWaveformPyramidRef = clip.audioState?.sourceAnalysisRefs?.waveformPyramidId;
-  const stemSeparationState = clip.audioState?.stemSeparation;
-  const soloStemLayer = stemSeparationState
-    && stemSeparationState.mixMode !== 'original'
-    && stemSeparationState.soloStemId
-    && stemSeparationState.soloStemId !== STEM_SOURCE_LAYER_ID
-    ? stemSeparationState.stems.find(stem => stem.id === stemSeparationState.soloStemId) ?? null
-    : null;
-  const soloStemMediaFileId = soloStemLayer?.mediaFileId;
-  const soloStemMediaFile = useMediaStore(s => (
-    soloStemMediaFileId ? s.files.find(file => file.id === soloStemMediaFileId) : undefined
-  ));
-  const soloStemWaveformPyramidRef = soloStemMediaFile?.audioAnalysisRefs?.waveformPyramidId;
   const processedSpectrogramTileSetRef = clip.audioState?.processedAnalysisRefs?.spectrogramTileSetIds?.[0];
   const sourceSpectrogramTileSetRef = clip.audioState?.sourceAnalysisRefs?.spectrogramTileSetIds?.[0];
   const processedWaveformState = useTimelineWaveformPyramidState(processedWaveformPyramidRef);
   const sourceWaveformState = useTimelineWaveformPyramidState(sourceWaveformPyramidRef);
-  const soloStemWaveformState = useTimelineWaveformPyramidState(soloStemWaveformPyramidRef);
   const processedSpectrogramState = useTimelineSpectrogramTileSetState(processedSpectrogramTileSetRef);
   const sourceSpectrogramState = useTimelineSpectrogramTileSetState(sourceSpectrogramTileSetRef);
   const processedWaveformPyramid = processedWaveformState.pyramid;
   const sourceWaveformPyramid = sourceWaveformState.pyramid;
-  const soloStemWaveformPyramid = soloStemWaveformState.pyramid;
-  const soloStemWaveform = soloStemMediaFile?.waveform?.length
-    ? soloStemMediaFile.waveform
-    : soloStemLayer?.waveform ?? [];
-  const soloStemWaveformChannels = soloStemMediaFile?.waveformChannels;
-  const hasSoloStemWaveform = Boolean(
-    soloStemLayer &&
-    (
-      soloStemWaveformPyramid ||
-      soloStemWaveform.length > 0 ||
-      soloStemWaveformChannels?.some(channel => channel.length > 0)
-    ),
-  );
   const audioEditStack = clip.audioState?.editStack ?? EMPTY_AUDIO_EDIT_STACK;
   const activeAudioEditCount = audioEditStack.filter(operation => operation.enabled !== false).length;
   const latestAudioBake = clip.audioState?.bakeHistory?.at(-1);
@@ -692,7 +705,7 @@ function TimelineClipComponent({
     }
     return null;
   });
-  const spectralImageMediaFiles = useMediaStore(s => s.files);
+  const spectralImageMediaFiles = mediaFiles;
   const spectralImageFilesById = useMemo(() => {
     const entries = spectralImageMediaFiles
       .filter(file => file.type === 'image')
@@ -851,6 +864,8 @@ function TimelineClipComponent({
   const clipEntranceKey = useTimelineStore(s => s.clipEntranceAnimationKey);
   const aiMove = useTimelineStore(s => s.aiMovingClips.get(clip.id));
   const [mountEntranceKey] = useState(clipEntranceKey);
+  const [stemMenuOpen, setStemMenuOpen] = useState(false);
+  const stemMenuCloseTimerRef = useRef<number | null>(null);
 
   // Only compute stagger order during composition entrance animation. Doing a
   // full clips sort inside every TimelineClip render gets very expensive once
@@ -966,11 +981,7 @@ function TimelineClipComponent({
   const isGeneratingAudioProxy = audioProxyStatus === 'generating';
   const hasAudioProxy = audioProxyStatus === 'ready';
   const hasAudioProxyError = audioProxyStatus === 'error';
-  const hasStemSeparation = Boolean(clip.audioState?.stemSeparation?.stems.length);
   const activeStemSeparationJob = clipStemSeparationJob && ACTIVE_STEM_JOB_PHASES.has(clipStemSeparationJob.phase)
-    ? clipStemSeparationJob
-    : null;
-  const failedStemSeparationJob = clipStemSeparationJob?.phase === 'failed'
     ? clipStemSeparationJob
     : null;
   const activeStemProgressPercent = activeStemSeparationJob
@@ -982,6 +993,29 @@ function TimelineClipComponent({
   const activeStemStatusTitle = activeStemSeparationJob
     ? `${activeStemStatusLabel}: ${activeStemProgressPercent}%`
     : undefined;
+  const isDownloadingStemModel = activeStemSeparationJob?.phase === 'downloading-model';
+  const completedStemChoices = !activeStemSeparationJob && clipStemSeparationJob?.phase === 'complete'
+    ? clipStemSeparationJob.stems ?? EMPTY_STEM_CHOICES
+    : EMPTY_STEM_CHOICES;
+  const hasCompletedStemChoices = completedStemChoices.length > 0;
+  let stemSourceMediaFileId = clipStemSeparationJob?.sourceMediaFileId ?? null;
+  if (!stemSourceMediaFileId) {
+    for (const stem of completedStemChoices) {
+      const sourceMediaFileId = mediaFiles.find(file => file.id === stem.mediaFileId)?.stemInfo?.sourceMediaFileId;
+      if (sourceMediaFileId) {
+        stemSourceMediaFileId = sourceMediaFileId;
+        break;
+      }
+    }
+  }
+  const hasStemSourceChoice = Boolean(
+    stemSourceMediaFileId &&
+    mediaFiles.some(file => file.id === stemSourceMediaFileId && file.type === 'audio')
+  );
+  const stemSourceClip = clipStemSeparationJob
+    ? clips.find(candidate => candidate.id === clipStemSeparationJob.clipId)
+    : clip;
+  const activeStemMediaFileId = stemSourceClip?.source?.mediaFileId ?? stemSourceClip?.mediaFileId;
 
   // Check if this clip is linked to the dragging/trimming clip
   const draggedClip = clipDrag
@@ -998,8 +1032,9 @@ function TimelineClipComponent({
   let displayOutPoint = clip.outPoint;
 
   if (isTrimming && clipTrim) {
-    const deltaX = clipTrim.currentX - clipTrim.startX;
-    const deltaTime = pixelToTime(deltaX);
+    // Use the resolved (snapped/frame-quantized) delta so the live resize lands
+    // exactly where the trim will commit.
+    const deltaTime = clipTrim.appliedDelta;
     const sourceType = clip.source?.type;
     const isInfiniteClip = sourceType === 'text' || sourceType === 'image' || sourceType === 'solid' || sourceType === 'camera' || sourceType === 'splat-effector' || sourceType === 'math-scene';
     const canLoopExtendRight = canLoopExtendVectorClip(clip);
@@ -1027,10 +1062,10 @@ function TimelineClipComponent({
       // Update outPoint when trimming right edge
       displayOutPoint = clipTrim.originalOutPoint + clampedDelta;
     }
-  } else if (isLinkedToTrimming && clipTrim && trimmedClip) {
-    // Apply same trim to linked clip visually
-    const deltaX = clipTrim.currentX - clipTrim.startX;
-    const deltaTime = pixelToTime(deltaX);
+  } else if (clipTrim && (isTrimFollower || (isLinkedToTrimming && trimmedClip))) {
+    // Resize this clip live too: a linked clip, or a selected clip following a
+    // multi-trim. Each clamps the shared (snapped) delta to its own bounds.
+    const deltaTime = clipTrim.appliedDelta;
     const canLoopExtendRight = canLoopExtendVectorClip(clip);
     const maxDuration = clip.source?.naturalDuration || clip.duration;
 
@@ -1063,6 +1098,14 @@ function TimelineClipComponent({
   }
 
   const width = timeToPixel(displayDuration);
+  const isClipPositionDragPreview = !clipDrag?.toolGesture && (
+    isDragging ||
+    isLinkedToDragging ||
+    (
+      clipDrag?.multiSelectClipIds?.includes(clip.id) &&
+      clipDrag.multiSelectTimeDelta !== undefined
+    )
+  );
 
   // Calculate position - if dragging, use the computed position (with snapping/resistance)
   let left = timeToPixel(displayStartTime);
@@ -1089,14 +1132,23 @@ function TimelineClipComponent({
     TIMELINE_VIEWPORT_MIN_PX,
     visibleTimelineViewportWidth
   );
-  const waveformRenderStartPx = Math.max(0, scrollX - left - TIMELINE_RENDER_OVERSCAN_PX);
-  const waveformRenderEndPx = Math.min(width, scrollX - left + renderTimelineViewportWidth + TIMELINE_RENDER_OVERSCAN_PX);
+  const staticContentRenderLeft = isClipPositionDragPreview
+    ? timeToPixel(displayStartTime)
+    : left;
+  const waveformRenderStartPx = Math.max(0, scrollX - staticContentRenderLeft - TIMELINE_RENDER_OVERSCAN_PX);
+  const waveformRenderEndPx = Math.min(
+    width,
+    scrollX - staticContentRenderLeft + renderTimelineViewportWidth + TIMELINE_RENDER_OVERSCAN_PX,
+  );
   const waveformRenderWindow = {
     startPx: waveformRenderStartPx,
     width: Math.max(0, waveformRenderEndPx - waveformRenderStartPx),
   };
-  const thumbnailRenderStartPx = Math.max(0, scrollX - left - THUMBNAIL_RENDER_OVERSCAN_PX);
-  const thumbnailRenderEndPx = Math.min(width, scrollX - left + renderTimelineViewportWidth + THUMBNAIL_RENDER_OVERSCAN_PX);
+  const thumbnailRenderStartPx = Math.max(0, scrollX - staticContentRenderLeft - THUMBNAIL_RENDER_OVERSCAN_PX);
+  const thumbnailRenderEndPx = Math.min(
+    width,
+    scrollX - staticContentRenderLeft + renderTimelineViewportWidth + THUMBNAIL_RENDER_OVERSCAN_PX,
+  );
   const thumbnailRenderWindow = {
     startPx: thumbnailRenderStartPx,
     width: Math.max(0, thumbnailRenderEndPx - thumbnailRenderStartPx),
@@ -1108,7 +1160,7 @@ function TimelineClipComponent({
   );
 
   useEffect(() => {
-    if (!waveformsEnabled || !isAudioClip || sourceWaveformPyramidRef || clip.waveformGenerating) {
+    if (!waveformsEnabled || !isAudioClip || sourceWaveformPyramidRef || clip.waveformGenerating || isClipDragActive) {
       return;
     }
 
@@ -1141,7 +1193,12 @@ function TimelineClipComponent({
     inFlightSourceWaveformPyramidUpgrades.add(fileKey);
 
     const timer = window.setTimeout(() => {
-      const { clips: currentClips, generateWaveformForClip } = useTimelineStore.getState();
+      const { clips: currentClips, clipDragPreview, generateWaveformForClip } = useTimelineStore.getState();
+      if (clipDragPreview) {
+        inFlightSourceWaveformPyramidUpgrades.delete(fileKey);
+        return;
+      }
+
       const currentClip = currentClips.find(current => current.id === clip.id);
       if (
         !currentClip ||
@@ -1170,6 +1227,7 @@ function TimelineClipComponent({
     clip.source?.mediaFileId,
     clip.id,
     clip.waveformGenerating,
+    isClipDragActive,
     isAudioClip,
     sourceWaveformPyramidRef,
     waveformsEnabled,
@@ -1189,6 +1247,7 @@ function TimelineClipComponent({
       audioDisplayMode === 'spectral' ||
       processedWaveformPyramidRef ||
       clip.waveformGenerating ||
+      isClipDragActive ||
       inFlightProcessedWaveformPyramidUpgrades.has(processedWaveformRequestKey)
     ) {
       return;
@@ -1196,6 +1255,10 @@ function TimelineClipComponent({
 
     const timer = window.setTimeout(() => {
       const store = useTimelineStore.getState();
+      if (store.clipDragPreview) {
+        return;
+      }
+
       const currentClip = store.clips.find(current => current.id === clip.id);
       if (
         !currentClip ||
@@ -1225,6 +1288,7 @@ function TimelineClipComponent({
     clip.id,
     clip.waveformGenerating,
     audioDisplayMode,
+    isClipDragActive,
     isAudioClip,
     processedWaveformPyramidRef,
     processedWaveformRequestKey,
@@ -1244,6 +1308,7 @@ function TimelineClipComponent({
       !isAudioClip ||
       audioDisplayMode !== 'spectral' ||
       clip.waveformGenerating ||
+      isClipDragActive ||
       inFlightSpectrogramTileSetUpgrades.has(spectrogramRequestKey)
     ) {
       return;
@@ -1251,6 +1316,10 @@ function TimelineClipComponent({
 
     const timer = window.setTimeout(() => {
       const store = useTimelineStore.getState();
+      if (store.clipDragPreview) {
+        return;
+      }
+
       const currentClip = store.clips.find(current => current.id === clip.id);
       if (!currentClip || currentClip.waveformGenerating) {
         return;
@@ -1281,6 +1350,7 @@ function TimelineClipComponent({
     audioDisplayMode,
     clip.id,
     clip.waveformGenerating,
+    isClipDragActive,
     isAudioClip,
     processedSpectrogramTileSetRef,
     sourceSpectrogramTileSetRef,
@@ -1450,13 +1520,10 @@ function TimelineClipComponent({
     });
   }, [activeAudioRegionOperationDrag, audioEditStack, audioRegionSelection]);
   const preferSourceWaveformForAudioRegionDrag = Boolean(activeAudioRegionOperationDrag?.operationIds.length && sourceWaveformPyramid);
-  const preferSoloStemWaveform = Boolean(!preferSourceWaveformForAudioRegionDrag && hasSoloStemWaveform);
   const waveformPyramidForRender = preferSourceWaveformForAudioRegionDrag
     ? sourceWaveformPyramid
-    : preferSoloStemWaveform
-      ? soloStemWaveformPyramid
-      : waveformPyramid;
-  const waveformVariantForRender = preferSourceWaveformForAudioRegionDrag || preferSoloStemWaveform
+    : waveformPyramid;
+  const waveformVariantForRender = preferSourceWaveformForAudioRegionDrag
     ? 'source'
     : waveformVariant;
   const waveformUsesProcessedPyramidForRender = Boolean(
@@ -1467,57 +1534,73 @@ function TimelineClipComponent({
   const processedWaveformPyramidForRender = waveformUsesProcessedPyramidForRender
     ? processedWaveformPyramid
     : null;
-  const soloStemRangeDuration = stemSeparationState
-    ? Math.max(0.001, stemSeparationState.range.end - stemSeparationState.range.start)
-    : 0;
-  const soloStemNaturalDurationForRender = Math.max(
-    0.001,
-    soloStemWaveformPyramid?.duration ||
-      soloStemMediaFile?.duration ||
-      soloStemRangeDuration ||
-      clip.source?.naturalDuration ||
-      clip.duration,
-  );
-  const soloStemRangeStart = stemSeparationState?.range.start ?? 0;
-  const soloStemInPointForRender = Math.min(
-    soloStemNaturalDurationForRender,
-    Math.max(0, displayInPoint - soloStemRangeStart),
-  );
-  const soloStemOutPointForRender = Math.max(
-    soloStemInPointForRender,
-    Math.min(soloStemNaturalDurationForRender, Math.max(0.001, displayOutPoint - soloStemRangeStart)),
-  );
-  const waveformNaturalDurationForRender = preferSoloStemWaveform
-    ? soloStemNaturalDurationForRender
-    : processedWaveformPyramidForRender
+  const waveformNaturalDurationForRender = processedWaveformPyramidForRender
     ? Math.max(0.001, processedWaveformPyramidForRender.duration)
     : (clip.source?.naturalDuration || clip.duration);
-  const waveformInPointForRender = preferSoloStemWaveform
-    ? soloStemInPointForRender
-    : processedWaveformPyramidForRender ? 0 : displayInPoint;
-  const waveformOutPointForRender = preferSoloStemWaveform
-    ? soloStemOutPointForRender
-    : processedWaveformPyramidForRender
+  const waveformInPointForRender = processedWaveformPyramidForRender ? 0 : displayInPoint;
+  const waveformOutPointForRender = processedWaveformPyramidForRender
     ? Math.max(0.001, processedWaveformPyramidForRender.duration)
     : displayOutPoint;
-  const waveformLegacyForRender = preferSoloStemWaveform ? soloStemWaveform : (clip.waveform ?? []);
-  const waveformChannelsForRender = preferSoloStemWaveform ? soloStemWaveformChannels : clip.waveformChannels;
+  const waveformLegacyForRender = clip.waveform ?? [];
+  const waveformChannelsForRender = clip.waveformChannels;
   const hasWaveformForRender = Boolean(
     waveformPyramidForRender ||
     waveformLegacyForRender.length > 0 ||
     waveformChannelsForRender?.some(channel => channel.length > 0)
   );
-  const soloStemGainMultiplier = preferSoloStemWaveform
-    ? 10 ** ((soloStemLayer?.gainDb ?? 0) / 20)
-    : 1;
-  const waveformDisplayGainForRender = Math.max(0, Math.min(8, waveformDisplayGain * soloStemGainMultiplier));
-  const canApplyPredictiveAudioWaveform = waveformVariantForRender !== 'processed' && !preferSoloStemWaveform;
+  const waveformDisplayGainForRender = waveformDisplayGain;
+  const canApplyPredictiveAudioWaveform = waveformVariantForRender !== 'processed';
   const predictiveAudioEditStack = canApplyPredictiveAudioWaveform
     ? displayAudioEditStack
     : EMPTY_AUDIO_EDIT_STACK;
   const predictiveAudioRegionGainPreview = canApplyPredictiveAudioWaveform
     ? audioRegionGainPreview
     : null;
+  const useStableWaveformTrimWindow = Boolean(
+    isAudioClip &&
+    (isTrimming || isLinkedToTrimming) &&
+    clipTrim &&
+    !processedWaveformPyramidForRender &&
+    width > 1,
+  );
+  const originalWaveformTrimInPoint = isTrimming && clipTrim
+    ? clipTrim.originalInPoint
+    : clip.inPoint;
+  const originalWaveformTrimOutPoint = isTrimming && clipTrim
+    ? clipTrim.originalOutPoint
+    : clip.outPoint;
+  const displayWaveformSourceSpan = Math.max(0.001, waveformOutPointForRender - waveformInPointForRender);
+  const waveformSourceSecondsPerPixel = displayWaveformSourceSpan / Math.max(1, width);
+  const stableWaveformContentInPoint = useStableWaveformTrimWindow
+    ? Math.max(0, Math.min(originalWaveformTrimInPoint, waveformInPointForRender))
+    : waveformInPointForRender;
+  const stableWaveformContentOutPoint = useStableWaveformTrimWindow
+    ? Math.max(stableWaveformContentInPoint + 0.001, Math.max(originalWaveformTrimOutPoint, waveformOutPointForRender))
+    : waveformOutPointForRender;
+  const stableWaveformContentWidth = useStableWaveformTrimWindow
+    ? Math.max(1, (stableWaveformContentOutPoint - stableWaveformContentInPoint) / waveformSourceSecondsPerPixel)
+    : width;
+  const stableWaveformContentOffsetPx = useStableWaveformTrimWindow
+    ? (stableWaveformContentInPoint - waveformInPointForRender) / waveformSourceSecondsPerPixel
+    : 0;
+  const stableWaveformRenderStartPx = useStableWaveformTrimWindow
+    ? Math.max(0, scrollX - (left + stableWaveformContentOffsetPx) - TIMELINE_RENDER_OVERSCAN_PX)
+    : waveformRenderWindow.startPx;
+  const stableWaveformRenderEndPx = useStableWaveformTrimWindow
+    ? Math.min(
+        stableWaveformContentWidth,
+        scrollX - (left + stableWaveformContentOffsetPx) + renderTimelineViewportWidth + TIMELINE_RENDER_OVERSCAN_PX,
+      )
+    : waveformRenderWindow.startPx + waveformRenderWindow.width;
+  const stableWaveformRenderWindow = useStableWaveformTrimWindow
+    ? {
+        startPx: stableWaveformRenderStartPx,
+        width: Math.max(0, stableWaveformRenderEndPx - stableWaveformRenderStartPx),
+      }
+    : waveformRenderWindow;
+  const stableWaveformClipDuration = useStableWaveformTrimWindow
+    ? Math.max(0.001, (stableWaveformContentOutPoint - stableWaveformContentInPoint) * displayDuration / displayWaveformSourceSpan)
+    : displayDuration;
 
   const commitAudioRegionOperationRange = useCallback((
     operationIds: string[],
@@ -2133,7 +2216,12 @@ function TimelineClipComponent({
 
   // Check if this clip is part of a multi-select drag
   const isInMultiSelectDrag = clipDrag?.multiSelectClipIds?.includes(clip.id) && clipDrag.multiSelectTimeDelta !== undefined;
+  const isClipBodyDragging = isDragging || isLinkedToDragging || isInMultiSelectDrag;
+  const showFocusCollisionHighlight = trackFocusMode !== 'balanced' && !!clipDrag?.overlapClipIds?.length;
+  const isOverlapCollisionTarget = showFocusCollisionHighlight && !!clipDrag?.overlapClipIds?.includes(clip.id);
+  const isOverlapCollisionSource = showFocusCollisionHighlight && isClipBodyDragging;
   const isTrackLocked = track.locked === true;
+  const canHandleTimelineToolPointer = !isClipDragActive && !isTrackLocked && !isClipBodyDragging;
   const trackTypeIndex = useMemo(
     () => tracks.filter(candidate => candidate.type === track.type).findIndex(candidate => candidate.id === track.id),
     [track.id, track.type, tracks],
@@ -2153,6 +2241,8 @@ function TimelineClipComponent({
     isLinkedToTrimming ? 'linked-trimming' : '',
     isFading ? 'fading' : '',
     isDragging && clipDrag?.forcingOverlap ? 'forcing-overlap' : '',
+    isOverlapCollisionSource ? 'overlap-collision-source' : '',
+    isOverlapCollisionTarget ? 'overlap-collision-target' : '',
     clipTypeClass,
     isAudioClip ? `audio-mode-${audioDisplayMode}` : '',
     isAudioClip && audioFocusMode ? 'audio-focus-active' : '',
@@ -2168,12 +2258,11 @@ function TimelineClipComponent({
     hasAudioProxy ? 'has-audio-proxy' : '',
     isGeneratingAudioProxy ? 'generating-audio-proxy' : '',
     hasAudioProxyError ? 'audio-proxy-error' : '',
-    hasStemSeparation ? 'has-stems' : '',
+    activeStemSeparationJob ? 'separating-stems' : '',
     hasKeyframes(clip.id) ? 'has-keyframes' : '',
     clip.reversed ? 'reversed' : '',
     clip.transcriptStatus === 'ready' ? 'has-transcript' : '',
     showWaveformGenerationIndicator ? 'generating-waveform' : '',
-    activeStemSeparationJob ? 'separating-stems' : '',
     waveformProcessingState,
     spectrogramProcessingState,
     audioDisplayMode === 'spectral' ? '' : (processedWaveformStatus?.className ?? ''),
@@ -2188,6 +2277,62 @@ function TimelineClipComponent({
   ]
     .filter(Boolean)
     .join(' ');
+
+  const clearStemMenuCloseTimer = useCallback(() => {
+    if (stemMenuCloseTimerRef.current === null) return;
+    window.clearTimeout(stemMenuCloseTimerRef.current);
+    stemMenuCloseTimerRef.current = null;
+  }, []);
+
+  const prewarmCompletedStemSources = useCallback(() => {
+    if (!hasCompletedStemChoices) return;
+    const mediaFileIds = completedStemChoices.map(stem => stem.mediaFileId);
+    if (stemSourceMediaFileId) {
+      mediaFileIds.unshift(stemSourceMediaFileId);
+    }
+    prewarmStemSourceMediaFiles(mediaFileIds);
+  }, [completedStemChoices, hasCompletedStemChoices, prewarmStemSourceMediaFiles, stemSourceMediaFileId]);
+
+  useEffect(() => clearStemMenuCloseTimer, [clearStemMenuCloseTimer]);
+
+  const handleStemControlMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleStemBadgeClick = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    clearStemMenuCloseTimer();
+    if (!hasCompletedStemChoices) return;
+    setStemMenuOpen(open => {
+      const nextOpen = !open;
+      if (nextOpen) {
+        prewarmCompletedStemSources();
+      }
+      return nextOpen;
+    });
+  }, [clearStemMenuCloseTimer, hasCompletedStemChoices, prewarmCompletedStemSources]);
+
+  const handleStemChoiceClick = useCallback((stemMediaFileId: string) => (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setClipSourceToStem(clip.id, stemMediaFileId);
+  }, [clip.id, setClipSourceToStem]);
+
+  const handleStemSwitcherMouseEnter = useCallback(() => {
+    clearStemMenuCloseTimer();
+    prewarmCompletedStemSources();
+  }, [clearStemMenuCloseTimer, prewarmCompletedStemSources]);
+
+  const handleStemSwitcherMouseLeave = useCallback(() => {
+    if (!stemMenuOpen) return;
+    clearStemMenuCloseTimer();
+    stemMenuCloseTimerRef.current = window.setTimeout(() => {
+      setStemMenuOpen(false);
+      stemMenuCloseTimerRef.current = null;
+    }, 320);
+  }, [clearStemMenuCloseTimer, stemMenuOpen]);
 
   const getClipPointerContext = (e: React.MouseEvent) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -2209,6 +2354,8 @@ function TimelineClipComponent({
 
   // Timeline tool pointer handlers
   const handleMouseMove = (e: React.MouseEvent) => {
+    if (!canHandleTimelineToolPointer) return;
+
     const result = dispatchTimelineClipPointerMove(getClipPointerContext(e));
     if (!result.handled) {
       if (timelineToolPreview?.clipId === clip.id) setTimelineToolPreview(null);
@@ -2218,6 +2365,8 @@ function TimelineClipComponent({
   };
 
   const handleMouseLeave = () => {
+    if (!canHandleTimelineToolPointer) return;
+
     if (timelineToolPreview?.clipId === clip.id) setTimelineToolPreview(null);
   };
 
@@ -2334,6 +2483,7 @@ function TimelineClipComponent({
   const handleAudioRegionGainMouseDown = useCallback((
     mode: AudioRegionGainDragState['mode'],
   ) => (e: React.MouseEvent<HTMLButtonElement | HTMLDivElement>) => {
+    if (e.button !== 0) return;
     if (!audioRegionGainControl) return;
     const regionElement = e.currentTarget.closest('.clip-audio-region-selection');
     if (!regionElement) return;
@@ -3133,11 +3283,18 @@ function TimelineClipComponent({
       style={clipStyle}
       data-clip-id={clip.id}
       data-dock-layout-child-anim-id={`timeline-clip:${clip.id}`}
-      onMouseDown={isTrackLocked || (isPointerToolActive && !canUseBodyToolGesture) ? undefined : onMouseDown}
+      onMouseDown={(e) => {
+        if (e.button === 2) {
+          onMouseDown(e);
+          return;
+        }
+        if (isTrackLocked || (isPointerToolActive && !canUseBodyToolGesture)) return;
+        onMouseDown(e);
+      }}
       onDoubleClick={isPointerToolActive ? undefined : onDoubleClick}
       onContextMenu={onContextMenu}
-      onMouseMove={isTrackLocked ? undefined : handleMouseMove}
-      onMouseLeave={handleMouseLeave}
+      onMouseMove={canHandleTimelineToolPointer ? handleMouseMove : undefined}
+      onMouseLeave={canHandleTimelineToolPointer ? handleMouseLeave : undefined}
       onClick={isTrackLocked ? undefined : handleClick}
     >
       {/* Cut indicator line */}
@@ -3207,7 +3364,6 @@ function TimelineClipComponent({
           <span className="audio-proxy-percent">{audioProxyProgress}%</span>
         </div>
       )}
-      {/* Stem separation indicator - fill badge */}
       {activeStemSeparationJob && (
         <div className="clip-stem-generating" title={activeStemStatusTitle}>
           <span className="stem-fill-badge">
@@ -3217,20 +3373,61 @@ function TimelineClipComponent({
               style={{ height: `${activeStemProgressPercent}%` }}
             >S</span>
           </span>
-          <span className="stem-percent">{activeStemProgressPercent}%</span>
+          <span className={isDownloadingStemModel ? 'stem-status-text' : 'stem-percent'}>
+            {isDownloadingStemModel ? 'Downloading model' : `${activeStemProgressPercent}%`}
+          </span>
         </div>
       )}
-      {hasStemSeparation && !activeStemSeparationJob && (
-        <div className="clip-stem-badge" title="Stems ready">
-          S
-        </div>
-      )}
-      {failedStemSeparationJob && !activeStemSeparationJob && (
+      {hasCompletedStemChoices && (
         <div
-          className="clip-stem-error"
-          title={failedStemSeparationJob.error ?? failedStemSeparationJob.message ?? 'Stem separation failed'}
+          className={`clip-stem-switcher ${stemMenuOpen ? 'open' : ''}`}
+          onMouseEnter={handleStemSwitcherMouseEnter}
+          onMouseLeave={handleStemSwitcherMouseLeave}
         >
-          S!
+          <button
+            type="button"
+            className="clip-stem-ready-badge"
+            aria-label="Show separated stems"
+            title="Separated stems ready"
+            onMouseDown={handleStemControlMouseDown}
+            onClick={handleStemBadgeClick}
+          >
+            S
+          </button>
+          {stemMenuOpen && (
+            <div className="clip-stem-menu" role="menu" aria-label="Use stem source">
+              {hasStemSourceChoice && stemSourceMediaFileId && (
+                <button
+                  type="button"
+                  className={`clip-stem-choice-button source ${activeStemMediaFileId === stemSourceMediaFileId ? 'active' : ''}`}
+                  role="menuitem"
+                  aria-label="Use source audio"
+                  title="Use source audio"
+                  onMouseDown={handleStemControlMouseDown}
+                  onClick={handleStemChoiceClick(stemSourceMediaFileId)}
+                >
+                  <IconFileMusic className="clip-stem-choice-icon" size={15} stroke={2.3} aria-hidden="true" />
+                </button>
+              )}
+              {completedStemChoices.map(stem => {
+                const isActiveStemSource = activeStemMediaFileId === stem.mediaFileId;
+                return (
+                  <button
+                    key={stem.id}
+                    type="button"
+                    className={`clip-stem-choice-button ${isActiveStemSource ? 'active' : ''}`}
+                    role="menuitem"
+                    aria-label={`Use ${stem.label} stem`}
+                    title={`Use ${stem.label} stem as clip source`}
+                    onMouseDown={handleStemControlMouseDown}
+                    onClick={handleStemChoiceClick(stem.mediaFileId)}
+                  >
+                    <StemChoiceIcon kind={stem.kind} />
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
       {/* Proxy ready indicator */}
@@ -3341,22 +3538,6 @@ function TimelineClipComponent({
           />
         </div>
       )}
-      {/* Stem separation progress indicator */}
-      {activeStemSeparationJob && (
-        <div
-          className={`clip-stem-progress phase-${activeStemSeparationJob.phase}`}
-          title={activeStemSeparationJob.message ?? formatStemJobPhase(activeStemSeparationJob.phase)}
-        >
-          <div
-            className="clip-stem-progress-bar"
-            style={{ width: `${activeStemProgressPercent}%` }}
-          />
-          <div className="clip-stem-progress-label">
-            <span>{activeStemStatusLabel}</span>
-            <strong>{activeStemProgressPercent}%</strong>
-          </div>
-        </div>
-      )}
       {/* Audio waveform / spectrogram */}
       {waveformsEnabled && isAudioClip && (
         audioDisplayMode === 'spectral'
@@ -3382,12 +3563,12 @@ function TimelineClipComponent({
               clipId={clip.id}
               waveform={waveformLegacyForRender}
               waveformChannels={waveformChannelsForRender}
-              width={width}
+              width={stableWaveformContentWidth}
               height={Math.max(20, trackBaseHeight - 12)}
-              inPoint={waveformInPointForRender}
-              outPoint={waveformOutPointForRender}
+              inPoint={stableWaveformContentInPoint}
+              outPoint={stableWaveformContentOutPoint}
               naturalDuration={waveformNaturalDurationForRender}
-              clipDuration={displayDuration}
+              clipDuration={stableWaveformClipDuration}
               displayMode={audioDisplayMode}
               pixelsPerSecond={zoom}
               pyramid={waveformPyramidForRender}
@@ -3396,8 +3577,12 @@ function TimelineClipComponent({
               volumeAutomationKeyframes={audioVolumeAutomationKeyframes}
               audioEditStack={predictiveAudioEditStack}
               audioRegionGainPreview={predictiveAudioRegionGainPreview}
-              renderStartPx={waveformRenderWindow.startPx}
-              renderWidth={waveformRenderWindow.width}
+              renderStartPx={stableWaveformRenderWindow.startPx}
+              renderWidth={stableWaveformRenderWindow.width}
+              contentOffsetPx={stableWaveformContentOffsetPx}
+              normalizationInPoint={useStableWaveformTrimWindow ? originalWaveformTrimInPoint : undefined}
+              normalizationOutPoint={useStableWaveformTrimWindow ? originalWaveformTrimOutPoint : undefined}
+              normalizationWidth={useStableWaveformTrimWindow ? Math.max(1, (originalWaveformTrimOutPoint - originalWaveformTrimInPoint) / waveformSourceSecondsPerPixel) : undefined}
             />
           ) : null}
           {(audioAnalysisDisplayStatus || (audioWaveformDiagnostics?.badges.length ?? 0) > 0) && (
@@ -4093,6 +4278,7 @@ function TimelineClipComponent({
             className={`fade-handle left${fadeInDuration > 0 ? ' active' : ''}`}
             style={fadeInDuration > 0 ? { left: timeToPixel(fadeInDuration) - 6 } : undefined}
             onMouseDown={(e) => {
+              if (e.button !== 0) return;
               if (!canUseFadeHandles) return;
               e.stopPropagation();
               onFadeStart(e, 'left');
@@ -4103,6 +4289,7 @@ function TimelineClipComponent({
             className={`fade-handle right${fadeOutDuration > 0 ? ' active' : ''}`}
             style={fadeOutDuration > 0 ? { right: timeToPixel(fadeOutDuration) - 6 } : undefined}
             onMouseDown={(e) => {
+              if (e.button !== 0) return;
               if (!canUseFadeHandles) return;
               e.stopPropagation();
               onFadeStart(e, 'right');
@@ -4113,6 +4300,7 @@ function TimelineClipComponent({
           <div
             className={`trim-handle left arrows-${leftTrimHandleDirections.length}`}
             onMouseDown={(e) => {
+              if (e.button !== 0) return;
               if (!canUseTrimHandles) return;
               e.stopPropagation();
               onTrimStart(e, 'left');
@@ -4123,6 +4311,7 @@ function TimelineClipComponent({
           <div
             className={`trim-handle right arrows-${rightTrimHandleDirections.length}`}
             onMouseDown={(e) => {
+              if (e.button !== 0) return;
               if (!canUseTrimHandles) return;
               e.stopPropagation();
               onTrimStart(e, 'right');

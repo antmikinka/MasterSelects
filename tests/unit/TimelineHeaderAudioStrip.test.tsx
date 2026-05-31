@@ -95,6 +95,7 @@ describe('TimelineHeader audio mixer strip', () => {
     expect(container.querySelector<HTMLInputElement>('.audio-track-fader')?.title).toBe('Volume -6.5 dB. Double-click to reset.');
     expect(container.querySelector('.audio-track-fader-value')?.textContent).toBe('-6.5');
     expect(container.querySelector('.audio-track-pan-value')?.textContent).toBe('L35');
+    expect(container.querySelector('.audio-track-pan-row.audio-track-pan-footer')).not.toBeNull();
     expect(container.querySelector<HTMLInputElement>('.audio-track-pan-inline')?.style.getPropertyValue('--pan-fill-start')).toBe('32.5%');
     expect(container.querySelector<HTMLInputElement>('.audio-track-pan-inline')?.style.getPropertyValue('--pan-fill-end')).toBe('50%');
     expect(container.querySelectorAll('.track-header-icon').length).toBeGreaterThanOrEqual(2);
@@ -124,6 +125,9 @@ describe('TimelineHeader audio mixer strip', () => {
 
     expect(container.querySelector('.track-header.audio.audio-strip-compact')).not.toBeNull();
     expect(container.querySelector('.audio-track-faders')).not.toBeNull();
+    expect(container.querySelector('.audio-track-fader')).toBeNull();
+    expect(container.querySelector('.audio-track-pan-row.audio-track-pan-footer')).not.toBeNull();
+    expect(container.querySelector<HTMLInputElement>('.audio-track-pan-inline')?.title).toBe('Pan L35. Double-click to center.');
     expect(container.querySelector('.audio-button-label-short')?.textContent).toBe('A');
     expect(container.querySelector('.audio-button-label-wide')?.textContent).toBe('Aux');
   });
@@ -149,6 +153,7 @@ describe('TimelineHeader audio mixer strip', () => {
     const { container } = renderAudioHeader(24);
 
     expect(container.querySelector('.track-header.audio.audio-strip-condensed')).not.toBeNull();
+    expect(container.querySelector('.audio-track-pan-row.audio-track-pan-footer')).toBeNull();
     expect(container.querySelectorAll('.track-controls .btn-icon').length).toBeGreaterThanOrEqual(7);
   });
 

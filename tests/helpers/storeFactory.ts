@@ -103,7 +103,6 @@ function getInitialState(): Partial<TimelineStore> {
     audioSpectralRegionSelection: null,
     showAudioRegionEditMarkers: true,
     clipStemSeparationJobs: {},
-    expandedClipStemLayerIds: new Set<string>(),
     runtimeAudioMeters: { trackMeters: {} },
     showTranscriptMarkers: false,
     // Clip animation / slot grid

@@ -6,7 +6,6 @@ import type { TimelineClip, TimelineTrack, Layer, Effect, NestedCompositionData,
 import type { VectorAnimationClipSettings } from '../../../types/vectorAnimation';
 import type { ClipDragState } from '../types';
 import { useTimelineStore } from '../../../stores/timeline';
-import { applyClipDragPreview } from '../../../stores/timeline/clipDragPreview';
 import { useMediaStore } from '../../../stores/mediaStore';
 import { engine } from '../../../engine/WebGPUEngine';
 import { proxyFrameCache } from '../../../services/proxyFrameCache';
@@ -33,8 +32,6 @@ function isLayerScaleChanged(layerScale: Layer['scale'] | undefined, transformSc
 
 interface UseLayerSyncProps {
   // Refs
-  timelineRef: React.RefObject<HTMLDivElement | null>;
-
   // State
   playheadPosition: number;
   clips: TimelineClip[];
@@ -45,8 +42,6 @@ interface UseLayerSyncProps {
   isRamPreviewing: boolean;
   clipKeyframes: Map<string, Array<{ id: string; clipId: string; time: number; property: AnimatableProperty; value: number; easing: string }>>;
   clipDrag: ClipDragState | null;
-  zoom: number;
-  scrollX: number;
 
   // Derived state
   clipMap: Map<string, TimelineClip>;
@@ -65,7 +60,6 @@ interface UseLayerSyncProps {
 }
 
 export function useLayerSync({
-  timelineRef,
   playheadPosition,
   clips,
   tracks,
@@ -75,8 +69,6 @@ export function useLayerSync({
   isRamPreviewing,
   clipKeyframes,
   clipDrag,
-  zoom,
-  scrollX,
   clipMap,
   videoTracks,
   audioTracks,
@@ -348,9 +340,16 @@ export function useLayerSync({
       return;
     }
 
+    // Clip dragging already publishes a lightweight preview for the direct
+    // engine render path. Running the legacy layer/audio sync on every mouse
+    // move adds allocations and store churn without changing layers.
+    if (clipDrag) {
+      return;
+    }
+
     // Try to use RAM Preview cache for instant scrubbing
     // This provides instant access to pre-rendered frames
-    if (!clipDrag && ramPreviewRange) {
+    if (ramPreviewRange) {
       const inRange = playheadPosition >= ramPreviewRange.start && playheadPosition <= ramPreviewRange.end;
       if (inRange) {
         const hit = engine.renderCachedFrame(playheadPosition);
@@ -359,7 +358,7 @@ export function useLayerSync({
         }
         // Cache miss within range - will fall through to regular render
       }
-    } else if (!clipDrag) {
+    } else {
       // No RAM preview range, but still try the cache in case frames were cached during playback
       const hit = engine.renderCachedFrame(playheadPosition);
       if (hit) {
@@ -373,45 +372,7 @@ export function useLayerSync({
     pendingRafRef.current = requestAnimationFrame(() => {
     pendingRafRef.current = null;
 
-    let clipsAtTime = getClipsAtTime(playheadPosition);
-
-    if (clipDrag) {
-      const dragPreview = useTimelineStore.getState().clipDragPreview;
-      const previewClips = applyClipDragPreview(clips, dragPreview);
-
-      if (previewClips !== clips) {
-        clipsAtTime = previewClips.filter(
-          (c) =>
-            playheadPosition >= c.startTime &&
-            playheadPosition < c.startTime + c.duration
-        );
-      } else {
-        const draggedClipId = clipDrag.clipId;
-        const rawPixelX = clipDrag.currentX
-          ? clipDrag.currentX -
-            (timelineRef.current?.getBoundingClientRect().left || 0) +
-            scrollX -
-            clipDrag.grabOffsetX
-          : 0;
-        const tempStartTime =
-          clipDrag.snappedTime ??
-          (clipDrag.currentX ? Math.max(0, rawPixelX / zoom) : null);
-
-        if (tempStartTime !== null) {
-          const modifiedClips = clips.map((c) => {
-            if (c.id === draggedClipId) {
-              return { ...c, startTime: tempStartTime, trackId: clipDrag.currentTrackId };
-            }
-            return c;
-          });
-          clipsAtTime = modifiedClips.filter(
-            (c) =>
-              playheadPosition >= c.startTime &&
-              playheadPosition < c.startTime + c.duration
-          );
-        }
-      }
-    }
+    const clipsAtTime = getClipsAtTime(playheadPosition);
 
     const currentLayers = useTimelineStore.getState().layers;
     const newLayers = [...currentLayers];
@@ -548,7 +509,11 @@ export function useLayerSync({
         const frameIndex = Math.floor(clipTime * proxyFps);
         let useProxy = false;
 
-        if (mediaStore.proxyEnabled && mediaFile?.proxyFps) {
+        if (
+          mediaStore.proxyEnabled &&
+          mediaFile?.proxyFps &&
+          mediaFile.proxyFormat !== 'mp4-all-intra'
+        ) {
           if (mediaFile.proxyStatus === 'ready') {
             useProxy = true;
           } else if (
@@ -572,11 +537,7 @@ export function useLayerSync({
           // Video element sync (mute/play/pause/seek) handled by LayerBuilderService
 
           const loadKey = `${mediaFile.id}_${frameIndex}`;
-          const cachedInService = proxyFrameCache.getCachedFrame(
-            mediaFile.id,
-            frameIndex,
-            proxyFps
-          );
+          const cachedInService = proxyFrameCache.getCachedFrame(mediaFile.id, frameIndex, proxyFps);
           const interpolatedEffectsForProxy = getInterpolatedEffects(
             clip.id,
             keyframeLocalTime
@@ -599,6 +560,10 @@ export function useLayerSync({
               source: {
                 type: 'image',
                 imageElement: cachedInService,
+                mediaTime: frameIndex / proxyFps,
+                targetMediaTime: clipTime,
+                previewPath: 'proxy-image-frame',
+                proxyFrameIndex: frameIndex,
               },
               effects: interpolatedEffectsForProxy,
               position: { x: transform.position.x, y: transform.position.y, z: transform.position.z },
@@ -643,6 +608,10 @@ export function useLayerSync({
                       source: {
                         type: 'image',
                         imageElement: image,
+                        mediaTime: frameIndex / proxyFps,
+                        targetMediaTime: clipTime,
+                        previewPath: 'proxy-image-frame',
+                        proxyFrameIndex: frameIndex,
                       },
                       effects: capturedEffects,
                       position: {
@@ -662,9 +631,13 @@ export function useLayerSync({
                 });
             }
 
-            // Try nearest cached frame for smooth scrubbing, then fall back to previous frame
-            const nearestOrCachedImage = proxyFrameCache.getNearestCachedFrame(mediaFile.id, frameIndex, 30) || cached?.image;
-            if (nearestOrCachedImage) {
+            // Try nearest cached frame for smooth scrubbing, then fall back to previous frame.
+            // While dragging the playhead, reach as far as the preloader fetches ahead (±90 ≈ 3s,
+            // matching proxyFrameCache SCRUB_PRELOAD_RANGE) so cold-region scrubs use a preloaded
+            // frame instead of holding stale; paused keeps the tight ±30 default.
+            const nearestSearchDistance = isDraggingPlayhead ? 90 : 30;
+            const nearestFrame = proxyFrameCache.getNearestCachedFrameEntry(mediaFile.id, frameIndex, nearestSearchDistance)?.image || cached?.image;
+            if (nearestFrame) {
               const transform = getInterpolatedTransform(clip.id, keyframeLocalTime);
               newLayers[layerIndex] = {
                 id: `timeline_layer_${layerIndex}`,
@@ -675,7 +648,11 @@ export function useLayerSync({
                 blendMode: transform.blendMode,
                 source: {
                   type: 'image',
-                  imageElement: nearestOrCachedImage,
+                  imageElement: nearestFrame,
+                  mediaTime: frameIndex / proxyFps,
+                  targetMediaTime: clipTime,
+                  previewPath: 'proxy-image-frame-nearest',
+                  proxyFrameIndex: frameIndex,
                 },
                 effects: interpolatedEffectsForProxy,
                 position: { x: transform.position.x, y: transform.position.y, z: transform.position.z },
@@ -709,6 +686,10 @@ export function useLayerSync({
                 source: {
                   type: 'image',
                   imageElement: cached.image,
+                  mediaTime: cached.frameIndex / proxyFps,
+                  targetMediaTime: clipTime,
+                  previewPath: 'proxy-image-frame-hold',
+                  proxyFrameIndex: cached.frameIndex,
                 },
                 effects: interpolatedEffectsForProxy,
                 position: { x: transform.position.x, y: transform.position.y, z: transform.position.z },
@@ -1074,8 +1055,6 @@ export function useLayerSync({
     isRamPreviewing,
     clipKeyframes,
     clipDrag,
-    zoom,
-    scrollX,
     getClipsAtTime,
     getInterpolatedTransform,
     getInterpolatedEffects,
@@ -1088,7 +1067,6 @@ export function useLayerSync({
     isAudioTrackMuted,
     buildNestedLayers,
     effectsChanged,
-    timelineRef,
     clipMap,
   ]);
 }

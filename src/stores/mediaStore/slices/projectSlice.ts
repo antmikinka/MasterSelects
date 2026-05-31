@@ -16,7 +16,7 @@ import type {
 import type { SignalArtifact, SignalGraph, SignalOperatorDescriptor } from '../../../signals';
 import { DEFAULT_COMPOSITION } from '../constants';
 import { generateId } from '../helpers/importPipeline';
-import { getExpectedProxyFps, getProxyProgressFromFrameIndices, isProxyFrameIndexSetComplete } from '../helpers/proxyCompleteness';
+import { getExpectedProxyFps, isProxyFrameIndexSetComplete } from '../helpers/proxyCompleteness';
 import { projectDB, type StoredProject } from '../../../services/projectDB';
 import { projectFileService } from '../../../services/projectFileService';
 import { fileSystemService } from '../../../services/fileSystemService';
@@ -136,17 +136,17 @@ export const createProjectSlice: MediaSliceCreator<ProjectActions> = (set, get) 
           let proxyFrameCount: number | undefined;
           let proxyProgress = 0;
           let proxyFps: number | undefined;
+          let proxyFormat: MediaFile['proxyFormat'];
           if (stored.type === 'video' && projectFileService.isProjectOpen()) {
             // Try fileHash first, then fall back to mediaId (for backwards compatibility)
             const storageKey = stored.fileHash || mediaFile.id;
             const frameIndices = await projectFileService.getProxyFrameIndices(storageKey);
-            const frameCount = frameIndices.size;
-            if (frameCount > 0) {
-              const duration = stored.duration ?? mediaFile.duration;
+            if (isProxyFrameIndexSetComplete(frameIndices, stored.duration ?? mediaFile.duration, stored.fps ?? mediaFile.fps)) {
               proxyFps = getExpectedProxyFps(stored.fps ?? mediaFile.fps);
-              proxyStatus = isProxyFrameIndexSetComplete(frameIndices, duration, proxyFps) ? 'ready' : 'none';
-              proxyFrameCount = frameCount;
-              proxyProgress = getProxyProgressFromFrameIndices(frameIndices, duration, proxyFps);
+              proxyStatus = 'ready';
+              proxyFrameCount = frameIndices.size;
+              proxyProgress = 100;
+              proxyFormat = 'jpeg-sequence';
             }
           }
 
@@ -174,6 +174,7 @@ export const createProjectSlice: MediaSliceCreator<ProjectActions> = (set, get) 
             proxyFrameCount,
             proxyFps: proxyStatus === 'ready' ? proxyFps : undefined,
             proxyProgress,
+            proxyFormat,
             transcriptStatus,
             transcript,
             duration: stored.duration ?? mediaFile.duration,

@@ -1,11 +1,14 @@
 // Unified import pipeline - eliminates 3x duplicate import logic
 
-import type { MediaFile, ProxyStatus } from '../types';
+import type { MediaFile, ProxyFormat, ProxyStatus } from '../types';
 import { classifyMediaType } from '../../timeline/helpers/mediaTypeHelpers';
 import { calculateFileHash } from './fileHashHelpers';
 import { getMediaInfo } from './mediaInfoHelpers';
 import { createThumbnail, handleThumbnailDedup } from './thumbnailHelpers';
-import { getExpectedProxyFps, getProxyProgressFromFrameIndices, isProxyFrameIndexSetComplete } from './proxyCompleteness';
+import {
+  getExpectedProxyFps,
+  isProxyFrameIndexSetComplete,
+} from './proxyCompleteness';
 import { projectFileService } from '../../../services/projectFileService';
 import { fileSystemService } from '../../../services/fileSystemService';
 import { projectDB } from '../../../services/projectDB';
@@ -188,23 +191,22 @@ async function checkExistingProxy(
   proxyFrameCount?: number;
   proxyFps?: number;
   proxyProgress?: number;
+  proxyFormat?: ProxyFormat;
 }> {
   if (!fileHash || type !== 'video' || !projectFileService.isProjectOpen()) {
     return { proxyStatus: 'none' };
   }
 
+  const proxyFps = getExpectedProxyFps(fps);
   const frameIndices = await projectFileService.getProxyFrameIndices(fileHash);
-  const frameCount = frameIndices.size;
-  if (frameCount > 0) {
-    const proxyFps = getExpectedProxyFps(fps);
-    const progress = getProxyProgressFromFrameIndices(frameIndices, duration, proxyFps);
-    const complete = isProxyFrameIndexSetComplete(frameIndices, duration, proxyFps);
-    log.debug(`Found existing proxy: ${fileHash.slice(0, 8)} frames: ${frameCount}, progress: ${progress}%`);
+  if (isProxyFrameIndexSetComplete(frameIndices, duration, proxyFps)) {
+    log.debug(`Found existing JPEG proxy: ${fileHash.slice(0, 8)}`);
     return {
-      proxyStatus: complete ? 'ready' : 'none',
-      proxyFrameCount: frameCount,
-      proxyFps: complete ? proxyFps : undefined,
-      proxyProgress: progress,
+      proxyStatus: 'ready',
+      proxyFrameCount: frameIndices.size,
+      proxyFps,
+      proxyProgress: 100,
+      proxyFormat: 'jpeg-sequence',
     };
   }
 

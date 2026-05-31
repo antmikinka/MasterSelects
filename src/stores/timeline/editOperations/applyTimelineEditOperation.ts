@@ -11,7 +11,7 @@ import { selectClipsFromTimeOperation } from './selectionOperations';
 import { applyPlaceTimelineRangeOperation } from './placementOperations';
 import { applySplitAtTimesOperation } from './splitBatchOperations';
 import { resolveSplitAllAtTimeTargets, resolveSplitAtTimeTargets } from './splitOperations';
-import { applyDeleteGapAtTimeOperation, applyRippleDeleteSelectionOperation } from './rippleOperations';
+import { applyDeleteAllGapsOperation, applyDeleteGapAtTimeOperation, applyRippleDeleteSelectionOperation } from './rippleOperations';
 import {
   applyRateStretchClipOperation,
   applyRippleTrimEdgeToTimeOperation,
@@ -265,6 +265,29 @@ export const createTimelineEditOperationSlice: SliceCreator<TimelineEditOperatio
       };
     }
 
+    if (operation.type === 'delete-all-gaps') {
+      const result = applyDeleteAllGapsOperation(operation, get().clips, get().tracks);
+      if (result.changedClipIds.length === 0 || hasOnlyNoopWarnings(result.warnings)) {
+        return resultFromWarnings(operationId, result.warnings);
+      }
+
+      startBatch(options.historyLabel ?? 'Delete all gaps');
+      try {
+        set({ clips: result.clips });
+        get().updateDuration();
+        get().invalidateCache();
+      } finally {
+        endBatch();
+      }
+
+      return {
+        success: true,
+        operationId,
+        changedClipIds: result.changedClipIds,
+        warnings: result.warnings,
+      };
+    }
+
     if (operation.type === 'move-clips') {
       const result = applyMoveClipsOperation(operation, get().clips, get().tracks);
       if (result.changedClipIds.length === 0 || hasOnlyNoopWarnings(result.warnings)) {
@@ -451,6 +474,16 @@ export const createTimelineEditOperationSlice: SliceCreator<TimelineEditOperatio
     time,
     trackIds,
   }, { source: 'ui', historyLabel: 'Delete gap' }),
+
+  deleteAllGaps: (trackIds, startTime) => get().applyTimelineEditOperation({
+    id: `delete-all-gaps:${Date.now()}`,
+    type: 'delete-all-gaps',
+    trackIds,
+    startTime,
+  }, {
+    source: 'ui',
+    historyLabel: trackIds?.length === 1 && startTime !== undefined ? 'Delete all gaps in layer from time' : 'Delete all gaps',
+  }),
 
   trimSelectedClipEdgeToPlayhead: (edge) => get().applyTimelineEditOperation({
     id: `trim-${edge}-to-playhead:${get().playheadPosition}`,

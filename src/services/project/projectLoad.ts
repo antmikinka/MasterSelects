@@ -7,7 +7,6 @@ import { getMediaInfo } from '../../stores/mediaStore/helpers/mediaInfoHelpers';
 import {
   getExpectedProxyFrameCount,
   getExpectedProxyFps,
-  getProxyProgressFromFrameIndices,
   isProxyFrameIndexSetComplete,
 } from '../../stores/mediaStore/helpers/proxyCompleteness';
 import { updateTimelineClips } from '../../stores/mediaStore/slices/fileManageSlice';
@@ -546,19 +545,22 @@ async function convertProjectMediaToStore(
     let proxyFrameCount: number | undefined;
     let proxyProgress = 0;
     let proxyFps: number | undefined;
+    let proxyFormat: MediaFile['proxyFormat'];
     if (pm.type === 'video' && pm.hasProxy && projectFileService.isProjectOpen()) {
       proxyFps = getExpectedProxyFps(pm.frameRate);
       if (deferCacheChecks) {
         proxyStatus = 'ready';
         proxyFrameCount = getExpectedProxyFrameCount(pm.duration, proxyFps) ?? undefined;
         proxyProgress = 100;
+        proxyFormat = 'jpeg-sequence';
       } else {
         const proxyStorageKey = pm.fileHash || pm.id;
         const frameIndices = await projectFileService.getProxyFrameIndices(proxyStorageKey);
-        if (frameIndices.size > 0) {
-          proxyStatus = isProxyFrameIndexSetComplete(frameIndices, pm.duration, proxyFps) ? 'ready' : 'none';
+        if (isProxyFrameIndexSetComplete(frameIndices, pm.duration, proxyFps)) {
+          proxyStatus = 'ready';
           proxyFrameCount = frameIndices.size;
-          proxyProgress = getProxyProgressFromFrameIndices(frameIndices, pm.duration, proxyFps);
+          proxyProgress = 100;
+          proxyFormat = 'jpeg-sequence';
         }
       }
     }
@@ -610,6 +612,7 @@ async function convertProjectMediaToStore(
       proxyFrameCount,
       proxyFps: proxyStatus === 'ready' ? proxyFps : undefined,
       proxyProgress,
+      proxyFormat,
       hasProxyAudio,
       audioProxyStatus,
       audioProxyProgress,
@@ -620,6 +623,7 @@ async function convertProjectMediaToStore(
       projectPath: representativeProjectPath,
       fileHash: pm.fileHash,
       audioAnalysisRefs: pm.audioAnalysisRefs ? structuredClone(pm.audioAnalysisRefs) : undefined,
+      stemInfo: pm.stemInfo ? structuredClone(pm.stemInfo) : undefined,
       waveform: pm.waveform ? [...pm.waveform] : undefined,
       waveformChannels: pm.waveformChannels?.map(channel => [...channel]),
       waveformStatus: pm.waveform?.length ? 'ready' : undefined,
@@ -1648,35 +1652,28 @@ async function restoreDeferredMediaCacheState(
     if (pm.type === 'video' && pm.hasProxy) {
       try {
         const proxyFps = getExpectedProxyFps(pm.frameRate);
-        const expectedFrames = getExpectedProxyFrameCount(pm.duration, proxyFps);
-        const frameIndices = await projectFileService.getProxyFrameIndices(
-          pm.fileHash || pm.id,
-          (scan) => {
-            const scanRatio = expectedFrames
-              ? Math.min(0.98, scan.matched / expectedFrames)
-              : 0;
-            const label = expectedFrames
-              ? `${pm.name} - proxy ${scan.matched}/${expectedFrames}`
-              : `${pm.name} - proxy ${scan.matched} frames`;
-            onProgress?.(completed, projectMedia.length, label, scan.done ? 0.98 : scanRatio);
-          },
-        );
-        if (frameIndices.size > 0) {
-          updates.proxyStatus = isProxyFrameIndexSetComplete(frameIndices, pm.duration, proxyFps) ? 'ready' : 'none';
+        const proxyStorageKey = pm.fileHash || pm.id;
+        onProgress?.(completed, projectMedia.length, `${pm.name} - proxy frames`, 0.5);
+        const frameIndices = await projectFileService.getProxyFrameIndices(proxyStorageKey);
+        if (isProxyFrameIndexSetComplete(frameIndices, pm.duration, proxyFps)) {
+          updates.proxyStatus = 'ready';
           updates.proxyFrameCount = frameIndices.size;
-          updates.proxyFps = updates.proxyStatus === 'ready' ? proxyFps : undefined;
-          updates.proxyProgress = getProxyProgressFromFrameIndices(frameIndices, pm.duration, proxyFps);
+          updates.proxyFps = proxyFps;
+          updates.proxyProgress = 100;
+          updates.proxyFormat = 'jpeg-sequence';
         } else {
           updates.proxyStatus = 'none';
           updates.proxyFrameCount = undefined;
           updates.proxyFps = undefined;
           updates.proxyProgress = 0;
+          updates.proxyFormat = undefined;
         }
       } catch {
         updates.proxyStatus = 'none';
         updates.proxyFrameCount = undefined;
         updates.proxyFps = undefined;
         updates.proxyProgress = 0;
+        updates.proxyFormat = undefined;
       }
     }
 

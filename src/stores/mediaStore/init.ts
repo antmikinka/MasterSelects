@@ -18,11 +18,29 @@ import { audioExtractor } from '../../engine/audio/AudioExtractor';
 const log = Logger.create('MediaStore');
 
 type MediaStore = typeof import('./index').useMediaStore;
+type TimelineStoreState = ReturnType<typeof useTimelineStore.getState>;
+type SaveTimelineToActiveCompositionOptions = {
+  allowDuringTimelineInteraction?: boolean;
+};
+type TimelineCompositionSaveRefs = {
+  tracks: unknown;
+  clips: unknown;
+  duration: number;
+  durationLocked: boolean;
+  inPoint: number | null;
+  outPoint: number | null;
+  loopPlayback: boolean;
+  clipKeyframes: unknown;
+  markers: unknown;
+  videoBakeRegions: unknown;
+  masterAudioState: unknown;
+};
 type MediaStoreGlobal = typeof globalThis & {
   __mediaStoreModule?: { useMediaStore: MediaStore };
   __masterselectsMediaStoreAutoSaveIntervalId?: ReturnType<typeof setInterval>;
   __masterselectsMediaStoreBeforeUnloadHandler?: () => void;
   __masterselectsTimelineCompositionSaveSignatures?: Map<string, string>;
+  __masterselectsTimelineCompositionSaveRefs?: Map<string, TimelineCompositionSaveRefs>;
 };
 
 // Cached store reference - populated after first access
@@ -32,6 +50,46 @@ function getTimelineSaveSignatures(): Map<string, string> {
   const globalState = globalThis as MediaStoreGlobal;
   globalState.__masterselectsTimelineCompositionSaveSignatures ??= new Map<string, string>();
   return globalState.__masterselectsTimelineCompositionSaveSignatures;
+}
+
+function getTimelineSaveRefs(): Map<string, TimelineCompositionSaveRefs> {
+  const globalState = globalThis as MediaStoreGlobal;
+  globalState.__masterselectsTimelineCompositionSaveRefs ??= new Map<string, TimelineCompositionSaveRefs>();
+  return globalState.__masterselectsTimelineCompositionSaveRefs;
+}
+
+function createTimelineSaveRefs(state: TimelineStoreState): TimelineCompositionSaveRefs {
+  return {
+    tracks: state.tracks,
+    clips: state.clips,
+    duration: state.duration,
+    durationLocked: state.durationLocked,
+    inPoint: state.inPoint,
+    outPoint: state.outPoint,
+    loopPlayback: state.loopPlayback,
+    clipKeyframes: state.clipKeyframes,
+    markers: state.markers,
+    videoBakeRegions: state.videoBakeRegions,
+    masterAudioState: state.masterAudioState,
+  };
+}
+
+function areTimelineSaveRefsEqual(
+  previous: TimelineCompositionSaveRefs | undefined,
+  next: TimelineCompositionSaveRefs,
+): boolean {
+  return Boolean(previous) &&
+    previous!.tracks === next.tracks &&
+    previous!.clips === next.clips &&
+    previous!.duration === next.duration &&
+    previous!.durationLocked === next.durationLocked &&
+    previous!.inPoint === next.inPoint &&
+    previous!.outPoint === next.outPoint &&
+    previous!.loopPlayback === next.loopPlayback &&
+    previous!.clipKeyframes === next.clipKeyframes &&
+    previous!.markers === next.markers &&
+    previous!.videoBakeRegions === next.videoBakeRegions &&
+    previous!.masterAudioState === next.masterAudioState;
 }
 
 function createTimelineSaveSignature(timelineData: CompositionTimelineData | undefined): string {
@@ -67,7 +125,7 @@ const getMediaStore = (): MediaStore | null => {
 /**
  * Save current timeline to active composition.
  */
-function saveTimelineToActiveComposition(): void {
+function saveTimelineToActiveComposition(options: SaveTimelineToActiveCompositionOptions = {}): void {
   if (isProjectStoreSyncInProgress()) {
     log.debug('Skipped timeline-to-composition save during project store sync');
     return;
@@ -78,8 +136,19 @@ function saveTimelineToActiveComposition(): void {
   const { activeCompositionId } = useMediaStore.getState();
   if (activeCompositionId) {
     const timelineStore = useTimelineStore.getState();
+    if (!options.allowDuringTimelineInteraction && timelineStore.clipDragPreview) {
+      return;
+    }
+
+    const nextRefs = createTimelineSaveRefs(timelineStore);
+    const refs = getTimelineSaveRefs();
+    if (areTimelineSaveRefsEqual(refs.get(activeCompositionId), nextRefs)) {
+      return;
+    }
+
     const timelineData = timelineStore.getSerializableState();
     const nextSignature = createTimelineSaveSignature(timelineData);
+    refs.set(activeCompositionId, nextRefs);
     const signatures = getTimelineSaveSignatures();
     const previousSignature = signatures.get(activeCompositionId);
     if (previousSignature === nextSignature) return;
@@ -380,7 +449,7 @@ function setupBeforeUnload(): void {
 
   globalState.__masterselectsMediaStoreBeforeUnloadHandler = () => {
     if ((window as unknown as { __CLEARING_CACHE__?: boolean }).__CLEARING_CACHE__) return;
-    saveTimelineToActiveComposition();
+    saveTimelineToActiveComposition({ allowDuringTimelineInteraction: true });
     disposeAllAudio();
   };
   window.addEventListener('beforeunload', globalState.__masterselectsMediaStoreBeforeUnloadHandler);

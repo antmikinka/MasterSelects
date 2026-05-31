@@ -50,6 +50,9 @@ export interface WaveformDisplayTransformOptions {
   targetPeak?: number;
   minReferencePeak?: number;
   maxGain?: number;
+  referencePeak?: number;
+  perceptualScale?: boolean;
+  noiseFloorDb?: number;
 }
 
 export const MAX_WAVEFORM_LOD_COLUMNS = 16_384;
@@ -67,6 +70,21 @@ function clampSigned01(value: number | undefined): number {
 function signedSoftLimit(value: number, gain: number): number {
   const sign = value < 0 ? -1 : 1;
   return sign * Math.tanh(Math.abs(value) * gain);
+}
+
+function perceptualDisplayAmplitude(value: number, floorDb: number): number {
+  const amplitude = clampAbs01(value);
+  if (amplitude <= 0) return 0;
+
+  const normalizedFloorDb = Math.min(-12, Math.max(-72, floorDb));
+  const db = 20 * Math.log10(Math.max(amplitude, 1e-6));
+  const normalized = Math.max(0, Math.min(1, (db - normalizedFloorDb) / Math.abs(normalizedFloorDb)));
+  return Math.pow(normalized, 1.35);
+}
+
+function signedPerceptualDisplayAmplitude(value: number, floorDb: number): number {
+  const sign = value < 0 ? -1 : 1;
+  return sign * perceptualDisplayAmplitude(Math.abs(value), floorDb);
 }
 
 function positiveFinite(value: number, fallback: number): number {
@@ -380,6 +398,9 @@ export function normalizeWaveformColumnsForDisplay(
   const minReferencePeak = positiveFinite(options.minReferencePeak ?? 0.035, 0.035);
   const maxGain = positiveFinite(options.maxGain ?? 18, 18);
   const sanitizedColumns = columns.map(sanitizeWaveformColumn);
+  const suppliedReferencePeak = positiveFinite(options.referencePeak ?? 0, 0);
+  const usePerceptualScale = options.perceptualScale === true;
+  const noiseFloorDb = Number.isFinite(options.noiseFloorDb) ? options.noiseFloorDb! : -36;
   const peaks = sanitizedColumns
     .map((column) => Math.max(column.peak, Math.abs(column.min), Math.abs(column.max)))
     .filter((peak) => peak > 0.0001)
@@ -390,23 +411,64 @@ export function normalizeWaveformColumnsForDisplay(
   }
 
   const maxPeak = peaks[peaks.length - 1] ?? 0;
-  const referencePeak = Math.max(
-    percentile(peaks, 0.85),
-    maxPeak * 0.28,
-    minReferencePeak,
-  );
+  const referencePeak = suppliedReferencePeak > 0
+    ? Math.max(suppliedReferencePeak, minReferencePeak)
+    : Math.max(
+        percentile(peaks, 0.85),
+        maxPeak * 0.28,
+        minReferencePeak,
+      );
   const gain = Math.max(1, Math.min(maxGain, targetPeak / referencePeak));
 
   return sanitizedColumns.map((column) => {
-    const min = signedSoftLimit(column.min, gain);
-    const max = signedSoftLimit(column.max, gain);
-    const rms = Math.tanh(Math.max(0, column.rms) * gain * 0.8);
-    const peak = Math.max(
+    const limitedMin = signedSoftLimit(column.min, gain);
+    const limitedMax = signedSoftLimit(column.max, gain);
+    const limitedRms = Math.tanh(Math.max(0, column.rms) * gain * 0.8);
+    const limitedPeak = Math.max(
       Math.tanh(Math.max(0, column.peak) * gain),
+      Math.abs(limitedMin),
+      Math.abs(limitedMax),
+    );
+
+    if (!usePerceptualScale) {
+      return {
+        min: limitedMin,
+        max: limitedMax,
+        rms: limitedRms,
+        peak: limitedPeak,
+      };
+    }
+
+    const min = signedPerceptualDisplayAmplitude(limitedMin, noiseFloorDb);
+    const max = signedPerceptualDisplayAmplitude(limitedMax, noiseFloorDb);
+    const rms = perceptualDisplayAmplitude(limitedRms, noiseFloorDb);
+    const peak = Math.max(
+      perceptualDisplayAmplitude(limitedPeak, noiseFloorDb),
       Math.abs(min),
       Math.abs(max),
     );
 
     return { min, max, rms, peak };
   });
+}
+
+export function resolveWaveformDisplayReferencePeak(
+  columns: readonly WaveformColumn[],
+  options: Pick<WaveformDisplayTransformOptions, 'minReferencePeak'> = {},
+): number {
+  const minReferencePeak = positiveFinite(options.minReferencePeak ?? 0.035, 0.035);
+  const peaks = columns
+    .map(sanitizeWaveformColumn)
+    .map((column) => Math.max(column.peak, Math.abs(column.min), Math.abs(column.max)))
+    .filter((peak) => peak > 0.0001)
+    .toSorted((a, b) => a - b);
+
+  if (peaks.length === 0) return minReferencePeak;
+
+  const maxPeak = peaks[peaks.length - 1] ?? 0;
+  return Math.max(
+    percentile(peaks, 0.85),
+    maxPeak * 0.28,
+    minReferencePeak,
+  );
 }

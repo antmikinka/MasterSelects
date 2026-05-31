@@ -74,6 +74,7 @@ const EXPORT_LOCKED_ACTION_NAMES = new Set<string>([
   'setClipStemSolo',
   'setClipStemEnabled',
   'setClipStemGain',
+  'setClipSourceToStem',
   'clearClipStemSeparation',
 
   'addTextClip',

@@ -21,6 +21,8 @@ import { LinuxVulkanWarning } from './components/common/LinuxVulkanWarning';
 import { ProjectLoadProgressOverlay } from './components/common/ProjectLoadProgressOverlay';
 import { PricingDialog } from './components/common/PricingDialog';
 import { HistoryActionToast } from './components/common/HistoryActionToast';
+import { ShortcutDisplayOverlay } from './components/common/ShortcutDisplayOverlay';
+import { IssueCreditCampaignBanner } from './components/common/IssueCreditCampaignBanner';
 import { GuidedActionOverlay } from './components/guidedActions/GuidedActionOverlay';
 import { TutorialOverlay } from './components/common/TutorialOverlay';
 import { TutorialCampaignDialog } from './components/common/TutorialCampaignDialog';
@@ -428,8 +430,10 @@ function App() {
     <div className="app">
       <LinuxVulkanWarning />
       <Toolbar onOpenChangelog={() => setShowChangelog(true)} onOpenSplash={() => setShowSplash(true)} />
+      <IssueCreditCampaignBanner />
       <DockContainer />
       <GuidedActionOverlay />
+      <ShortcutDisplayOverlay />
       <ProjectLoadProgressOverlay />
       <HistoryActionToast notice={historyNotice} onDone={clearHistoryNotice} />
       {showWelcome && (

@@ -41,6 +41,20 @@ export type AudioStemKind =
   | 'music'
   | 'sfx';
 
+export interface MediaFileStemInfo {
+  schemaVersion: 1;
+  sourceMediaFileId: string;
+  sourceFingerprint?: string;
+  sourceClipId?: string;
+  sourceClipName?: string;
+  activeSetId?: string;
+  modelId?: string;
+  modelVersion?: string;
+  kind: AudioStemKind;
+  label: string;
+  createdAt: number;
+}
+
 export type AudioChannelLayoutKind =
   | 'mono'
   | 'stereo'

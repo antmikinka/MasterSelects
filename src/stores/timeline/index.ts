@@ -236,7 +236,6 @@ export const useTimelineStore = create<TimelineStore>()(
       showAudioRegionEditMarkers: true,
       showTranscriptMarkers: true,
       clipStemSeparationJobs: {},
-      expandedClipStemLayerIds: new Set<string>(),
 
       // Keyframe animation state
       clipKeyframes: new Map<string, Keyframe[]>(),

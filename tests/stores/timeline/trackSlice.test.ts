@@ -545,8 +545,8 @@ describe('trackSlice', () => {
     store.getState().setTrackHeight('video-1', 5); // below min
     expect(store.getState().tracks.find(t => t.id === 'video-1')!.height).toBe(20); // MIN_TRACK_HEIGHT
 
-    store.getState().setTrackHeight('video-1', 500); // above max
-    expect(store.getState().tracks.find(t => t.id === 'video-1')!.height).toBe(200); // MAX_TRACK_HEIGHT
+    store.getState().setTrackHeight('video-1', 700); // above max
+    expect(store.getState().tracks.find(t => t.id === 'video-1')!.height).toBe(600); // MAX_TRACK_HEIGHT
   });
 
   it('setTrackHeight: sets valid height within range', () => {
@@ -559,9 +559,9 @@ describe('trackSlice', () => {
     expect(store.getState().tracks.find(t => t.id === 'video-1')!.height).toBe(20);
   });
 
-  it('setTrackHeight: accepts exact MAX boundary (200)', () => {
-    store.getState().setTrackHeight('video-1', 200);
-    expect(store.getState().tracks.find(t => t.id === 'video-1')!.height).toBe(200);
+  it('setTrackHeight: accepts exact MAX boundary (600)', () => {
+    store.getState().setTrackHeight('video-1', 600);
+    expect(store.getState().tracks.find(t => t.id === 'video-1')!.height).toBe(600);
   });
 
   it('setTrackHeight: clamps zero to MIN', () => {
@@ -623,11 +623,11 @@ describe('trackSlice', () => {
     }
   });
 
-  it('scaleTracksOfType: clamps to MAX_TRACK_HEIGHT (200)', () => {
-    store.getState().scaleTracksOfType('video', 300); // 60 + 300 = 360 => clamped to 200
+  it('scaleTracksOfType: clamps to MAX_TRACK_HEIGHT (600)', () => {
+    store.getState().scaleTracksOfType('video', 600); // 60 + 600 = 660 => clamped to 600
     const videoTracks = store.getState().tracks.filter(t => t.type === 'video');
     for (const t of videoTracks) {
-      expect(t.height).toBe(200);
+      expect(t.height).toBe(600);
     }
   });
 
@@ -910,7 +910,7 @@ describe('trackSlice', () => {
     store.getState().setTrackHeight('audio-1', 5);
     expect(store.getState().tracks.find(t => t.id === 'audio-1')!.height).toBe(20);
     store.getState().setTrackHeight('audio-1', 999);
-    expect(store.getState().tracks.find(t => t.id === 'audio-1')!.height).toBe(200);
+    expect(store.getState().tracks.find(t => t.id === 'audio-1')!.height).toBe(600);
   });
 
   it('removing parent track leaves orphan children unchanged', () => {

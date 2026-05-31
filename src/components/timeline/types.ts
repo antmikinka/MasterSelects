@@ -35,6 +35,7 @@ export interface ClipDragState {
   newTrackType?: 'video' | 'audio' | null; // Ghost target when dragging beyond video/audio track stacks
   altKeyPressed: boolean;      // If true, skip linked group movement (independent drag)
   forcingOverlap: boolean;     // If true, user has pushed through resistance and is forcing overlap
+  overlapClipIds?: string[];    // Clips currently overlapping the drag preview
   dragStartTime: number;       // Timestamp when drag started (for track-change delay)
   // Multi-select drag support
   multiSelectTimeDelta?: number;  // Time delta to apply to all selected clips during preview
@@ -53,6 +54,14 @@ export interface ClipTrimState {
   startX: number;
   currentX: number;
   altKey: boolean;  // If true, don't trim linked clip
+  // Snap feedback: the timeline time the edge snapped to (clip/playhead/marker),
+  // or null when frame-snapped or not snapped. Drives the green snap line.
+  snapIndicatorTime: number | null;
+  isSnapping: boolean;
+  // The resolved (snapped/frame-quantized) trim delta in seconds. Shared so the
+  // live clip resize matches where the trim commits, and so multi-selected
+  // followers can apply the same delta clamped to their own bounds.
+  appliedDelta: number;
 }
 
 // Clip fade state (for fade-in/out handles)
@@ -96,6 +105,13 @@ export interface ContextMenuState {
   x: number;
   y: number;
   clipId: string;
+}
+
+export interface TimelineEmptyContextMenuState {
+  x: number;
+  y: number;
+  time: number;
+  trackId: string;
 }
 
 // Marquee selection state for rectangle selection
@@ -144,6 +160,8 @@ export interface TimelineControlsProps {
   proxyEnabled: boolean;
   currentlyGeneratingProxyId: string | null;
   mediaFilesWithProxy: number;
+  mediaFilesProxyTotal: number;
+  generatingProxyIndex: number;
   showTranscriptMarkers: boolean;
   thumbnailsEnabled: boolean;
   waveformsEnabled: boolean;
@@ -238,6 +256,7 @@ export interface TimelineTrackProps {
   selectedClipIds: Set<string>;
   selectedKeyframeIds: Set<string>;
   activeTimelineToolId: TimelineToolId;
+  isClipDragActive: boolean;
   clipDrag: ClipDragState | null;
   clipTrim: ClipTrimState | null;
   externalDrag: ExternalDragState | null;
@@ -246,6 +265,8 @@ export interface TimelineTrackProps {
   timelineRef: React.RefObject<HTMLDivElement | null>;
   onClipMouseDown: (e: React.MouseEvent, clipId: string) => void;
   onClipContextMenu: (e: React.MouseEvent, clipId: string) => void;
+  onEmptyMouseDown: (e: React.MouseEvent, trackId: string, time: number) => void;
+  onEmptyContextMenu: (e: React.MouseEvent, trackId: string, time: number) => void;
   onTrimStart: (e: React.MouseEvent, clipId: string, edge: 'left' | 'right') => void;
   onDrop: (e: React.DragEvent) => void;
   onDragOver: (e: React.DragEvent) => void;
@@ -298,6 +319,8 @@ export interface TimelineClipProps {
   isFading: boolean;  // True if this clip is being fade-adjusted
   isLinkedToDragging: boolean;
   isLinkedToTrimming: boolean;
+  isTrimFollower?: boolean;  // Selected clip resizing live alongside a multi-trim
+  isClipDragActive: boolean;
   clipDrag: ClipDragState | null;
   clipTrim: ClipTrimState | null;
   clipFade: ClipFadeState | null;

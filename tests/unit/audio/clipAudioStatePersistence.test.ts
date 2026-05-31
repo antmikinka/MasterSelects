@@ -3,8 +3,9 @@ import { clonePersistedClipAudioState } from '../../../src/services/audio/clipAu
 import type { ClipAudioState } from '../../../src/types';
 
 describe('clip audio state persistence', () => {
-  it('keeps per-clip stem selection and compact stem waveform previews', () => {
+  it('keeps generated stem state detached from persisted clip audio state', () => {
     const audioState: ClipAudioState = {
+      sourceAudioRevisionId: 'source-revision',
       stemSeparation: {
         activeSetId: 'stem-set',
         modelId: 'demucs-htdemucs-web',
@@ -39,17 +40,6 @@ describe('clip audio state persistence', () => {
 
     const persisted = clonePersistedClipAudioState(audioState);
 
-    expect(persisted?.stemSeparation).toMatchObject({
-      mixMode: 'hybrid',
-      soloStemId: 'stem-drums',
-      sourceGainDb: -3,
-    });
-    expect(persisted?.stemSeparation?.stems[0]).toMatchObject({
-      id: 'stem-drums',
-      enabled: false,
-      gainDb: 4,
-      mediaFileId: 'media-drums',
-    });
-    expect(persisted?.stemSeparation?.stems[0].waveform).toEqual([0.123, 0.8, 1, 0]);
+    expect(persisted).toEqual({ sourceAudioRevisionId: 'source-revision' });
   });
 });

@@ -31,6 +31,10 @@ function hasVideoProxyCandidate(clip: TimelineClip, mediaFile: MediaFile): boole
     return false;
   }
 
+  if (mediaFile.proxyFormat === 'mp4-all-intra') {
+    return false;
+  }
+
   if (mediaFile.proxyStatus === 'ready') {
     return true;
   }

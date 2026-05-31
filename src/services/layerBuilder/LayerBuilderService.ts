@@ -51,6 +51,13 @@ import { mathSceneRenderer } from '../mathScene/MathSceneRenderer';
 const log = Logger.create('LayerBuilder');
 const SCRUB_PROXY_HOLD_MAX_DRIFT_SECONDS = 0.15;
 const PAUSED_PROXY_HOLD_MAX_DRIFT_SECONDS = 0.5;
+// Cold-region scrub fallback: how far the nearest-cached-proxy search reaches.
+// While dragging the playhead, match proxyFrameCache's SCRUB_PRELOAD_RANGE (90 ≈ 3s)
+// so the frames the preloader already fetched ahead are actually used instead of
+// falling through to an empty-hold. Paused previews keep the tight default so they
+// never show a visibly wrong frame.
+const PROXY_NEAREST_DISTANCE_DEFAULT = 30;
+const PROXY_NEAREST_DISTANCE_SCRUB = 90;
 
 /**
  * LayerBuilderService - Builds render layers from timeline state
@@ -897,8 +904,9 @@ export class LayerBuilderService {
       timeInfo.clipTime
     );
     const allowSharedPreviewSession = canUseSharedPreviewRuntimeSession(clip, ctx.clipsAtTime);
+    const isInteractivePreview = ctx.isDraggingPlayhead || ctx.hasClipDragPreview;
     const keepScrubRuntimeActive =
-      ctx.isDraggingPlayhead || scrubSettleState.isPending(clip.id);
+      isInteractivePreview || scrubSettleState.isPending(clip.id);
     const useScrubRuntime = keepScrubRuntimeActive;
     const previewRuntimeSource = useScrubRuntime
       ? getScrubRuntimeSource(
@@ -915,7 +923,7 @@ export class LayerBuilderService {
     const preferFreshPausedRuntime = useScrubRuntime;
     const preferHtmlScrubPreview =
       !flags.disableHtmlPreviewFallback &&
-      ctx.isDraggingPlayhead &&
+      isInteractivePreview &&
       !!clip.source?.videoElement &&
       (!flags.useFullWebCodecsPlayback || !clip.source?.webCodecsPlayer?.isFullMode?.());
     const playingVisualProvider =
@@ -974,26 +982,30 @@ export class LayerBuilderService {
 
     if (!this.canUseProxyFrame(mediaFile, frameIndex, proxyFps)) return null;
 
-    // Try to get cached frame
     const cacheKey = `${mediaFile.id}_${clip.id}`;
     const cachedFrame = proxyFrameCache.getCachedFrame(mediaFile.id, frameIndex, proxyFps);
 
     if (cachedFrame) {
       this.proxyFramesRef.set(cacheKey, { frameIndex, image: cachedFrame });
-      return this.buildImageLayerFromElement(clip, layerIndex, cachedFrame, clipTime, ctx, opacityOverride, {
+      return this.buildImageLayerFromProxy(clip, layerIndex, cachedFrame, clipTime, ctx, opacityOverride, {
         displayedMediaTime: frameIndex / proxyFps,
         targetMediaTime: clipTime,
-        previewPath: 'proxy-frame',
+        previewPath: 'proxy-image-frame',
         proxyFrameIndex: frameIndex,
       });
     }
 
-    this.ensureProxyFrameLoaded(mediaFile.id, frameIndex, clipTime, proxyFps, cacheKey);
+    this.ensureProxyImageFrameLoaded(mediaFile.id, frameIndex, clipTime, proxyFps, cacheKey);
 
-    // Try to get nearest cached frame for smooth scrubbing
-    const nearestFrame = proxyFrameCache.getNearestCachedFrameEntry(mediaFile.id, frameIndex, 30);
+    // Try to get nearest cached frame for smooth scrubbing. During an active
+    // playhead drag, reach as far as the preloader fetches ahead (±3s) so a
+    // cold-region teleport lands on a preloaded frame instead of empty-hold.
+    const nearestDistance = ctx.isDraggingPlayhead
+      ? PROXY_NEAREST_DISTANCE_SCRUB
+      : PROXY_NEAREST_DISTANCE_DEFAULT;
+    const nearestFrame = proxyFrameCache.getNearestCachedFrameEntry(mediaFile.id, frameIndex, nearestDistance);
     if (nearestFrame) {
-      return this.buildImageLayerFromElement(
+      return this.buildImageLayerFromProxy(
         clip,
         layerIndex,
         nearestFrame.image,
@@ -1003,7 +1015,7 @@ export class LayerBuilderService {
         {
           displayedMediaTime: nearestFrame.frameIndex / proxyFps,
           targetMediaTime: clipTime,
-          previewPath: 'proxy-frame-nearest',
+          previewPath: 'proxy-image-frame-nearest',
           proxyFrameIndex: nearestFrame.frameIndex,
         }
       );
@@ -1015,10 +1027,23 @@ export class LayerBuilderService {
       cached?.image &&
       this.canUseHeldProxyFrame(cached.frameIndex, clipTime, proxyFps, ctx.isDraggingPlayhead)
     ) {
-      return this.buildImageLayerFromElement(clip, layerIndex, cached.image, clipTime, ctx, opacityOverride, {
+      return this.buildImageLayerFromProxy(clip, layerIndex, cached.image, clipTime, ctx, opacityOverride, {
         displayedMediaTime: cached.frameIndex / proxyFps,
         targetMediaTime: clipTime,
-        previewPath: 'proxy-frame-hold',
+        previewPath: 'proxy-image-frame-hold',
+        proxyFrameIndex: cached.frameIndex,
+      });
+    }
+
+    // Guaranteed floor during an active drag: once this clip has rendered any
+    // proxy frame, hold it (ignoring the drift gate) rather than dropping to an
+    // empty-hold while a fast fling outruns the preloader. The correct frame
+    // snaps in as soon as ensureProxyImageFrameLoaded resolves (~1 frame later).
+    if (ctx.isDraggingPlayhead && cached?.image) {
+      return this.buildImageLayerFromProxy(clip, layerIndex, cached.image, clipTime, ctx, opacityOverride, {
+        displayedMediaTime: cached.frameIndex / proxyFps,
+        targetMediaTime: clipTime,
+        previewPath: 'proxy-image-frame-hold-stale',
         proxyFrameIndex: cached.frameIndex,
       });
     }
@@ -1028,6 +1053,10 @@ export class LayerBuilderService {
   }
 
   private canUseProxyFrame(mediaFile: MediaFile, frameIndex: number, proxyFps: number): boolean {
+    if (mediaFile.proxyFormat === 'mp4-all-intra') {
+      return false;
+    }
+
     if (mediaFile.proxyStatus === 'ready') {
       return true;
     }
@@ -1044,7 +1073,7 @@ export class LayerBuilderService {
     return frameIndex < maxGeneratedFrame;
   }
 
-  private ensureProxyFrameLoaded(
+  private ensureProxyImageFrameLoaded(
     mediaFileId: string,
     frameIndex: number,
     clipTime: number,
@@ -1104,13 +1133,10 @@ export class LayerBuilderService {
     return layer;
   }
 
-  /**
-   * Build image layer from an image element (for proxy frames)
-   */
-  private buildImageLayerFromElement(
+  private buildImageLayerFromProxy(
     clip: TimelineClip,
     layerIndex: number,
-    imageElement: HTMLImageElement,
+    image: HTMLImageElement,
     localTime: number,
     ctx: FrameContext,
     opacityOverride?: number,
@@ -1123,8 +1149,8 @@ export class LayerBuilderService {
   ): Layer {
     const mediaFile = getMediaFileForClip(ctx, clip);
     const sourceMetadata = this.getLayerSourceMetadata(clip, mediaFile, {
-      width: imageElement.naturalWidth || imageElement.width,
-      height: imageElement.naturalHeight || imageElement.height,
+      width: image.naturalWidth || image.width,
+      height: image.naturalHeight || image.height,
     });
     const transform = this.transformCache.getTransform(
       `${ctx.activeCompId}_${layerIndex}`,
@@ -1132,8 +1158,6 @@ export class LayerBuilderService {
     );
     const effects = ctx.getInterpolatedEffects(clip.id, localTime);
     const colorCorrection = ctx.getInterpolatedColorCorrection(clip.id, localTime);
-
-    // Apply transition opacity override if provided
     const finalOpacity = opacityOverride !== undefined
       ? transform.opacity * opacityOverride
       : transform.opacity;
@@ -1147,7 +1171,7 @@ export class LayerBuilderService {
       blendMode: transform.blendMode as BlendMode,
       source: {
         type: 'image',
-        imageElement,
+        imageElement: image,
         ...sourceMetadata,
         mediaTime: timing?.displayedMediaTime,
         targetMediaTime: timing?.targetMediaTime,
@@ -1792,12 +1816,15 @@ export class LayerBuilderService {
     const exactFrame = proxyFrameCache.getCachedFrame(mediaFile.id, frameIndex, proxyFps);
     if (exactFrame) {
       this.proxyFramesRef.set(cacheKey, { frameIndex, image: exactFrame });
-      return this.buildNestedProxyImageLayer(baseLayer, exactFrame, mediaFile, frameIndex, nestedClipTime, 'nested-proxy-frame');
+      return this.buildNestedProxyImageLayer(baseLayer, exactFrame, mediaFile, frameIndex, nestedClipTime, 'nested-proxy-image-frame');
     }
 
-    this.ensureProxyFrameLoaded(mediaFile.id, frameIndex, nestedClipTime, proxyFps, cacheKey);
+    this.ensureProxyImageFrameLoaded(mediaFile.id, frameIndex, nestedClipTime, proxyFps, cacheKey);
 
-    const nearestFrame = proxyFrameCache.getNearestCachedFrameEntry(mediaFile.id, frameIndex, 30);
+    const nearestDistance = isDraggingPlayhead
+      ? PROXY_NEAREST_DISTANCE_SCRUB
+      : PROXY_NEAREST_DISTANCE_DEFAULT;
+    const nearestFrame = proxyFrameCache.getNearestCachedFrameEntry(mediaFile.id, frameIndex, nearestDistance);
     if (nearestFrame) {
       return this.buildNestedProxyImageLayer(
         baseLayer,
@@ -1805,7 +1832,7 @@ export class LayerBuilderService {
         mediaFile,
         nearestFrame.frameIndex,
         nestedClipTime,
-        'nested-proxy-frame-nearest',
+        'nested-proxy-image-frame-nearest',
       );
     }
 
@@ -1820,7 +1847,20 @@ export class LayerBuilderService {
         mediaFile,
         heldFrame.frameIndex,
         nestedClipTime,
-        'nested-proxy-frame-hold',
+        'nested-proxy-image-frame-hold',
+      );
+    }
+
+    // Guaranteed floor during an active drag (mirrors tryBuildProxyLayer): hold
+    // any prior proxy frame for this nested clip rather than dropping to empty.
+    if (isDraggingPlayhead && heldFrame?.image) {
+      return this.buildNestedProxyImageLayer(
+        baseLayer,
+        heldFrame.image,
+        mediaFile,
+        heldFrame.frameIndex,
+        nestedClipTime,
+        'nested-proxy-image-frame-hold-stale',
       );
     }
 
@@ -1829,7 +1869,7 @@ export class LayerBuilderService {
 
   private buildNestedProxyImageLayer(
     baseLayer: Omit<Layer, 'source'>,
-    imageElement: HTMLImageElement,
+    image: HTMLImageElement,
     mediaFile: MediaFile,
     frameIndex: number,
     targetMediaTime: number,
@@ -1840,10 +1880,10 @@ export class LayerBuilderService {
       ...baseLayer,
       source: {
         type: 'image',
-        imageElement,
+        imageElement: image,
         mediaFileId: mediaFile.id,
-        intrinsicWidth: imageElement.naturalWidth || imageElement.width,
-        intrinsicHeight: imageElement.naturalHeight || imageElement.height,
+        intrinsicWidth: image.naturalWidth || image.width,
+        intrinsicHeight: image.naturalHeight || image.height,
         mediaTime: frameIndex / proxyFps,
         targetMediaTime,
         previewPath,
@@ -1910,7 +1950,7 @@ export class LayerBuilderService {
       // Preload 60 frames
       const framesToPreload = Math.min(60, Math.ceil(proxyFps * 2));
       for (let i = 0; i < framesToPreload; i++) {
-        proxyFrameCache.getCachedFrame(mediaFile.id, frameIndex + i, proxyFps);
+        void proxyFrameCache.getFrame(mediaFile.id, (frameIndex + i) / proxyFps, proxyFps);
       }
     }
   }

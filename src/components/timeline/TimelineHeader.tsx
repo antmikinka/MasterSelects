@@ -1359,6 +1359,7 @@ function TimelineHeaderComponent({
   const audioHeaderFaderScale = showAdvancedAudioControls && audioHeaderDensity !== 'condensed'
     ? Math.max(0, Math.min(1, baseHeight / 96))
     : 1;
+  const showAudioTrackVolumeFader = showAdvancedAudioControls && audioHeaderDensity === 'full';
   const trackTypeIndex = tracks.filter((timelineTrack) => timelineTrack.type === track.type).findIndex((timelineTrack) => timelineTrack.id === track.id);
   const showTimelineTrackColor = audioLayerAdvancedMode !== false;
   const trackColor = showTimelineTrackColor ? getTimelineTrackColor(track, trackTypeIndex) : TIMELINE_TRACK_COLOR_HIDDEN;
@@ -1585,7 +1586,7 @@ function TimelineHeaderComponent({
           )}
           {showAdvancedAudioControls && (
             <div
-              className="audio-track-pan-row"
+              className={`audio-track-pan-row ${audioHeaderDensity !== 'condensed' ? 'audio-track-pan-footer' : ''}`}
               onClick={(event) => event.stopPropagation()}
               onPointerDown={(event) => event.stopPropagation()}
             >
@@ -1806,30 +1807,32 @@ function TimelineHeaderComponent({
               orientation="vertical"
               display="stereo"
             />
-            <div className="audio-track-fader-column">
-              <div
-                className="audio-track-fader-control"
-                style={{ '--audio-track-volume-unit': trackVolumeUnit.toFixed(4) } as CSSProperties & { '--audio-track-volume-unit': string }}
-              >
-                <div className="audio-track-fader-rail" aria-hidden="true">
-                  <div className="audio-track-fader-fill" />
-                  <div className="audio-track-fader-thumb" />
+            {showAudioTrackVolumeFader && (
+              <div className="audio-track-fader-column">
+                <div
+                  className="audio-track-fader-control"
+                  style={{ '--audio-track-volume-unit': trackVolumeUnit.toFixed(4) } as CSSProperties & { '--audio-track-volume-unit': string }}
+                >
+                  <div className="audio-track-fader-rail" aria-hidden="true">
+                    <div className="audio-track-fader-fill" />
+                    <div className="audio-track-fader-thumb" />
+                  </div>
+                  <input
+                    className="audio-track-fader"
+                    type="range"
+                    min="-60"
+                    max="18"
+                    step="0.5"
+                    value={trackVolumeDb}
+                    aria-label={`${track.name} volume`}
+                    title={`Volume ${trackVolumeLabel} dB. Double-click to reset.`}
+                    onChange={handleTrackVolumeChange}
+                    onDoubleClick={handleTrackVolumeReset}
+                  />
                 </div>
-                <input
-                  className="audio-track-fader"
-                  type="range"
-                  min="-60"
-                  max="18"
-                  step="0.5"
-                  value={trackVolumeDb}
-                  aria-label={`${track.name} volume`}
-                  title={`Volume ${trackVolumeLabel} dB. Double-click to reset.`}
-                  onChange={handleTrackVolumeChange}
-                  onDoubleClick={handleTrackVolumeReset}
-                />
+                <span className="audio-track-fader-value" aria-hidden="true">{trackVolumeLabel}</span>
               </div>
-              <span className="audio-track-fader-value" aria-hidden="true">{trackVolumeLabel}</span>
-            </div>
+            )}
           </div>
         )}
         {showAdvancedAudioControls && audioFxOpen && (

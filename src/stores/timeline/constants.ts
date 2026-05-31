@@ -65,9 +65,9 @@ export function calculateNativeScale(sourceWidth: number, sourceHeight: number):
 // Note: Video tracks are numbered so that the highest number is at the top (first in array)
 // This matches compositing order where higher layers render on top
 export const DEFAULT_TRACKS: TimelineTrack[] = [
-  { id: 'video-2', name: 'Video 2', type: 'video', height: 60, muted: false, visible: true, solo: false },
-  { id: 'video-1', name: 'Video 1', type: 'video', height: 60, muted: false, visible: true, solo: false },
-  { id: 'audio-1', name: 'Audio', type: 'audio', height: 40, muted: false, visible: true, solo: false },
+  { id: 'video-2', name: 'Video 2', type: 'video', height: 70, muted: false, visible: true, solo: false },
+  { id: 'video-1', name: 'Video 1', type: 'video', height: 70, muted: false, visible: true, solo: false },
+  { id: 'audio-1', name: 'Audio', type: 'audio', height: 48, muted: false, visible: true, solo: false },
 ];
 
 // Snap threshold in seconds (clips will snap when within this distance)
@@ -81,8 +81,6 @@ export const OVERLAP_RESISTANCE_PIXELS = 100;
 // Property row heights for expanded tracks
 export const PROPERTY_ROW_HEIGHT = 18;
 export const GROUP_HEADER_HEIGHT = 20;
-export const STEM_LAYER_HEADER_ROW_HEIGHT = 22;
-export const STEM_LAYER_ROW_HEIGHT = 22;
 
 // Curve editor constants
 export const CURVE_EDITOR_HEIGHT = 250;
@@ -102,7 +100,7 @@ export const MAX_ZOOM = 10000;
 
 // Track height limits
 export const MIN_TRACK_HEIGHT = 20;
-export const MAX_TRACK_HEIGHT = 200;
+export const MAX_TRACK_HEIGHT = 600;
 
 // Track header width limits
 export const DEFAULT_TRACK_HEADER_WIDTH = 210;

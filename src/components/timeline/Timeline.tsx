@@ -47,6 +47,7 @@ import { useTimelineKeyboard } from './hooks/useTimelineKeyboard';
 import { useTimelineZoom } from './hooks/useTimelineZoom';
 import { usePlayheadDrag } from './hooks/usePlayheadDrag';
 import { TimelineContextMenu } from './TimelineContextMenu';
+import { TimelineEmptyContextMenu } from './TimelineEmptyContextMenu';
 import { InOutContextMenu, type InOutContextMenuState, type InOutPointType } from './InOutContextMenu';
 import { useClipContextMenu } from './useClipContextMenu';
 import { useMarqueeSelection } from './hooks/useMarqueeSelection';
@@ -74,7 +75,7 @@ import {
   MAX_TRACK_HEADER_WIDTH,
 } from '../../stores/timeline/constants';
 import type { TimelineTrackFocusMode } from '../../stores/timeline/types';
-import type { ClipKeyframeTimeGroup, ContextMenuState, TimelineControlsProps, TimelineRulerCacheRange } from './types';
+import type { ClipDragState, ClipKeyframeTimeGroup, ContextMenuState, TimelineControlsProps, TimelineEmptyContextMenuState, TimelineRulerCacheRange } from './types';
 import { isProxyFrameCountComplete } from '../../stores/mediaStore/helpers/proxyCompleteness';
 import { parseVectorAnimationStateProperty } from '../../types/vectorAnimation';
 import { createSubcompositionFromSelection } from '../../services/timelineSubcomposition';
@@ -108,8 +109,35 @@ const TRACK_SCROLL_GLIDE_PX_PER_MS = 1.35;
 const TRACK_SCROLL_STEP_DELTA_PX = 160;
 const TRACK_SCROLL_MAX_STEPS_PER_GESTURE = 8;
 const TRACK_SCROLL_LIVE_TARGET_APPROACH = 0.68;
+const TIMELINE_RIGHT_DRAG_SCRUB_THRESHOLD_PX = 4;
+const TIMELINE_RIGHT_DRAG_CONTEXT_MENU_SUPPRESS_MS = 700;
 
 type TrackSectionKind = 'video' | 'audio';
+
+function clipDragAffectsTrack(
+  drag: ClipDragState | null,
+  trackId: string,
+  clipMap: Map<string, TimelineClipType>,
+): boolean {
+  if (!drag) return false;
+  if (drag.originalTrackId === trackId || drag.currentTrackId === trackId) return true;
+
+  const draggedClip = clipMap.get(drag.clipId);
+  if (draggedClip?.trackId === trackId) return true;
+  if (draggedClip?.linkedClipId && clipMap.get(draggedClip.linkedClipId)?.trackId === trackId) return true;
+
+  if (draggedClip?.linkedGroupId && isManualLinkedGroupId(draggedClip.linkedGroupId)) {
+    for (const clip of clipMap.values()) {
+      if (clip.linkedGroupId === draggedClip.linkedGroupId && clip.trackId === trackId) {
+        return true;
+      }
+    }
+  }
+
+  if (drag.multiSelectClipIds?.some((clipId) => clipMap.get(clipId)?.trackId === trackId)) return true;
+  if (drag.overlapClipIds?.some((clipId) => clipMap.get(clipId)?.trackId === trackId)) return true;
+  return false;
+}
 
 type TrackSectionMetrics = {
   contentHeight: number;
@@ -154,6 +182,16 @@ type TimelineSurfaceDragState = {
   startClientX: number;
   startScrollX: number;
   maxScrollX: number;
+};
+
+type TimelineRightDragScrubState = {
+  source: 'empty' | 'clip';
+  trackId?: string;
+  clipId?: string;
+  startClientX: number;
+  startClientY: number;
+  startTime: number;
+  dragging: boolean;
 };
 
 type VideoBakeRulerDragState = {
@@ -481,7 +519,6 @@ export function Timeline() {
   const { selectedKeyframeIds, clipKeyframes, expandedCurveProperties } =
     useTimelineStore(useShallow(selectKeyframeState));
   const expandedTracks = useTimelineStore(state => state.expandedTracks);
-  const expandedClipStemLayerIds = useTimelineStore(state => state.expandedClipStemLayerIds);
   const clipStemSeparationJobs = useTimelineStore(state => state.clipStemSeparationJobs);
 
   // ===========================================
@@ -505,7 +542,7 @@ export function Timeline() {
     addMathSceneClip, addMotionShapeClip, moveClip,
     updateClip, updateTextProperties, removeClip, selectClip, unlinkGroup, linkClips, unlinkClips, splitClipAtPlayhead,
     toggleClipReverse, updateClipTransform, setClipParent, generateWaveformForClip, generateSpectrogramForClip,
-    addClipEffect, convertSolidToMotionShape, rippleDeleteSelection, deleteGapAtTime,
+    addClipEffect, convertSolidToMotionShape, rippleDeleteSelection, deleteGapAtTime, deleteAllGaps,
     prepareTimelinePlacementRange, startClipStemSeparation,
   } = store;
 
@@ -694,10 +731,8 @@ export function Timeline() {
       selectedClipIds,
       clipKeyframes,
       expandedCurveProperties,
-      expandedClipStemLayerIds,
-      clipStemSeparationJobs,
     }),
-    [clipKeyframes, expandedCurveProperties, expandedClipStemLayerIds, clipStemSeparationJobs, selectedClipIds],
+    [clipKeyframes, expandedCurveProperties, selectedClipIds],
   );
   const getRenderedTrackBaseHeight = useCallback(
     (track: TimelineTrackType) => getTimelineTrackBaseHeight(track, audioDisplayMode, audioFocusMode),
@@ -842,6 +877,10 @@ export function Timeline() {
     tracks,
     isExporting,
     activeTimelineToolId,
+    selectedClipIds,
+    snappingEnabled,
+    playheadPosition,
+    markers,
     selectClip,
     applyTimelineEditOperation: store.applyTimelineEditOperation,
     setTimelineToolPreview: store.setTimelineToolPreview,
@@ -1208,7 +1247,15 @@ export function Timeline() {
 
   // Context menu state for clip right-click
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-  const handleClipContextMenu = useClipContextMenu(selectedClipIds, selectClip, setContextMenu);
+  const [emptyContextMenu, setEmptyContextMenu] = useState<TimelineEmptyContextMenuState | null>(null);
+  const timelineRightDragScrubRef = useRef<TimelineRightDragScrubState | null>(null);
+  const timelineRightDragScrubCleanupRef = useRef<(() => void) | null>(null);
+  const suppressTimelineContextMenuUntilRef = useRef(0);
+  const setClipContextMenu = useCallback((menu: ContextMenuState | null) => {
+    setEmptyContextMenu(null);
+    setContextMenu(menu);
+  }, []);
+  const openClipContextMenu = useClipContextMenu(selectedClipIds, selectClip, setClipContextMenu);
 
   // Context menu state for track header right-click
   const [trackContextMenu, setTrackContextMenu] = useState<TrackContextMenuState | null>(null);
@@ -1225,6 +1272,7 @@ export function Timeline() {
     if (isExporting) return;
 
     setContextMenu(null);
+    setEmptyContextMenu(null);
     setTrackContextMenu(null);
     setMarkerContextMenu(null);
     setInOutContextMenu({
@@ -1241,6 +1289,177 @@ export function Timeline() {
       setOutPoint(null);
     }
   }, [setInPoint, setOutPoint]);
+
+  const getTimelineTimeFromClientX = useCallback((clientX: number) => {
+    if (!timelineRef.current) return null;
+    const rect = timelineRef.current.getBoundingClientRect();
+    const x = clientX - rect.left + scrollX;
+    return Math.max(0, Math.min(duration, pixelToTime(x)));
+  }, [duration, pixelToTime, scrollX]);
+
+  const cleanupTimelineRightDragScrub = useCallback(() => {
+    timelineRightDragScrubCleanupRef.current?.();
+    timelineRightDragScrubCleanupRef.current = null;
+
+    const drag = timelineRightDragScrubRef.current;
+    timelineRightDragScrubRef.current = null;
+    if (drag?.dragging) {
+      setDraggingPlayhead(false);
+    }
+  }, [setDraggingPlayhead]);
+
+  useEffect(() => cleanupTimelineRightDragScrub, [cleanupTimelineRightDragScrub]);
+
+  const handleTimelineRightDragScrubMouseDown = useCallback((
+    e: React.MouseEvent,
+    startTime: number,
+    source: Pick<TimelineRightDragScrubState, 'source' | 'trackId' | 'clipId'>,
+  ) => {
+    if (e.button !== 2 || isExporting) return;
+
+    e.stopPropagation();
+    cleanupTimelineRightDragScrub();
+    timelineRightDragScrubRef.current = {
+      ...source,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startTime,
+      dragging: false,
+    };
+
+    const handleDocumentContextMenu = (event: MouseEvent) => {
+      const drag = timelineRightDragScrubRef.current;
+      if (!drag?.dragging && Date.now() >= suppressTimelineContextMenuUntilRef.current) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const drag = timelineRightDragScrubRef.current;
+      if (!drag) return;
+
+      const movedPx = Math.hypot(
+        event.clientX - drag.startClientX,
+        event.clientY - drag.startClientY,
+      );
+      if (!drag.dragging && movedPx < TIMELINE_RIGHT_DRAG_SCRUB_THRESHOLD_PX) return;
+
+      if (!drag.dragging) {
+        drag.dragging = true;
+        setContextMenu(null);
+        setEmptyContextMenu(null);
+        setTrackContextMenu(null);
+        setMarkerContextMenu(null);
+        setInOutContextMenu(null);
+
+        if (isPlaying) {
+          pause();
+        }
+        if (effectiveIsRamPreviewing) {
+          cancelRamPreview();
+        }
+
+        setDraggingPlayhead(true);
+        setPlayheadPosition(drag.startTime);
+      }
+
+      event.preventDefault();
+      const nextTime = getTimelineTimeFromClientX(event.clientX);
+      if (nextTime !== null) {
+        setPlayheadPosition(nextTime);
+      }
+    };
+
+    const handleMouseUp = (event: MouseEvent) => {
+      const drag = timelineRightDragScrubRef.current;
+      if (drag?.dragging) {
+        event.preventDefault();
+        suppressTimelineContextMenuUntilRef.current = Date.now() + TIMELINE_RIGHT_DRAG_CONTEXT_MENU_SUPPRESS_MS;
+        const suppressReleasedContextMenu = (contextMenuEvent: MouseEvent) => {
+          if (Date.now() >= suppressTimelineContextMenuUntilRef.current) return;
+          contextMenuEvent.preventDefault();
+          contextMenuEvent.stopPropagation();
+        };
+        document.addEventListener('contextmenu', suppressReleasedContextMenu, true);
+        window.setTimeout(() => {
+          document.removeEventListener('contextmenu', suppressReleasedContextMenu, true);
+        }, TIMELINE_RIGHT_DRAG_CONTEXT_MENU_SUPPRESS_MS);
+      }
+      cleanupTimelineRightDragScrub();
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp, { once: true });
+    document.addEventListener('contextmenu', handleDocumentContextMenu, true);
+    timelineRightDragScrubCleanupRef.current = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('contextmenu', handleDocumentContextMenu, true);
+    };
+  }, [
+    cancelRamPreview,
+    cleanupTimelineRightDragScrub,
+    effectiveIsRamPreviewing,
+    getTimelineTimeFromClientX,
+    isExporting,
+    isPlaying,
+    pause,
+    setDraggingPlayhead,
+    setPlayheadPosition,
+  ]);
+
+  const handleEmptyTimelineMouseDown = useCallback((e: React.MouseEvent, trackId: string, time: number) => {
+    handleTimelineRightDragScrubMouseDown(e, time, { source: 'empty', trackId });
+  }, [handleTimelineRightDragScrubMouseDown]);
+
+  const handleEmptyTimelineContextMenu = useCallback((e: React.MouseEvent, trackId: string, time: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (
+      timelineRightDragScrubRef.current?.dragging ||
+      Date.now() < suppressTimelineContextMenuUntilRef.current
+    ) {
+      return;
+    }
+    if (isExporting) return;
+
+    setContextMenu(null);
+    setTrackContextMenu(null);
+    setMarkerContextMenu(null);
+    setInOutContextMenu(null);
+    setEmptyContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      time,
+      trackId,
+    });
+  }, [isExporting]);
+
+  const handleClipContextMenu = useCallback((e: React.MouseEvent, clipId: string) => {
+    if (
+      timelineRightDragScrubRef.current?.dragging ||
+      Date.now() < suppressTimelineContextMenuUntilRef.current
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
+    openClipContextMenu(e, clipId);
+  }, [openClipContextMenu]);
+
+  const handleTimelineClipMouseDown = useCallback((e: React.MouseEvent, clipId: string) => {
+    if (e.button === 2) {
+      const time = getTimelineTimeFromClientX(e.clientX);
+      if (time !== null) {
+        handleTimelineRightDragScrubMouseDown(e, time, { source: 'clip', clipId });
+      }
+      return;
+    }
+
+    handleClipMouseDown(e, clipId);
+  }, [getTimelineTimeFromClientX, handleClipMouseDown, handleTimelineRightDragScrubMouseDown]);
 
   // Transcript markers visibility toggle (from store for persistence)
   const showTranscriptMarkers = useTimelineStore(s => s.showTranscriptMarkers);
@@ -2169,11 +2388,23 @@ export function Timeline() {
     videoSectionMetrics.contentHeight,
   ]);
 
-  // Performance: Memoize proxy-ready file count
-  const mediaFilesWithProxyCount = useMemo(
-    () => mediaFiles.filter((f) => f.proxyStatus === 'ready').length,
-    [mediaFiles]
-  );
+  // Performance: Memoize proxy batch status for the toolbar.
+  const proxyBatchStatus = useMemo(() => {
+    const proxyableFiles = mediaFiles.filter((file) => file.type === 'video' && Boolean(file.file));
+    const readyCount = proxyableFiles.filter((file) =>
+      file.proxyStatus === 'ready' &&
+      isProxyFrameCountComplete(file.proxyFrameCount, file.duration, file.proxyFps ?? file.fps)
+    ).length;
+    const generatingIndex = currentlyGeneratingProxyId
+      ? proxyableFiles.findIndex((file) => file.id === currentlyGeneratingProxyId) + 1
+      : 0;
+
+    return {
+      readyCount,
+      totalCount: proxyableFiles.length,
+      generatingIndex: generatingIndex > 0 ? generatingIndex : 0,
+    };
+  }, [currentlyGeneratingProxyId, mediaFiles]);
 
   // Keyboard shortcuts - extracted to hook
   useTimelineKeyboard({
@@ -2224,7 +2455,6 @@ export function Timeline() {
 
   // Layer sync - extracted to hook
   useLayerSync({
-    timelineRef,
     playheadPosition,
     clips,
     tracks,
@@ -2234,8 +2464,6 @@ export function Timeline() {
     isRamPreviewing: effectiveIsRamPreviewing,
     clipKeyframes,
     clipDrag,
-    zoom,
-    scrollX,
     clipMap,
     videoTracks,
     audioTracks,
@@ -2534,12 +2762,30 @@ export function Timeline() {
             clip.linkedGroupId === draggedClip.linkedGroupId &&
             clip.id !== draggedClip.id
           ));
+      const isInMultiSelectDrag =
+        !!clipDrag?.multiSelectClipIds?.includes(clip.id) &&
+        clipDrag.multiSelectTimeDelta !== undefined;
+      const isOverlapCollisionTarget = !!clipDrag?.overlapClipIds?.includes(clip.id);
+      const clipDragForClip =
+        clipDrag && (isDragging || isLinkedToDragging || isInMultiSelectDrag || isOverlapCollisionTarget)
+          ? clipDrag
+          : null;
       const isLinkedToTrimming =
         clipTrim &&
         !clipTrim.altKey &&
         trimmedClip &&
         (clip.linkedClipId === clipTrim.clipId ||
           trimmedClip.linkedClipId === clip.id);
+      // Multi-select trim: a selected clip (not the dragged one) that should resize
+      // live alongside it. Only the default edge-trim drives a multi-clip trim.
+      const isTrimFollower =
+        !!clipTrim &&
+        !isTrimming &&
+        !isLinkedToTrimming &&
+        (activeTimelineToolId === 'select' || activeTimelineToolId === 'edge-trim') &&
+        selectedClipIds.size > 1 &&
+        selectedClipIds.has(clipTrim.clipId) &&
+        selectedClipIds.has(clip.id);
 
       // Use mediaFiles from hook state instead of getState() for render-time lookups
       const mediaFile = mediaFiles.find(
@@ -2576,7 +2822,9 @@ export function Timeline() {
           isFading={isFading}
           isLinkedToDragging={!!isLinkedToDragging}
           isLinkedToTrimming={!!isLinkedToTrimming}
-          clipDrag={clipDrag}
+          isTrimFollower={isTrimFollower}
+          isClipDragActive={clipDrag !== null}
+          clipDrag={clipDragForClip}
           clipTrim={clipTrim}
           clipFade={clipFade}
           zoom={zoom}
@@ -2590,7 +2838,7 @@ export function Timeline() {
           audioProxyProgress={mediaFile?.audioProxyProgress || 0}
           showTranscriptMarkers={showTranscriptMarkers}
           snappingEnabled={snappingEnabled}
-          onMouseDown={(e) => handleClipMouseDown(e, clip.id)}
+          onMouseDown={(e) => handleTimelineClipMouseDown(e, clip.id)}
           onDoubleClick={(e) => handleClipDoubleClick(e, clip.id)}
           onContextMenu={(e) => handleClipContextMenu(e, clip.id)}
           onTrimStart={(e, edge) => handleTrimStart(e, clip.id, edge)}
@@ -2617,6 +2865,7 @@ export function Timeline() {
       clipMap,
       clips,
       selectedClipIds,
+      activeTimelineToolId,
       clipDrag,
       clipTrim,
       clipFade,
@@ -2627,7 +2876,7 @@ export function Timeline() {
       mediaFiles,
       showTranscriptMarkers,
       snappingEnabled,
-      handleClipMouseDown,
+      handleTimelineClipMouseDown,
       handleClipDoubleClick,
       handleClipContextMenu,
       handleTrimStart,
@@ -2731,10 +2980,14 @@ export function Timeline() {
       event.preventDefault();
     }
 
+    if (clipDrag || clipTrim) {
+      return;
+    }
+
     const rect = event.currentTarget.getBoundingClientRect();
     const nextPointerX = Math.round(event.clientX - rect.left);
     setTimelinePointerX(previousPointerX => previousPointerX === nextPointerX ? previousPointerX : nextPointerX);
-  }, [setScrollX]);
+  }, [clipDrag, clipTrim, setScrollX]);
 
   const handleTimelinePointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const drag = timelineSurfaceDragRef.current;
@@ -3090,6 +3343,10 @@ export function Timeline() {
                     onContextMenu={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
+                      setContextMenu(null);
+                      setEmptyContextMenu(null);
+                      setMarkerContextMenu(null);
+                      setInOutContextMenu(null);
                       setTrackContextMenu({
                         x: e.clientX,
                         y: e.clientY,
@@ -3174,6 +3431,9 @@ export function Timeline() {
                   const isExpanded = !sectionCollapsed && isTrackExpandedForRender(track.id);
                   const baseHeight = getSectionTrackBaseHeight(track, sectionKind);
                   const dynamicHeight = getSectionTrackHeight(track, sectionKind);
+                  const trackClipDrag = clipDragAffectsTrack(clipDrag, track.id, clipMap)
+                    ? clipDrag
+                    : null;
 
                   return (
                     <TimelineTrack
@@ -3194,14 +3454,17 @@ export function Timeline() {
                       selectedClipIds={selectedClipIds}
                       selectedKeyframeIds={selectedKeyframeIds}
                       activeTimelineToolId={activeTimelineToolId}
-                      clipDrag={clipDrag}
+                      isClipDragActive={clipDrag !== null}
+                      clipDrag={trackClipDrag}
                       clipTrim={clipTrim}
                       externalDrag={externalDrag}
                       zoom={zoom}
                       scrollX={scrollX}
                       timelineRef={timelineRef}
-                      onClipMouseDown={handleClipMouseDown}
+                      onClipMouseDown={handleTimelineClipMouseDown}
                       onClipContextMenu={handleClipContextMenu}
+                      onEmptyMouseDown={handleEmptyTimelineMouseDown}
+                      onEmptyContextMenu={handleEmptyTimelineContextMenu}
                       onTrimStart={handleTrimStart}
                       onDrop={(e) => handleCombinedDrop(e, track.id)}
                       onDragOver={(e) => handleCombinedDragOver(e, track.id)}
@@ -3391,7 +3654,9 @@ export function Timeline() {
     outPoint,
     proxyEnabled,
     currentlyGeneratingProxyId,
-    mediaFilesWithProxy: mediaFilesWithProxyCount,
+    mediaFilesWithProxy: proxyBatchStatus.readyCount,
+    mediaFilesProxyTotal: proxyBatchStatus.totalCount,
+    generatingProxyIndex: proxyBatchStatus.generatingIndex,
     showTranscriptMarkers,
     thumbnailsEnabled,
     waveformsEnabled,
@@ -3704,6 +3969,7 @@ export function Timeline() {
                   switchMotionClass={timelineSwitchMotionClass}
                   renderMode="trackOverlays"
                   clipDrag={clipDrag}
+                  clipTrim={clipTrim}
                   isRamPreviewing={effectiveIsRamPreviewing}
                   ramPreviewProgress={effectiveRamPreviewProgress}
                   playheadPosition={playheadPosition}
@@ -3779,6 +4045,10 @@ export function Timeline() {
                 onContextMenu={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
+                  setContextMenu(null);
+                  setEmptyContextMenu(null);
+                  setTrackContextMenu(null);
+                  setInOutContextMenu(null);
                   setMarkerContextMenu({
                     x: e.clientX,
                     y: e.clientY,
@@ -3864,6 +4134,21 @@ export function Timeline() {
         hasClipboardColor={hasClipboardColor}
         setMulticamDialogOpen={setMulticamDialogOpen}
         showInExplorer={showInExplorer}
+      />
+
+      <TimelineEmptyContextMenu
+        menu={emptyContextMenu}
+        onClose={() => setEmptyContextMenu(null)}
+        onEraseGap={(time, trackId) => {
+          deleteGapAtTime(time, [trackId]);
+        }}
+        onEraseLayerGaps={(time, trackId) => {
+          deleteAllGaps([trackId], time);
+        }}
+        onEraseAllGaps={() => {
+          deleteAllGaps();
+        }}
+        onFitCompToWindow={handleFitToWindow}
       />
 
       <TrackContextMenu

@@ -51,18 +51,18 @@ Canvas-backed sources such as text, solids, Lottie, and Rive are re-rendered for
 - Uses `ParallelDecodeManager` when multiple clips are present in the export range.
 - Parses source media with MP4Box.
 - Prefetches frames ahead of the render position.
-- Can fall back to HTMLVideo-based precise export on specific decode or file-size failures.
+- Is a strict WebCodecs path. It does not auto-switch to HTMLVideo Precise when decoding fails or source files are too large.
 
 ### Precise Mode
 
 - Uses detached `HTMLVideoElement` instances and browser seeking.
 - Tries to wait for ready state and a fresh frame before export captures.
-- Is slower than fast mode, but it is the compatibility fallback when fast mode fails.
+- Is slower than fast mode, but it is the explicit compatibility choice for difficult files or timing cases.
 
-### Automatic Fallbacks
+### Strict Fast-Mode Refusals
 
-- Large source media can bypass fast mode and switch directly to precise mode.
-- Fast mode also retries precise mode on known decode / buffer / unsupported-file failures.
+- Large source media is refused by fast mode with an error that tells the user to select HTMLVideo Precise explicitly.
+- Decode, buffer, and unsupported-file failures stay in the selected workflow. The exporter logs the failure and does not retry in another workflow automatically.
 
 ### Current File-Size Thresholds
 

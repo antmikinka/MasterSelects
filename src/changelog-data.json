@@ -2,6 +2,13 @@
   {
     "date": "2026-05-29",
     "type": "improve",
+    "title": "MasterSelects 2.0.6",
+    "description": "Timeline editing now has clearer perceptual audio waveforms, right-drag playhead scrubbing over empty space and clips, mouse-anchored faster wheel zoom, wider audio header pan controls, refreshed built-in Video/Audio Edit layouts, empty-space gap cleanup actions, and more reliable direct timeline drops for newly imported media.",
+    "section": "Release"
+  },
+  {
+    "date": "2026-05-29",
+    "type": "improve",
     "title": "MasterSelects 2.0.5",
     "description": "Dock split dragging now coalesces raw mouse movement into animation-frame updates and commits the final layout once on release, making Audio Mixer and Properties resizing feel much more responsive. Audio track and master selections also open scoped Properties tabs, with synchronized mixer/timeline focus and expanded debug bridge profiling for dock and timeline interactions.",
     "section": "Release"

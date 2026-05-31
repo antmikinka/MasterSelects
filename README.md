@@ -2,24 +2,24 @@
 
 # MasterSelects
 
-<h3>Browser-based Video Compositor, Vector Animation & 3D Engine</h3>
+<h3>Local-first Media Editor for Video, Audio, Vector Animation & 3D</h3>
 
 <br>
 
 <table><tr><td align="center" style="border:none;background:#0d1117;">
-<h1>&#9889; ~1.5 MB <sub>gzip</sub></h1>
-<sup><b>initial load</b></sup>
+<h1>&#9889; ~2 MB <sub>compressed</sub></h1>
+<sup><b>compressed editor shell</b></sup>
 </td></tr></table>
 
 
 <p>
-  GPU-first editing with <b>32 effects</b>, <b>37 blend modes</b>, <b>79 AI tools</b>, <b>native WebGPU 3D</b>, and only <b>15 runtime dependencies</b>.<br>
-  Built from scratch in <b>2,700+ lines of WGSL</b> and <b>165k lines of TypeScript</b>.<br>
-  Import <b>.lottie, .riv, Lottie JSON, OBJ, glTF, GLB, PLY, SPLAT, KSPLAT, SPZ, SOG, LCC</b> assets and play <b>PLY / GLB sequences</b> directly on the timeline. Created with only one max supscription for a coding agent, january till now.
+  GPU-first media editing with <b>33 effects</b>, <b>37 blend modes</b>, <b>23 audio FX</b>, <b>stem separation</b>, <b>native WebGPU 3D</b>, and <b>19 direct runtime dependencies</b>.<br>
+  Built from scratch in <b>4.1k+ lines of WGSL</b> and <b>330k+ lines of TypeScript/TSX app code</b>.<br>
+  Import <b>.lottie, .riv, Lottie JSON, OBJ, glTF, GLB, PLY, SPLAT, KSPLAT, SPZ, SOG, LCC</b> assets and play <b>PLY / GLB sequences</b> directly on the timeline. Built with one coding-agent subscription from January to now.
 </p>
 
 <p>
-  <a href="https://github.com/Sportinger/MasterSelects/releases"><img src="https://img.shields.io/badge/version-2.0.3-blue.svg" alt="Version"></a>
+  <a href="https://github.com/Sportinger/MasterSelects/releases"><img src="https://img.shields.io/badge/version-2.0.6-blue.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
   <a href="https://app.fossa.com/projects/custom%2b61097%2fmasterselects"><img src="https://app.fossa.com/api/projects/custom%2b61097%2fmasterselects.svg?type=shield" alt="FOSSA Status"></a>
 </p>
@@ -54,6 +54,7 @@ Decoding depends on what the **browser** supports — the container is just the 
 <tr><td><b>Video files</b></td><td>MP4, WebM, MOV, AVI, MKV, WMV, M4V, FLV</td></tr>
 <tr><td><b>Video codecs</b></td><td>H.264 (AVC), H.265 (HEVC)¹, VP8, VP9, AV1</td></tr>
 <tr><td><b>Audio files</b></td><td>WAV, MP3, OGG, FLAC, AAC, M4A, WMA, AIFF, OPUS</td></tr>
+<tr><td><b>Audio stems</b></td><td>On-device Demucs/HTDemucs separation creates Vocals, Drums, Bass, and Other stems as project-local WAV media when the project write path is available</td></tr>
 <tr><td><b>Image</b></td><td>PNG, JPG/JPEG, WebP, GIF, BMP, SVG</td></tr>
 <tr><td><b>Vector animation</b></td><td><code>.lottie</code> packages, <code>.riv</code> files, and Lottie JSON files (content-sniffed)</td></tr>
 <tr><td><b>3D Models</b></td><td>OBJ, glTF, GLB - rendered through the native WebGPU shared-scene path</td></tr>
@@ -65,13 +66,13 @@ Decoding depends on what the **browser** supports — the container is just the 
 <tr><td><b>FFmpeg codecs</b></td><td>ProRes, DNxHR, FFV1, UTVideo, MJPEG</td></tr>
 <tr><td><b>Video codecs</b></td><td>H.264, H.265¹, VP9, AV1 — GPU-accelerated via WebCodecs</td></tr>
 <tr><td><b>Image export</b></td><td>PNG, JPG/JPEG, WebP, BMP (current playhead frame)</td></tr>
-<tr><td><b>Audio-only export</b></td><td>AAC or OGG/Opus depending on browser codec support</td></tr>
+<tr><td><b>Audio-only export</b></td><td>WAV, plus AAC or OGG/Opus depending on browser codec support</td></tr>
 <tr><td><b>Interchange</b></td><td>FCPXML (Final Cut Pro / DaVinci Resolve)</td></tr>
 </table>
 
 ¹ H.265 decode/encode depends on OS & hardware — full support on Windows, partial on macOS/Linux.
 
-> **MOV** files work because they share the same ISO BMFF container as MP4 — any MOV with H.264/H.265 inside plays fine. **MKV** works if it contains browser-decodable codecs (H.264, VP9, etc.). Files with unsupported codecs (e.g. ProRes in MOV) fall back to the Native Helper decode path when available.
+> **MOV** files work because they share the same ISO BMFF container as MP4 — any MOV with H.264/H.265 inside plays fine. **MKV** works if it contains browser-decodable codecs (H.264, VP9, etc.). Native Helper decode is an opt-in companion path for browser gaps when the helper is connected and the source path is resolvable; unsupported codecs do not automatically switch to it.
 
 ---
 
@@ -81,17 +82,19 @@ Most browser-based video editors share a pattern: Canvas 2D compositing, heavywe
 
 **GPU-first architecture.** Preview, scrubbing, and export all run through the same **WebGPU ping-pong compositor**. Video textures are imported as `texture_external` (**zero-copy**, no CPU roundtrip). **37 blend modes**, 3D rotation, and inline color effects all execute in a **single WGSL composite shader** per layer. The 3D layer system now renders through the native WebGPU shared-scene path for 3D planes, primitive meshes, 3D text, OBJ/glTF/GLB models, camera clips, and gaussian splats - no GSAP, no Canvas 2D fallback in the hot path.
 
-**Current startup footprint.** The production app shell is currently about **1.5 MB gzip** on first load. The largest contributors are the native 3D / gaussian-splat render path, browser-side media parsing/runtime code, and AI/media helper modules. Reducing the initial bundle again is an active optimization target.
+**Current startup footprint.** A fresh production build currently loads an editor shell of about **2 MB compressed** on the main editor start path. The largest contributors are the native 3D / gaussian-splat render path, browser-side media parsing/runtime code, and AI/media helper modules. Reducing the initial bundle again is an active optimization target.
 
 **Zero-copy export pipeline.** Frames are captured as `new VideoFrame(offscreenCanvas)` directly from the GPU canvas. **No `readPixels()`**, no `getImageData()`, no staging buffers in the default path. The GPU renders, **WebCodecs encodes**. That's it.
 
 **3-tier scrubbing cache.** **300 GPU textures in VRAM** for instant scrub (Tier 1), per-video last-frame cache for seek transitions (Tier 2), and a **900-frame RAM Preview** with CPU/GPU promotion (Tier 3). When the cache is warm, **scrubbing doesn't decode at all**.
 
-**16 runtime dependencies.** React/React DOM, Zustand, MediaBunny, mp4box, PlayCanvas / splat-transform helpers, dotLottie, Rive WASM, HuggingFace Transformers, ONNX Runtime, SoundTouch, WebGPU types, plus an **experimental FFmpeg WASM path**. **Everything else is custom-built from scratch**: the WebGPU compositor, all 32 effect shaders, the keyframe animation system, the export engine, the audio mixer, the text renderer, the mask engine, the video scope renderers, the dock/panel system, the timeline UI, and the native shared 3D scene path. Zero runtime abstraction layers between your timeline and the GPU.
+**Audio workstation in the timeline.** Audio Focus turns the timeline into a detailed waveform and spectrogram editor with non-destructive region edits, gain fades, silence removal, repair operations, spectral selections, image-in-spectrum layers, recording, and bake/unbake. The docked Audio Mixer adds track/master strips, Peak/RMS meters, stereo phase correlation, track sends rendered into the master return mix, FX stacks, limiter controls, and export preflight. Stem separation runs a browser ONNX Demucs/HTDemucs path and publishes Vocals, Drums, Bass, and Other stems as normal WAV media when the project media write succeeds, with artifact-backed fallback state when it cannot.
 
-**Nested composition rendering.** Compositions within compositions, each with their own resolution. Rendered to **pooled GPU textures** with frame-level caching, composited in the parent's ping-pong pass, all in a **single `device.queue.submit()`**.
+**19 direct runtime dependencies.** React/React DOM, Zustand, MediaBunny, mp4box, PlayCanvas / splat-transform helpers, dotLottie, Rive WASM, HuggingFace Transformers, ONNX Runtime, SoundTouch, FFmpeg WASM packages, fflate, gifenc, Tabler icons, and WebGPU types. **Everything else is custom-built from scratch**: the WebGPU compositor, all 33 GPU effects, the 23-effect audio registry, the keyframe animation system, the export engine, the audio mixer, the text renderer, the mask engine, the video scope renderers, the dock/panel system, the timeline UI, and the native shared 3D scene path. Zero runtime abstraction layers between your timeline and the GPU.
 
-**On-device AI.** SAM2 (Segment Anything Model 2) runs entirely in-browser via ONNX Runtime. Click to select objects in the preview, propagate masks across frames. No server, no API key, no upload. ~220MB model loaded on demand.
+**Nested composition rendering.** Compositions within compositions, each with their own resolution. The normal 2D/nested compositor path renders them to **pooled GPU textures** with frame-level caching and composites them in the parent's ping-pong pass. Native 3D and gaussian-splat auxiliary paths can submit their own GPU work when those layer types are active.
+
+**On-device AI and analysis.** SAM2 (Segment Anything Model 2) runs entirely in-browser via ONNX Runtime. Click to select objects in the preview, propagate masks across frames. Stem separation writes project-local WAV media, while local transcription, waveform pyramids, spectrogram tiles, loudness envelopes, beat/onset maps, and frequency/phase summaries are generated as project artifacts instead of being baked into timeline clips. Large neural models are loaded on demand.
 
 ---
 
@@ -99,9 +102,9 @@ Most browser-based video editors share a pattern: Canvas 2D compositing, heavywe
 
 No Adobe subscription, no patience for cracks, and every free online editor felt like garbage. I wanted something that actually works: fast in the browser, GPU-first, built for real editing instead of templates, and open enough that AI can steer the timeline instead of just suggesting ideas.
 
-**The vision:** an editor where AI can directly operate the tool. The built-in chat connects to OpenAI/Cloud or a local Lemonade Server and exposes **79 exported editing tools**. External agents can steer the running editor over the local/native HTTP bridge, and in development the Vite bridge still exists too. Live outputs still matter too - I've been doing video art for 16 years, so multi-output routing was never optional.
+**The vision:** an editor where AI can directly operate the tool. The built-in chat connects to OpenAI/Cloud or a local Lemonade Server and exposes **86 exported model tools** across timeline, media, editing, playback, stats, and node-workspace actions. External agents can steer the running editor over the local/native HTTP bridge, and in development the Vite bridge still exists too. Live outputs still matter too - I've been doing video art for 16 years, so multi-output routing was never optional.
 
-Built with Claude as my pair-programmer. Every feature gets debugged, refactored, and beaten into shape until it does what I need. ~165k lines of TypeScript, ~2,700 lines of WGSL, and a Rust native helper for the stuff browsers still can't do cleanly.
+Built with Claude as my pair-programmer. Every feature gets debugged, refactored, and beaten into shape until it does what I need. ~330k lines of TypeScript/TSX app code, ~4.1k lines of WGSL shader files, and a Rust native helper for the stuff browsers still can't do cleanly.
 
 ---
 
@@ -109,10 +112,10 @@ Built with Claude as my pair-programmer. Every feature gets debugged, refactored
 
 MasterSelects is being built around the idea that AI should be able to *do the edit*, not just talk about it.
 
-- **Built-in editor chat:** OpenAI/Cloud or local Lemonade chat, compact provider/model menus, project-saved system prompts, and direct access to 79 exported timeline/media/editing tools
+- **Built-in editor chat:** OpenAI/Cloud or local Lemonade chat, compact provider/model menus, project-saved system prompts, and direct access to 86 exported timeline/media/editing and diagnostics tools
 - **Local Lemonade provider:** OpenAI-compatible Lemonade Server support for local chat models such as `gemma4-it-e2b-FLM`; model discovery comes from `/models`, and the endpoint is restricted to loopback hosts
 - **External agent bridge:** Claude Code or any other local agent can drive the running editor via the Native Helper HTTP bridge, and in development the same tool surface is also available through the Vite bridge and `window.aiTools`
-- **AI video and image generation:** Classic AI Video plus FlashBoard route through Kie.ai, hosted cloud, and PiAPI-backed catalogs depending on account and key setup
+- **AI video, image, and audio generation:** FlashBoard routes through Kie.ai, hosted cloud, ElevenLabs, Suno, EvoLink, and legacy PiAPI-compatible catalogs depending on account and key setup
 - **Experimental multicam AI:** Claude/Anthropic generates edit decision lists for the multicam workflow
 - **On-device AI:** SAM2 segmentation in-browser via ONNX Runtime, MatAnyone2 via Native Helper, plus local Whisper transcription via Transformers.js
 
@@ -134,22 +137,23 @@ This requires the Native Helper to be running, a MasterSelects editor tab to be 
 | Feature | Description |
 |---|---|
 | [**Multi-track Timeline**](docs/Features/Timeline.md) | Cut, copy, paste, multi-select, JKL shuttle, nested compositions |
-| [**32 GPU Effects**](docs/Features/Effects.md) | Color correction, blur, distort, stylize, keying - all real-time |
+| [**33 GPU Effects**](docs/Features/Effects.md) | Color correction, blur, distort, stylize, keying - all real-time |
 | [**Video Scopes**](docs/Features/UI-Panels.md#video-scopes-panels) | GPU-accelerated Histogram, Vectorscope, Waveform monitor |
 | [**Keyframe Animation**](docs/Features/Keyframes.md) | Bezier curves, copy/paste, tick marks, 5 easing modes |
 | [**Vector Masks**](docs/Features/Masks.md) | Pen tool, edge dragging, feathering, multiple masks per clip |
 | [**SAM2 Segmentation**](docs/Features/AI-Integration.md) | AI object selection in preview - click to mask, propagate across frames |
 | [**Transitions**](docs/Features/UI-Panels.md#transitions-panel) | Crossfade transitions with GPU-accelerated rendering *(experimental)* |
-| [**AI Integration**](docs/Features/AI-Integration.md) | Built-in OpenAI/Cloud or local Lemonade chat, 79 exported tool-callable edit actions, and local/native bridges for external agents |
-| [**FlashBoard**](docs/Features/FlashBoard.md) | Node-based AI canvas for text-to-video, image-to-video, and image generation |
+| [**AI Integration**](docs/Features/AI-Integration.md) | Built-in OpenAI/Cloud or local Lemonade chat, 86 exported tool-callable edit/debug actions, and local/native bridges for external agents |
+| [**FlashBoard**](docs/Features/FlashBoard.md) | Media Panel generation tray for text-to-video, image-to-video, images, speech, and music |
 | [**Multicam AI**](docs/Features/Multicam-AI.md) | Sync cameras, transcribe footage, and generate Claude-powered multicam EDLs *(experimental)* |
 | [**Export Pipeline**](docs/Features/Export.md) | WebCodecs Fast/Precise, FFmpeg intermediates, image/audio-only export, FCPXML, and project-persistent presets |
-| [**Live EQ & Audio**](docs/Features/Audio.md) | 10-band parametric EQ with real-time Web Audio preview |
+| [**Audio Workstation**](docs/Features/Audio.md) | Audio Focus, detailed waveforms and spectrograms, 23 Audio FX, track sends into the master return mix, stem separation, recording, and export preflight |
 | [**Download Panel**](docs/Features/Download-Panel.md) | YouTube, TikTok, Instagram, Twitter/X, Vimeo, and other yt-dlp-supported sites via Native Helper |
 | [**Vector Animation**](docs/Features/Vector-Animation.md) | `.lottie`, `.riv`, and Lottie JSON clips with bounce playback, render resolution overrides, state-machine keyframes, Rive data binding, and preview/export |
 | [**Text & Solids**](docs/Features/Text-Clips.md) | 50 Google Fonts, stroke, shadow, and solid color clips |
 | [**Proxy System**](docs/Features/Proxy-System.md) | GPU-accelerated proxies with resume and cache indicator |
 | [**Output Manager**](docs/Features/Preview.md) | Multi-window outputs, source routing, corner pin warping, slice masks |
+| [**Signal IR**](docs/Features/Signal-IR.md) | Universal import layer for files that become binary, table, model, splat, or text-summary signals |
 | [**Slot Grid**](docs/Features/Slot-Grid.md) | Resolume-style 12x4 grid with multi-layer live playback and slot-clip trims |
 | [**Preview & Playback**](docs/Features/Preview.md) | RAM Preview, transform handles, multiple render targets |
 | [**Project Storage**](docs/Features/Project-Persistence.md) | Local folders, raw media auto-copy, continuous save by default, interval mode, backups |
@@ -223,6 +227,7 @@ This is alpha software. Features get added fast, things break.
 - FFmpeg WASM export is still work in progress
 - Multicam AI is experimental
 - Transitions are experimental
+- Stem separation downloads a large ONNX model on first use and depends on WebGPU/WASM runtime performance
 - Firefox project storage requires the Native Helper backend
 - Video downloads require Native Helper; the Windows MSI bundles yt-dlp, while source/non-Windows installs need yt-dlp beside the helper or on PATH
 - Audio waveforms may not display for some video formats
@@ -235,10 +240,10 @@ If something breaks, refresh. If it's still broken, [open an issue](https://gith
 ## Tech Stack
 
 - **Frontend:** React 19, TypeScript, Zustand, Vite 7.3
-- **Rendering:** WebGPU + 2,700+ lines of WGSL shaders
+- **Rendering:** WebGPU + 4.1k+ lines of WGSL shader files
 - **Video:** WebCodecs, MediaBunny, mp4box, HTMLVideo fallback, and experimental FFmpeg WASM export path
-- **Audio:** Web Audio API with 10-band live EQ, element-synced playback, drift correction, and waveform extraction
-- **AI:** Built-in OpenAI/Cloud or local Lemonade editor chat with 79 exported tools, Native Helper HTTP bridge for Claude Code / external agents, Claude/Anthropic for experimental multicam EDLs, SAM2 via ONNX Runtime, MatAnyone2 via Native Helper, local Whisper via Hugging Face Transformers, and Kie.ai / hosted cloud / PiAPI-backed generation flows
+- **Audio:** Web Audio API, AudioWorklet recording, 23 registry-backed Audio FX, flexible EQ, track sends rendered into the master mix, stem separation through ONNX Runtime, artifact-backed waveform/spectrogram/loudness/beat/frequency analysis, and export preflight
+- **AI:** Built-in OpenAI/Cloud or local Lemonade editor chat with 86 exported model tools, Native Helper HTTP bridge for Claude Code / external agents, Claude/Anthropic for experimental multicam EDLs, SAM2 via ONNX Runtime, MatAnyone2 via Native Helper, local Whisper via Hugging Face Transformers, and Kie.ai / hosted cloud / ElevenLabs / Suno / EvoLink / PiAPI-compatible generation flows
 - **Native:** Rust helper for Firefox storage backend, native decode/encode, and bundled/system yt-dlp downloads
 - **Storage:** File System Access API on Chrome, Native Helper backend on Firefox, IndexedDB, local project folders with raw media
 
@@ -309,16 +314,28 @@ src/
 │   ├── audio/           # AudioMixer, AudioEncoder, TimeStretch
 │   ├── ffmpeg/          # FFmpegBridge, codecs
 │   ├── pipeline/        # CompositorPipeline, EffectsPipeline, OutputPipeline, SlicePipeline
+│   ├── scene/           # Shared-scene 3D runtime
+│   ├── native3d/        # Native WebGPU 3D renderer helpers
+│   ├── gaussian/        # Gaussian splat loading/render support
 │   ├── texture/         # TextureManager, ScrubbingCache, MaskTextureManager
 │   ├── managers/        # CacheManager, ExportCanvasManager, OutputWindowManager
 │   ├── analysis/        # Histogram, Vectorscope, Waveform scopes
 │   ├── video/           # VideoFrameManager
 │   ├── stats/           # PerformanceStats
 │   └── structuralSharing/ # SnapshotManager for undo/redo
-├── effects/             # 32 GPU effects (color/, blur/, distort/, stylize/, keying/)
+├── effects/             # 33 GPU effects (color/, blur/, distort/, stylize/, keying/)
 ├── transitions/         # Transition definitions (crossfade)
+├── artifacts/           # Content-addressed artifact storage
+├── importers/           # Universal media importers
+├── signals/             # Signal IR contracts and adapters
+├── runtime/             # Runtime renderer adapters
+├── extensions/          # Extension/provider integration points
+├── marketing/           # Public/landing surfaces
+├── routing/             # Route-level app shells
+├── styles/              # Shared styles
+├── shims/               # Browser/runtime shims
 ├── services/            # Audio, AI, Project, NativeHelper, Logger, LayerBuilder, MediaRuntime
-│   ├── aiTools/         # 79 exported AI tool definitions + handlers
+│   ├── aiTools/         # 86 exported AI tool definitions + handlers
 │   ├── sam2/            # SAM2 model manager + service
 │   ├── project/         # Project persistence, save/load
 │   ├── nativeHelper/    # Native decoder + WebSocket client
@@ -340,7 +357,8 @@ tools/
 │   └── src/             # WebSocket server, decode/encode sessions
 ├── ffmpeg-build/        # FFmpeg build scripts
 ├── ffmpeg-wasm-build/   # FFmpeg WASM build configuration
-└── qwen3vl-server/      # Qwen3 VL server for scene description
+├── qwen3vl-server/      # Qwen3 VL server for scene description
+└── visitor-tray/        # Windows tray notifier for hosted visit events
 ```
 
 </details>
@@ -352,7 +370,7 @@ tools/
 
 [![FOSSA Status](https://app.fossa.com/api/projects/custom%2b61097%2fmasterselects.svg?type=large)](https://app.fossa.com/projects/custom%2b61097%2fmasterselects)
 
-The linked FOSSA report tracks direct and transitive dependencies across npm, Cargo, and pip. The current npm runtime surface in `package.json` has **15 direct runtime dependencies**.
+The linked FOSSA report tracks direct and transitive dependencies across npm, Cargo, and pip. The current npm runtime surface in `package.json` has **19 direct runtime dependencies**.
 
 | Category | Count | Status |
 |----------|-------|--------|

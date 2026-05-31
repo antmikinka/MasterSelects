@@ -5,6 +5,7 @@ import type {
   CompositionTimelineData,
   GaussianSplatSequenceData,
   MediaFileAudioAnalysisRefs,
+  MediaFileStemInfo,
   ModelSequenceData,
   TranscriptStatus,
   TranscriptWord,
@@ -44,6 +45,7 @@ export type MediaType =
 
 // Proxy status for video files
 export type ProxyStatus = 'none' | 'generating' | 'ready' | 'error';
+export type ProxyFormat = 'jpeg-sequence' | 'mp4-all-intra';
 
 export type SlotDeckStatus =
   | 'cold'
@@ -107,6 +109,7 @@ export interface MediaFile extends MediaItem {
   bitrate?: number;      // bits per second
   hasAudio?: boolean;    // Does video have audio tracks?
   audioAnalysisRefs?: MediaFileAudioAnalysisRefs;
+  stemInfo?: MediaFileStemInfo;
   waveform?: number[];
   waveformChannels?: number[][];
   waveformStatus?: 'idle' | 'generating' | 'ready' | 'skipped' | 'error';
@@ -121,6 +124,7 @@ export interface MediaFile extends MediaItem {
   proxyProgress?: number;
   proxyFrameCount?: number;
   proxyFps?: number;
+  proxyFormat?: ProxyFormat;
   hasProxyAudio?: boolean;
   audioProxyStatus?: ProxyStatus;
   audioProxyProgress?: number;

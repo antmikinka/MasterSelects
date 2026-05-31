@@ -42,6 +42,7 @@ import type {
   SpectralImageLayer,
   VideoBakeRegion,
   ClipAudioStemState,
+  AudioStemKind,
 } from '../../types';
 import type { MidiNote, MidiInstrument } from '../../types/midiClip';
 import type { MotionColor, MotionLayerDefinition, ShapePrimitive } from '../../types/motionDesign';
@@ -383,9 +384,8 @@ export interface TimelineState {
   showAudioRegionEditMarkers: boolean;
   showTranscriptMarkers: boolean;
 
-  // Stem separation transient UI/job state. Persistent stem state lives on clips.
+  // Stem separation transient job state plus lightweight completed stem choices.
   clipStemSeparationJobs: Record<string, ClipStemSeparationJobState>;
-  expandedClipStemLayerIds: Set<string>;
 
   // Keyframe animation state
   clipKeyframes: Map<string, Keyframe[]>;
@@ -752,6 +752,7 @@ export interface TimelineEditOperationActions {
   ) => TimelineEditResult;
   rippleDeleteSelection: (clipIds?: string[]) => TimelineEditResult;
   deleteGapAtTime: (time: number, trackIds?: string[]) => TimelineEditResult;
+  deleteAllGaps: (trackIds?: string[], startTime?: number) => TimelineEditResult;
   trimSelectedClipEdgeToPlayhead: (edge: 'start' | 'end') => TimelineEditResult;
   rippleTrimSelectedClipEdgeToPlayhead: (edge: 'start' | 'end') => TimelineEditResult;
   prepareTimelinePlacementRange: (
@@ -850,14 +851,23 @@ export interface ClipStemSeparationJobState {
   jobId: string;
   clipId: string;
   requestedClipId: string;
+  sourceMediaFileId?: string;
   modelId: string;
   phase: ClipStemSeparationJobPhase;
   progress: number;
+  stems?: ClipStemSeparationJobStemChoice[];
   backend?: StemSeparationBackend;
   message?: string;
   error?: string;
   startedAt: number;
   updatedAt: number;
+}
+
+export interface ClipStemSeparationJobStemChoice {
+  id: string;
+  kind: AudioStemKind;
+  label: string;
+  mediaFileId: string;
 }
 
 export interface StartClipStemSeparationOptions {
@@ -869,6 +879,8 @@ export interface StartClipStemSeparationOptions {
 export interface ClipStemSeparationProgressUpdate {
   phase?: ClipStemSeparationJobPhase;
   progress?: number;
+  sourceMediaFileId?: string;
+  stems?: ClipStemSeparationJobStemChoice[];
   backend?: StemSeparationBackend;
   message?: string;
   error?: string;
@@ -928,10 +940,11 @@ export interface StemSeparationActions {
   setClipStemSolo: (clipId: string, stemId: string | null) => void;
   setClipStemEnabled: (clipId: string, stemId: string, enabled: boolean) => void;
   setClipStemGain: (clipId: string, stemId: string, gainDb: number) => void;
+  prewarmStemSourceMediaFiles: (stemMediaFileIds: readonly string[]) => number;
+  setClipSourceToStem: (clipId: string, stemMediaFileId: string) => boolean;
+  relinkClipStemSeparationJobsFromMediaLibrary: () => number;
   syncClipStemSeparationCopies: (clipId: string) => number;
   clearClipStemSeparation: (clipId: string) => void;
-  toggleClipStemLayerDropdown: (clipId: string) => void;
-  setClipStemLayerDropdownOpen: (clipId: string, open: boolean) => void;
 }
 
 // RAM Preview actions interface

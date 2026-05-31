@@ -104,6 +104,13 @@ export interface SavedDockTimelineLayout {
   trackTypeHeights?: Partial<Record<'video' | 'audio' | 'midi', number>>;
   trackVisibility?: Record<string, boolean>;
   trackTypeVisibility?: Partial<Record<'video' | 'audio' | 'midi', boolean>>;
+  trackTypeCounts?: Partial<Record<'video' | 'audio' | 'midi', number>>;
+  trackTypeLayouts?: Partial<Record<'video' | 'audio' | 'midi', SavedDockTimelineTrackSlotLayout[]>>;
+}
+
+export interface SavedDockTimelineTrackSlotLayout {
+  height?: number;
+  visible?: boolean;
 }
 
 export interface SavedDockLayout {
@@ -240,6 +247,7 @@ export const PANEL_CONFIGS: Record<PanelType, PanelConfig> = {
     minHeight: 300,
     closable: false,
   },
+  // Deprecated: kept only so persisted layouts can be normalized away from the old standalone AI Generative tab.
   'ai-video': {
     type: 'ai-video',
     title: 'AI Generative',
@@ -247,6 +255,7 @@ export const PANEL_CONFIGS: Record<PanelType, PanelConfig> = {
     minHeight: 400,
     closable: false,
   },
+  // Deprecated: downloads now live in the Media Panel tray; this remains for saved-layout migration.
   youtube: {
     type: 'youtube',
     title: 'YouTube',
@@ -254,6 +263,7 @@ export const PANEL_CONFIGS: Record<PanelType, PanelConfig> = {
     minHeight: 400,
     closable: false,
   },
+  // Deprecated: downloads now live in the Media Panel tray; this remains for saved-layout migration.
   download: {
     type: 'download',
     title: 'Downloads',

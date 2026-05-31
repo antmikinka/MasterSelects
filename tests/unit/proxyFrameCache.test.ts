@@ -219,8 +219,8 @@ describe('proxyFrameCache scrub preloading', () => {
       cache.audioBufferCache.set('media-1', createMockAudioBuffer());
 
       proxyFrameCache.playScrubAudio('media-1', 5);
-      expect(audioContextMock.sources.length).toBeGreaterThan(1);
-      expect(audioContextMock.sources[0].start).toHaveBeenCalledWith(0, 5, 0.065);
+      expect(audioContextMock.sources).toHaveLength(1);
+      expect(audioContextMock.sources[0].start).toHaveBeenCalledWith(0, 5, 0.09);
       const scheduledCount = audioContextMock.sources.length;
 
       now += 40;
@@ -242,7 +242,7 @@ describe('proxyFrameCache scrub preloading', () => {
       expect(audioContextMock.sources[scheduledCount].start).toHaveBeenCalledWith(
         expect.any(Number),
         expect.any(Number),
-        0.065
+        0.09
       );
     } finally {
       audioContextMock.restore();
@@ -269,11 +269,62 @@ describe('proxyFrameCache scrub preloading', () => {
       expect(audioContextMock.sources.length).toBeGreaterThan(initialSourceCount);
       const reverseSource = audioContextMock.sources[initialSourceCount];
       expect(reverseSource.buffer).not.toBe(buffer);
-      expect(reverseSource.buffer?.duration).toBeCloseTo(0.065, 3);
+      expect(reverseSource.buffer?.duration).toBeCloseTo(0.09, 3);
       expect(reverseSource.start).toHaveBeenCalledWith(
         expect.any(Number),
         0,
-        expect.closeTo(0.065, 3)
+        expect.closeTo(0.09, 3)
+      );
+    } finally {
+      audioContextMock.restore();
+    }
+  });
+
+  it('keeps scrub grains pitch-stable during fast movement', () => {
+    const audioContextMock = installScrubAudioContextMock();
+    let now = 1000;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+
+    try {
+      cache.audioBufferCache.set('media-1', createMockAudioBuffer());
+
+      proxyFrameCache.playScrubAudio('media-1', 2);
+      const initialSourceCount = audioContextMock.sources.length;
+
+      now += 20;
+      audioContextMock.contexts[0].currentTime = 0.02;
+      proxyFrameCache.playScrubAudio('media-1', 2.4);
+
+      expect(audioContextMock.sources.length).toBeGreaterThan(initialSourceCount);
+      for (const source of audioContextMock.sources) {
+        expect(source.playbackRate.value).toBe(1);
+      }
+    } finally {
+      audioContextMock.restore();
+    }
+  });
+
+  it('fades out the previous scrub grain during fast jumps before scheduling the new position', () => {
+    const audioContextMock = installScrubAudioContextMock();
+    let now = 1000;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+
+    try {
+      cache.audioBufferCache.set('media-1', createMockAudioBuffer());
+
+      proxyFrameCache.playScrubAudio('media-1', 1);
+      const firstSource = audioContextMock.sources[0];
+
+      now += 20;
+      audioContextMock.contexts[0].currentTime = 0.02;
+      proxyFrameCache.playScrubAudio('media-1', 2);
+
+      expect(firstSource.stop).toHaveBeenCalledWith(expect.closeTo(0.032, 3));
+      expect(audioContextMock.sources.length).toBeGreaterThan(1);
+      expect(audioContextMock.sources[1].start).toHaveBeenCalledWith(
+        0.02,
+        expect.any(Number),
+        0.09
       );
     } finally {
       audioContextMock.restore();

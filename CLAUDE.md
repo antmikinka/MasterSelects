@@ -1,45 +1,225 @@
-# CLAUDE.md
+# MasterSelects Agent Instructions
 
-## -1. Arbeitsprinzip / Top Memory
+Repository instructions for Codex, Claude, and other coding agents working on MasterSelects.
 
-Man kann nie sicher sein, dass man allein in einem Branch arbeitet. Behandle alle fremden Aenderungen als aktive Arbeit anderer Personen oder Agenten: niemals Aenderungen zuruecksetzen, ueberschreiben, aufraeumen, umformatieren oder anderweitig rueckgaengig machen, die du nicht selbst gemacht hast, ausser der User verlangt genau diese Operation explizit.
-
-MasterSelects wird nicht fuer kurzfristige Loesungen optimiert. Da das Projekt AI-powered sehr schnell entwickelt werden kann und aktuell keine externen User blockiert, sind grosse, richtige Architekturentscheidungen ausdruecklich erlaubt und bevorzugt.
-
-Default ist: langfristig denken, echte Zielarchitektur bauen, keine MVPs, keine Mocks, keine Wegwerf-Prototypen und keine kleinen Zwischenloesungen, wenn die robuste Loesung direkt erreichbar ist. Kurzfristige Hacks nur dann verwenden, wenn der User sie explizit verlangt oder ein harter technischer Blocker keine bessere Umsetzung erlaubt.
-
-Anweisungen für AI-Assistenten (Claude, GPT, etc.) bei der Arbeit an diesem Projekt.
+`AGENTS.md` and `CLAUDE.md` are intentionally identical. When workflow, branch rules, debug recipes, or project conventions change, update both files to the same content.
 
 ---
 
-## 0. Projektziel (Deadline: Juni 2026)
+## -1. Working Principle / Top Memory
 
-**MasterSelects muss ALLE Media-Dateien unterstützen** — nicht nur Video/Audio/Bild, sondern wirklich ALLES:
-3D (OBJ, FBX, glTF), PDF, SVG, CAD (DXF/STEP), Binärdaten, Point Clouds, JSON, CSV, und mehr.
+Never assume that you are the only person or agent working in the current branch. Treat all unrelated changes as someone else's active work: never revert, overwrite, clean up, reformat, or otherwise undo changes you did not make unless the user explicitly asks for that exact operation.
 
-**Inspiration: TouchDesigner-Prinzip** — Jede Datei wird zu einem visuellen Signal. So wie TouchDesigner in SOPs/TOPs/CHOPs jede Datenquelle sichtbar und manipulierbar macht (Geometrie → Vertices als Farben, Audio → Wellenform-Textur, Daten → Heatmaps), soll MasterSelects jedes Dateiformat in die GPU-Pipeline bringen und auf dem Canvas rendern können.
+MasterSelects is not optimized for short-term fixes. Because this project can move very quickly with AI-powered development and currently has no external users blocked by changes, large and correct architectural decisions are explicitly allowed and preferred.
 
-**Kernidee:** Es gibt keine "nicht unterstützten" Dateien. Alles wird Textur, Geometrie oder Daten — alles kann auf der Timeline platziert, composited und exportiert werden.
+Default behavior: think long term, build the real target architecture, do not build MVPs, mocks, throwaway prototypes, or small temporary solutions when the robust solution is directly reachable. Use short-term hacks only when the user explicitly requests them or when a hard technical blocker leaves no better implementation path.
 
 ---
 
-## 0.1 AI Debug Tools (kein Browser-Plugin nötig!)
+## 0. Project Goal
 
-Die `/masterselects` Skill stellt Debug-Tools bereit, die über den HTTP Bridge laufen (`POST http://localhost:5173/api/ai-tools`). Voraussetzung: Dev-Server läuft + App in Browser-Tab geöffnet.
+By June 2026, MasterSelects should support all media files, not only video, audio, and images, but genuinely everything:
 
-| Tool | Parameters | Beschreibung |
-|------|-----------|-------------|
-| `getStats` | _(none)_ | Engine-Snapshot: FPS, Timing, Decoder, Drops, Audio, GPU |
-| `getStatsHistory` | `samples?`, `intervalMs?` | N Snapshots über Zeit sammeln mit min/max/avg Summary |
-| `getLogs` | `limit?`, `level?`, `module?`, `search?` | Browser-Logs filtern nach Level (DEBUG/INFO/WARN/ERROR), Modul, Suchtext |
-| `getPlaybackTrace` | `windowMs?`, `limit?` | WebCodecs/VF Pipeline-Events + Health-State für Playback-Debugging |
-| `debugExport` | `startTime?`, `endTime?`, `durationSeconds?`, `width?`, `height?`, `fps?`, `includeAudio?`, `exportMode?`, `download?`, `maxRuntimeMs?` | Dev-Bridge-only Exportprobe im echten Browser. Ruft `FrameExporter` auf und liefert Blob-Groesse, Progress, Engine-Status und Export-/GPU-Logs zurueck. |
+- 3D: OBJ, FBX, glTF
+- Documents: PDF, SVG
+- CAD / technical data: DXF, STEP
+- Data formats: JSON, CSV, binary formats, point clouds, and more
 
-**Nutzung:** `/masterselects getLogs module=PlaybackHealth level=WARN` oder `/masterselects getPlaybackTrace windowMs=10000`
+The inspiration is the TouchDesigner principle: every file becomes a visual signal. There are no "unsupported" files. Everything becomes texture, geometry, or data, can be placed on the timeline, composited, and exported.
 
-### Export-Debug ueber Bridge
+---
 
-Wenn Export im UI haengt oder fehlschlaegt, zuerst ueber die Bridge im echten Browser reproduzieren. Der lokale Dev-Bridge-POST braucht den Bearer-Token aus `.ai-bridge-token`:
+## 1. Command Modes
+
+### Fast Commands
+
+Fast commands are explicit exceptions to the normal check, push, merge, documentation, and versioning rules. When the user says one of these exact commands, follow this section even if other sections would normally require checks.
+
+#### `fast commit`
+
+Use when the user says `fast commit`.
+
+1. Stage everything in the current worktree, including untracked files: `git add -A`.
+2. Commit without running build, lint, tests, or targeted checks.
+3. Do not require documentation updates.
+4. Do not bump versions or update changelog.
+5. Use the user's supplied commit message if present; otherwise derive a concise message from the diff.
+
+#### `fast push`
+
+Use when the user says `fast push`.
+
+1. If the worktree is dirty, perform `fast commit` first.
+2. Push the current branch.
+3. If the branch has no upstream, push with upstream: `git push -u origin <branch>`.
+4. Do not run build, lint, tests, or targeted checks.
+5. Do not require documentation, version, or changelog updates.
+
+#### `fast merge`
+
+Use when the user says `fast merge`.
+
+1. Remember the current source branch.
+2. If the worktree is dirty, perform `fast commit` first.
+3. Push the current source branch, setting upstream if needed.
+4. Fetch `origin`.
+5. Switch to local `master`.
+6. Bring local `master` to `origin/master`.
+7. Merge the source branch directly into `master`.
+8. Push `master` directly to `origin/master`.
+9. Do not create a PR.
+10. Do not go through `staging` unless `staging` is the source branch.
+11. Do not wait for GitHub checks.
+12. Do not run build, lint, tests, or targeted checks.
+13. Do not bump versions or update changelog.
+14. If a merge conflict occurs, stop and report the conflict. Do not auto-resolve by guessing.
+
+### Normal Commands
+
+Any commit, push, merge, release, or readiness request that does not explicitly use a `fast ...` command follows the normal rules:
+
+- Run `npm run build`, `npm run lint`, and `npm run test` before commit, release, merge, or final commit readiness.
+- Do not commit if build, lint, or tests fail.
+- Update relevant docs in `docs/Features/` for feature, UI, workflow, architecture, or user-visible behavior changes.
+- Update version and changelog for normal merges to `master`.
+- Do not repeat the full check chain if it already passed on the exact same HEAD after the latest changes. Reuse the latest successful check result and state that it was reused.
+
+---
+
+## 2. Branch, Commit, Push, And Merge Rules
+
+### Branch Rules
+
+| Branch | Purpose |
+|---|---|
+| `staging` | Development, default target for ongoing work |
+| `master` | Production |
+
+Normal rule: never commit directly to `master`, never merge to `master` independently, and never push independently unless the user explicitly asks for it.
+
+Exceptions:
+
+- `fast push`
+- `fast merge`
+- issue branches created through the Issue Handling Workflow
+- direct user instructions that explicitly ask for commit, push, or merge
+
+### Issue Handling Workflow
+
+When taking over a GitHub issue, always use this flow:
+
+1. Comment `I am on it` on the issue.
+2. Assign the issue to `sportinger`.
+3. Create a new Git branch for the issue and link it to the issue on GitHub.
+4. Clone that branch into a new separate folder, then work from that folder so other agents can stay in their own working directories.
+5. Implement the issue in that branch folder.
+6. Commit and push to the issue branch at the agent's discretion when the work is coherent and locally checked.
+7. When the user says that everything works, merge the issue branch to `master` without waiting for GitHub checks.
+8. After the merge, comment on the issue with the result.
+
+This issue workflow is an explicit exception to the general "do not push independently" rule, but only for the created issue branch. Merging to `master` still requires the user's confirmation that everything works.
+
+### Normal Test, Commit, And Push Rules
+
+During ongoing work, test deliberately: choose relevant unit/smoke tests, build, or lint according to risk and change scope. The full suite is not required after every small intermediate change and should not be run routinely because of time/token cost.
+
+Before every normal commit, all checks are mandatory:
+
+```bash
+npm run build
+npm run lint
+npm run test
+```
+
+Rules:
+
+- Prefer small, coherent changes.
+- Do not commit if build, lint, or tests fail.
+- Do not push unless the user explicitly asks, except for issue branches and fast commands.
+- For feature changes, update relevant docs in `docs/Features/`.
+
+### Normal Merge To Master
+
+Only when the user explicitly requests a normal merge to `master`:
+
+1. Make sure required checks have passed for the exact HEAD being merged.
+2. If checks already passed on the same HEAD after the latest changes, do not rerun them.
+3. Bump the release version in all required version locations.
+4. Update changelog/release notes.
+5. Commit and push.
+6. Create and merge a PR from the source branch to `master`, unless the user explicitly asks for a direct merge.
+7. Bring `staging` back to the current `master` state when the normal workflow uses `staging`.
+
+---
+
+## 3. Version And Changelog Locations
+
+When intentionally bumping the release version, check all of these:
+
+- `src/version.ts`
+  - `APP_VERSION`
+  - `FEATURED_VIDEO.banner.title` if it contains the version
+  - `FEATURED_VIDEO.banner.message` if it names the release
+  - `BUILD_NOTICE.title` if it contains the version
+  - `BUILD_NOTICE.message` if it names the release
+- `src/changelog-data.json`
+  - add release notes / changelog entries at the beginning when a normal release or normal merge requires them
+- `package.json`
+  - top-level `"version"`
+- `package-lock.json`
+  - top-level `"version"`
+  - `packages[""].version`
+
+Before a normal release, verify version consistency with a targeted search:
+
+```bash
+rg -n "APP_VERSION|MasterSelects [0-9]+\\.[0-9]+\\.[0-9]+|\"version\": \"[0-9]+\\.[0-9]+\\.[0-9]+\"" src package.json package-lock.json
+```
+
+Fast commands do not bump versions and do not update changelog unless the user explicitly adds that request.
+
+---
+
+## 4. Codex Skill Mapping
+
+The old Claude commands under `C:\Users\admin\.claude\commands\` should be represented in Codex through skills. If the following skills are available, prefer them:
+
+| Claude Command | Codex Skill | Purpose |
+|---|---|---|
+| `/masterselects` | `masterselects` | Timeline, clip, preview, and analysis actions through the local AI bridge |
+| `/cloudflare` | `cloudflare-api` | Cloudflare REST / Wrangler |
+| `/stripe` | `stripe-api` | Stripe REST API |
+| `/vazer` | `vazer-app-api` | Local VAZer app / XML / analysis |
+| `/react-doctor` | `react-doctor` | React codebase analysis |
+| `/nano-banana` | `nano-banana` | Image generation via Gemini |
+| `/kie` | `kie-ai-api-route` | Kie.ai image and video generation |
+| `/kling` | `kling` | Kling video prompting / API |
+| `/tasks` | `tasks` | Task list |
+| `/email` | `email` | Strato / OX mail |
+| `/gmail` | `gmail` | Gmail via IMAP/SMTP |
+| `/dienstplan` | `dienstplan` | Duty roster PDF -> calendar |
+
+If a skill is not available, work directly through local scripts, MCP tools, the HTTP bridge, or APIs. Do not get stuck on Claude command files.
+
+---
+
+## 5. MasterSelects Debug Bridge
+
+For app debugging, local AI tools exist behind `POST http://localhost:5173/api/ai-tools`. Prerequisite: the dev server is running and the app is open in a browser.
+
+| Tool | Parameters | Purpose |
+|---|---|---|
+| `getStats` | none | Engine snapshot: FPS, timing, decoder, drops, audio, GPU |
+| `getStatsHistory` | `samples?`, `intervalMs?` | Multiple snapshots with min/max/avg |
+| `getLogs` | `limit?`, `level?`, `module?`, `search?` | Retrieve filtered browser logs |
+| `getPlaybackTrace` | `windowMs?`, `limit?` | WebCodecs and VF pipeline events plus health state |
+| `debugExport` | `startTime?`, `endTime?`, `durationSeconds?`, `width?`, `height?`, `fps?`, `includeAudio?`, `exportMode?`, `download?`, `maxRuntimeMs?` | Dev-bridge-only export probe in the real browser. Calls `FrameExporter` and returns blob size, progress, engine state, and export/GPU logs. |
+
+The `masterselects` skill is the preferred entry point. If the skill cannot be used, call the HTTP bridge directly with `curl` or PowerShell.
+
+### Export Debug Through Bridge
+
+When export hangs or fails in the UI, first reproduce it in the real browser through the bridge. The local dev-bridge POST needs the bearer token from `.ai-bridge-token`:
 
 ```powershell
 $token = Get-Content -Path .ai-bridge-token -Raw
@@ -49,7 +229,7 @@ $body = @{ tool = 'getStats'; args = @{} } | ConvertTo-Json -Depth 4
 Invoke-RestMethod -Uri 'http://localhost:5173/api/ai-tools' -Method Post -Headers $headers -Body $body
 ```
 
-Smoke-Test ohne Download:
+Smoke test without download:
 
 ```powershell
 $body = @{
@@ -69,7 +249,7 @@ $body = @{
 Invoke-RestMethod -Uri 'http://localhost:5173/api/ai-tools' -Method Post -Headers $headers -Body $body
 ```
 
-Full-Timeline-Test mit aktuellen Exportdefaults:
+Full timeline test with current export defaults:
 
 ```powershell
 $body = @{ tool = 'debugExport'; args = @{ includeAudio = $true; exportMode = 'fast'; download = $false } } | ConvertTo-Json -Depth 6
@@ -78,243 +258,107 @@ Invoke-RestMethod -Uri 'http://localhost:5173/api/ai-tools' -Method Post -Header
 
 Interpretation:
 
-- `debugExport` ist absichtlich kein Chat/Public-Tool, sondern ein selbstregistrierter Dev-Bridge-Handler mit Policy-Zugriff fuer `devBridge`, `console` und `internal`.
-- `maxRuntimeMs` bricht den Browser-Export sauber ab, bevor der Dev-Bridge-Request haengt; fuer lange Exporte gezielt hoeher setzen.
-- Blob `size > 0` bedeutet: der Browser-Exportpfad funktioniert grundsaetzlich; danach UI-Download, `ExportPanel`, Preset-State oder Progress-State pruefen.
-- Bei `WebGPU device lost during export` plus `getStats` mit `renderLoop.isRunning=false`, `renderDispatcher=null` oder `targetCanvasCount=0`: Hard Reload/`reloadApp`, danach erneut exportieren.
-- Windows-`requestAdapter(powerPreference)`-Warnungen und NativeHelper-WebSocket-Fehler sind nicht automatisch Exportblocker.
-- Bei Video-only-Timeline muss `FrameExporter` Audio ueberspringen; langer Start bei "Rendering audio" weist auf Audio-Range-Erkennung hin.
+- `debugExport` is intentionally not a chat/public tool. It is a self-registered dev-bridge handler with policy access for `devBridge`, `console`, and `internal`.
+- `maxRuntimeMs` cleanly aborts browser export before the dev-bridge request hangs. Raise it deliberately for long exports.
+- If `debugExport` returns a blob with `size > 0`, the browser export path basically works. Then investigate UI issues in `ExportPanel`, download handling, preset state, or progress state.
+- If logs show `WebGPU device lost during export` and `getStats` afterwards reports `renderLoop.isRunning=false`, `renderDispatcher=null`, or `targetCanvasCount=0`, the browser engine is in a stale device state. First run `reloadApp`/hard reload through the bridge or reload the browser, then test again.
+- Windows warnings about `requestAdapter(powerPreference)` and NativeHelper WebSocket errors are not automatically export blockers. NativeHelper matters only when the tested path actually needs it.
+- For timelines with video-only clips, `FrameExporter` must skip audio. A long start at "Rendering audio" points to broken audio range detection.
 
-## 0.2 Codex Session Usage Monitoring
+---
 
-Fuer laengere Codex-/Agent-Arbeit soll nach Moeglichkeit der lokale Usage-Watcher mitlaufen:
+## 6. Check Budget And Repo Memory
+
+`AGENTS.md` and `CLAUDE.md` are the durable project memory for coding agents. Do not assume an agent has hidden persistent memory for this repo; important workflow rules belong here.
+
+During normal implementation, check sparingly: run targeted unit/smoke tests, individual builds, or lint only when risk and change scope justify it. Do not run full `npm run build`, `npm run lint`, and `npm run test` after every small edit. That full check chain is mandatory before normal commit, release, merge, or when the user explicitly asks for final commit readiness.
+
+Large command outputs are token- and time-expensive. For intermediate status, report short summaries and relevant error lines instead of repeating complete logs.
+
+For longer Codex/agent work, run the local usage watcher when practical:
 
 ```bash
 npm run codex:usage:watch
-```
-
-Einmalige Auswertung:
-
-```bash
 npm run codex:usage
-```
-
-Versteckten Watcher stoppen:
-
-```bash
 npm run codex:usage:stop
 ```
 
-Der Watcher liest `~/.codex/sessions`, filtert auf dieses Repo, gruppiert `token_count`-Events pro User-Turn und schreibt lokale Reports nach `.codex-usage/`:
-
-- `turns.jsonl`: maschinenlesbare Turn-Kosten, Fragen, Status, Tool-Nutzung und Git-Snapshots
-- `sessions.json`: Session-Summary
-- `report.md`: lesbarer Kosten-/Strategie-Report
-- `state.json`: Watcher-State fuer Commit-Zuordnung
-
-`.codex-usage/` bleibt lokal und ist in Git ignoriert. Exakte Commit-Zuordnung funktioniert nur fuer Turns, die beobachtet wurden, waehrend `codex:usage:watch` lief; historische Sessions bekommen nur den beim Report beobachteten Git-Stand.
-
-## 0.3 Agent Check Budget / Repo Memory
-
-`AGENTS.md` und `CLAUDE.md` sind die dauerhafte Projekt-Memory fuer Coding Agents. Nicht davon ausgehen, dass ein Agent versteckte persistente Memory fuer dieses Repo hat; wichtige Workflow-Regeln hier pflegen.
-
-Waehrend normaler Implementierung sparsam pruefen: gezielte Unit-/Smoke-Tests, einzelne Builds oder Lint nur dann ausfuehren, wenn Risiko und Aenderungsumfang es rechtfertigen. Full `npm run build`, `npm run lint` und `npm run test` nicht nach jedem kleinen Edit laufen lassen; diese volle Check-Kette ist Pflicht vor Commit, Release, Merge oder wenn der User explizit nach finaler Commit-Readiness fragt.
-
-Grosse Kommandoausgaben sind token- und zeitintensiv. Bei Zwischenstaenden kurze Zusammenfassungen und relevante Fehlerzeilen berichten statt komplette Logs zu wiederholen.
+The watcher writes local reports to `.codex-usage/`, which stays local and is gitignored.
 
 ---
 
-## 1. Workflow (WICHTIG!)
+## 7. Quick Reference
 
-### Branch-Regeln
-| Branch | Zweck |
-|--------|-------|
-| `staging` | Entwicklung - hierhin committen |
-| `master` | Production - nur via PR |
-
-### Issue-Bearbeitung
-Wenn ein GitHub-Issue uebernommen wird, immer so vorgehen:
-
-1. Im Issue `I am on it` kommentieren.
-2. Das Issue `sportinger` zuweisen.
-3. Einen neuen Git-Branch fuer das Issue erstellen und auf GitHub mit dem Issue verknuepfen.
-4. Diesen Branch in einen neuen separaten Ordner clonen und dann in diesem Ordner arbeiten, damit andere Agents in ihren eigenen Ordnern bleiben koennen.
-5. Das Issue in diesem Branch-Ordner bearbeiten.
-6. Nach Ermessen committen und in den Issue-Branch pushen, sobald die Arbeit zusammenhaengend und lokal geprueft ist.
-7. Wenn der User sagt, dass alles geht, den Issue-Branch nach `master` mergen, ohne auf GitHub-Checks zu warten.
-8. Danach das Issue mit dem Ergebnis kommentieren.
-
-Dieser Issue-Workflow ist eine ausdrueckliche Ausnahme von der allgemeinen Regel, nicht selbststaendig zu pushen, aber nur fuer den erstellten Issue-Branch. Der Merge nach `master` braucht weiterhin die Bestaetigung des Users, dass alles geht.
-
-### Test- und Commit-Regeln
 ```bash
-# VOR jedem Commit: ALLE Checks durchführen!
-npm run build          # 1. Build muss fehlerfrei sein
-npm run lint           # 2. Lint: 0 Errors (Warnings OK)
-npm run test           # 3. ALLE Tests müssen grün sein
+npm install && npm run dev
+npm run dev:changelog
+npm run build
+npm run build:deploy
+npm run lint
+npm run test
+npm run test:watch
+npm run test:unit
+npm run test:ui
+npm run test:coverage
+npm run preview
 ```
 
-Während laufender Arbeit gezielt prüfen: passende Unit-/Smoke-Tests, Build oder Lint nach Risiko und Änderungsumfang auswählen. Die volle Suite ist kein Pflichtschritt nach jedem kleinen Zwischenstand und soll wegen Zeit-/Token-Kosten nicht routinemäßig laufen.
+### Dev Server Rules
 
-**IMMER vor Commit:**
-- `npm run build` ausführen — muss fehlerfrei sein
-- `npm run lint` ausführen — 0 Errors (Warnings sind OK)
-- `npm run test` ausführen — ALLE Tests müssen grün sein
-- Erst dann committen
+- Default is `npm run dev`.
+- Use `npm run dev:changelog` only when the changelog dialog is needed.
+- Production builds show the changelog automatically.
 
-**NIEMALS:**
-- Direkt auf `master` committen
-- Selbstständig zu `master` mergen
-- Selbstständig pushen (nur wenn User es explizit verlangt; Ausnahme: Issue-Branches aus dem Issue-Workflow)
-- Committen, wenn Build, Lint oder Tests fehlschlagen
+### Native Helper
 
-### Merge zu Master (nur wenn User es verlangt!)
 ```bash
-# 1. Version erhöhen in src/version.ts
-# 2. CHANGELOG aktualisieren in src/version.ts
-# 3. Commit & Push
-# 4. PR erstellen und mergen:
-gh pr create --base master --head staging --title "..." --body "..."
-gh pr merge --merge
-# 5. Staging synchronisieren:
-git fetch origin && git merge origin/master && git push origin staging
+cd tools/native-helper
+cargo run --release
 ```
 
-### Version & Changelog
-- **Datei:** `src/version.ts`
-- **Version:** Nur bei Merge zu master erhöhen (PATCH +1)
-- **CHANGELOG:** Neuen Eintrag am Anfang mit `version`, `date`, `changes[]`
-- **KNOWN_ISSUES:** Aktuelle Bugs pflegen
+Windows MSI builds bundle `yt-dlp.exe`; source builds and non-Windows archives use `yt-dlp` next to the helper binary or from `PATH`.
 
-### Dokumentation
-Bei Feature-Änderungen: `docs/Features/` aktualisieren
+Ports:
+
+- WebSocket: `9876`
+- HTTP: `9877`
 
 ---
 
-## 2. Quick Reference
+## 8. Architecture
 
-```bash
-npm install && npm run dev   # http://localhost:5173 (ohne Changelog)
-npm run dev:changelog        # Dev-Server MIT Changelog-Dialog
-npm run build                # Production build (tsc + vite, Changelog immer aktiv)
-npm run build:deploy         # Production build ohne tsc (nur vite)
-npm run lint                 # ESLint check
-npm run test                 # Vitest einmal ausführen
-npm run test:watch           # Vitest im Watch-Modus
-npm run test:unit            # Nur Unit-Tests (tests/unit/)
-npm run test:ui              # Vitest mit Browser-UI
-npm run test:coverage        # Vitest mit Coverage-Report
-npm run preview              # Built output lokal serven
-```
+Important areas:
 
-### Dev-Server Regeln
-- **IMMER `npm run dev` verwenden** (ohne Changelog)
-- `npm run dev:changelog` nur wenn User Changelog sehen will
-- Production builds zeigen Changelog automatisch
+- `src/components/`: React UI, Timeline, Panels, Preview, Docking, Export, Mobile
+- `src/stores/`: Zustand stores for Timeline, Media, History, Settings, Dock, Slice, Render Targets, SAM2, Multicam, YouTube
+- `src/engine/`: WebGPU rendering, Render Dispatcher, texture/audio/export/analysis pipeline
+- `src/effects/`: GPU effects and shared shaders
+- `src/transitions/`: GPU transitions
+- `src/services/`: business logic such as Layer Builder, Media Runtime, Monitoring, Project Storage, AI Tools, Export
+- `src/hooks/`, `src/utils/`, `src/types/`, `src/workers/`, `src/shaders/`
 
-### Native Helper (optional, cross-platform)
-```bash
-# All platforms:
-cd tools/native-helper && cargo run --release
+Especially central files:
 
-# Windows: requires FFMPEG_DIR + LIBCLANG_PATH env vars (see tools/native-helper/README.md)
-```
-Windows-MSI-Builds bundlen `yt-dlp.exe`; Source-Builds und nicht-Windows-Archive nutzen `yt-dlp` neben dem Helper-Binary oder aus `PATH`.
-Ports: WebSocket `9876`, HTTP `9877`
+- `src/engine/WebGPUEngine.ts`
+- `src/engine/render/RenderDispatcher.ts`
+- `src/stores/timeline/index.ts`
+- `src/stores/mediaStore/index.ts`
+- `src/stores/historyStore.ts`
+- `src/services/layerBuilder/LayerBuilderService.ts`
+- `src/services/logger.ts`
+- `src/engine/featureFlags.ts`
+
+More context is in `README.md` and `docs/Features/README.md`.
 
 ---
 
-## 3. Architektur (Kurzübersicht)
+## 9. Critical Patterns
 
-```
-src/
-├── components/          # React UI
-│   ├── timeline/        # Timeline-Editor (hooks/, components/, utils/)
-│   ├── panels/          # Properties, Media, AI, Scopes, Transitions, SAM2, Transcript, etc.
-│   ├── preview/         # Canvas + Overlays (Mask, SAM2, MultiPreview)
-│   ├── dock/            # Panel-System (DockContainer, Tabs, Split, Float)
-│   ├── common/          # Shared UI: Toolbar, Settings, Dialogs, Overlays
-│   ├── export/          # Export Dialog + Panel
-│   ├── outputManager/   # Output Window / Slice management
-│   └── mobile/          # Mobile-optimized UI
-├── stores/              # Zustand State
-│   ├── timeline/        # 17 Slices: track, clip, keyframe, mask, playback, selection, transition,
-│   │   │                #   ramPreview, proxyCache, clipEffect, linkedGroup, downloadClip,
-│   │   │                #   solidClip, textClip, clipboard, aiActionFeedback, marker
-│   │   ├── clip/        # Clip sub-modules (addVideoClip, addAudioClip, addImageClip, etc.)
-│   │   ├── helpers/     # clipStateHelpers, idGenerator, blobUrlManager, audioDetection, etc.
-│   │   └── selectors.ts # 50 optimized selectors (individual, grouped, derived, stable action)
-│   ├── mediaStore/      # 9 Slices: fileImport, fileManage, folder, proxy, composition,
-│   │   │                #   slot, multiLayer, project, selection
-│   │   └── init.ts      # IndexedDB init, auto-save, beforeunload, audio cleanup
-│   ├── historyStore.ts  # Snapshot-based Undo/Redo
-│   ├── engineStore.ts   # Engine ready state, GPU info
-│   ├── settingsStore.ts # User preferences
-│   ├── dockStore.ts     # Panel layout state
-│   ├── sliceStore.ts    # Slice/region management
-│   ├── renderTargetStore.ts # Output targets
-│   ├── sam2Store.ts     # SAM2 segmentation state
-│   ├── multicamStore.ts # Multicam editing state
-│   └── youtubeStore.ts  # YouTube download state
-├── engine/              # WebGPU Rendering
-│   ├── core/            # WebGPUContext, RenderTargetManager
-│   ├── render/          # RenderLoop, RenderDispatcher, LayerCollector, Compositor, NestedCompRenderer, layerEffectStack
-│   ├── pipeline/        # CompositorPipeline, EffectsPipeline, OutputPipeline, SlicePipeline
-│   ├── texture/         # TextureManager, MaskTextureManager, ScrubbingCache
-│   ├── managers/        # CacheManager, ExportCanvasManager, OutputWindowManager, outputWindowPlacement
-│   ├── export/          # FrameExporter, VideoEncoderWrapper, AudioEncoder, types
-│   ├── audio/           # AudioMixer, TimeStretchProcessor, AudioExportPipeline
-│   ├── video/           # VideoFrameManager
-│   ├── ffmpeg/          # FFmpegBridge
-│   ├── analysis/        # Scopes (Histogram, Waveform, Vectorscope, OpticalFlow)
-│   ├── stats/           # PerformanceStats
-│   ├── structuralSharing/ # SnapshotManager for render optimization
-│   ├── ParallelDecodeManager.ts  # Multi-clip parallel decode
-│   ├── WebCodecsPlayer.ts        # WebCodecs playback engine
-│   ├── WebCodecsExportMode.ts    # Export-specific WebCodecs path
-│   └── featureFlags.ts           # Runtime feature toggles
-├── effects/             # 30 GPU Effects (color/, blur/, distort/, stylize/, keying/, generate/, time/, transition/)
-│   ├── _shared/         # common.wgsl (154 lines shared utility)
-│   └── EffectsPipeline.ts # Effect orchestration
-├── transitions/         # GPU Transitions (crossfade, etc.)
-├── services/            # Business logic
-│   ├── layerBuilder/    # LayerBuilderService, VideoSyncManager, AudioSyncHandler,
-│   │                    #   AudioTrackSyncManager, LayerCache, FrameContext, TransformCache, types, index
-│   ├── mediaRuntime/    # Clip bindings, runtime playback registry, session policies
-│   ├── monitoring/      # playbackHealthMonitor, playbackDebugStats, framePhaseMonitor,
-│   │                    #   vfPipelineMonitor, wcPipelineMonitor, scrubSettleState
-│   ├── project/         # ProjectCoreService, NativeProjectCoreService, save/load, file service
-│   │   └── domains/     # AnalysisService, CacheService, ProxyStorageService, RawMediaService, TranscriptService
-│   ├── nativeHelper/    # Native FFmpeg decoder client
-│   ├── sam2/            # SAM2 segmentation service
-│   ├── aiTools/         # AI tool bridge (76 tools across 15 definition files)
-│   │   ├── definitions/ # 15 tool definition files
-│   │   └── handlers/    # Tool handler dispatch + visual feedback
-│   ├── export/          # FCPXML export
-│   └── (standalone)     # logger, audioManager, thumbnailRenderer, whisperService,
-│                        #   renderScheduler, ramPreviewEngine, compositionRenderer,
-│                        #   clipAnalyzer, clipTranscriber, sceneDescriber, apiKeyManager, etc.
-├── hooks/               # React hooks: useEngine, useGlobalHistory, useMIDI, useTheme,
-│                        #   useClipPanelSync, useContextMenuPosition, useThumbnailCache, ...
-├── utils/               # Helpers: keyframeInterpolation, maskRenderer, fileLoader,
-│                        #   speedIntegration, externalDragPlacement, externalDragSession, ...
-├── types/               # TypeScript types, mp4box.d.ts
-├── workers/             # Web Workers (transcription)
-├── shaders/             # WGSL: composite, effects, output, slice, opticalflow
-├── assets/              # Static assets
-├── test/                # In-browser test components
-└── changelog-data.json  # 5,000+ line changelog data (imported by version.ts)
-```
+### HMR Singletons
 
-**Detaillierte Struktur:** siehe `README.md` oder `docs/Features/`
+Singletons such as Engine, FFmpegBridge, or SAM2 must survive HMR.
 
----
-
-## 4. Critical Patterns (MUST READ)
-
-### HMR Singleton
-Singletons (Engine, FFmpegBridge, SAM2Service) müssen Hot Reloads überleben:
-```typescript
+```ts
 let instance: MyService | null = null;
 
 if (import.meta.hot) {
@@ -328,274 +372,137 @@ if (import.meta.hot) {
 }
 ```
 
-### Stale Closure Fix
-Immer `get()` in async Callbacks:
-```typescript
-// FALSCH
-const { layers } = get();
-video.onload = () => set({ layers: layers.map(...) });
+### Avoid Stale Closures
 
-// RICHTIG
+In async callbacks, always read fresh state through `get()` or functional updates.
+
+```ts
 video.onload = () => {
   const current = get().layers;
   set({ layers: current.map(...) });
 };
 ```
 
-### Video Ready State
-Warten auf `canplaythrough`, nicht `loadeddata`:
-```typescript
-video.addEventListener('canplaythrough', () => {
-  // Jetzt ist Video bereit
-}, { once: true });
-```
+### Other Patterns
 
-### Zustand Slice Pattern
-```typescript
-export const createSlice: SliceCreator<Actions> = (set, get) => ({
-  actionName: (params) => {
-    const state = get();
-    set({ /* updates */ });
-  },
-});
-```
-
-### Functional setState (prevents stale closures)
-```typescript
-// WRONG: needs items as dependency, recreated on every change
-const addItems = useCallback((newItems) => {
-  setItems([...items, ...newItems])
-}, [items])
-
-// RIGHT: stable callback, no stale closure
-const addItems = useCallback((newItems) => {
-  setItems(curr => [...curr, ...newItems])
-}, [])
-```
-
-### Lazy State Initialization
-```typescript
-// WRONG: runs on EVERY render
-const [index, setIndex] = useState(buildSearchIndex(items))
-
-// RIGHT: runs only once
-const [index, setIndex] = useState(() => buildSearchIndex(items))
-```
-
-### toSorted() instead of sort() (prevents state mutation)
-```typescript
-// WRONG: mutates original array
-const sorted = users.sort((a, b) => a.name.localeCompare(b.name))
-
-// RIGHT: creates new array
-const sorted = users.toSorted((a, b) => a.name.localeCompare(b.name))
-```
-
-### Zustand Middleware
-All stores use `subscribeWithSelector` middleware. `settingsStore` and `dockStore` also use `persist` middleware.
-MediaStore uses `MediaSliceCreator` variant (slightly different signature than timeline's `SliceCreator`).
+- Wait for `canplaythrough`, not only `loadeddata`.
+- Prefer functional `setState` updates.
+- Use lazy state initialization for expensive initialization.
+- Use `toSorted()` instead of `sort()` to avoid mutation.
+- All stores use `subscribeWithSelector`.
+- `settingsStore` and `dockStore` also use `persist`.
+- `mediaStore` uses a slice-creator signature that differs from Timeline.
 
 ---
 
-## 5. Debugging & Logging
+## 10. Debugging And Logging
 
-### Logger verwenden
-```typescript
+### Logger
+
+```ts
 import { Logger } from '@/services/logger';
 const log = Logger.create('ModuleName');
 
-log.debug('Verbose', { data });  // Nur wenn DEBUG aktiv
-log.info('Event');               // Immer sichtbar
-log.warn('Warning', data);       // Orange
-log.error('Fehler', error);      // Rot + Stack Trace
+log.debug('Verbose', { data });
+log.info('Event');
+log.warn('Warning', data);
+log.error('Error', error);
 ```
 
-### Console Commands
-```javascript
-Logger.enable('WebGPU,FFmpeg')  // Module aktivieren
-Logger.enable('*')              // Alle aktivieren
-Logger.disable()                // Nur Errors
+### Browser Console Shortcuts
 
-Logger.setLevel('DEBUG')        // Alle Level
-Logger.setLevel('WARN')         // Nur Warn+Error
-
-Logger.search('device')         // Logs durchsuchen
-Logger.errors()                 // Nur Fehler
-Logger.dump(50)                 // Letzte 50 ausgeben
-Logger.summary()                // Übersicht für AI
-```
-
-### Common Issues
-
-| Problem | Lösung |
-|---------|--------|
-| 15fps auf Linux | `chrome://flags/#enable-vulkan` aktivieren |
-| "Device mismatch" | HMR kaputt -> Seite neu laden |
-| Schwarzes Canvas | `readyState >= 2` prüfen |
-| WebCodecs Fehler | Fällt automatisch auf HTMLVideoElement zurück |
-| Schwarz nach Refresh | Cold-Start: `hasFrame=false` nach Restore, `primeRestoredWebCodecsPlayer` seek pending. Workaround: einmal Play/Pause |
-
-### WebCodecs Playback Debugging
-
-**Pipeline Monitors** — im Browser-Console verfügbar:
-```javascript
-// WebCodecs Pipeline (decode/seek/frame lifecycle)
-window.__WC_PIPELINE__
-
-// VideoFrame Pipeline (VF-mode: HTMLVideo + VideoFrame API)
-window.__VF_PIPELINE__
-```
-Beide sind 5000-Event Ring-Buffer mit Events wie `decode_feed`, `decode_output`, `frame_read`, `frame_drop`, `seek_start/end`, `drift_correct`, `stall`, etc.
-
-**Playback-spezifisches Logging:**
-```javascript
-// WebCodecs + Playback Health
-Logger.enable('WebCodecsPlayer,PlaybackHealth,LayerCollector')
+```js
+Logger.enable('WebGPU,FFmpeg')
+Logger.enable('*')
+Logger.disable()
 Logger.setLevel('DEBUG')
+Logger.setLevel('WARN')
+Logger.search('device')
+Logger.errors()
+Logger.dump(50)
+Logger.summary()
+```
 
-// VideoSync + Frame Pipeline
+### Common Problems
+
+| Problem | Check |
+|---|---|
+| Black canvas | Check `readyState >= 2` |
+| Device mismatch | HMR broken, reload page |
+| Linux at 15fps | Check Vulkan flag |
+| WebCodecs error | Expect fallback to HTMLVideoElement |
+| Black after refresh | Cold-start / restore path, hard reload if needed |
+
+### Playback Debugging
+
+Available in the browser:
+
+- `window.__WC_PIPELINE__`
+- `window.__VF_PIPELINE__`
+
+Useful log modules:
+
+```js
+Logger.enable('WebCodecsPlayer,PlaybackHealth,LayerCollector')
 Logger.enable('VideoSyncManager,ParallelDecode,RenderLoop')
 Logger.setLevel('DEBUG')
 ```
 
-**7 Monitoring Services** (`src/services/monitoring/`):
+Important monitoring services in `src/services/monitoring/`:
 
-| Service | Was es trackt |
-|---------|--------------|
-| `playbackHealthMonitor` | 8 Anomalie-Typen: FRAME_STALL, WARMUP_STUCK, SEEK_STUCK, GPU_SURFACE_COLD, HIGH_DROP_RATE, etc. Auto-Recovery nach 3+ Anomalien in 12s |
-| `playbackDebugStats` | Live-Stats: Pipeline-Name, Decoder-Resets, Seek-Timing, Collector Hold/Drop Counts |
-| `framePhaseMonitor` | Frame-Lifecycle: Zeit in stats/build/render/sync-video/sync-audio/cache Phasen |
-| `wcPipelineMonitor` | WebCodecs Event Ring-Buffer (`window.__WC_PIPELINE__`) |
-| `vfPipelineMonitor` | VideoFrame Event Ring-Buffer (`window.__VF_PIPELINE__`) |
-| `scrubSettleState` | Scrub-to-Play Transition: Settle, Retry, Warmup Stages pro Clip |
+- `playbackHealthMonitor`
+- `playbackDebugStats`
+- `framePhaseMonitor`
+- `wcPipelineMonitor`
+- `vfPipelineMonitor`
+- `scrubSettleState`
 
-**AI Debug Tools** (wenn Dev-Server läuft):
-```bash
-# Playback-Trace mit Pipeline-Events + Health-State
-/masterselects getPlaybackTrace windowMs=10000
+When the dev server is running, prefer the AI bridge for repros:
 
-# Logs filtern nach Playback-Modulen
-/masterselects getLogs module=PlaybackHealth level=WARN
+- `simulateScrub`
+- `simulatePlayback`
+- `simulatePlaybackPath`
+- `getPlaybackTrace`
+- `getClipDetails`
+- `reloadApp`
 
-# Engine-Stats Snapshot (FPS, Decoder, Drops, Audio)
-/masterselects getStats
-
-# Hard Reload (für scripted Tests)
-/masterselects reloadApp mode=hard
-```
-
-### Scripted Scrub & Stress Tests
-
-Über die AI Bridge (`POST http://localhost:5173/api/ai-tools`) lassen sich reproduzierbare Playback-Tests scripten. Node `fetch()` oder `curl` bevorzugen (PowerShell-Wrapper können Args verfälschen).
-
-**Wichtige Test-Tools:**
-
-| Tool | Zweck |
-|------|-------|
-| `simulateScrub` | DOM-basierter Scrub-Stress (patterns: `short`/`long`/`random`/`custom`, speeds: `slow`/`normal`/`fast`/`wild`) |
-| `simulatePlayback` | Play für N ms, misst Transport-Delta, Drift, Stalls |
-| `simulatePlaybackPath` | Preset-basierte Mixed Play/Scrub Runs (z.B. `play_scrub_stress_v1`) |
-| `getPlaybackTrace` | Event-Timeline + aggregierte Stats. Für lange Runs: `windowMs: 12000, limit: 1200` |
-| `getClipDetails` | Debug-Source: `webCodecsReady`, `webCodecsHasFrame`, `needsReload`, `runtimeSessionKey` |
-| `reloadApp` | Hard/Soft Reload für scripted Tests (`mode: "hard"/"soft"`, `delayMs`) |
-
-**Repro-Recipes:**
-```javascript
-// 1. Baseline Playback (15s normal play)
-await call('setPlayhead', { time: 0 });
-await call('simulatePlayback', { startTime: 0, durationMs: 15000, resetDiagnostics: true });
-await call('getPlaybackTrace', { windowMs: 16000, limit: 1200 });
-
-// 2. Random Wild Scrub Stress
-await call('setPlayhead', { time: 0 });
-await call('simulateScrub', { pattern: 'random', speed: 'wild', durationMs: 9000, minTime: 0, maxTime: 240, seed: 424242 });
-await call('getPlaybackTrace', { windowMs: 12000, limit: 1200 });
-
-// 3. Mixed Play/Scrub Regression Path
-await call('simulatePlaybackPath', { preset: 'play_scrub_stress_v1', startTime: 0, resetDiagnostics: true });
-await call('getPlaybackTrace', { windowMs: 20000, limit: 1200 });
-
-// 4. Play/Stop Cycle (warm decoder test)
-await call('simulatePlayback', { durationMs: 3000, resetDiagnostics: true });
-// wait 1s
-await call('simulatePlayback', { durationMs: 4000, resetDiagnostics: true });
-```
-
-**Worauf achten in Traces:**
-- `stalePreviewWhileTargetMoved` — Frame hängt obwohl Target sich bewegt
-- `decoderResets` / `seeks` — Explodierende Werte = zu viele Resets beim Scrubben
-- `previewFreezeEvents` / `longestPreviewFreezeMs` — Sichtbare Freezes
-- `previewPathCounts.empty` — Schwarze Frames nach Teleport/Seek
-- `driftSeconds` — Transport-Drift zwischen erwartet und tatsächlich
-- Health-Anomalien: `FRAME_STALL`, `SEEK_STUCK`, `HIGH_DROP_RATE`, `GPU_SURFACE_COLD`
-- `firstPreviewUpdateMs` — Startup-Latenz (Ziel: <100ms warm, <400ms cold)
-
-**Gotchas:**
-- `getStats` ist nur ein Snapshot — für kurze Freezes immer `getPlaybackTrace` oder `simulatePlayback` nutzen
-- `setPlayhead` ≠ Scrub (kein DOM-Drag, kein Grab/Pause-Flow)
-- Nach Änderungen an `WebCodecsPlayer` / Restore-Logic: Hard Reload statt HMR
-- Refresh-Bugs ≠ Teleport-Bugs — separater Repro-Pfad nötig
-- `wcStats` in getPlaybackTrace sind **kumulativ** über die Session — für A/B-Tests immer `reloadApp` zwischen Runs
-
-Detaillierte Docs: `docs/Features/Debugging.md` + `docs/Features/Playback-Debugging.md`
+More details: `docs/Features/Debugging.md` and `docs/Features/Playback-Debugging.md`.
 
 ---
 
-## 6. Wichtige Dateien
+## 11. Render And Data Flow
 
-| Bereich | Datei |
-|---------|-------|
-| Version/Changelog | `src/version.ts` |
-| Engine Entry | `src/engine/WebGPUEngine.ts` |
-| Render Dispatcher | `src/engine/render/RenderDispatcher.ts` |
-| Timeline Store | `src/stores/timeline/index.ts` |
-| Media Store | `src/stores/mediaStore/index.ts` |
-| History (Undo/Redo) | `src/stores/historyStore.ts` |
-| Effects Registry | `src/effects/index.ts` |
-| Effects Pipeline | `src/effects/EffectsPipeline.ts` |
-| Layer Builder | `src/services/layerBuilder/LayerBuilderService.ts` |
-| Video Sync | `src/services/layerBuilder/VideoSyncManager.ts` |
-| Logger | `src/services/logger.ts` |
-| Project Storage | `src/services/project/core/ProjectCoreService.ts` |
-| Engine Hook | `src/hooks/useEngine.ts` |
-| Monitoring Services | `src/services/monitoring/playbackHealthMonitor.ts` |
-| Media Runtime | `src/services/mediaRuntime/index.ts` |
-| Native Project Storage | `src/services/project/core/NativeProjectCoreService.ts` |
-| Feature Flags | `src/engine/featureFlags.ts` |
+Rough render path:
 
-### Neuen Effect hinzufügen
-Detailed guide: `docs/Features/Effects.md` (Developer Internals section)
+```text
+useEngine
+  -> WebGPUEngine.initialize()
+    -> RenderLoop.start()
+      -> RenderDispatcher.render(layers)
+        -> LayerCollector
+        -> Compositor / Effects
+        -> NestedCompRenderer
+        -> OutputPipeline
+        -> SlicePipeline
+```
 
----
-
-## 7. Texture Types
+Texture types:
 
 | Source | GPU Type |
-|--------|----------|
-| Video (HTMLVideoElement) | `texture_external` via `importExternalTexture` (zero-copy) |
-| Video (HTMLVideoElement, Firefox) | `texture_2d<f32>` via `htmlVideoPreviewFallback.ts` (copies to persistent texture to avoid black frames) |
-| Video (VideoFrame) | `texture_external` via `importExternalTexture` (zero-copy) |
-| Image (HTMLImageElement) | `texture_2d<f32>` via `copyExternalImageToTexture` (copied once, cached) |
-| Canvas (Text Clips) | `texture_2d<f32>` via `copyExternalImageToTexture` (cached by reference) |
-| Native Decoder Frames | `texture_2d<f32>` dynamic textures (re-uploaded per frame) |
+|---|---|
+| HTMLVideoElement | `texture_external` via `importExternalTexture` |
+| Firefox HTMLVideo fallback | `texture_2d<f32>` |
+| VideoFrame | `texture_external` |
+| HTMLImageElement | `texture_2d<f32>` |
+| Canvas / Text | `texture_2d<f32>` |
+| Native decoder frames | dynamic `texture_2d<f32>` |
 
 ---
 
-## 8. Render Pipeline
+## 12. Practical Agent Rules For This Repo
 
-```
-useEngine hook (src/hooks/useEngine.ts)
-  └── engine.initialize() -> WebGPUContext + all pipelines
-        └── RenderLoop.start()
-              └── requestAnimationFrame loop (idle detection + fps limiting)
-                    └── RenderDispatcher.render(layers)
-                          ├── LayerCollector: Import textures (external/cached/scrubbing)
-                          ├── Compositor: Ping-pong compositing + effects per layer
-                          ├── NestedCompRenderer: Handle compositions-in-compositions
-                          ├── OutputPipeline: Output to preview canvas
-                          └── SlicePipeline: Output to slice/render target canvases
-```
-
----
-
-*Ausführliche Dokumentation: `docs/Features/README.md`*
+- Read context before editing.
+- For timeline, playback, render, or export bugs, inspect logs/traces/monitoring first.
+- For larger feature changes, always check impact on `docs/Features/`, version/changelog locations, and tests.
+- For editor automation, prefer the `masterselects` skill instead of manual browser speculation.
+- Keep `AGENTS.md` and `CLAUDE.md` byte-identical.

@@ -702,7 +702,16 @@ export function useEngine() {
 
     const unsubClipDragPreview = useTimelineStore.subscribe(
       (state) => state.clipDragPreview,
-      () => {
+      (clipDragPreview) => {
+        const timelineState = useTimelineStore.getState();
+        if (!hasTimelineVisualRenderDemand({
+          clips: timelineState.clips,
+          tracks: timelineState.tracks,
+          playheadPosition: timelineState.playheadPosition,
+          clipDragPreview,
+        })) {
+          return;
+        }
         layerBuilder.invalidateCache();
         engine.requestRender();
       }

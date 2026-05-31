@@ -122,6 +122,7 @@ export function getTimelineReplayToolId(operation: TimelineEditOperation): Timel
     case 'ripple-delete-selection':
       return 'ripple-delete';
     case 'delete-gap-at-time':
+    case 'delete-all-gaps':
       return 'delete-gap';
     case 'trim-clip':
     case 'trim-edge-to-time':
@@ -275,6 +276,7 @@ function getPrimaryClipId(operation: TimelineEditOperation): string | undefined 
     case 'split-all-at-time':
     case 'select-clips-from-time':
     case 'delete-gap-at-time':
+    case 'delete-all-gaps':
     case 'place-timeline-range':
     case 'lift-range':
     case 'extract-range':
@@ -290,6 +292,7 @@ function getPrimaryTrackId(operation: TimelineEditOperation): string | undefined
     case 'split-all-at-time':
     case 'select-clips-from-time':
     case 'delete-gap-at-time':
+    case 'delete-all-gaps':
       return operation.trackIds?.[0];
     case 'place-timeline-range':
       return operation.trackIds?.[0];
@@ -327,6 +330,7 @@ function getPrimaryTimelineTime(operation: TimelineEditOperation): number | unde
       return operation.range?.startTime;
     case 'ripple-delete-selection':
     case 'delete-clips':
+    case 'delete-all-gaps':
     case 'slip-clip':
     case 'slide-clip':
       return undefined;
@@ -344,6 +348,7 @@ function getToneForOperation(operation: TimelineEditOperation): GuidedTone {
     case 'delete-clips':
     case 'ripple-delete-selection':
     case 'delete-gap-at-time':
+    case 'delete-all-gaps':
     case 'lift-range':
     case 'extract-range':
       return 'danger';
@@ -371,6 +376,15 @@ function formatOperationBody(operation: TimelineEditOperation): string {
       return `Cut ${operation.times.length} time${operation.times.length === 1 ? '' : 's'}.`;
     case 'select-clips-from-time':
       return `Select ${operation.direction} from ${formatTime(operation.time)}.`;
+    case 'delete-all-gaps':
+      if (operation.startTime !== undefined) {
+        return operation.trackIds?.length
+          ? `Close gaps from ${formatTime(operation.startTime)} on ${operation.trackIds.length} track${operation.trackIds.length === 1 ? '' : 's'}.`
+          : `Close timeline gaps from ${formatTime(operation.startTime)}.`;
+      }
+      return operation.trackIds?.length
+        ? `Close all gaps on ${operation.trackIds.length} track${operation.trackIds.length === 1 ? '' : 's'}.`
+        : 'Close all timeline gaps.';
     case 'place-timeline-range':
       return operation.startTime !== undefined
         ? `Place source at ${formatTime(operation.startTime)}.`

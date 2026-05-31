@@ -1993,7 +1993,7 @@
   }
 }
 
-/* ─── Pill buttons (like classic AI Video panel) ─── */
+/* Pill buttons */
 
 .fb-pill-group {
   display: flex;
@@ -3268,38 +3268,6 @@
 
 .fb-popover-pill.active .fb-popover-pill-meta {
   color: rgba(255, 255, 255, 0.82);
-}
-
-/* ─── Mode Toggle (in AIVideoPanel header) ─── */
-
-.ai-video-mode-toggle {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 5px;
-  background: var(--bg-tertiary);
-  margin-left: auto;
-}
-
-.ai-video-mode-btn {
-  padding: 2px 8px;
-  border: none;
-  border-radius: 3px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 11px;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.ai-video-mode-btn.active {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-}
-
-.ai-video-mode-btn:hover:not(.active) {
-  color: var(--text-secondary);
 }
 
 .fb-bubble-bar.has-inline-submenu .fb-pill-group .fb-popover {

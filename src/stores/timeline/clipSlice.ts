@@ -492,7 +492,7 @@ export const createClipSlice: SliceCreator<CoreClipActions> = (set, get) => ({
     // Handle image files
     if (mediaType === 'image') {
       const imageClip = applyAddClipOptions(
-        createImageClipPlaceholder({ trackId, file, startTime, estimatedDuration }),
+        createImageClipPlaceholder({ trackId, file, startTime, estimatedDuration, mediaFileId }),
         options,
       );
       set({ clips: [...clips, imageClip] });

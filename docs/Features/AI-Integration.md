@@ -2,7 +2,7 @@
 
 [← Back to Index](./README.md)
 
-GPT-powered editing with 79 exported tools across 15 exported definition groups, OpenAI/Cloud or local Lemonade chat providers, multi-provider AI video generation, transcription, multicam EDL generation, browser-local SAM 2 segmentation, and native-helper MatAnyone2 matting.
+GPT-powered editing with 86 exported model tools across 16 exported definition groups, OpenAI/Cloud or local Lemonade chat providers, multi-provider AI video/image/audio generation, transcription, multicam EDL generation, browser-local SAM 2 segmentation, and native-helper MatAnyone2 matting.
 
 ---
 
@@ -62,7 +62,7 @@ Manually imported Lemonade models may be exposed with a `user.` prefix, for exam
 
 Lemonade is a provider, not an editor bridge. It can return OpenAI-compatible tool-call suggestions, but MasterSelects still applies the chat approval mode and routes execution through the shared AI tool dispatcher.
 
-Because local FLM models have a smaller practical prompt budget than hosted models, Lemonade editor mode sends a compact high-use tool set instead of the full 79-tool catalog. The full exported catalog remains available to OpenAI/Cloud and to the local/native bridge.
+Because local FLM models have a smaller practical prompt budget than hosted models, Lemonade editor mode sends a compact high-use tool set instead of the full 86-tool catalog. The full exported catalog remains available to OpenAI/Cloud and to the local/native bridge.
 
 Lemonade chat responses use the OpenAI-compatible SSE streaming endpoint, so text appears incrementally in the chat panel while the local model is generating. Tool calls are collected from the streamed deltas and executed after the assistant response finishes. To stay within the 4096-token context used by current FLM models, Lemonade uses a shorter editor system prompt, compact tool results, and a lower completion-token limit than hosted models. If a local model still stalls after a tool result, MasterSelects times out the follow-up request and shows a deterministic tool-result summary instead of leaving the chat empty.
 
@@ -104,11 +104,7 @@ When enabled:
 - The chat UI applies its own approval gate before calling mutating or sensitive tools
 - AI can manipulate timeline directly
 
-The current tool surface is 79 exported tool definitions across 15 exported definition groups. Two dispatch gaps remain in the shared registry:
-- `openComposition` is defined and policy-registered, but the handler registry still does not map it
-- `searchVideos` is the definition name, while the dispatcher still exposes the handler as `searchYouTube`
-
-There is also a `gaussian.ts` definition file, but it is not part of the exported `AI_TOOLS` array yet, so those tools are not currently exposed to the chat model.
+The current model-exposed surface is 86 exported tool definitions across 16 exported definition groups. `openComposition` and `searchVideos` are both mapped through the shared handler registry. There is also a `gaussian.ts` definition file, but it is not part of the exported `AI_TOOLS` array yet, so those tools are not currently exposed to the chat model.
 
 In development, the same shared tool surface is also exposed in the browser console:
 
@@ -278,9 +274,9 @@ MatAnyone2 is the second step in the workflow:
 
 ## AI Editor Tools
 
-### 80 Tools across 15 Exported Definition Groups
+### 86 Tools across 16 Exported Definition Groups
 
-> **Note:** `openComposition` and `searchVideos` are still the two current dispatch gaps. They are defined and appear in the policy registry, but the shared handler registry does not map them yet. Gaussian Splat tool definitions also exist in `src/services/aiTools/definitions/gaussian.ts`, but that file is not currently exported through `AI_TOOLS`.
+> **Note:** The 86-tool count is the model-exposed `AI_TOOLS` catalog. Bridge-only diagnostics can exist as handler/policy entries without being exposed to the chat model. Gaussian Splat tool definitions also exist in `src/services/aiTools/definitions/gaussian.ts`, but that file is not currently exported through `AI_TOOLS`.
 
 The exported tool groups are:
 - Timeline state and selection
@@ -298,6 +294,7 @@ The exported tool groups are:
 - Transitions
 - Masks
 - Stats and debug
+- Node Workspace
 
 The chat and bridge code call the shared dispatcher, so the same registry is used in-chat, through the Vite dev bridge, and through the Native Helper bridge. Approval behavior is enforced in the chat UI before execution, while the dispatcher policy is the actual execution gate.
 
@@ -539,4 +536,4 @@ Tool definition integrity is covered by the unit tests in `tests/unit/aiToolDefi
 
 ---
 
-*Source: `src/main.tsx`, `src/components/panels/AIChatPanel.tsx`, `src/components/panels/AIVideoPanel.tsx`, `src/components/panels/SAM2Panel.tsx`, `src/components/panels/MultiCamPanel.tsx`, `src/components/panels/SceneDescriptionPanel.tsx`, `src/components/preview/SAM2Overlay.tsx`, `src/services/sam2/SAM2Service.ts`, `src/services/sam2/SAM2ModelManager.ts`, `src/services/sam2/sam2Worker.ts`, `src/stores/sam2Store.ts`, `src/services/aiTools/`, `src/services/aiTools/aiFeedback.ts`, `src/services/aiTools/executionState.ts`, `src/services/aiTools/bridge.ts`, `src/services/sceneDescriber.ts`, `src/services/claudeService.ts`, `src/services/kieAiService.ts`, `src/services/cloudAiService.ts`, `src/services/flashboard/`, `src/stores/multicamStore.ts`, `src/services/multicamAnalyzer.ts`, `functions/api/ai/chat.ts`, `functions/api/ai/chat-history.ts`, `functions/lib/chatLog.ts`*
+*Source: `src/main.tsx`, `src/components/panels/AIChatPanel.tsx`, `src/components/panels/media/MediaAIGenerativeTray.tsx`, `src/components/panels/flashboard/FlashBoardComposer.tsx`, `src/components/panels/SAM2Panel.tsx`, `src/components/panels/MultiCamPanel.tsx`, `src/components/panels/SceneDescriptionPanel.tsx`, `src/components/preview/SAM2Overlay.tsx`, `src/services/sam2/SAM2Service.ts`, `src/services/sam2/SAM2ModelManager.ts`, `src/services/sam2/sam2Worker.ts`, `src/stores/sam2Store.ts`, `src/services/aiTools/`, `src/services/aiTools/aiFeedback.ts`, `src/services/aiTools/executionState.ts`, `src/services/aiTools/bridge.ts`, `src/services/sceneDescriber.ts`, `src/services/claudeService.ts`, `src/services/kieAiService.ts`, `src/services/cloudAiService.ts`, `src/services/flashboard/`, `src/stores/multicamStore.ts`, `src/services/multicamAnalyzer.ts`, `functions/api/ai/chat.ts`, `functions/api/ai/chat-history.ts`, `functions/lib/chatLog.ts`*

@@ -46,7 +46,7 @@ For Firefox users:
 ### Select Project Folder
 1. Click **"New Project"**
 2. Choose or create a folder for your project
-3. App creates the project folder with `project.json` plus the standard subfolders (`Raw/`, `Downloads/`, `Proxy/`, `Cache/`, `Analysis/`, `Transcripts/`, `Renders/`, `Backups/`)
+3. App creates the project folder with `project.json` plus the standard subfolders (`Raw/`, `Downloads/`, `Proxy/`, `Audio Proxies/`, `Cache/`, `Analysis/`, `Transcripts/`, `Renders/`, `Backups/`, `Prompts/`)
 4. Folder handle stored in IndexedDB (FSA) or path stored in localStorage (`ms-native-last-project-path`) for future sessions
 
 ### Continue Without Saving
@@ -127,7 +127,7 @@ MyProject/
 |   +-- scan/              # Imported PLY/splat sequence frames
 |   |   +-- scan000000.ply
 |   |   +-- scan000001.ply
-+-- Downloads/             # Downloaded videos (platform subfolders)
++-- Downloads/             # FSA download copies (platform subfolders)
 |   +-- YT/
 |   |   +-- video_title.mp4
 |   +-- TikTok/
@@ -140,7 +140,8 @@ MyProject/
 +-- Backups/               # Auto-backup folder
 |   +-- project_2026-01-11_14-00-00.json
 |   +-- ... (last 20 backups)
-+-- Proxy/                 # Generated proxy video/audio files
++-- Proxy/                 # Generated proxy video frame folders and legacy proxy media
++-- Audio Proxies/         # Current WAV audio proxy files
 +-- Cache/                 # Cached derived data
 |   +-- thumbnails/        # Media thumbnails (WebP, keyed by file hash)
 |   +-- splats/            # Cached Gaussian splat runtimes
@@ -386,8 +387,9 @@ Temporary camera `NO KF` live offsets are intentionally not saved. They only aff
 | `.keys.enc` | Encrypted API keys |
 | `Backups/` | Auto-backup files |
 | `Raw/` | Copied media files |
-| `Downloads/` | Downloaded videos (per platform) |
-| `Proxy/` | Proxy video/audio files |
+| `Downloads/` | Downloaded videos (per platform) for File System Access projects; Native Helper projects import completed downloads through `Raw/` |
+| `Proxy/` | Proxy video frame folders and legacy proxy media |
+| `Audio Proxies/` | Current WAV audio proxy files |
 | `Cache/thumbnails/` | Media thumbnails (WebP) |
 | `Cache/waveforms/` | Waveform data |
 | `Analysis/` | Clip analysis cache |
@@ -474,17 +476,25 @@ Each composition stores its own resolution (width/height) in the project file:
 
 ### Actions
 ```typescript
-saveNamedLayout()          // View -> Layouts; stores dock layout, timeline focus, and track heights
+saveNamedLayout()          // View -> Layouts; stores dock layout, timeline focus, track slots, heights, and visibility
 saveCurrentNamedLayout()   // View -> Layouts; overwrites the active named layout
 loadSavedLayout()          // View -> Layouts; restores layout with a 500ms dock transition
 setDefaultSavedLayout()    // View -> Layouts
 toggleFavoriteSavedLayout()// View -> Layouts, center header quick switcher
-saveLayoutAsDefault()      // View -> Layouts; stores dock layout, timeline focus, and track heights
+saveLayoutAsDefault()      // View -> Layouts; stores dock layout, timeline focus, track slots, heights, and visibility
 resetLayout()              // View -> Layouts
 ```
 
-The hardcoded default layout is the shared Video/Audio Edit arrangement: Media on the left,
-Preview in the center, Properties/Export on the right, and a compact Timeline at the bottom.
+The hardcoded factory layouts are `VIDEO EDIT` and `AUDIO EDIT`. `VIDEO EDIT` is the default
+layout with Media on the left, Preview in the center, Properties/History on the right, and
+Timeline at the bottom. It stores balanced timeline focus with two visible 70 px video tracks
+and one visible 48 px compact audio track, and first empty loads mark it as the active named
+layout. `AUDIO EDIT` stores audio focus with Timeline above
+Media, Audio Mixer, and Properties/History, using two visible 40 px video context tracks and
+one visible 96 px audio track. Saved layouts keep per-type track slot counts, per-slot height
+and visibility, and legacy per-track-id height/visibility for exact project restores. Loading
+a layout creates missing tracks to satisfy the saved slot count, but it does not delete extra
+existing tracks because that could remove clips.
 
 ---
 

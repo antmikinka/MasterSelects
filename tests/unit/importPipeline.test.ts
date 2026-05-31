@@ -89,6 +89,10 @@ vi.mock('../../src/stores/settingsStore', () => ({
 
 import { processImport } from '../../src/stores/mediaStore/helpers/importPipeline';
 
+function createFrameIndexSet(count: number): Set<number> {
+  return new Set(Array.from({ length: count }, (_, index) => index));
+}
+
 describe('processImport', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -193,28 +197,20 @@ describe('processImport', () => {
     expect(result.mediaFile.duration).toBe(5);
   });
 
-  it('does not mark a partial existing proxy as ready during import', async () => {
-    mocks.getProxyFrameCount.mockResolvedValue(300);
-    mocks.getProxyFrameIndices.mockResolvedValue(
-      new Set(Array.from({ length: 300 }, (_, index) => index))
-    );
-
+  it('ignores incomplete JPEG proxy frames during import', async () => {
     const result = await processImport({
       file: new File(['video-bytes'], 'clip.mp4', { type: 'video/mp4' }),
-      id: 'media-partial-proxy',
+      id: 'media-legacy-proxy',
     });
 
     expect(result.mediaFile.proxyStatus).toBe('none');
-    expect(result.mediaFile.proxyFrameCount).toBe(300);
-    expect(result.mediaFile.proxyProgress).toBe(80);
+    expect(result.mediaFile.proxyFrameCount).toBeUndefined();
+    expect(result.mediaFile.proxyProgress).toBeUndefined();
     expect(result.mediaFile.proxyFps).toBeUndefined();
   });
 
-  it('marks an existing proxy as ready only when enough frames are present', async () => {
-    mocks.getProxyFrameCount.mockResolvedValue(370);
-    mocks.getProxyFrameIndices.mockResolvedValue(
-      new Set(Array.from({ length: 370 }, (_, index) => index))
-    );
+  it('marks an existing JPEG proxy sequence as ready during import', async () => {
+    mocks.getProxyFrameIndices.mockResolvedValue(createFrameIndexSet(375));
 
     const result = await processImport({
       file: new File(['video-bytes'], 'clip.mp4', { type: 'video/mp4' }),
@@ -222,16 +218,15 @@ describe('processImport', () => {
     });
 
     expect(result.mediaFile.proxyStatus).toBe('ready');
-    expect(result.mediaFile.proxyFrameCount).toBe(370);
+    expect(result.mediaFile.proxyFrameCount).toBe(375);
     expect(result.mediaFile.proxyProgress).toBe(100);
     expect(result.mediaFile.proxyFps).toBe(30);
+    expect(result.mediaFile.proxyFormat).toBe('jpeg-sequence');
   });
 
   it('uses source fps when restoring a complete lower-fps proxy', async () => {
     mocks.getMediaInfo.mockResolvedValue({ duration: 12.5, width: 1920, height: 1080, fps: 24 });
-    mocks.getProxyFrameIndices.mockResolvedValue(
-      new Set(Array.from({ length: 300 }, (_, index) => index))
-    );
+    mocks.getProxyFrameIndices.mockResolvedValue(createFrameIndexSet(300));
 
     const result = await processImport({
       file: new File(['video-bytes'], 'clip-24fps.mp4', { type: 'video/mp4' }),
@@ -242,5 +237,6 @@ describe('processImport', () => {
     expect(result.mediaFile.proxyFrameCount).toBe(300);
     expect(result.mediaFile.proxyProgress).toBe(100);
     expect(result.mediaFile.proxyFps).toBe(24);
+    expect(result.mediaFile.proxyFormat).toBe('jpeg-sequence');
   });
 });

@@ -261,13 +261,17 @@ function withAudioExportPreflightMeasurementHistory(
   };
 }
 
+function createTrackId(type: 'video' | 'audio' | 'midi'): string {
+  return `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export const createTrackSlice: SliceCreator<TrackActions> = (set, get) => ({
   addTrack: (type) => {
     const { tracks, expandedTracks } = get();
     const typeCount = tracks.filter(t => t.type === type).length + 1;
     const typeLabel = type === 'video' ? 'Video' : type === 'midi' ? 'MIDI' : 'Audio';
     const newTrack: TimelineTrack = {
-      id: `${type}-${Date.now()}`,
+      id: createTrackId(type),
       name: `${typeLabel} ${typeCount}`,
       type,
       height: type === 'video' ? 60 : 40,

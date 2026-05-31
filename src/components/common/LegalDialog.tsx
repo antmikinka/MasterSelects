@@ -281,6 +281,7 @@ function PrivacyEN() {
         <li><strong>Account data:</strong> Email address, display name — Legal basis: Contract performance (Art. 6(1)(b) GDPR)</li>
         <li><strong>Payment data:</strong> Processed directly by <strong>Stripe, Inc.</strong> (South San Francisco, CA, USA). Stripe is certified under the EU-US Data Privacy Framework. We do not store credit card numbers or bank details. Legal basis: Contract performance (Art. 6(1)(b) GDPR)</li>
         <li><strong>Usage data:</strong> Credit balance, usage history — Legal basis: Contract performance (Art. 6(1)(b) GDPR)</li>
+        <li><strong>Hosted AI chat logs:</strong> When you use hosted AI chat, prompts/messages, assistant responses, tool calls, token counts, credit cost, duration, status, and error state may be stored in our D1 database for account history, billing/debugging, abuse handling, and support — Legal basis: Contract performance (Art. 6(1)(b) GDPR) and legitimate interest (Art. 6(1)(f) GDPR)</li>
         <li><strong>Billing data:</strong> Retained for 10 years per German tax law (§ 147 AO, § 257 HGB) — Legal basis: Legal obligation (Art. 6(1)(c) GDPR)</li>
       </ul>
 
@@ -288,7 +289,8 @@ function PrivacyEN() {
       <p>
         MasterSelects stores project data, settings, and media references in your browser's IndexedDB.
         This data does not leave your computer and is not transmitted to us. AI features requiring an
-        API connection are explicitly labeled as such.
+        API connection are explicitly labeled as such; hosted AI chat is processed on the Cloudflare backend
+        and can be logged as described above.
       </p>
 
       <h3>6. Your Rights</h3>
@@ -314,7 +316,7 @@ function PrivacyEN() {
 
       <h3>8. Changes</h3>
       <p>This privacy policy is updated as needed. The current version is always available in the app under Info → Privacy.</p>
-      <p className="legal-meta">Last updated: March 2026</p>
+      <p className="legal-meta">Last updated: May 2026</p>
     </div>
   );
 }
@@ -438,13 +440,15 @@ function PrivacyDE() {
         <li><strong>Kontodaten:</strong> E-Mail-Adresse, Anzeigename — Rechtsgrundlage: Vertragserfüllung (Art. 6 Abs. 1 lit. b DSGVO)</li>
         <li><strong>Zahlungsdaten:</strong> Werden direkt von <strong>Stripe, Inc.</strong> verarbeitet. Stripe ist unter dem EU-US Data Privacy Framework zertifiziert. Wir speichern keine Kreditkartennummern oder Bankdaten. Rechtsgrundlage: Vertragserfüllung (Art. 6 Abs. 1 lit. b DSGVO)</li>
         <li><strong>Nutzungsdaten:</strong> Credit-Balance, Nutzungshistorie — Rechtsgrundlage: Vertragserfüllung (Art. 6 Abs. 1 lit. b DSGVO)</li>
+        <li><strong>Hosted-AI-Chat-Logs:</strong> Wenn Sie den gehosteten AI-Chat nutzen, k&ouml;nnen Prompts/Nachrichten, Antworten, Tool Calls, Tokenzahlen, Credit-Kosten, Dauer, Status und Fehlerzustand in unserer D1-Datenbank f&uuml;r Account-Historie, Abrechnung/Debugging, Missbrauchserkennung und Support gespeichert werden — Rechtsgrundlage: Vertragserf&uuml;llung (Art. 6 Abs. 1 lit. b DSGVO) und berechtigtes Interesse (Art. 6 Abs. 1 lit. f DSGVO)</li>
         <li><strong>Rechnungsdaten:</strong> Werden gem. § 147 AO und § 257 HGB für 10 Jahre aufbewahrt — Rechtsgrundlage: Gesetzliche Pflicht (Art. 6 Abs. 1 lit. c DSGVO)</li>
       </ul>
 
       <h3>5. Lokale Datenverarbeitung</h3>
       <p>
         MasterSelects speichert Projektdaten, Einstellungen und Medien-Referenzen in der IndexedDB Ihres Browsers.
-        Diese Daten verlassen Ihren Computer nicht. AI-Funktionen mit API-Verbindung werden explizit gekennzeichnet.
+        Diese Daten verlassen Ihren Computer nicht. AI-Funktionen mit API-Verbindung werden explizit gekennzeichnet;
+        der gehostete AI-Chat wird auf dem Cloudflare-Backend verarbeitet und kann wie oben beschrieben protokolliert werden.
       </p>
 
       <h3>6. Ihre Rechte</h3>
@@ -468,7 +472,7 @@ function PrivacyDE() {
 
       <h3>8. Änderungen</h3>
       <p>Diese Datenschutzerklärung wird bei Bedarf angepasst. Aktuelle Version unter Info → Datenschutz.</p>
-      <p className="legal-meta">Stand: März 2026</p>
+      <p className="legal-meta">Stand: Mai 2026</p>
     </div>
   );
 }
@@ -555,6 +559,12 @@ function PrivacyFR() {
       </p>
       <h3>4. Comptes utilisateurs et paiements</h3>
       <p>Les paiements sont traités par <strong>Stripe, Inc.</strong> (certifié EU-US DPF). Nous ne stockons aucune donnée de carte bancaire.</p>
+      <p>
+        <strong>Journaux du chat IA hébergé :</strong> lorsque vous utilisez le chat IA hébergé,
+        les messages/prompts, réponses, appels d&apos;outils, nombres de tokens, coût en crédits,
+        durée, statut et état d&apos;erreur peuvent être stockés dans notre base D1 pour
+        l&apos;historique du compte, la facturation/le débogage, la lutte contre les abus et le support.
+      </p>
       <h3>5. Vos droits (RGPD)</h3>
       <ul>
         <li>Accès (Art. 15), Rectification (Art. 16), Effacement (Art. 17)</li>
@@ -566,7 +576,7 @@ function PrivacyFR() {
         Uniquement des cookies techniques nécessaires. Pas de cookies de suivi ou marketing. La surveillance de visite
         décrite ci-dessus ne stocke pas d&apos;information sur votre terminal à cette fin.
       </p>
-      <p className="legal-meta">Dernière mise à jour : mars 2026</p>
+      <p className="legal-meta">Dernière mise à jour : mai 2026</p>
     </div>
   );
 }
@@ -643,6 +653,12 @@ function PrivacyES() {
       </p>
       <h3>4. Cuentas y pagos</h3>
       <p>Los pagos son procesados por <strong>Stripe, Inc.</strong> (certificado EU-US DPF). No almacenamos datos de tarjetas.</p>
+      <p>
+        <strong>Registros del chat de IA alojado:</strong> cuando utiliza el chat de IA alojado, los mensajes/prompts,
+        respuestas, llamadas a herramientas, recuentos de tokens, coste en créditos, duración, estado y errores
+        pueden almacenarse en nuestra base D1 para historial de cuenta, facturación/depuración, prevención de abuso
+        y soporte.
+      </p>
       <h3>5. Sus derechos (RGPD)</h3>
       <ul>
         <li>Acceso (Art. 15), Rectificación (Art. 16), Supresión (Art. 17)</li>
@@ -654,7 +670,7 @@ function PrivacyES() {
         Solo cookies técnicamente necesarias. Sin cookies de seguimiento o marketing. La supervisión de visitas
         descrita arriba no almacena información en su dispositivo con esta finalidad.
       </p>
-      <p className="legal-meta">Última actualización: marzo 2026</p>
+      <p className="legal-meta">Última actualización: mayo 2026</p>
     </div>
   );
 }
@@ -724,6 +740,11 @@ function PrivacyPT() {
       </p>
       <h3>4. Pagamentos</h3>
       <p>Processados pelo <strong>Stripe, Inc.</strong> (certificado EU-US DPF). Não armazenamos dados de cartão.</p>
+      <p>
+        <strong>Logs do chat de IA hospedado:</strong> quando você usa o chat de IA hospedado, mensagens/prompts,
+        respostas, chamadas de ferramentas, contagens de tokens, custo em créditos, duração, status e estado de erro
+        podem ser armazenados no nosso banco D1 para histórico da conta, cobrança/debug, prevenção de abuso e suporte.
+      </p>
       <h3>5. Seus direitos (RGPD)</h3>
       <ul>
         <li>Acesso (Art. 15), Retificação (Art. 16), Eliminação (Art. 17)</li>
@@ -735,7 +756,7 @@ function PrivacyPT() {
         Apenas cookies tecnicamente necessários. Nenhum cookie de rastreamento ou marketing. O monitoramento de
         visitas descrito acima não armazena informações no seu dispositivo para essa finalidade.
       </p>
-      <p className="legal-meta">Última atualização: março 2026</p>
+      <p className="legal-meta">Última atualização: maio 2026</p>
     </div>
   );
 }
@@ -796,6 +817,11 @@ function PrivacyJA() {
       </p>
       <h3>4. 決済</h3>
       <p><strong>Stripe, Inc.</strong> が決済を処理します。クレジットカード情報は保存しません。</p>
+      <p>
+        <strong>Hosted AI chat logs:</strong> when you use hosted AI chat, prompts/messages, responses, tool calls,
+        token counts, credit cost, duration, status, and error state may be stored in our D1 database for account
+        history, billing/debugging, abuse handling, and support.
+      </p>
       <h3>5. あなたの権利（GDPR）</h3>
       <ul>
         <li>アクセス権（第15条）、訂正権（第16条）、消去権（第17条）</li>
@@ -806,7 +832,7 @@ function PrivacyJA() {
       <p>
         認証とセッション管理のための技術的に必要な Cookie のみを使用します。トラッキング Cookie やマーケティング Cookie は使用しません。上記の訪問監視は、この目的でお使いの端末に情報を保存しません。
       </p>
-      <p className="legal-meta">最終更新: 2026年3月</p>
+      <p className="legal-meta">最終更新: 2026年5月</p>
     </div>
   );
 }
@@ -867,6 +893,11 @@ function PrivacyKO() {
       </p>
       <h3>4. 결제</h3>
       <p><strong>Stripe, Inc.</strong>가 결제를 처리합니다. 신용카드 정보는 저장하지 않습니다.</p>
+      <p>
+        <strong>Hosted AI chat logs:</strong> when you use hosted AI chat, prompts/messages, responses, tool calls,
+        token counts, credit cost, duration, status, and error state may be stored in our D1 database for account
+        history, billing/debugging, abuse handling, and support.
+      </p>
       <h3>5. 귀하의 권리 (GDPR)</h3>
       <ul>
         <li>열람권 (제15조), 정정권 (제16조), 삭제권 (제17조)</li>
@@ -877,7 +908,7 @@ function PrivacyKO() {
       <p>
         인증과 세션 관리를 위한 기술적으로 필요한 쿠키만 사용합니다. 추적 또는 마케팅 쿠키는 사용하지 않습니다. 위에서 설명한 방문 모니터링은 이 목적을 위해 사용자 단말기에 정보를 저장하지 않습니다.
       </p>
-      <p className="legal-meta">최종 업데이트: 2026년 3월</p>
+      <p className="legal-meta">최종 업데이트: 2026년 5월</p>
     </div>
   );
 }
@@ -937,6 +968,11 @@ function PrivacyZH() {
       </p>
       <h3>4. 支付</h3>
       <p>由 <strong>Stripe, Inc.</strong> 处理支付。我们不存储信用卡信息。</p>
+      <p>
+        <strong>Hosted AI chat logs:</strong> when you use hosted AI chat, prompts/messages, responses, tool calls,
+        token counts, credit cost, duration, status, and error state may be stored in our D1 database for account
+        history, billing/debugging, abuse handling, and support.
+      </p>
       <h3>5. 您的权利（GDPR）</h3>
       <ul>
         <li>访问权（第15条）、更正权（第16条）、删除权（第17条）</li>
@@ -947,7 +983,7 @@ function PrivacyZH() {
       <p>
         我们仅使用身份验证和会话管理所必需的技术性 Cookie，不使用跟踪或营销 Cookie。上述访问监控不会为此目的在您的设备上存储信息。
       </p>
-      <p className="legal-meta">最后更新: 2026年3月</p>
+      <p className="legal-meta">最后更新: 2026年5月</p>
     </div>
   );
 }

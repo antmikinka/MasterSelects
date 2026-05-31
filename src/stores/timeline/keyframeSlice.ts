@@ -9,8 +9,6 @@ import { DEFAULT_SCENE_CAMERA_SETTINGS, type SceneCameraSettings } from '../medi
 import {
   DEFAULT_TRANSFORM,
   PROPERTY_ROW_HEIGHT,
-  STEM_LAYER_HEADER_ROW_HEIGHT,
-  STEM_LAYER_ROW_HEIGHT,
   MIN_CURVE_EDITOR_HEIGHT,
   MAX_CURVE_EDITOR_HEIGHT,
 } from './constants';
@@ -80,15 +78,6 @@ import {
   rgbColorToHex,
   setHexColorChannel,
 } from '../../utils/colorParam';
-
-const ACTIVE_STEM_JOB_PHASES = new Set([
-  'queued',
-  'preparing',
-  'downloading-model',
-  'loading-model',
-  'separating',
-  'storing',
-]);
 
 type MaskPathVertex = MaskPathKeyframeValue['vertices'][number];
 
@@ -2041,8 +2030,6 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
     const {
       expandedTracks,
       expandedCurveProperties,
-      expandedClipStemLayerIds,
-      clipStemSeparationJobs,
       clips,
       selectedClipIds,
       clipKeyframes,
@@ -2054,25 +2041,11 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
 
     const trackClips = clips.filter(c => c.trackId === trackId);
     const selectedTrackClips = trackClips.filter(c => selectedClipIds.has(c.id));
-    const stemLayerHeight = trackClips.reduce((height, clip) => {
-      const stemSeparation = clip.audioState?.stemSeparation;
-      const job = clipStemSeparationJobs[clip.id];
-      const hasActiveStemJob = ACTIVE_STEM_JOB_PHASES.has(job?.phase ?? 'failed');
-      const showsCompletedStems = selectedClipIds.has(clip.id) && Boolean(stemSeparation?.stems.length);
-      if (!hasActiveStemJob && !showsCompletedStems) return height;
-
-      const activeJobHeight = hasActiveStemJob ? STEM_LAYER_ROW_HEIGHT : 0;
-      const completedStemHeight = showsCompletedStems && expandedClipStemLayerIds.has(clip.id)
-        ? ((stemSeparation?.stems.length ?? 0) + 1) * STEM_LAYER_ROW_HEIGHT
-        : 0;
-
-      return height + STEM_LAYER_HEADER_ROW_HEIGHT + activeJobHeight + completedStemHeight;
-    }, 0);
     const selectedTrackClip = selectedTrackClips[0];
 
     // If no clip is selected in this track, no property rows
     if (!selectedTrackClip) {
-      return baseHeight + stemLayerHeight;
+      return baseHeight;
     }
 
     const clipId = selectedTrackClip.id;
@@ -2080,7 +2053,7 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
 
     // If no keyframes at all, no property rows
     if (keyframes.length === 0) {
-      return baseHeight + stemLayerHeight;
+      return baseHeight;
     }
 
     // Flattened display: count unique properties with keyframes
@@ -2106,7 +2079,7 @@ export const createKeyframeSlice: SliceCreator<KeyframeActions> = (set, get) => 
       });
     }
 
-    return baseHeight + stemLayerHeight + extraHeight;
+    return baseHeight + extraHeight;
   },
 
   // Check if any clip on a track has keyframes

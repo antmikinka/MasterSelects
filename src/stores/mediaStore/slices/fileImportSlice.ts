@@ -1,6 +1,7 @@
 // File import actions - unified import logic
 
 import type { FileImportResult, MediaFile, MediaSliceCreator, MediaState, SignalAssetItem } from '../types';
+import type { MediaFileStemInfo } from '../../../types/audio';
 import { generateId, processImport } from '../helpers/importPipeline';
 import { processGaussianSplatSequenceImport } from '../helpers/gaussianSplatSequenceImport';
 import { processModelSequenceImport } from '../helpers/modelSequenceImport';
@@ -72,6 +73,7 @@ export interface FileImportActions {
 export interface ImportFileOptions {
   forceCopyToProject?: boolean;
   projectFileName?: string;
+  stemInfo?: MediaFileStemInfo;
 }
 
 async function resolveImportEntry(
@@ -318,6 +320,21 @@ function startMediaFileAudioProxyGeneration(
   });
 }
 
+function startVideoProxyGenerationIfNeeded(get: () => MediaState, id: string): void {
+  const state = get() as MediaState & { startProxyGenerationQueue?: () => void };
+  if (!state.proxyEnabled) return;
+
+  const mediaFile = state.files.find((file) => file.id === id);
+  if (mediaFile?.type !== 'video' || mediaFile.isImporting) return;
+
+  queueMicrotask(() => {
+    const latestState = get() as MediaState & { startProxyGenerationQueue?: () => void };
+    if (latestState.proxyEnabled) {
+      latestState.startProxyGenerationQueue?.();
+    }
+  });
+}
+
 function finalizeImportedMediaFile(
   set: (partial: Partial<MediaState> | ((state: MediaState) => Partial<MediaState>)) => void,
   get: () => MediaState,
@@ -332,6 +349,7 @@ function finalizeImportedMediaFile(
     (mediaFileId) => get().files.find((file) => file.id === mediaFileId),
   );
   startMediaFileAudioProxyGeneration(set, get, id);
+  startVideoProxyGenerationIfNeeded(get, id);
 }
 
 function splitModelSequenceEntries(entries: ResolvedLegacyImportEntry[]): {
@@ -382,7 +400,17 @@ export const createFileImportSlice: MediaSliceCreator<FileImportActions> = (set,
     );
     if (existing) {
       log.info(`Skipping duplicate: ${file.name} (${file.size} bytes) - already exists as ${existing.id}`);
+      if (options?.stemInfo) {
+        const updatedExisting = { ...existing, stemInfo: options.stemInfo };
+        set((state) => ({
+          files: state.files.map((candidate) => candidate.id === existing.id ? updatedExisting : candidate),
+        }));
+        startMediaFileAudioProxyGeneration(set, get, existing.id);
+        startVideoProxyGenerationIfNeeded(get, existing.id);
+        return updatedExisting;
+      }
       startMediaFileAudioProxyGeneration(set, get, existing.id);
+      startVideoProxyGenerationIfNeeded(get, existing.id);
       return existing;
     }
 
@@ -428,9 +456,12 @@ export const createFileImportSlice: MediaSliceCreator<FileImportActions> = (set,
         projectFileName: options?.projectFileName,
         typeOverride: type,
       });
-      finalizeImportedMediaFile(set, get, id, result.mediaFile);
-      log.info('Complete:', result.mediaFile.name);
-      return result.mediaFile;
+      const mediaFile = options?.stemInfo
+        ? { ...result.mediaFile, stemInfo: options.stemInfo }
+        : result.mediaFile;
+      finalizeImportedMediaFile(set, get, id, mediaFile);
+      log.info('Complete:', mediaFile.name);
+      return mediaFile;
     } catch (err) {
       log.error(`Import failed: ${file.name}`, err);
       set((state) => ({

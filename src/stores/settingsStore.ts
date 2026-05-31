@@ -57,14 +57,25 @@ export type AIProvider = 'openai' | 'lemonade';
 
 export type GuidedActionReplayVisualizationMode = 'off' | 'concise' | 'full';
 export type GuidedActionReplayCompressionMode = 'none' | 'family' | 'aggressive';
+export type TimelineZoomAnchor = 'playhead' | 'mouse';
 
 export const DEFAULT_GUIDED_ACTION_REPLAY_BUDGET_MS = 3000;
+export const DEFAULT_SHORTCUT_DISPLAY_SCALE = 1;
+export const MIN_SHORTCUT_DISPLAY_SCALE = 0.75;
+export const MAX_SHORTCUT_DISPLAY_SCALE = 2;
 
 function clampGuidedActionReplayBudgetMs(value: number): number {
   if (!Number.isFinite(value)) {
     return DEFAULT_GUIDED_ACTION_REPLAY_BUDGET_MS;
   }
   return Math.max(0, Math.round(value));
+}
+
+function clampShortcutDisplayScale(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_SHORTCUT_DISPLAY_SCALE;
+  }
+  return Math.min(MAX_SHORTCUT_DISPLAY_SCALE, Math.max(MIN_SHORTCUT_DISPLAY_SCALE, value));
 }
 
 export interface APIKeys {
@@ -131,6 +142,13 @@ interface SettingsState {
 
   // Mobile/Desktop view
   forceDesktopMode: boolean;  // Show desktop UI even on mobile devices
+
+  // Timeline interaction
+  timelineZoomAnchor: TimelineZoomAnchor;  // Where Ctrl/Alt+wheel zoom keeps focus
+
+  // Input display
+  showShortcutDisplay: boolean;  // Show pressed keys and mouse clicks in a screen overlay
+  shortcutDisplayScale: number;  // Size multiplier for the input overlay
 
   // GPU preference
   gpuPowerPreference: GPUPowerPreference;  // 'high-performance' (dGPU) or 'low-power' (iGPU)
@@ -203,6 +221,9 @@ interface SettingsState {
   setNativeHelperPort: (port: number) => void;
   setNativeHelperConnected: (connected: boolean) => void;
   setForceDesktopMode: (force: boolean) => void;
+  setTimelineZoomAnchor: (anchor: TimelineZoomAnchor) => void;
+  setShowShortcutDisplay: (show: boolean) => void;
+  setShortcutDisplayScale: (scale: number) => void;
   setGpuPowerPreference: (preference: GPUPowerPreference) => void;
   setMatAnyoneEnabled: (enabled: boolean) => void;
   setMatAnyonePythonPath: (path: string) => void;
@@ -283,6 +304,9 @@ export const useSettingsStore = create<SettingsState>()(
       nativeHelperPort: 9876, // Default WebSocket port
       nativeHelperConnected: false, // Not connected initially
       forceDesktopMode: false, // Use responsive detection by default
+      timelineZoomAnchor: 'mouse' as TimelineZoomAnchor, // Zoom toward the mouse pointer by default
+      showShortcutDisplay: false, // Optional Blender-style input overlay
+      shortcutDisplayScale: DEFAULT_SHORTCUT_DISPLAY_SCALE,
       gpuPowerPreference: 'high-performance', // Prefer dGPU by default
       matanyoneEnabled: false, // MatAnyone2 disabled by default
       matanyonePythonPath: '', // Auto-detect Python path
@@ -398,6 +422,18 @@ export const useSettingsStore = create<SettingsState>()(
 
       setForceDesktopMode: (force) => {
         set({ forceDesktopMode: force });
+      },
+
+      setTimelineZoomAnchor: (anchor) => {
+        set({ timelineZoomAnchor: anchor });
+      },
+
+      setShowShortcutDisplay: (show) => {
+        set({ showShortcutDisplay: show });
+      },
+
+      setShortcutDisplayScale: (scale) => {
+        set({ shortcutDisplayScale: clampShortcutDisplayScale(scale) });
       },
 
       setGpuPowerPreference: (preference) => {
@@ -626,6 +662,9 @@ export const useSettingsStore = create<SettingsState>()(
         nativeDecodeEnabled: state.nativeDecodeEnabled,
         nativeHelperPort: state.nativeHelperPort,
         forceDesktopMode: state.forceDesktopMode,
+        timelineZoomAnchor: state.timelineZoomAnchor,
+        showShortcutDisplay: state.showShortcutDisplay,
+        shortcutDisplayScale: state.shortcutDisplayScale,
         gpuPowerPreference: state.gpuPowerPreference,
         matanyoneEnabled: state.matanyoneEnabled,
         matanyonePythonPath: state.matanyonePythonPath,

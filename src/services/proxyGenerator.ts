@@ -1,10 +1,11 @@
-// Proxy frame generator using WebCodecs VideoDecoder + parallel OffscreenCanvas → JPEG
-// Decodes source video with hardware VideoDecoder, resizes on a pool of OffscreenCanvases,
-// then saves individual JPEG frames via convertToBlob for instant scrubbing.
+// Proxy generator using WebCodecs VideoDecoder. The active proxy path decodes
+// source video, transfers frames to Dedicated Workers for resize/JPEG encoding,
+// and lets project storage decide how those JPEG frames are persisted.
 
 import { Logger } from './logger';
 import * as MP4BoxModule from 'mp4box';
 import type { MP4ArrayBuffer, MP4VideoTrack, Sample } from '../engine/webCodecsTypes';
+import { VideoEncoderWrapper } from '../engine/export/VideoEncoderWrapper';
 
 const MP4Box = MP4BoxModule as unknown as {
   createFile: typeof MP4BoxModule.createFile;
@@ -23,7 +24,12 @@ const log = Logger.create('ProxyGenerator');
 const PROXY_FPS = 30;
 const PROXY_MAX_WIDTH = 1280;
 const JPEG_QUALITY = 0.82;
+const PROXY_H264_BITS_PER_PIXEL_SECOND = 0.16;
+const PROXY_MIN_BITRATE = 4_000_000;
+const PROXY_MAX_BITRATE = 30_000_000;
 const CANVAS_POOL_SIZE = 8;       // Parallel encoding canvases
+const WORKER_ENCODER_MAX_COUNT = 8;
+const WORKER_ENCODER_RESERVED_THREADS = 2;
 const DECODE_BATCH_SIZE = 30;     // Feed 30 samples at a time before yielding
 const MAX_PENDING_ENCODE_FRAMES = CANVAS_POOL_SIZE * 8;
 const BACKPRESSURE_TARGET_FRAMES = CANVAS_POOL_SIZE * 4;
@@ -82,6 +88,11 @@ function ceilFrameCount(value: number): number {
   return Math.ceil(value);
 }
 
+function getProxyVideoBitrate(width: number, height: number, fps: number): number {
+  const bitrate = Math.round(width * height * fps * PROXY_H264_BITS_PER_PIXEL_SECOND);
+  return Math.max(PROXY_MIN_BITRATE, Math.min(PROXY_MAX_BITRATE, bitrate));
+}
+
 export function getFirstPresentationCts(samples: Sample[]): number {
   let firstPresentationCts = Number.POSITIVE_INFINITY;
   for (const sample of samples) {
@@ -97,10 +108,41 @@ export function getNormalizedSampleTimestampUs(sample: Sample, firstPresentation
   return (normalizedCts / sample.timescale) * 1_000_000;
 }
 
+export function getDurationSecondsFromSamples(samples: Sample[]): number {
+  let firstPresentationSeconds = Number.POSITIVE_INFINITY;
+  let lastPresentationEndSeconds = 0;
+
+  for (const sample of samples) {
+    if (
+      !Number.isFinite(sample.cts) ||
+      !Number.isFinite(sample.duration) ||
+      !Number.isFinite(sample.timescale) ||
+      sample.timescale <= 0
+    ) {
+      continue;
+    }
+
+    const startSeconds = sample.cts / sample.timescale;
+    const endSeconds = (sample.cts + Math.max(0, sample.duration)) / sample.timescale;
+    firstPresentationSeconds = Math.min(firstPresentationSeconds, startSeconds);
+    lastPresentationEndSeconds = Math.max(lastPresentationEndSeconds, endSeconds);
+  }
+
+  if (!Number.isFinite(firstPresentationSeconds) || lastPresentationEndSeconds <= firstPresentationSeconds) {
+    return 0;
+  }
+
+  return lastPresentationEndSeconds - firstPresentationSeconds;
+}
+
 interface AVCConfigurationBox {
   AVCProfileIndication: number;
   profile_compatibility: number;
   AVCLevelIndication: number;
+  write: (stream: { buffer: ArrayBuffer; position?: number }) => void;
+}
+
+interface CodecConfigurationBox {
   write: (stream: { buffer: ArrayBuffer; position?: number }) => void;
 }
 
@@ -111,6 +153,9 @@ interface MP4TrackDetails {
         stsd?: {
           entries?: Array<{
             avcC?: AVCConfigurationBox;
+            hvcC?: CodecConfigurationBox;
+            vpcC?: CodecConfigurationBox;
+            av1C?: CodecConfigurationBox;
           }>;
         };
       };
@@ -134,6 +179,146 @@ interface CanvasSlot {
   ctx: OffscreenCanvasRenderingContext2D;
 }
 
+interface EncodedProxyImageFrame {
+  frameIndex: number;
+  blob: Blob;
+  drawMs: number;
+  jpegMs: number;
+  size: number;
+}
+
+interface ProxyFrameWorkerEncodedMessage extends EncodedProxyImageFrame {
+  type: 'encoded';
+  requestId: number;
+}
+
+interface ProxyFrameWorkerReadyMessage {
+  type: 'ready';
+}
+
+interface ProxyFrameWorkerErrorMessage {
+  type: 'error';
+  requestId?: number;
+  message: string;
+}
+
+type ProxyFrameWorkerMessage =
+  | ProxyFrameWorkerEncodedMessage
+  | ProxyFrameWorkerReadyMessage
+  | ProxyFrameWorkerErrorMessage;
+
+class ProxyFrameEncodeWorkerClient {
+  private readonly worker: Worker;
+  private readonly pending = new Map<number, {
+    resolve: (frame: EncodedProxyImageFrame) => void;
+    reject: (error: Error) => void;
+  }>();
+  private readonly ready: Promise<void>;
+  private readyResolve: (() => void) | null = null;
+  private readyReject: ((error: Error) => void) | null = null;
+  private nextRequestId = 1;
+  private disposed = false;
+
+  constructor(width: number, height: number, quality: number) {
+    this.worker = new Worker(new URL('../workers/proxyFrameEncodeWorker.ts', import.meta.url), {
+      type: 'module',
+    });
+
+    this.ready = new Promise((resolve, reject) => {
+      this.readyResolve = resolve;
+      this.readyReject = reject;
+    });
+
+    this.worker.onmessage = (event: MessageEvent<ProxyFrameWorkerMessage>) => {
+      this.handleMessage(event.data);
+    };
+    this.worker.onerror = (event) => {
+      const error = new Error(event.message || 'Proxy frame encoder worker failed');
+      this.readyReject?.(error);
+      this.rejectPending(error);
+    };
+    this.worker.postMessage({
+      type: 'init',
+      width,
+      height,
+      quality,
+    });
+  }
+
+  async encode(frameIndex: number, frame: VideoFrame): Promise<EncodedProxyImageFrame> {
+    if (this.disposed) {
+      throw new Error('Proxy frame encoder worker was disposed');
+    }
+
+    await this.ready;
+    const requestId = this.nextRequestId++;
+
+    return new Promise((resolve, reject) => {
+      this.pending.set(requestId, { resolve, reject });
+      try {
+        this.worker.postMessage(
+          {
+            type: 'encode',
+            requestId,
+            frameIndex,
+            frame,
+          },
+          [frame as unknown as Transferable]
+        );
+      } catch (error) {
+        this.pending.delete(requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.readyReject?.(new Error('Proxy frame encoder worker disposed'));
+    this.worker.terminate();
+    this.rejectPending(new Error('Proxy frame encoder worker disposed'));
+  }
+
+  private handleMessage(message: ProxyFrameWorkerMessage): void {
+    if (message.type === 'ready') {
+      this.readyResolve?.();
+      return;
+    }
+
+    if (message.type === 'error') {
+      const error = new Error(message.message);
+      if (typeof message.requestId === 'number') {
+        const pending = this.pending.get(message.requestId);
+        this.pending.delete(message.requestId);
+        pending?.reject(error);
+      } else {
+        this.readyReject?.(error);
+        this.rejectPending(error);
+      }
+      return;
+    }
+
+    const pending = this.pending.get(message.requestId);
+    this.pending.delete(message.requestId);
+    pending?.resolve({
+      frameIndex: message.frameIndex,
+      blob: message.blob,
+      drawMs: message.drawMs,
+      jpegMs: message.jpegMs,
+      size: message.size,
+    });
+  }
+
+  private rejectPending(error: Error): void {
+    for (const pending of this.pending.values()) {
+      pending.reject(error);
+    }
+    this.pending.clear();
+  }
+}
+
+type ProxyOutputMode = 'jpeg-sequence' | 'all-intra-mp4';
+
 class ProxyGeneratorWebCodecs {
   private mp4File: MP4File | null = null;
   private decoder: VideoDecoder | null = null;
@@ -153,6 +338,7 @@ class ProxyGeneratorWebCodecs {
   private processingFrameIndices = new Set<number>();
   private encodeQueue: EncodeQueueItem[] = [];
   private encodeWorkers: Promise<void>[] = [];
+  private frameEncodeWorkers: ProxyFrameEncodeWorkerClient[] = [];
   private encodeWakeResolvers: Array<() => void> = [];
   private decodeDone = false;
   private encodeStopRequested = false;
@@ -165,6 +351,8 @@ class ProxyGeneratorWebCodecs {
   private onProgress: ((progress: number) => void) | null = null;
   private checkCancelled: (() => boolean) | null = null;
   private saveFrame: ((frame: { frameIndex: number; blob: Blob }) => Promise<void>) | null = null;
+  private outputMode: ProxyOutputMode = 'jpeg-sequence';
+  private videoEncoder: VideoEncoderWrapper | null = null;
   private isCancelled = false;
 
   async generate(
@@ -178,6 +366,7 @@ class ProxyGeneratorWebCodecs {
     this.onProgress = onProgress;
     this.checkCancelled = checkCancelled;
     this.saveFrame = saveFrame;
+    this.outputMode = 'jpeg-sequence';
     this.isCancelled = false;
     this.samples = [];
     this.decodedFrames.clear();
@@ -228,20 +417,13 @@ class ProxyGeneratorWebCodecs {
         log.warn(`Existing proxy frame layout does not match ${this.proxyFps.toFixed(2)}fps; rebuilding frame indices`);
       }
 
-      log.info(`Source: ${this.videoTrack!.video.width}x${this.videoTrack!.video.height} → Proxy: ${this.outputWidth}x${this.outputHeight} @ ${this.proxyFps.toFixed(2)}fps`);
+      log.info(`Source: ${this.videoTrack!.video.width}x${this.videoTrack!.video.height} -> Proxy: ${this.outputWidth}x${this.outputHeight} @ ${this.proxyFps.toFixed(2)}fps`);
 
       // Report initial progress if resuming
       if (this.processedFrames > 0 && this.totalFrames > 0) {
         const initialProgress = Math.min(99, Math.round((this.processedFrames / this.totalFrames) * 100));
         this.onProgress?.(initialProgress);
         log.info(`Resume progress: ${initialProgress}% (${this.processedFrames}/${this.totalFrames} frames)`);
-      }
-
-      // Initialize canvas pool for parallel encoding
-      for (let i = 0; i < CANVAS_POOL_SIZE; i++) {
-        const canvas = new OffscreenCanvas(this.outputWidth, this.outputHeight);
-        const ctx = canvas.getContext('2d')!;
-        this.canvasPool.push({ canvas, ctx });
       }
 
       // Initialize decoder
@@ -305,6 +487,107 @@ class ProxyGeneratorWebCodecs {
     }
   }
 
+  async generateAllIntraVideo(
+    file: File,
+    _mediaFileId: string,
+    onProgress: (progress: number) => void,
+    checkCancelled: () => boolean,
+  ): Promise<{ frameCount: number; fps: number; blob: Blob } | null> {
+    this.onProgress = onProgress;
+    this.checkCancelled = checkCancelled;
+    this.saveFrame = null;
+    this.outputMode = 'all-intra-mp4';
+    this.isCancelled = false;
+    this.samples = [];
+    this.decodedFrames.clear();
+    this.processingFrameIndices.clear();
+    this.closeQueuedEncodeFrames();
+    this.encodeWorkers = [];
+    this.encodeWakeResolvers = [];
+    this.decodeDone = false;
+    this.encodeStopRequested = false;
+    this.metrics = createMetrics();
+    this.lastReportedProgress = -1;
+    this.canvasPool = [];
+    this.proxyFps = PROXY_FPS;
+    this.savedFrameIndices.clear();
+    this.processedFrames = 0;
+
+    try {
+      if (!('VideoDecoder' in window)) {
+        throw new Error('WebCodecs VideoDecoder not available');
+      }
+      if (!('VideoEncoder' in window)) {
+        throw new Error('WebCodecs VideoEncoder not available');
+      }
+
+      const demuxStart = performance.now();
+      const loaded = await this.loadWithMP4Box(file);
+      this.metrics.demuxMs += performance.now() - demuxStart;
+      if (!loaded) {
+        throw new Error('Failed to parse video file or no supported codec found');
+      }
+
+      log.info(`Source: ${this.videoTrack!.video.width}x${this.videoTrack!.video.height} -> Proxy MP4: ${this.outputWidth}x${this.outputHeight} @ ${this.proxyFps.toFixed(2)}fps`);
+
+      const canvas = new OffscreenCanvas(this.outputWidth, this.outputHeight);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('Failed to create proxy video canvas context');
+      }
+      this.canvasPool.push({ canvas, ctx });
+
+      const encoder = new VideoEncoderWrapper({
+        width: this.outputWidth,
+        height: this.outputHeight,
+        fps: this.proxyFps,
+        codec: 'h264',
+        container: 'mp4',
+        bitrate: getProxyVideoBitrate(this.outputWidth, this.outputHeight, this.proxyFps),
+        rateControl: 'vbr',
+        startTime: 0,
+        endTime: this.duration,
+        includeAudio: false,
+      });
+      const encoderReady = await encoder.init();
+      if (!encoderReady) {
+        throw new Error('Failed to initialize all-intra H.264 proxy encoder');
+      }
+      this.videoEncoder = encoder;
+
+      this.initDecoder();
+      await this.processSamples();
+
+      if (this.isCancelled || this.processedFrames === 0) {
+        this.cleanup();
+        if (this.isCancelled) {
+          log.info('All-intra proxy generation cancelled');
+          return null;
+        }
+        log.error('No frames were processed!');
+        return null;
+      }
+
+      const blob = await encoder.finish();
+      this.metrics.savedBytes = blob.size;
+      log.info(`All-intra MP4 proxy complete: ${this.processedFrames} frames, ${(blob.size / 1024 / 1024).toFixed(2)} MB`);
+      this.logPerformance(performance.now() - demuxStart);
+      this.cleanup();
+
+      return {
+        frameCount: this.processedFrames,
+        fps: this.proxyFps,
+        blob,
+      };
+    } catch (error) {
+      log.error('All-intra proxy generation failed', error);
+      this.cleanup();
+      throw error;
+    } finally {
+      this.outputMode = 'jpeg-sequence';
+    }
+  }
+
   private async loadWithMP4Box(file: File): Promise<boolean> {
     // eslint-disable-next-line no-async-promise-executor
     return new Promise(async (resolve) => {
@@ -313,12 +596,25 @@ class ProxyGeneratorWebCodecs {
       let expectedSamples = 0;
       let samplesReady = false;
       let codecReady = false;
+      let completed = false;
 
       const checkComplete = () => {
-        if (codecReady && samplesReady) {
-          log.info(`Extracted ${this.samples.length} samples from video`);
-          resolve(true);
+        if (completed || !codecReady || !samplesReady) return;
+
+        completed = true;
+        this.refreshProxyTiming(expectedSamples);
+        if (this.totalFrames <= 0 || this.duration <= 0) {
+          log.error('Could not determine proxy duration from track metadata or sample timestamps', {
+            samples: this.samples.length,
+            trackDuration: this.videoTrack?.duration,
+            timescale: this.videoTrack?.timescale,
+          });
+          resolve(false);
+          return;
         }
+
+        log.info(`Extracted ${this.samples.length} samples from video`);
+        resolve(true);
       };
 
       mp4File.onReady = async (info: { videoTracks: MP4VideoTrack[] }) => {
@@ -342,34 +638,12 @@ class ProxyGeneratorWebCodecs {
         this.outputWidth = width & ~1;
         this.outputHeight = height & ~1;
 
-        this.duration = track.duration / track.timescale;
-        const sourceFps = this.duration > 0 ? expectedSamples / this.duration : PROXY_FPS;
-        this.proxyFps = Number.isFinite(sourceFps) && sourceFps > 0
-          ? Math.min(PROXY_FPS, Math.round(sourceFps * 100) / 100)
-          : PROXY_FPS;
-        this.totalFrames = ceilFrameCount(this.duration * this.proxyFps);
-
-        log.info(`Duration: ${this.duration.toFixed(3)}s, totalFrames: ${this.totalFrames}, samples: ${expectedSamples}, proxyFps: ${this.proxyFps.toFixed(2)}`);
-
         // Get codec config
         const trak = this.mp4File!.getTrackById(track.id);
         const codecString = this.getCodecString(track.codec, trak);
         log.debug(`Detected codec: ${codecString}`);
 
-        // Get AVC description
-        let description: Uint8Array | undefined;
-        if (codecString.startsWith('avc1')) {
-          const avcC = trak?.mdia?.minf?.stbl?.stsd?.entries?.[0]?.avcC;
-          if (avcC) {
-            const stream = new MP4Box.DataStream(undefined, 0, MP4Box.DataStream.BIG_ENDIAN);
-            avcC.write(stream);
-            const totalWritten = stream.position || stream.buffer.byteLength;
-            if (totalWritten > 8) {
-              description = new Uint8Array(stream.buffer.slice(8, totalWritten));
-              log.debug(`Got AVC description: ${description.length} bytes`);
-            }
-          }
-        }
+        const description = this.extractCodecDescription(trak);
 
         const config = await this.findSupportedCodec(codecString, track.video.width, track.video.height, description);
         if (!config) {
@@ -453,6 +727,71 @@ class ProxyGeneratorWebCodecs {
         resolve(false);
       }
     });
+  }
+
+  private refreshProxyTiming(expectedSamples: number): void {
+    if (!this.videoTrack) return;
+
+    const trackDuration = this.videoTrack.timescale > 0
+      ? this.videoTrack.duration / this.videoTrack.timescale
+      : 0;
+    const sampleDuration = getDurationSecondsFromSamples(this.samples);
+    const duration = trackDuration > 0 ? trackDuration : sampleDuration;
+    const sampleCount = expectedSamples > 0 ? expectedSamples : this.samples.length;
+    const sourceFps = duration > 0 && sampleCount > 0 ? sampleCount / duration : PROXY_FPS;
+
+    this.duration = duration;
+    this.proxyFps = Number.isFinite(sourceFps) && sourceFps > 0
+      ? Math.min(PROXY_FPS, Math.round(sourceFps * 100) / 100)
+      : PROXY_FPS;
+    this.totalFrames = duration > 0 ? ceilFrameCount(duration * this.proxyFps) : 0;
+
+    if (trackDuration <= 0 && sampleDuration > 0) {
+      log.warn('Video track duration missing; using sample timestamp duration', {
+        sampleDuration: Number(sampleDuration.toFixed(3)),
+        samples: this.samples.length,
+      });
+    }
+
+    log.info(`Duration: ${this.duration.toFixed(3)}s, totalFrames: ${this.totalFrames}, samples: ${sampleCount}, proxyFps: ${this.proxyFps.toFixed(2)}`);
+  }
+
+  private extractCodecDescription(trak: MP4TrackDetails | undefined): Uint8Array | undefined {
+    const entry = trak?.mdia?.minf?.stbl?.stsd?.entries?.[0];
+    if (!entry) return undefined;
+
+    const candidates: Array<[string, CodecConfigurationBox | undefined]> = [
+      ['avcC', entry.avcC],
+      ['hvcC', entry.hvcC],
+      ['vpcC', entry.vpcC],
+      ['av1C', entry.av1C],
+    ];
+    const match = candidates.find(([, box]) => Boolean(box));
+
+    if (!match) {
+      log.warn('No codec config box found in sample entry', Object.keys(entry));
+      return undefined;
+    }
+
+    const [boxName, configBox] = match;
+    if (!configBox) return undefined;
+
+    try {
+      const stream = new MP4Box.DataStream(undefined, 0, MP4Box.DataStream.BIG_ENDIAN);
+      configBox.write(stream);
+      const totalWritten = stream.position || stream.buffer.byteLength;
+      if (totalWritten <= 8) {
+        log.warn(`Codec config box ${boxName} did not contain a payload`);
+        return undefined;
+      }
+
+      const description = new Uint8Array(stream.buffer.slice(8, totalWritten));
+      log.debug(`Got ${boxName} description: ${description.byteLength} bytes`);
+      return description;
+    } catch (error) {
+      log.warn(`Failed to extract ${boxName} codec description`, error);
+      return undefined;
+    }
   }
 
   private getCodecString(codec: string, trak: MP4TrackDetails | undefined): string {
@@ -587,7 +926,57 @@ class ProxyGeneratorWebCodecs {
   }
 
   private startEncodeWorkers(): void {
+    if (this.outputMode === 'all-intra-mp4') {
+      const slots = this.canvasPool.slice(0, 1);
+      this.encodeWorkers = slots.map((slot) => this.encodeWorker(slot));
+      return;
+    }
+
+    if (this.canUseDedicatedFrameWorkers()) {
+      const workerCount = this.getDedicatedFrameWorkerCount();
+      this.frameEncodeWorkers = Array.from(
+        { length: workerCount },
+        () => new ProxyFrameEncodeWorkerClient(this.outputWidth, this.outputHeight, JPEG_QUALITY)
+      );
+      this.encodeWorkers = this.frameEncodeWorkers.map((worker) => this.encodeWorkerWithDedicatedWorker(worker));
+      log.info(`Using ${workerCount} Dedicated Workers for JPEG proxy frame encoding`);
+      return;
+    }
+
+    this.initializeCanvasPool(CANVAS_POOL_SIZE);
     this.encodeWorkers = this.canvasPool.map((slot) => this.encodeWorker(slot));
+    log.warn('Dedicated proxy frame workers unavailable; using main-thread OffscreenCanvas encode pool');
+  }
+
+  private initializeCanvasPool(size: number): void {
+    if (this.canvasPool.length > 0) return;
+
+    for (let i = 0; i < size; i++) {
+      const canvas = new OffscreenCanvas(this.outputWidth, this.outputHeight);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('Failed to create proxy canvas context');
+      }
+      this.canvasPool.push({ canvas, ctx });
+    }
+  }
+
+  private canUseDedicatedFrameWorkers(): boolean {
+    return (
+      typeof Worker !== 'undefined' &&
+      typeof OffscreenCanvas !== 'undefined' &&
+      typeof VideoFrame !== 'undefined'
+    );
+  }
+
+  private getDedicatedFrameWorkerCount(): number {
+    const hardwareConcurrency = typeof navigator !== 'undefined' && Number.isFinite(navigator.hardwareConcurrency)
+      ? navigator.hardwareConcurrency
+      : 4;
+    return Math.max(
+      2,
+      Math.min(WORKER_ENCODER_MAX_COUNT, Math.max(2, hardwareConcurrency - WORKER_ENCODER_RESERVED_THREADS))
+    );
   }
 
   private async encodeWorker(slot: CanvasSlot): Promise<void> {
@@ -611,7 +1000,61 @@ class ProxyGeneratorWebCodecs {
     }
   }
 
+  private async encodeWorkerWithDedicatedWorker(worker: ProxyFrameEncodeWorkerClient): Promise<void> {
+    while (true) {
+      if (this.encodeStopRequested) {
+        this.closeQueuedEncodeFrames();
+        return;
+      }
+
+      const item = this.encodeQueue.shift();
+      if (item) {
+        await this.encodeAndSaveFrameInDedicatedWorker(worker, item);
+        continue;
+      }
+
+      if (this.decodeDone) {
+        return;
+      }
+
+      await this.waitForEncodeWork();
+    }
+  }
+
+  private async encodeAndSaveFrameInDedicatedWorker(
+    worker: ProxyFrameEncodeWorkerClient,
+    item: EncodeQueueItem
+  ): Promise<void> {
+    try {
+      const encoded = await worker.encode(item.frameIndex, item.frame);
+      this.metrics.drawMs += encoded.drawMs;
+      this.metrics.jpegMs += encoded.jpegMs;
+      this.metrics.savedBytes += encoded.size;
+
+      const saveStart = performance.now();
+      await this.saveFrame!({ frameIndex: encoded.frameIndex, blob: encoded.blob });
+      this.metrics.saveMs += performance.now() - saveStart;
+
+      this.savedFrameIndices.add(encoded.frameIndex);
+      this.processedFrames++;
+      this.reportProgress();
+    } finally {
+      this.processingFrameIndices.delete(item.frameIndex);
+      try {
+        item.frame.close();
+      } catch {
+        // Frame ownership may have moved to a Dedicated Worker.
+      }
+      this.wakeEncodeWorkers();
+    }
+  }
+
   private async encodeAndSaveFrame(slot: CanvasSlot, item: EncodeQueueItem): Promise<void> {
+    if (this.outputMode === 'all-intra-mp4') {
+      await this.encodeAndMuxVideoFrame(slot, item);
+      return;
+    }
+
     try {
       const drawStart = performance.now();
       slot.ctx.drawImage(item.frame, 0, 0, this.outputWidth, this.outputHeight);
@@ -634,6 +1077,43 @@ class ProxyGeneratorWebCodecs {
       this.processedFrames++;
       this.reportProgress();
     } finally {
+      this.processingFrameIndices.delete(item.frameIndex);
+      try {
+        item.frame.close();
+      } catch {
+        // Frame may already be closed after drawImage.
+      }
+      this.wakeEncodeWorkers();
+    }
+  }
+
+  private async encodeAndMuxVideoFrame(slot: CanvasSlot, item: EncodeQueueItem): Promise<void> {
+    let encodedFrame: VideoFrame | null = null;
+    try {
+      const drawStart = performance.now();
+      slot.ctx.drawImage(item.frame, 0, 0, this.outputWidth, this.outputHeight);
+      this.metrics.drawMs += performance.now() - drawStart;
+      item.frame.close();
+
+      const timestampMicros = Math.round(item.frameIndex * (1_000_000 / this.proxyFps));
+      const durationMicros = Math.round(1_000_000 / this.proxyFps);
+      encodedFrame = new VideoFrame(slot.canvas, {
+        timestamp: timestampMicros,
+        duration: durationMicros,
+      });
+
+      const encodeStart = performance.now();
+      await this.videoEncoder?.encodeVideoFrame(encodedFrame, item.frameIndex, 1);
+      if ((this.videoEncoder?.getEncodeQueueSize() ?? 0) > 90) {
+        await this.videoEncoder?.flushPendingVideo();
+      }
+      this.metrics.jpegMs += performance.now() - encodeStart;
+
+      this.savedFrameIndices.add(item.frameIndex);
+      this.processedFrames++;
+      this.reportProgress();
+    } finally {
+      encodedFrame?.close();
       this.processingFrameIndices.delete(item.frameIndex);
       try {
         item.frame.close();
@@ -694,12 +1174,20 @@ class ProxyGeneratorWebCodecs {
   }
 
   private resetEncodePipeline(): void {
+    this.disposeFrameEncodeWorkers();
     this.closeQueuedEncodeFrames();
     this.processingFrameIndices.clear();
     this.encodeWakeResolvers = [];
     this.encodeWorkers = [];
     this.decodeDone = false;
     this.encodeStopRequested = false;
+  }
+
+  private disposeFrameEncodeWorkers(): void {
+    for (const worker of this.frameEncodeWorkers) {
+      worker.dispose();
+    }
+    this.frameEncodeWorkers = [];
   }
 
   private logPerformance(totalMs: number): void {
@@ -785,8 +1273,11 @@ class ProxyGeneratorWebCodecs {
             const feedStart = performance.now();
             decoder.decode(chunk);
             this.metrics.decodeFeedMs += performance.now() - feedStart;
-          } catch {
+          } catch (error) {
             decodeErrors++;
+            if (decodeErrors <= 5) {
+              log.error('Decode chunk failed', error);
+            }
             if (decodeErrors > 50) {
               log.error('Too many decode errors, stopping');
               return;
@@ -909,14 +1400,17 @@ class ProxyGeneratorWebCodecs {
 
   private cleanup() {
     try { this.decoder?.close(); } catch { /* ignore */ }
+    try { this.videoEncoder?.cancel(); } catch { /* ignore */ }
     this.encodeStopRequested = true;
     this.decodeDone = true;
     this.wakeEncodeWorkers();
     this.closeDecodedFrames();
     this.closeQueuedEncodeFrames();
+    this.disposeFrameEncodeWorkers();
     this.processingFrameIndices.clear();
     this.canvasPool = [];
     this.decoder = null;
+    this.videoEncoder = null;
   }
 }
 

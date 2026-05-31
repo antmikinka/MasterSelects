@@ -2,7 +2,7 @@ import type { SignalMetadata } from '../../../signals';
 import { encodeFloat32PcmChunksToWavBlob } from '../../../engine/audio/AudioFileEncoder';
 import { useMediaStore, type MediaFile, type MediaFolder } from '../../../stores/mediaStore';
 import type { AudioChannelLayout, AudioArtifactRef } from '../audioArtifactTypes';
-import type { ClipAudioStemLayer, ClipAudioStemState } from '../../../types/audio';
+import type { ClipAudioStemLayer, ClipAudioStemState, MediaFileStemInfo } from '../../../types/audio';
 import type { ClipStemSeparationRunnerRequest } from '../../../stores/timeline/types';
 import { AudioArtifactStore } from '../AudioArtifactStore';
 import { Logger } from '../../logger';
@@ -17,6 +17,7 @@ import {
   DEFAULT_STEM_MODEL_ID,
   requireStemModel,
 } from './modelCatalog';
+import { STEM_SOURCE_LAYER_ID } from './stemSourceLayer';
 import {
   createStemPcmF32Metadata,
   encodeStemPcmF32Payload,
@@ -85,7 +86,7 @@ interface StemMediaLibraryStore {
   importFile: (
     file: File,
     parentId?: string | null,
-    options?: { forceCopyToProject?: boolean; projectFileName?: string },
+    options?: { forceCopyToProject?: boolean; projectFileName?: string; stemInfo?: MediaFileStemInfo },
   ) => Promise<unknown>;
 }
 
@@ -243,6 +244,36 @@ function createStemManifestMetadata(input: {
   };
 }
 
+function createStemMediaFileInfo(input: {
+  activeSetId: string;
+  model: StemModelCatalogEntry;
+  prepared: PreparedClipAudioAnalysisInput;
+  request: ClipStemSeparationRunnerRequest;
+  stem: StemSeparationWorkerStemResult;
+  createdAt: number;
+}): MediaFileStemInfo {
+  const sourceClipId = typeof input.prepared.metadata.sourceClipId === 'string'
+    ? input.prepared.metadata.sourceClipId
+    : undefined;
+  const sourceClipName = typeof input.prepared.metadata.sourceClipName === 'string'
+    ? input.prepared.metadata.sourceClipName
+    : undefined;
+
+  return {
+    schemaVersion: 1,
+    sourceMediaFileId: input.prepared.mediaFileId,
+    sourceFingerprint: input.prepared.sourceFingerprint,
+    sourceClipId: sourceClipId ?? input.request.clip.id,
+    sourceClipName: sourceClipName ?? input.request.clip.name,
+    activeSetId: input.activeSetId,
+    modelId: input.model.id,
+    modelVersion: input.model.modelVersion,
+    kind: input.stem.kind,
+    label: stemLabel(input.stem.kind),
+    createdAt: input.createdAt,
+  };
+}
+
 export class StemSeparationService {
   private readonly modelManager: StemModelManagerLike;
   private readonly artifactStore: AudioArtifactStore | null;
@@ -313,16 +344,21 @@ export class StemSeparationService {
 
     const workerInput = createWorkerInput(prepared, model.id);
     const worker = this.getWorkerClient();
-    const stems = await worker.separate(request.jobId, workerInput, {
-      signal: request.signal,
-      onProgress: (progress) => {
-        request.updateProgress({
-          phase: 'separating',
-          progress: mapProgress(progress.progress, LOAD_PROGRESS_END, SEPARATION_PROGRESS_END),
-          message: progress.message,
-        });
-      },
-    });
+    let stems: StemSeparationWorkerStemResult[];
+    try {
+      stems = await worker.separate(request.jobId, workerInput, {
+        signal: request.signal,
+        onProgress: (progress) => {
+          request.updateProgress({
+            phase: 'separating',
+            progress: mapProgress(progress.progress, LOAD_PROGRESS_END, SEPARATION_PROGRESS_END),
+            message: progress.message,
+          });
+        },
+      });
+    } finally {
+      this.disposeWorkerClient();
+    }
     throwIfAborted(request.signal);
 
     request.updateProgress({
@@ -357,18 +393,24 @@ export class StemSeparationService {
       sampleRate: firstLayer.sampleRate,
       channelCount: firstLayer.channelCount,
       stems: storedLayers.map(stored => stored.layer),
-      mixMode: 'stems',
+      soloStemId: STEM_SOURCE_LAYER_ID,
+      sourceGainDb: 0,
+      mixMode: 'original',
     };
   }
 
   dispose(): void {
-    this.workerClient?.dispose();
-    this.workerClient = null;
+    this.disposeWorkerClient();
   }
 
   private getWorkerClient(): StemSeparationWorkerClientLike {
     this.workerClient ??= this.createWorkerClient();
     return this.workerClient;
+  }
+
+  private disposeWorkerClient(): void {
+    this.workerClient?.dispose();
+    this.workerClient = null;
   }
 
   private getArtifactStore(): AudioArtifactStore {
@@ -492,8 +534,7 @@ export class StemSeparationService {
         message: 'Stem model loader failed. Retrying with a fresh worker.',
       });
 
-      this.workerClient?.dispose();
-      this.workerClient = null;
+      this.disposeWorkerClient();
       return this.loadWorkerModelSource(model, { kind: 'url', url: getPrimaryModelUrl(model) }, request);
     }
   }
@@ -512,8 +553,8 @@ export class StemSeparationService {
       });
     };
     return source.kind === 'url'
-      ? worker.loadModelFromUrl(model, source.url, { signal: request.signal, onProgress })
-      : worker.loadModel(model, source.buffers, { signal: request.signal, onProgress });
+      ? worker.loadModelFromUrl(model, source.url, { signal: request.signal, onProgress, backendPreference: 'wasm' })
+      : worker.loadModel(model, source.buffers, { signal: request.signal, onProgress, backendPreference: 'wasm' });
   }
 
   private async storeStemResults(input: {
@@ -632,8 +673,10 @@ export class StemSeparationService {
       try {
         const publishedIds = await this.publishStemWavFilesToMediaLibrary({
           request: input.request,
+          model: input.model,
           prepared: input.prepared,
           stems: input.stems,
+          activeSetId,
           createdAt,
         });
 
@@ -653,8 +696,10 @@ export class StemSeparationService {
 
   private async publishStemWavFilesToMediaLibrary(input: {
     request: ClipStemSeparationRunnerRequest;
+    model: StemModelCatalogEntry;
     prepared: PreparedClipAudioAnalysisInput;
     stems: readonly StemSeparationWorkerStemResult[];
+    activeSetId: string;
     createdAt: number;
   }): Promise<Map<ClipAudioStemLayer['kind'], string>> {
     if (typeof File === 'undefined') {
@@ -685,6 +730,14 @@ export class StemSeparationService {
       const imported = await this.getMediaLibraryStore().importFile(file, sourceFolderId, {
         forceCopyToProject: true,
         projectFileName: `${STEM_MEDIA_ROOT_FOLDER_NAME}/${sourceFolderName}/${stemFileName}`,
+        stemInfo: createStemMediaFileInfo({
+          activeSetId: input.activeSetId,
+          model: input.model,
+          prepared: input.prepared,
+          request: input.request,
+          stem,
+          createdAt: input.createdAt,
+        }),
       });
       if (isImportedAudioMediaFile(imported)) {
         importedIds.set(stem.kind, imported.id);

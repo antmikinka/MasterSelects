@@ -6,9 +6,12 @@ import {
   setClipStemSeparationRunner,
 } from '../../../src/stores/timeline/stemSeparationSlice';
 import { STEM_SOURCE_LAYER_ID } from '../../../src/services/audio/stemSeparation';
+import { useMediaStore } from '../../../src/stores/mediaStore';
+import type { MediaFile } from '../../../src/stores/mediaStore/types';
 
 const SOURCE_REFS = { waveformPyramidId: 'source-waveform' };
 const PROCESSED_REFS = { processedWaveformPyramidId: 'processed-waveform' };
+const EMPTY_MEDIA_STORE_STATE = useMediaStore.getState();
 
 function createStemState(overrides: Partial<ClipAudioStemState> = {}): ClipAudioStemState {
   return {
@@ -29,6 +32,7 @@ function createStemState(overrides: Partial<ClipAudioStemState> = {}): ClipAudio
         analysisArtifactId: 'analysis-vocals',
         manifestArtifactId: 'manifest-vocals',
         payloadRef: { artifactId: 'payload-vocals' },
+        mediaFileId: 'media-stem-vocals',
         enabled: true,
         gainDb: 0,
         phaseAligned: true,
@@ -42,6 +46,7 @@ function createStemState(overrides: Partial<ClipAudioStemState> = {}): ClipAudio
         analysisArtifactId: 'analysis-drums',
         manifestArtifactId: 'manifest-drums',
         payloadRef: { artifactId: 'payload-drums' },
+        mediaFileId: 'media-stem-drums',
         enabled: true,
         gainDb: 0,
         phaseAligned: true,
@@ -93,6 +98,7 @@ async function flushPromises(): Promise<void> {
 describe('timeline stem separation slice', () => {
   afterEach(() => {
     setClipStemSeparationRunner(null);
+    vi.mocked(useMediaStore.getState).mockReturnValue({ ...EMPTY_MEDIA_STORE_STATE, files: [] });
   });
 
   it('applies stem solo to the linked audible audio clip and clears processed refs', () => {
@@ -144,34 +150,16 @@ describe('timeline stem separation slice', () => {
     expect(store.getState().clips[0].audioState?.stemSeparation?.mixMode).toBe('stems');
   });
 
-  it('clears stem state and closes the transient dropdown', () => {
+  it('clears stem state', () => {
     const audioClip = createAudioClip();
     const store = createTestTimelineStore({ clips: [audioClip] });
 
-    store.getState().setClipStemLayerDropdownOpen('audio-clip', true);
     store.getState().clearClipStemSeparation('audio-clip');
 
     const updated = store.getState().clips[0];
     expect(updated.audioState?.stemSeparation).toBeUndefined();
     expect(updated.audioState?.sourceAnalysisRefs).toBe(SOURCE_REFS);
     expect(updated.audioState?.processedAnalysisRefs).toBeUndefined();
-    expect(store.getState().expandedClipStemLayerIds.has('audio-clip')).toBe(false);
-  });
-
-  it('keeps dropdown state transient without changing clip objects', () => {
-    const audioClip = createAudioClip();
-    const videoClip = createLinkedVideoClip();
-    const store = createTestTimelineStore({ clips: [videoClip, audioClip] });
-    const originalClips = store.getState().clips;
-
-    store.getState().toggleClipStemLayerDropdown('video-clip');
-
-    expect(store.getState().expandedClipStemLayerIds.has('audio-clip')).toBe(true);
-    expect(store.getState().clips).toBe(originalClips);
-
-    store.getState().setClipStemLayerDropdownOpen('video-clip', false);
-    expect(store.getState().expandedClipStemLayerIds.has('audio-clip')).toBe(false);
-    expect(store.getState().clips).toBe(originalClips);
   });
 
   it('starts separation through the runner for a linked video and commits returned stems to audio', async () => {
@@ -216,25 +204,239 @@ describe('timeline stem separation slice', () => {
       jobId,
       clipId: 'audio-clip',
       requestedClipId: 'video-clip',
+      sourceMediaFileId: 'media-dialog',
       phase: 'complete',
       progress: 1,
       backend: 'webgpu',
+      stems: [
+        {
+          id: 'stem-vocals',
+          kind: 'vocals',
+          label: 'Vocals',
+          mediaFileId: 'media-stem-vocals',
+        },
+        {
+          id: 'stem-drums',
+          kind: 'drums',
+          label: 'Drums',
+          mediaFileId: 'media-stem-drums',
+        },
+      ],
     });
-    expect(store.getState().expandedClipStemLayerIds.has('audio-clip')).toBe(true);
     const updatedAudioClip = store.getState().clips.find(clip => clip.id === 'audio-clip');
     const updatedCopiedAudioClip = store.getState().clips.find(clip => clip.id === 'audio-copy');
-    expect(updatedAudioClip?.audioState?.stemSeparation).toEqual(stemState);
+    expect(updatedAudioClip?.audioState?.stemSeparation).toBeUndefined();
     expect(updatedAudioClip?.audioState?.sourceAnalysisRefs).toBe(SOURCE_REFS);
-    expect(updatedAudioClip?.audioState?.processedAnalysisRefs).toBeUndefined();
-    expect(updatedCopiedAudioClip?.audioState?.stemSeparation).toMatchObject({
-      activeSetId: 'stem-set-generated',
-      mixMode: 'original',
-      soloStemId: STEM_SOURCE_LAYER_ID,
-      sourceGainDb: 0,
-    });
-    expect(updatedCopiedAudioClip?.audioState?.stemSeparation?.stems).toEqual(stemState.stems);
+    expect(updatedAudioClip?.audioState?.processedAnalysisRefs).toBe(PROCESSED_REFS);
+    expect(updatedCopiedAudioClip?.audioState?.stemSeparation).toBeUndefined();
     expect(updatedCopiedAudioClip?.audioState?.sourceAnalysisRefs).toBe(SOURCE_REFS);
-    expect(updatedCopiedAudioClip?.audioState?.processedAnalysisRefs).toBeUndefined();
+    expect(updatedCopiedAudioClip?.audioState?.processedAnalysisRefs).toBe(PROCESSED_REFS);
+  });
+
+  it('switches the resolved audio clip source to a generated stem media file', () => {
+    const sourceFile = new File([], 'dialog.wav', { type: 'audio/wav' });
+    const sourceMediaFile: MediaFile = {
+      id: 'media-dialog',
+      name: 'dialog.wav',
+      type: 'audio',
+      parentId: null,
+      createdAt: 1_777_000_000_000,
+      file: sourceFile,
+      url: 'blob:source',
+      duration: 10,
+      waveform: [0.1, 0.3],
+      waveformChannels: [[0.1, 0.3]],
+      waveformStatus: 'ready',
+      audioAnalysisRefs: SOURCE_REFS,
+    };
+    const stemFile = new File([], 'dialog - vocals.wav', { type: 'audio/wav' });
+    const stemMediaFile: MediaFile = {
+      id: 'media-stem-vocals',
+      name: 'Vocals',
+      type: 'audio',
+      parentId: null,
+      createdAt: 1_777_000_000_001,
+      file: stemFile,
+      url: 'blob:stem-vocals',
+      duration: 10,
+      waveform: [0.2, 0.4],
+      waveformChannels: [[0.2, 0.4]],
+      waveformStatus: 'ready',
+      audioAnalysisRefs: { waveformPyramidId: 'stem-waveform' },
+    };
+    vi.mocked(useMediaStore.getState).mockReturnValue({ ...EMPTY_MEDIA_STORE_STATE, files: [sourceMediaFile, stemMediaFile] });
+
+    const effects = [{ id: 'fx-1', name: 'blur', type: 'blur' as const, enabled: true, params: { radius: 4 } }];
+    const audioClip = createAudioClip({
+      linkedClipId: 'video-clip',
+      duration: 5,
+      inPoint: 2,
+      outPoint: 7,
+      effects,
+      source: { type: 'audio', naturalDuration: 10, mediaFileId: 'media-dialog' },
+      audioState: {
+        sourceAnalysisRefs: SOURCE_REFS,
+        processedAnalysisRefs: PROCESSED_REFS,
+        stemSeparation: createStemState(),
+      },
+    });
+    const videoClip = createLinkedVideoClip();
+    const store = createTestTimelineStore({ clips: [videoClip, audioClip] });
+
+    expect(store.getState().setClipSourceToStem('video-clip', 'media-stem-vocals')).toBe(true);
+
+    const updatedVideoClip = store.getState().clips.find(clip => clip.id === 'video-clip');
+    const updatedAudioClip = store.getState().clips.find(clip => clip.id === 'audio-clip');
+    expect(updatedVideoClip?.source?.mediaFileId).toBeUndefined();
+    expect(updatedAudioClip).toMatchObject({
+      id: 'audio-clip',
+      file: stemFile,
+      mediaFileId: 'media-stem-vocals',
+      duration: 5,
+      inPoint: 2,
+      outPoint: 7,
+      effects,
+      waveform: [0.2, 0.4],
+      waveformChannels: [[0.2, 0.4]],
+      waveformGenerating: false,
+      waveformProgress: 100,
+    });
+    expect(updatedAudioClip?.source).toMatchObject({
+      type: 'audio',
+      naturalDuration: 10,
+      mediaFileId: 'media-stem-vocals',
+      file: stemFile,
+    });
+    expect(updatedAudioClip?.source?.audioElement).toBeInstanceOf(HTMLAudioElement);
+    expect(updatedAudioClip?.audioState).toMatchObject({
+      sourceAudioRevisionId: 'media-stem-vocals',
+      sourceAnalysisRefs: { waveformPyramidId: 'stem-waveform' },
+    });
+    expect(updatedAudioClip?.audioState?.stemSeparation).toBeUndefined();
+    expect(updatedAudioClip?.audioState?.processedAnalysisRefs).toBeUndefined();
+
+    expect(store.getState().setClipSourceToStem('video-clip', 'media-dialog')).toBe(true);
+
+    const restoredAudioClip = store.getState().clips.find(clip => clip.id === 'audio-clip');
+    expect(restoredAudioClip).toMatchObject({
+      file: sourceFile,
+      mediaFileId: 'media-dialog',
+      waveform: [0.1, 0.3],
+      waveformChannels: [[0.1, 0.3]],
+    });
+    expect(restoredAudioClip?.source).toMatchObject({
+      type: 'audio',
+      mediaFileId: 'media-dialog',
+      file: sourceFile,
+    });
+    expect(restoredAudioClip?.audioState).toMatchObject({
+      sourceAudioRevisionId: 'media-dialog',
+      sourceAnalysisRefs: SOURCE_REFS,
+    });
+  });
+
+  it('relinks completed stem choices from media library metadata after reload', () => {
+    const audioClip = createAudioClip({
+      source: { type: 'audio', naturalDuration: 10, mediaFileId: 'media-dialog' },
+      audioState: {
+        sourceAnalysisRefs: SOURCE_REFS,
+      },
+    });
+    const stemFile = new File([], 'dialog - vocals.wav', { type: 'audio/wav' });
+    const stemMediaFile: MediaFile = {
+      id: 'media-stem-vocals',
+      name: 'dialog - vocals.wav',
+      type: 'audio',
+      parentId: null,
+      createdAt: 1_777_000_000_001,
+      file: stemFile,
+      url: 'blob:stem-vocals',
+      duration: 10,
+      stemInfo: {
+        schemaVersion: 1,
+        sourceMediaFileId: 'media-dialog',
+        sourceFingerprint: 'sha256:source',
+        activeSetId: 'stem-set-1',
+        modelId: 'demucs-htdemucs-web',
+        modelVersion: 'test-model-v1',
+        kind: 'vocals',
+        label: 'Vocals',
+        createdAt: 1_777_000_000_001,
+      },
+    };
+    vi.mocked(useMediaStore.getState).mockReturnValue({ ...EMPTY_MEDIA_STORE_STATE, files: [stemMediaFile], folders: [] });
+    const store = createTestTimelineStore({ clips: [audioClip] });
+
+    expect(store.getState().relinkClipStemSeparationJobsFromMediaLibrary()).toBe(1);
+
+    expect(store.getState().clipStemSeparationJobs['audio-clip']).toMatchObject({
+      jobId: 'stem-relink:media-dialog',
+      clipId: 'audio-clip',
+      requestedClipId: 'audio-clip',
+      sourceMediaFileId: 'media-dialog',
+      modelId: 'demucs-htdemucs-web',
+      phase: 'complete',
+      progress: 1,
+      stems: [
+        {
+          id: 'media-stem-vocals:vocals',
+          kind: 'vocals',
+          label: 'Vocals',
+          mediaFileId: 'media-stem-vocals',
+        },
+      ],
+    });
+  });
+
+  it('relinks legacy stem media files from the Stems folder when metadata is missing', () => {
+    const audioClip = createAudioClip({
+      name: 'dialog.wav',
+      source: { type: 'audio', naturalDuration: 10, mediaFileId: 'media-dialog' },
+      audioState: {
+        sourceAnalysisRefs: SOURCE_REFS,
+      },
+    });
+    const sourceMediaFile: MediaFile = {
+      id: 'media-dialog',
+      name: 'dialog.wav',
+      type: 'audio',
+      parentId: null,
+      createdAt: 1_777_000_000_000,
+      file: new File([], 'dialog.wav', { type: 'audio/wav' }),
+      url: 'blob:dialog',
+      duration: 10,
+    };
+    const stemMediaFile: MediaFile = {
+      id: 'media-stem-drums',
+      name: 'dialog - Drums.wav',
+      type: 'audio',
+      parentId: 'stem-source-folder',
+      createdAt: 1_777_000_000_001,
+      file: new File([], 'dialog - Drums.wav', { type: 'audio/wav' }),
+      url: 'blob:stem-drums',
+      duration: 10,
+      projectPath: 'Stems/dialog/dialog - Drums.wav',
+    };
+    vi.mocked(useMediaStore.getState).mockReturnValue({
+      ...EMPTY_MEDIA_STORE_STATE,
+      files: [sourceMediaFile, stemMediaFile],
+      folders: [
+        { id: 'stem-root-folder', name: 'Stems', parentId: null, isExpanded: true, createdAt: 1_777_000_000_000 },
+        { id: 'stem-source-folder', name: 'dialog', parentId: 'stem-root-folder', isExpanded: true, createdAt: 1_777_000_000_000 },
+      ],
+    });
+    const store = createTestTimelineStore({ clips: [audioClip] });
+
+    expect(store.getState().relinkClipStemSeparationJobsFromMediaLibrary()).toBe(1);
+    expect(store.getState().clipStemSeparationJobs['audio-clip'].sourceMediaFileId).toBe('media-dialog');
+    expect(store.getState().clipStemSeparationJobs['audio-clip'].stems).toEqual([
+      {
+        id: 'media-stem-drums:drums',
+        kind: 'drums',
+        label: 'Drums',
+        mediaFileId: 'media-stem-drums',
+      },
+    ]);
   });
 
   it('shares an existing stem separation with same-source clip copies', () => {

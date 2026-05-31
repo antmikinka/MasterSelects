@@ -276,12 +276,17 @@ type ExportStoreSnapshot = ExportStoreData;
 // Flush = execute the pending capture immediately so its state isn't lost
 let flushPendingCaptureCallback: (() => void) | null = null;
 let suppressCapturesCallback: (() => void) | null = null;
+// Called after a snapshot is applied (undo/redo/jump/restore) so the preview can
+// be rebuilt — restoring deleted clips otherwise leaves a stale canvas.
+let afterApplyCallback: (() => void) | null = null;
 export function setHistoryCallbacks(callbacks: {
   flushPendingCapture: () => void;
   suppressCaptures: () => void;
+  afterApply?: () => void;
 }) {
   flushPendingCaptureCallback = callbacks.flushPendingCapture;
   suppressCapturesCallback = callbacks.suppressCaptures;
+  afterApplyCallback = callbacks.afterApply ?? null;
 }
 
 // Import stores dynamically to avoid circular dependencies
@@ -1060,6 +1065,11 @@ function applySnapshot(snapshot: StateSnapshot) {
   if (setExportState) {
     setExportState(deepClone(snapshot.export));
   }
+
+  // Rebuild the preview from the restored state. Without this, restoring deleted
+  // clips (or any layer-affecting undo/redo) leaves the canvas showing the old
+  // frame until the next interaction.
+  afterApplyCallback?.();
 }
 
 function isTimelineHistoryLocked(): boolean {

@@ -260,6 +260,7 @@ const selfContainedHandlers: Record<string, (args: Record<string, unknown>, call
 // YouTube handlers - self-contained, fetch their own stores
 const youtubeHandlers: Record<string, (args: Record<string, unknown>, callerContext?: CallerContext) => Promise<ToolResult>> = {
   searchYouTube: handleSearchYouTube,
+  searchVideos: handleSearchYouTube,
   listVideoFormats: handleListVideoFormats,
   downloadAndImportVideo: handleDownloadAndImportVideo,
   getYouTubeVideos: handleGetYouTubeVideos,

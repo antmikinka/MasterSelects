@@ -1,7 +1,9 @@
-// Proxy frame cache - loads and caches proxy image frames for fast playback
+// Proxy frame cache - loads and caches proxy image/video frames for fast playback
 
 import { Logger } from './logger';
 import { projectFileService } from './projectFileService';
+import * as MP4BoxModule from 'mp4box';
+import type { MP4ArrayBuffer, MP4VideoTrack, Sample } from '../engine/webCodecsTypes';
 import {
   getProjectRawPathCandidates,
   getStoredProjectFileHandle,
@@ -28,6 +30,8 @@ import { calculateAudioMeterSnapshot } from './audio/audioMetering';
 
 // Cache settings - tuned for fast scrubbing
 const MAX_CACHE_SIZE = 900; // 30 seconds at 30fps - larger cache for scrubbing
+const MAX_VIDEO_FRAME_CACHE_SIZE = 120;
+const JPEG_PROXY_FRAMES_ENABLED = true;
 const PRELOAD_AHEAD_FRAMES = 60; // 2 seconds ahead for playback
 const PRELOAD_BEHIND_FRAMES = 30; // 1 second behind for reverse scrubbing
 const PARALLEL_LOAD_COUNT = 16; // More parallel loads for faster preload
@@ -35,19 +39,30 @@ const SCRUB_PRELOAD_RANGE = 90; // 3 seconds around scrub position
 const SCRUB_TELEPORT_SECONDS = 2; // Large jumps should abandon stale queued scrub preloads
 const SCRUB_STATIONARY_EPSILON_SECONDS = 0.003;
 const SCRUB_STATIONARY_STOP_MS = 140;
-const SCRUB_GRAIN_DURATION_SECONDS = 0.065;
-const SCRUB_GRAIN_SPACING_SECONDS = 0.018;
-const SCRUB_GRAIN_FADE_SECONDS = 0.006;
-const SCRUB_GRAIN_SCHEDULE_AHEAD_SECONDS = 0.16;
+const SCRUB_GRAIN_DURATION_SECONDS = 0.09;
+const SCRUB_GRAIN_SPACING_SECONDS = 0.075;
+const SCRUB_GRAIN_FADE_SECONDS = 0.008;
+const SCRUB_GRAIN_SCHEDULE_AHEAD_SECONDS = 0.075;
 const SCRUB_GRAIN_PEAK_GAIN = 0.42;
 const SCRUB_RESYNC_POSITION_DELTA_SECONDS = 0.045;
+const SCRUB_RESYNC_FADE_OUT_SECONDS = 0.012;
 const SCRUB_FAST_VELOCITY_SECONDS_PER_SECOND = 2.5;
-const SCRUB_PENDING_GRAIN_KEEP_AHEAD_SECONDS = 0.012;
 const SCRUB_REVERSE_THRESHOLD_SECONDS_PER_SECOND = -0.04;
 const MAX_AUDIO_BUFFER_CACHE_BYTES = 192 * 1024 * 1024;
 const MAX_AUDIO_BUFFER_CACHE_ENTRIES = 3;
 const EQ_FREQUENCIES = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 const HUM_NOTCH_MAX_HARMONICS = 8;
+
+const MP4Box = MP4BoxModule as unknown as {
+  createFile: typeof MP4BoxModule.createFile;
+  DataStream: {
+    new (buffer?: unknown, byteOffset?: number, endianness?: number): {
+      buffer: ArrayBuffer;
+      position?: number;
+    };
+    BIG_ENDIAN: number;
+  };
+};
 
 // Frame cache entry
 interface CachedFrame {
@@ -60,6 +75,59 @@ interface CachedFrame {
 export interface ProxyCachedFrame {
   frameIndex: number;
   image: HTMLImageElement;
+}
+
+interface CodecConfigurationBox {
+  write: (stream: { buffer: ArrayBuffer; position?: number }) => void;
+}
+
+interface MP4TrackDetails {
+  mdia?: {
+    minf?: {
+      stbl?: {
+        stsd?: {
+          entries?: Array<{
+            avcC?: CodecConfigurationBox;
+            hvcC?: CodecConfigurationBox;
+            vpcC?: CodecConfigurationBox;
+            av1C?: CodecConfigurationBox;
+          }>;
+        };
+      };
+    };
+  };
+}
+
+interface MP4File {
+  onReady: (info: { videoTracks: MP4VideoTrack[] }) => void;
+  onSamples: (trackId: number, ref: unknown, samples: Sample[]) => void;
+  onError: (error: string) => void;
+  appendBuffer: (buffer: MP4ArrayBuffer) => number;
+  start: () => void;
+  flush: () => void;
+  setExtractionOptions: (trackId: number, user: unknown, options: { nbSamples: number }) => void;
+  getTrackById: (id: number) => MP4TrackDetails | undefined;
+}
+
+interface ProxyVideoSourceState {
+  mediaFileId: string;
+  storageKey: string;
+  samples: Sample[];
+  codecConfig: VideoDecoderConfig;
+  width: number;
+  height: number;
+}
+
+interface CachedVideoFrame {
+  mediaFileId: string;
+  frameIndex: number;
+  frame: VideoFrame;
+  timestamp: number;
+}
+
+export interface ProxyCachedVideoFrame {
+  frameIndex: number;
+  frame: VideoFrame;
 }
 
 interface ScrubAudioOptions {
@@ -119,6 +187,146 @@ function normalizeScrubDynamicsReductionDb(rawReduction: number): number {
   if (!Number.isFinite(rawReduction)) return 0;
   const reduction = rawReduction < 0 ? -rawReduction : rawReduction;
   return Math.max(0, Math.min(60, reduction));
+}
+
+function getFirstPresentationCts(samples: Sample[]): number {
+  let firstPresentationCts = Number.POSITIVE_INFINITY;
+  for (const sample of samples) {
+    if (Number.isFinite(sample.cts) && sample.cts < firstPresentationCts) {
+      firstPresentationCts = sample.cts;
+    }
+  }
+  return Number.isFinite(firstPresentationCts) ? firstPresentationCts : 0;
+}
+
+function getNormalizedSampleTimestampUs(sample: Sample, firstPresentationCts: number): number {
+  const normalizedCts = Math.max(0, sample.cts - firstPresentationCts);
+  return (normalizedCts / sample.timescale) * 1_000_000;
+}
+
+function extractCodecDescription(trak: MP4TrackDetails | undefined): Uint8Array | undefined {
+  const entry = trak?.mdia?.minf?.stbl?.stsd?.entries?.[0];
+  if (!entry) return undefined;
+
+  const configBox = entry.avcC || entry.hvcC || entry.vpcC || entry.av1C;
+  if (!configBox) return undefined;
+
+  const stream = new MP4Box.DataStream(undefined, 0, MP4Box.DataStream.BIG_ENDIAN);
+  configBox.write(stream);
+  const totalWritten = stream.position || stream.buffer.byteLength;
+  if (totalWritten <= 8) return undefined;
+  return new Uint8Array(stream.buffer.slice(8, totalWritten));
+}
+
+async function parseProxyVideoFile(mediaFileId: string, storageKey: string, file: File): Promise<ProxyVideoSourceState | null> {
+  const buffer = await file.arrayBuffer() as MP4ArrayBuffer;
+  buffer.fileStart = 0;
+
+  return new Promise((resolve) => {
+    const mp4File = MP4Box.createFile() as unknown as MP4File;
+    const samples: Sample[] = [];
+    let codecConfig: VideoDecoderConfig | null = null;
+    let width = 0;
+    let height = 0;
+    let resolved = false;
+
+    const finish = async () => {
+      if (resolved) return;
+      if (!codecConfig || samples.length === 0) {
+        resolved = true;
+        resolve(null);
+        return;
+      }
+
+      try {
+        if ('VideoDecoder' in window) {
+          const support = await VideoDecoder.isConfigSupported(codecConfig);
+          if (!support.supported) {
+            log.warn('Proxy video decoder config is not supported', { mediaFileId, codec: codecConfig.codec });
+            resolved = true;
+            resolve(null);
+            return;
+          }
+        }
+      } catch (error) {
+        log.warn('Proxy video decoder support check failed', error);
+      }
+
+      resolved = true;
+      resolve({
+        mediaFileId,
+        storageKey,
+        samples,
+        codecConfig,
+        width,
+        height,
+      });
+    };
+
+    const timeout = window.setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        log.warn('Proxy video parse timed out', { mediaFileId, storageKey });
+        resolve(null);
+      }
+    }, 10000);
+
+    mp4File.onReady = (info) => {
+      const videoTrack = info.videoTracks[0];
+      if (!videoTrack) {
+        window.clearTimeout(timeout);
+        if (!resolved) {
+          resolved = true;
+          resolve(null);
+        }
+        return;
+      }
+
+      const trak = mp4File.getTrackById(videoTrack.id);
+      const description = extractCodecDescription(trak);
+      codecConfig = {
+        codec: videoTrack.codec,
+        codedWidth: videoTrack.video.width,
+        codedHeight: videoTrack.video.height,
+        hardwareAcceleration: 'prefer-hardware',
+        ...(description && { description }),
+      };
+      width = videoTrack.video.width;
+      height = videoTrack.video.height;
+
+      mp4File.setExtractionOptions(videoTrack.id, null, { nbSamples: Infinity });
+      mp4File.start();
+    };
+
+    mp4File.onSamples = (_trackId, _ref, newSamples) => {
+      samples.push(...newSamples);
+    };
+
+    mp4File.onError = (error) => {
+      log.warn('Proxy video MP4Box error', error);
+      window.clearTimeout(timeout);
+      if (!resolved) {
+        resolved = true;
+        resolve(null);
+      }
+    };
+
+    try {
+      mp4File.appendBuffer(buffer);
+      mp4File.flush();
+      window.setTimeout(() => {
+        window.clearTimeout(timeout);
+        void finish();
+      }, 0);
+    } catch (error) {
+      window.clearTimeout(timeout);
+      log.warn('Proxy video parse failed', error);
+      if (!resolved) {
+        resolved = true;
+        resolve(null);
+      }
+    }
+  });
 }
 
 function scrubLimiterReductionDb(inputLinear: number, outputLinear: number): number {
@@ -642,7 +850,10 @@ function reconnectScrubCustomProcessor(node: ScrubProcessorNode): void {
 
 class ProxyFrameCache {
   private cache: Map<string, CachedFrame> = new Map();
+  private videoFrameCache: Map<string, CachedVideoFrame> = new Map();
   private loadingPromises: Map<string, Promise<HTMLImageElement | null>> = new Map();
+  private videoFrameLoadingPromises: Map<string, Promise<VideoFrame | null>> = new Map();
+  private proxyVideoSourcePromises: Map<string, Promise<ProxyVideoSourceState | null>> = new Map();
   private preloadQueue: string[] = [];
   private isPreloading = false;
 
@@ -668,6 +879,18 @@ class ProxyFrameCache {
   // Get cache key
   private getKey(mediaFileId: string, frameIndex: number): string {
     return `${mediaFileId}_${frameIndex}`;
+  }
+
+  private disposeAudioProxyElement(mediaFileId: string, audio: HTMLAudioElement): void {
+    const src = audio.currentSrc || audio.src;
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+    if (src && this.ownedAudioUrls.has(src)) {
+      URL.revokeObjectURL(src);
+      this.ownedAudioUrls.delete(src);
+    }
+    this.audioCache.delete(mediaFileId);
   }
 
   private touchAudioBufferCacheEntry(mediaFileId: string, buffer: AudioBuffer): void {
@@ -696,6 +919,12 @@ class ProxyFrameCache {
   // Synchronously get a frame if it's already in memory cache
   // Also triggers preloading of upcoming frames (even if current frame not cached)
   getCachedFrame(mediaFileId: string, frameIndex: number, fps: number = 30): HTMLImageElement | null {
+    return JPEG_PROXY_FRAMES_ENABLED
+      ? this.getCachedLegacyImageFrame(mediaFileId, frameIndex, fps)
+      : null;
+  }
+
+  private getCachedLegacyImageFrame(mediaFileId: string, frameIndex: number, fps: number = 30): HTMLImageElement | null {
     const key = this.getKey(mediaFileId, frameIndex);
     const cached = this.cache.get(key);
 
@@ -720,6 +949,16 @@ class ProxyFrameCache {
   }
 
   getNearestCachedFrameEntry(
+    mediaFileId: string,
+    frameIndex: number,
+    maxDistance: number = 30
+  ): ProxyCachedFrame | null {
+    return JPEG_PROXY_FRAMES_ENABLED
+      ? this.getNearestCachedLegacyImageFrameEntry(mediaFileId, frameIndex, maxDistance)
+      : null;
+  }
+
+  private getNearestCachedLegacyImageFrameEntry(
     mediaFileId: string,
     frameIndex: number,
     maxDistance: number = 30
@@ -764,8 +1003,197 @@ class ProxyFrameCache {
     return null;
   }
 
+  getCachedVideoFrame(mediaFileId: string, frameIndex: number): VideoFrame | null {
+    this.updateScrubDirection(frameIndex);
+    const key = this.getKey(mediaFileId, frameIndex);
+    const cached = this.videoFrameCache.get(key);
+    if (cached) {
+      cached.timestamp = Date.now();
+      this.cacheHits++;
+      return cached.frame;
+    }
+    this.cacheMisses++;
+    return null;
+  }
+
+  getNearestCachedVideoFrameEntry(
+    mediaFileId: string,
+    frameIndex: number,
+    maxDistance: number = 30
+  ): ProxyCachedVideoFrame | null {
+    const exact = this.videoFrameCache.get(this.getKey(mediaFileId, frameIndex));
+    if (exact) {
+      exact.timestamp = Date.now();
+      return { frameIndex: exact.frameIndex, frame: exact.frame };
+    }
+
+    const searchForward = this.scrubDirection >= 0;
+    for (let d = 1; d <= maxDistance; d++) {
+      const primaryFrame = frameIndex + (searchForward ? d : -d);
+      if (primaryFrame >= 0) {
+        const primary = this.videoFrameCache.get(this.getKey(mediaFileId, primaryFrame));
+        if (primary) {
+          primary.timestamp = Date.now();
+          return { frameIndex: primary.frameIndex, frame: primary.frame };
+        }
+      }
+
+      const secondaryFrame = frameIndex + (searchForward ? -d : d);
+      if (secondaryFrame >= 0) {
+        const secondary = this.videoFrameCache.get(this.getKey(mediaFileId, secondaryFrame));
+        if (secondary) {
+          secondary.timestamp = Date.now();
+          return { frameIndex: secondary.frameIndex, frame: secondary.frame };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  async getVideoFrame(mediaFileId: string, time: number, fps: number = 30): Promise<VideoFrame | null> {
+    const frameIndex = Math.floor(time * fps);
+    this.updateScrubDirection(frameIndex);
+    const key = this.getKey(mediaFileId, frameIndex);
+
+    const cached = this.videoFrameCache.get(key);
+    if (cached) {
+      cached.timestamp = Date.now();
+      return cached.frame;
+    }
+
+    const loadingPromise = this.videoFrameLoadingPromises.get(key);
+    if (loadingPromise) return loadingPromise;
+
+    const promise = this.decodeProxyVideoFrame(mediaFileId, frameIndex);
+    this.videoFrameLoadingPromises.set(key, promise);
+
+    try {
+      const frame = await promise;
+      if (frame) {
+        this.addVideoFrameToCache(mediaFileId, frameIndex, frame);
+      }
+      return frame;
+    } finally {
+      this.videoFrameLoadingPromises.delete(key);
+    }
+  }
+
+  private async getProxyVideoSource(mediaFileId: string): Promise<ProxyVideoSourceState | null> {
+    const existing = this.proxyVideoSourcePromises.get(mediaFileId);
+    if (existing) return existing;
+
+    const promise = (async () => {
+      const mediaFile = useMediaStore.getState().files.find(f => f.id === mediaFileId);
+      const storageKey = mediaFile?.fileHash || mediaFileId;
+      if (!projectFileService.isProjectOpen()) return null;
+
+      const proxyVideo = await projectFileService.getProxyVideo(storageKey);
+      if (!proxyVideo) return null;
+
+      return parseProxyVideoFile(mediaFileId, storageKey, proxyVideo);
+    })();
+
+    this.proxyVideoSourcePromises.set(mediaFileId, promise);
+    return promise;
+  }
+
+  private async decodeProxyVideoFrame(mediaFileId: string, frameIndex: number): Promise<VideoFrame | null> {
+    const source = await this.getProxyVideoSource(mediaFileId);
+    if (!source || source.samples.length === 0) return null;
+
+    const sampleIndex = Math.max(0, Math.min(source.samples.length - 1, frameIndex));
+    const sample = source.samples[sampleIndex];
+    const firstPresentationCts = getFirstPresentationCts(source.samples);
+    let decodedFrame: VideoFrame | null = null;
+    let decodeError: unknown = null;
+    const closeDecodedFrame = () => {
+      const frame = decodedFrame as VideoFrame | null;
+      if (frame) {
+        frame.close();
+        decodedFrame = null;
+      }
+    };
+
+    const decoder = new VideoDecoder({
+      output: (frame) => {
+        if (decodedFrame) decodedFrame.close();
+        decodedFrame = frame;
+      },
+      error: (error) => {
+        decodeError = error;
+      },
+    });
+
+    try {
+      decoder.configure(source.codecConfig);
+      decoder.decode(new EncodedVideoChunk({
+        type: 'key',
+        timestamp: getNormalizedSampleTimestampUs(sample, firstPresentationCts),
+        duration: sample.timescale > 0 ? (sample.duration / sample.timescale) * 1_000_000 : undefined,
+        data: sample.data,
+      }));
+      await decoder.flush();
+      if (decodeError) {
+        log.warn('Proxy video frame decode failed', decodeError);
+        closeDecodedFrame();
+        return null;
+      }
+      return decodedFrame;
+    } catch (error) {
+      log.warn('Proxy video frame decode failed', error);
+      closeDecodedFrame();
+      return null;
+    } finally {
+      try {
+        if (decoder.state !== 'closed') decoder.close();
+      } catch { /* ignore */ }
+    }
+  }
+
+  private addVideoFrameToCache(mediaFileId: string, frameIndex: number, frame: VideoFrame): void {
+    const key = this.getKey(mediaFileId, frameIndex);
+    const existing = this.videoFrameCache.get(key);
+    if (existing && existing.frame !== frame) {
+      existing.frame.close();
+    }
+
+    while (this.videoFrameCache.size >= MAX_VIDEO_FRAME_CACHE_SIZE) {
+      this.evictOldestVideoFrame();
+    }
+
+    this.videoFrameCache.set(key, {
+      mediaFileId,
+      frameIndex,
+      frame,
+      timestamp: Date.now(),
+    });
+  }
+
+  private evictOldestVideoFrame(): void {
+    let oldestKey: string | null = null;
+    let oldestTime = Infinity;
+    for (const [key, entry] of this.videoFrameCache) {
+      if (entry.timestamp < oldestTime) {
+        oldestTime = entry.timestamp;
+        oldestKey = key;
+      }
+    }
+
+    if (!oldestKey) return;
+    const oldest = this.videoFrameCache.get(oldestKey);
+    oldest?.frame.close();
+    this.videoFrameCache.delete(oldestKey);
+  }
+
   // Get a frame from cache or load it
   async getFrame(mediaFileId: string, time: number, fps: number = 30): Promise<HTMLImageElement | null> {
+    return JPEG_PROXY_FRAMES_ENABLED
+      ? this.getLegacyImageFrame(mediaFileId, time, fps)
+      : null;
+  }
+
+  private async getLegacyImageFrame(mediaFileId: string, time: number, fps: number = 30): Promise<HTMLImageElement | null> {
     const frameIndex = Math.floor(time * fps);
     const key = this.getKey(mediaFileId, frameIndex);
 
@@ -986,6 +1414,17 @@ class ProxyFrameCache {
     }
   }
 
+  private updateScrubDirection(currentFrameIndex: number): void {
+    if (this.lastScrubFrame >= 0) {
+      const delta = currentFrameIndex - this.lastScrubFrame;
+      if (Math.abs(delta) > 0) {
+        this.scrubDirection = delta > 0 ? 1 : -1;
+        this.isScrubbing = true;
+      }
+    }
+    this.lastScrubFrame = currentFrameIndex;
+  }
+
   // Call this when scrubbing stops to reset state
   resetScrubState(): void {
     this.isScrubbing = false;
@@ -1073,6 +1512,13 @@ class ProxyFrameCache {
    */
   getCachedAudioProxy(mediaFileId: string): HTMLAudioElement | null {
     return this.audioCache.get(mediaFileId) || null;
+  }
+
+  releaseAudioProxy(mediaFileId: string): void {
+    const audio = this.audioCache.get(mediaFileId);
+    if (audio) {
+      this.disposeAudioProxyElement(mediaFileId, audio);
+    }
   }
 
   /**
@@ -1389,8 +1835,8 @@ class ProxyFrameCache {
 
   /**
    * Granular scrub audio - call continuously while dragging the playhead.
-   * Short overlapping grains avoid the gated/stalled sound of one long
-   * playbackRate-driven buffer source and allow backward scrub feedback.
+   * Short overlapping, pitch-stable grains avoid the gated/stalled sound of
+   * one long buffer source and allow backward scrub feedback.
    */
   playScrubAudio(
     mediaFileId: string,
@@ -1509,13 +1955,32 @@ class ProxyFrameCache {
   }
 
   private resyncScrubGrainSchedule(currentTime: number): void {
-    this.stopPendingScrubGrains(currentTime + SCRUB_PENDING_GRAIN_KEEP_AHEAD_SECONDS);
+    this.stopScrubGrainsForResync(currentTime);
     this.scrubNextGrainTime = currentTime;
   }
 
-  private stopPendingScrubGrains(startAfter: number): void {
+  private stopScrubGrainsForResync(currentTime: number): void {
     for (const grain of Array.from(this.scrubGrains)) {
-      if (grain.startTime <= startAfter) continue;
+      if (grain.startTime <= currentTime) {
+        this.fadeOutScrubGrain(grain, currentTime);
+        continue;
+      }
+      try {
+        grain.source.onended = null;
+        grain.source.stop();
+      } catch { /* ignore */ }
+      this.cleanupScrubGrain(grain);
+    }
+  }
+
+  private fadeOutScrubGrain(grain: ScrubGrain, currentTime: number): void {
+    const stopTime = currentTime + SCRUB_RESYNC_FADE_OUT_SECONDS;
+    try {
+      grain.gain.gain.cancelScheduledValues(currentTime);
+      grain.gain.gain.setValueAtTime(Math.max(0, grain.gain.gain.value), currentTime);
+      grain.gain.gain.linearRampToValueAtTime(0, stopTime);
+      grain.source.stop(stopTime);
+    } catch {
       try {
         grain.source.onended = null;
         grain.source.stop();
@@ -1577,7 +2042,7 @@ class ProxyFrameCache {
     const gain = ctx.createGain();
 
     source.buffer = sourceBuffer;
-    source.playbackRate.value = this.getScrubGrainPlaybackRate(velocity);
+    source.playbackRate.value = 1;
     this.shapeScrubGrainGain(gain.gain, startTime, playbackDuration);
 
     source.connect(gain);
@@ -1608,12 +2073,6 @@ class ProxyFrameCache {
   ): number {
     const maxOffset = Math.max(0, buffer.duration - duration);
     return Math.max(0, Math.min(position, maxOffset));
-  }
-
-  private getScrubGrainPlaybackRate(velocity: number): number {
-    const speed = Math.abs(velocity);
-    if (!Number.isFinite(speed) || speed < 0.001) return 1;
-    return Math.max(0.75, Math.min(2.25, speed));
   }
 
   private shapeScrubGrainGain(gain: AudioParam, startTime: number, duration: number): void {
@@ -1813,6 +2272,13 @@ class ProxyFrameCache {
    */
   hasAudioBuffer(mediaFileId: string): boolean {
     return this.audioBufferCache.has(mediaFileId);
+  }
+
+  getCachedAudioBuffer(mediaFileId: string): AudioBuffer | null {
+    const cached = this.audioBufferCache.get(mediaFileId);
+    if (!cached) return null;
+    this.touchAudioBufferCacheEntry(mediaFileId, cached);
+    return cached;
   }
 
   private attachScrubEffectChain(
@@ -2032,17 +2498,19 @@ class ProxyFrameCache {
         this.cache.delete(key);
       }
     }
+    for (const [key, entry] of this.videoFrameCache) {
+      if (key.startsWith(mediaFileId + '_')) {
+        entry.frame.close();
+        this.videoFrameCache.delete(key);
+      }
+    }
     this.preloadQueue = this.preloadQueue.filter((k) => !k.startsWith(mediaFileId + '_'));
+    this.proxyVideoSourcePromises.delete(mediaFileId);
 
     // Also clear audio cache
     const audio = this.audioCache.get(mediaFileId);
     if (audio) {
-      audio.pause();
-      if (this.ownedAudioUrls.has(audio.src)) {
-        URL.revokeObjectURL(audio.src);
-        this.ownedAudioUrls.delete(audio.src);
-      }
-      this.audioCache.delete(mediaFileId);
+      this.disposeAudioProxyElement(mediaFileId, audio);
     }
 
     this.audioBufferCache.delete(mediaFileId);
@@ -2053,14 +2521,17 @@ class ProxyFrameCache {
   // Clear entire cache
   clearAll() {
     this.cache.clear();
+    for (const entry of this.videoFrameCache.values()) {
+      entry.frame.close();
+    }
+    this.videoFrameCache.clear();
+    this.videoFrameLoadingPromises.clear();
+    this.proxyVideoSourcePromises.clear();
     this.preloadQueue = [];
 
     // Clear audio cache
-    for (const [, audio] of this.audioCache) {
-      audio.pause();
-      if (this.ownedAudioUrls.has(audio.src)) {
-        URL.revokeObjectURL(audio.src);
-      }
+    for (const [mediaFileId, audio] of Array.from(this.audioCache.entries())) {
+      this.disposeAudioProxyElement(mediaFileId, audio);
     }
     this.audioCache.clear();
     this.ownedAudioUrls.clear();
@@ -2231,6 +2702,11 @@ class ProxyFrameCache {
     // Collect all cached frame indices for this media file
     const cachedFrames: number[] = [];
     for (const [, entry] of this.cache) {
+      if (entry.mediaFileId === mediaFileId) {
+        cachedFrames.push(entry.frameIndex);
+      }
+    }
+    for (const [, entry] of this.videoFrameCache) {
       if (entry.mediaFileId === mediaFileId) {
         cachedFrames.push(entry.frameIndex);
       }
