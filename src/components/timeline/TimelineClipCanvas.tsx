@@ -14,16 +14,21 @@
 //
 // Phase 1 is intentionally display-only (no hit-testing / handles). Interaction
 // stays on the DOM path; Phase 2 adds canvas hit-testing + a single active-clip
-// overlay. Thumbnails/waveforms on canvas are a Phase 1 follow-up.
+// overlay.
 
-import { memo, useEffect, useRef } from 'react';
+import { memo, useEffect, useReducer, useRef } from 'react';
+import { thumbnailCacheService } from '../../services/thumbnailCacheService';
+import { getThumbnailBitmap, ensureThumbnailBitmap } from './utils/thumbnailBitmapCache';
 
 // Browser 2D canvas backing-store limit is ~16384px in Chrome; stay safely under.
 export const MAX_CANVAS_WIDTH_PX = 16000;
 
 // Level-of-Detail thresholds, in CSS px of clip width.
-const LOD_BAR_PX = 4;     // below this: nothing meaningful, draw a thin bar
-const LOD_LABEL_PX = 24;  // above this: room for a label
+const LOD_BAR_PX = 4;        // below this: nothing meaningful, draw a thin bar
+const LOD_LABEL_PX = 24;     // above this: room for a label
+const LOD_THUMB_PX = 40;     // above this: draw filmstrip thumbnails
+const CANVAS_THUMB_SLOT_PX = 80; // target width of one filmstrip frame
+const MAX_THUMB_SLOTS = 48;  // hard cap per clip
 
 export interface CanvasClip {
   id: string;
@@ -31,7 +36,11 @@ export interface CanvasClip {
   startTime: number;
   duration: number;
   name: string;
-  source?: { type?: string | null } | null;
+  inPoint?: number;
+  outPoint?: number;
+  reversed?: boolean;
+  mediaFileId?: string;
+  source?: { type?: string | null; mediaFileId?: string } | null;
 }
 
 interface TimelineClipCanvasProps {
@@ -48,7 +57,6 @@ interface TimelineClipCanvasProps {
 }
 
 function withAlpha(color: string, alpha: number): string {
-  // Accepts #rrggbb or rgb()/hsl(); for hex we build rgba, otherwise wrap.
   if (color.startsWith('#') && (color.length === 7 || color.length === 4)) {
     let r: number, g: number, b: number;
     if (color.length === 4) {
@@ -65,10 +73,66 @@ function withAlpha(color: string, alpha: number): string {
   return color;
 }
 
+/** A clip shows a filmstrip when it has a media source and is a video/image. */
+function clipShowsThumbnails(clip: CanvasClip): string | null {
+  const type = clip.source?.type;
+  if (type && type !== 'video' && type !== 'image') return null;
+  return clip.mediaFileId ?? clip.source?.mediaFileId ?? null;
+}
+
+/** Cover-fit draw of a bitmap into a destination rect, clipped by the caller. */
+function drawCover(
+  ctx: CanvasRenderingContext2D,
+  bmp: ImageBitmap,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number,
+): void {
+  const scale = Math.max(dw / bmp.width, dh / bmp.height);
+  const sw = dw / scale;
+  const sh = dh / scale;
+  const sx = (bmp.width - sw) / 2;
+  const sy = (bmp.height - sh) / 2;
+  ctx.drawImage(bmp, sx, sy, sw, sh, dx, dy, dw, dh);
+}
+
+function drawThumbnails(
+  ctx: CanvasRenderingContext2D,
+  clip: CanvasClip,
+  mediaFileId: string,
+  x: number,
+  top: number,
+  w: number,
+  h: number,
+  requestRedraw: () => void,
+): void {
+  const count = Math.max(1, Math.min(MAX_THUMB_SLOTS, Math.floor(w / CANVAS_THUMB_SLOT_PX)));
+  const urls = thumbnailCacheService.getThumbnailsForRange(
+    mediaFileId,
+    clip.inPoint ?? 0,
+    clip.outPoint ?? (clip.inPoint ?? 0) + clip.duration,
+    count,
+    clip.reversed,
+  );
+  const slotW = w / count;
+  for (let i = 0; i < count; i++) {
+    const url = urls[i];
+    if (!url) continue;
+    const bmp = getThumbnailBitmap(url);
+    if (bmp) {
+      drawCover(ctx, bmp, x + i * slotW, top, slotW, h);
+    } else {
+      ensureThumbnailBitmap(url, requestRedraw);
+    }
+  }
+}
+
 function drawClips(
   ctx: CanvasRenderingContext2D,
   props: TimelineClipCanvasProps,
   cssWidth: number,
+  requestRedraw: () => void,
 ): void {
   const { clips, height, timeToPixel, selectedClipIds, trackColor } = props;
   ctx.clearRect(0, 0, cssWidth, height);
@@ -86,7 +150,6 @@ function drawClips(
     const x = timeToPixel(clip.startTime);
     const w = timeToPixel(clip.duration);
     if (w < LOD_BAR_PX) {
-      // Sub-pixel/tiny: a single thin bar, no rounding/label (zoomed-out LOD).
       ctx.fillStyle = selectedClipIds.has(clip.id) ? fillSelected : fill;
       ctx.fillRect(x, 1, Math.max(1, w), height - 2);
       continue;
@@ -96,11 +159,32 @@ function drawClips(
     const top = 1;
     const h = height - 2;
 
-    // Rounded clip body.
+    // Rounded clip body fill.
     ctx.beginPath();
     ctx.roundRect(x, top, w, h, radius);
     ctx.fillStyle = selected ? fillSelected : fill;
     ctx.fill();
+
+    // Filmstrip thumbnails clipped to the body.
+    const mediaFileId = w >= LOD_THUMB_PX ? clipShowsThumbnails(clip) : null;
+    if (mediaFileId) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(x, top, w, h, radius);
+      ctx.clip();
+      drawThumbnails(ctx, clip, mediaFileId, x, top, w, h, requestRedraw);
+      // Darken bottom strip so the label stays readable over thumbnails.
+      const grad = ctx.createLinearGradient(0, top + h - 16, 0, top + h);
+      grad.addColorStop(0, 'rgba(0,0,0,0)');
+      grad.addColorStop(1, 'rgba(0,0,0,0.55)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(x, top + h - 16, w, 16);
+      ctx.restore();
+    }
+
+    // Border.
+    ctx.beginPath();
+    ctx.roundRect(x, top, w, h, radius);
     ctx.lineWidth = selected ? 2 : 1;
     ctx.strokeStyle = selected ? selectedBorder : border;
     ctx.stroke();
@@ -112,7 +196,7 @@ function drawClips(
       ctx.rect(x + 5, top, w - 10, h);
       ctx.clip();
       ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
-      ctx.fillText(clip.name, x + 6, top + h / 2);
+      ctx.fillText(clip.name, x + 6, mediaFileId ? top + h - 8 : top + h / 2);
       ctx.restore();
     }
   }
@@ -121,8 +205,12 @@ function drawClips(
 function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number | null>(null);
+  const [redrawNonce, bumpRedraw] = useReducer((n: number) => n + 1, 0);
   const { clips, height, contentWidth, timeToPixel, selectedClipIds, trackColor } = props;
   const cssWidth = Math.max(1, Math.min(contentWidth, MAX_CANVAS_WIDTH_PX));
+
+  // Redraw when the thumbnail cache gains frames for any of our media files.
+  useEffect(() => thumbnailCacheService.subscribe(() => bumpRedraw()), []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -131,7 +219,6 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
     if (!ctx) return;
 
     const dpr = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 1;
-    // Backing store at devicePixelRatio for crisp text/edges; CSS size stays logical.
     canvas.width = Math.round(cssWidth * dpr);
     canvas.height = Math.round(height * dpr);
     canvas.style.width = `${cssWidth}px`;
@@ -141,7 +228,12 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawClips(ctx, { clips, height, contentWidth, timeToPixel, selectedClipIds, trackColor }, cssWidth);
+      drawClips(
+        ctx,
+        { clips, height, contentWidth, timeToPixel, selectedClipIds, trackColor },
+        cssWidth,
+        bumpRedraw,
+      );
     });
 
     return () => {
@@ -150,9 +242,7 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
         rafRef.current = null;
       }
     };
-    // Redraw whenever geometry/selection/color change. timeToPixel identity
-    // changes with zoom/scroll, so it captures those without extra deps.
-  }, [clips, height, contentWidth, cssWidth, timeToPixel, selectedClipIds, trackColor]);
+  }, [clips, height, contentWidth, cssWidth, timeToPixel, selectedClipIds, trackColor, redrawNonce]);
 
   return (
     <canvas
