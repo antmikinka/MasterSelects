@@ -35,10 +35,6 @@ interface PreviewControlsProps {
   dropdownStyle: React.CSSProperties;
   compositions: Composition[];
   setPanelSource: (source: PreviewPanelSource) => void;
-  panelId: string;
-  // Panel management
-  addPreviewPanel: (compositionId: string | null) => void;
-  closePanelById: (panelId: string) => void;
 }
 
 export function PreviewControls({
@@ -63,9 +59,6 @@ export function PreviewControls({
   dropdownStyle,
   compositions,
   setPanelSource,
-  panelId,
-  addPreviewPanel,
-  closePanelById,
 }: PreviewControlsProps) {
   const renderLayerOptions = (compositionId: string | null) => {
     const videoTracks = getCompositionVideoTracks(
@@ -196,20 +189,6 @@ export function PreviewControls({
           </div>
         </>
       )}
-      <button
-        className="preview-add-btn"
-        onClick={() => addPreviewPanel(null)}
-        title="Add another preview panel"
-      >
-        +
-      </button>
-      <button
-        className="preview-close-btn"
-        onClick={() => closePanelById(panelId)}
-        title="Close this preview panel"
-      >
-        -
-      </button>
     </div>
   );
 }

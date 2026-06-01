@@ -1,6 +1,6 @@
 // App version
 // Format: MAJOR.MINOR.PATCH
-export const APP_VERSION = '2.1.0';
+export const APP_VERSION = '2.1.1';
 
 export interface ChangelogNotice {
   type: 'info' | 'warning' | 'success' | 'danger';
@@ -27,8 +27,8 @@ export const FEATURED_VIDEO: {
   title: 'MasterSelects Demo',
   banner: {
     type: 'success',
-    title: 'MasterSelects 2.1.0',
-    message: 'Polish batch: audio waveform previews in the slot & board views, the source monitor opens once and replays consecutive same-type files, the fullscreen timeline divider hugs its content, list-column dragging no longer marquee-selects, badges hide only on horizontal scroll, idle audio scrubbing stays quiet, and Appearance has an interface-zoom area.',
+    title: 'MasterSelects 2.1.1',
+    message: 'Multiple preview panels: the tab-bar "+" now spawns a second, independent Preview side-by-side — each with its own composition/layer selector and render target. The old +/- buttons inside the preview toolbar are gone in favour of the dock "+".',
     animated: true,
   },
 };
@@ -36,8 +36,8 @@ export const FEATURED_VIDEO: {
 // Build/Platform notice shown at top of changelog (set to null to hide)
 export const BUILD_NOTICE: ChangelogNotice | null = {
   type: 'success',
-  title: 'MasterSelects 2.1.0',
-  message: 'Polish batch: audio waveform previews in the slot/board views, source monitor opens once and replays consecutive same-type files, timeline divider hugs content on fullscreen, list-column drag no longer marquee-selects, badges only hide on horizontal scroll, audio scrub no longer repeats when idle, and an interface zoom area in Appearance.',
+  title: 'MasterSelects 2.1.1',
+  message: 'Multiple preview panels: the tab-bar "+" now spawns a second, independent Preview side-by-side, each with its own composition/layer selector and render target. The +/- buttons inside the preview toolbar are gone — adding previews is handled by the dock "+".',
   animated: true,
 };
 

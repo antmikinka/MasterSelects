@@ -3,7 +3,7 @@
 import { useCallback, useRef, useEffect, useState, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { DockTabGroup, DockPanel, PanelType } from '../../types/dock';
-import { DEPRECATED_PANEL_TYPES, PANEL_CONFIGS, WIP_PANEL_TYPES } from '../../types/dock';
+import { DEPRECATED_PANEL_TYPES, MULTI_INSTANCE_PANEL_TYPES, PANEL_CONFIGS, WIP_PANEL_TYPES } from '../../types/dock';
 import { useDockStore } from '../../stores/dockStore';
 import { useMediaStore } from '../../stores/mediaStore';
 import { useTimelineStore } from '../../stores/timeline';
@@ -26,6 +26,11 @@ const TAB_SLOT_SIZE_PX = 22;
 const TAB_SLOT_GAP_PX = 7;
 const CHANGE_TO_PANEL_TYPES = (Object.keys(PANEL_CONFIGS) as PanelType[])
   .filter((type) => !DEPRECATED_PANEL_TYPES.includes(type));
+
+// Add-panel "+" menu order: multi-instance (spawnable) types like Preview float to the top.
+const ADD_MENU_PANEL_TYPES = [...CHANGE_TO_PANEL_TYPES].sort((a, b) => (
+  (MULTI_INSTANCE_PANEL_TYPES.includes(a) ? 0 : 1) - (MULTI_INSTANCE_PANEL_TYPES.includes(b) ? 0 : 1)
+));
 
 interface DockTabContextMenuState {
   x: number;
@@ -846,21 +851,28 @@ export function DockTabPane({ group }: DockTabPaneProps) {
         >
           {(() => {
             const visibleTypes = new Set(getVisiblePanelTypes());
-            return CHANGE_TO_PANEL_TYPES.map((type) => {
+            return ADD_MENU_PANEL_TYPES.map((type) => {
               const config = PANEL_CONFIGS[type];
+              const isMulti = MULTI_INSTANCE_PANEL_TYPES.includes(type);
               const isVisible = visibleTypes.has(type);
               const isWip = WIP_PANEL_TYPES.includes(type);
+              // Multi-instance types spawn a new instance every time, so they are
+              // never "current" — clicking always adds another side-by-side.
+              const title = isMulti
+                ? `Add another ${config.title}`
+                : (isVisible ? `${config.title} (focus existing)` : `Add ${config.title}`);
               return (
                 <button
                   key={type}
-                  className={`dock-tab-add-menu-item ${isVisible ? 'is-current' : ''}`}
+                  className={`dock-tab-add-menu-item ${(!isMulti && isVisible) ? 'is-current' : ''}`}
                   type="button"
                   onClick={() => handleAddPanelType(type)}
-                  title={isVisible ? `${config.title} (focus existing)` : `Add ${config.title}`}
+                  title={title}
                 >
                   <span>{config.title}</span>
                   {isWip && <span className="dock-tab-context-menu-hint">WIP</span>}
-                  {isVisible && <span className="dock-tab-context-menu-hint">open</span>}
+                  {isMulti && <span className="dock-tab-context-menu-hint">+1</span>}
+                  {!isMulti && isVisible && <span className="dock-tab-context-menu-hint">open</span>}
                 </button>
               );
             });

@@ -19,7 +19,7 @@ import type {
   SavedDockTimelineTrackSlotLayout,
   PanelConfig,
 } from '../types/dock';
-import { DEPRECATED_PANEL_TYPES, PANEL_CONFIGS } from '../types/dock';
+import { DEPRECATED_PANEL_TYPES, MULTI_INSTANCE_PANEL_TYPES, PANEL_CONFIGS } from '../types/dock';
 import {
   removePanel,
   insertPanelAtTarget,
@@ -1032,8 +1032,9 @@ interface DockState {
   // Add a panel type as a tab into a specific group (used by the per-panel "+" button)
   addPanelTypeToGroup: (type: PanelType, groupId: string) => void;
 
-  // Multiple preview panels
-  addPreviewPanel: (compositionId: string | null) => void;
+  // Multiple preview panels. Optional targetGroupId places the new instance
+  // side-by-side (split right) of that group — e.g. the tab bar whose "+" was clicked.
+  addPreviewPanel: (compositionId: string | null, targetGroupId?: string) => void;
   updatePanelData: (panelId: string, data: Partial<import('../types/dock').PanelData>) => void;
 
   // Layout management
@@ -1516,6 +1517,17 @@ export const useDockStore = create<DockState>()(
         addPanelTypeToGroup: (type, groupId) => {
           const resolvedType = resolvePanelType(type);
           if (!VALID_PANEL_TYPES.has(resolvedType)) return;
+
+          // Multi-instance panels (e.g. Preview) always spawn a fresh, independent
+          // instance side-by-side of the clicked group instead of focusing the
+          // existing one. Each instance has its own id / render target.
+          if (MULTI_INSTANCE_PANEL_TYPES.includes(resolvedType)) {
+            if (resolvedType === 'preview') {
+              get().addPreviewPanel(null, groupId);
+            }
+            return;
+          }
+
           const { layout, isPanelTypeVisible, activatePanelType } = get();
 
           // Built-in panels are singletons (id === type). If already visible,
@@ -1545,11 +1557,9 @@ export const useDockStore = create<DockState>()(
           set({ layout: newLayout });
         },
 
-        addPreviewPanel: (compositionId) => {
+        addPreviewPanel: (compositionId, targetGroupId) => {
           const { layout } = get();
 
-          // Find the preview-group to add to
-          const previewGroup = findTabGroupById(layout.root, 'preview-group');
           const newPanelId = `preview-${Date.now()}`;
           const newPanel: DockPanel = {
             id: newPanelId,
@@ -1558,24 +1568,19 @@ export const useDockStore = create<DockState>()(
             data: createPreviewPanelDataPatch(createPreviewPanelSource(compositionId)) as PreviewPanelData,
           };
 
-          if (previewGroup) {
-            // Insert to the RIGHT of the preview group (side-by-side)
-            const newLayout = insertPanelAtTarget(layout, newPanel, {
-              groupId: 'preview-group',
-              position: 'right',
-            });
-            set({ layout: newLayout });
-          } else {
-            // Fallback: find any tab group or create floating
-            const anyGroup = findFirstTabGroup(layout.root);
-            if (anyGroup) {
-              const newLayout = insertPanelAtTarget(layout, newPanel, {
-                groupId: anyGroup.id,
-                position: 'right',
-              });
-              set({ layout: newLayout });
-            }
-          }
+          // Prefer the explicitly requested group (the tab bar whose "+" was clicked),
+          // then the canonical preview-group, then any tab group. Insert side-by-side.
+          const resolvedGroupId =
+            (targetGroupId && findTabGroupById(layout.root, targetGroupId) ? targetGroupId : null)
+            ?? (findTabGroupById(layout.root, 'preview-group') ? 'preview-group' : null)
+            ?? findFirstTabGroup(layout.root)?.id;
+          if (!resolvedGroupId) return;
+
+          const newLayout = insertPanelAtTarget(layout, newPanel, {
+            groupId: resolvedGroupId,
+            position: 'right',
+          });
+          set({ layout: newLayout });
         },
 
         updatePanelData: (panelId, data) => {
