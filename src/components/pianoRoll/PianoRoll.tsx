@@ -6,10 +6,11 @@
 // clip. Notes are drawn/moved/resized with free placement (no grid snapping)
 // and deleted via right-click. A live cursor mirrors the timeline playhead.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTimelineStore } from '../../stores/timeline';
 import { previewMidiNote } from '../../services/audio/midiPlaybackScheduler';
 import type { MidiNote } from '../../types/midiClip';
+import { computeGhostNotes } from './ghostNotes';
 
 const ROW_H = 16;          // px per pitch row
 const PX_PER_SEC = 120;    // horizontal zoom
@@ -70,6 +71,10 @@ export function PianoRoll({ clipId, onRequestClose }: PianoRollProps) {
   // Plain selectors (no useShallow): the clip object identity changes whenever
   // its notes change, so this re-renders on every edit; actions are stable refs.
   const clip = useTimelineStore((state) => state.clips.find((c) => c.id === clipId));
+  // All clips, so ghost notes from other overlapping MIDI clips can be shown
+  // read-only in this clip's editor (#232). Re-renders on any clip edit, which
+  // is what we want — ghosts must track the other clips' notes live.
+  const allClips = useTimelineStore((state) => state.clips);
   const playheadPosition = useTimelineStore((state) => state.playheadPosition);
   const addMidiNote = useTimelineStore((state) => state.addMidiNote);
   const updateMidiNote = useTimelineStore((state) => state.updateMidiNote);
@@ -80,6 +85,14 @@ export function PianoRoll({ clipId, onRequestClose }: PianoRollProps) {
   // rules the editor length (#232); resize the clip on the timeline for more room.
   const contentWidth = clipDuration * PX_PER_SEC;
   const notes = clip?.midiData?.notes ?? [];
+
+  // Read-only ghosts: notes from other MIDI clips that overlap this clip's
+  // window, in this clip's local time space (#232). Editing stays in each
+  // note's own clip; ghosts are display only.
+  const ghostNotes = useMemo(
+    () => (clip ? computeGhostNotes(clip, allClips) : []),
+    [clip, allClips],
+  );
 
   // Center the view near middle C on first mount so notes land in view.
   useEffect(() => {
@@ -289,6 +302,27 @@ export function PianoRoll({ clipId, onRequestClose }: PianoRollProps) {
             <div
               key={`s${s}`}
               style={{ position: 'absolute', top: 0, left: s * PX_PER_SEC, width: 1, height: GRID_H, background: 'rgba(255,255,255,0.07)' }}
+            />
+          ))}
+
+          {/* Ghost notes from other overlapping MIDI clips — read-only (#232).
+              Drawn before the real notes so editable notes always sit on top. */}
+          {ghostNotes.map((ghost) => (
+            <div
+              key={`ghost-${ghost.key}`}
+              title={`${pitchLabel(ghost.pitch)} · (other clip)`}
+              style={{
+                position: 'absolute',
+                left: ghost.start * PX_PER_SEC,
+                top: pitchToY(ghost.pitch),
+                width: Math.max(2, ghost.duration * PX_PER_SEC),
+                height: ROW_H - 1,
+                background: 'rgba(150,150,150,0.18)',
+                border: '1px solid rgba(170,170,170,0.35)',
+                borderRadius: 2,
+                boxSizing: 'border-box',
+                pointerEvents: 'none',
+              }}
             />
           ))}
 
