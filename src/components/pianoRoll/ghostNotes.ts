@@ -10,6 +10,7 @@
 // same `start * PX_PER_SEC` / `pitchToY` mapping it uses for real notes.
 
 import type { TimelineClip } from '../../types';
+import { isNoteStartInWindow, noteAbsoluteStart } from '../../services/midi/midiClipTiming';
 
 export interface GhostNote {
   /** Stable key: `${sourceClipId}:${noteId}`. */
@@ -46,7 +47,9 @@ export function computeGhostNotes(
     if (!notes || notes.length === 0) continue;
 
     for (const note of notes) {
-      const absStart = clip.startTime + note.start;
+      // Only notes inside the source clip's own window are visible/playable (#232).
+      if (!isNoteStartInWindow(clip, note)) continue;
+      const absStart = noteAbsoluteStart(clip, note);
       const absEnd = absStart + note.duration;
 
       // Skip notes that don't intersect the active clip's window.

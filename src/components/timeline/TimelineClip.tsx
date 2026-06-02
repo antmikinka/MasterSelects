@@ -71,6 +71,7 @@ import {
   isTimelinePointerTool,
 } from './tools/pointer/timelineToolPointerDispatcher';
 import { getTrimHandleArrowDirections } from './utils/trimHandleDirections';
+import { isInfiniteTrimSource } from './utils/infiniteTrimSource';
 import type { ClipAudioEditOperation, VideoBakeRegion } from '../../types';
 import type { AudioStemKind } from '../../types/audio';
 
@@ -1042,8 +1043,7 @@ function TimelineClipComponent({
     // Use the resolved (snapped/frame-quantized) delta so the live resize lands
     // exactly where the trim will commit.
     const deltaTime = clipTrim.appliedDelta;
-    const sourceType = clip.source?.type;
-    const isInfiniteClip = sourceType === 'text' || sourceType === 'image' || sourceType === 'solid' || sourceType === 'camera' || sourceType === 'splat-effector' || sourceType === 'math-scene';
+    const isInfiniteClip = isInfiniteTrimSource(clip);
     const canLoopExtendRight = canLoopExtendVectorClip(clip);
     const maxDuration = isInfiniteClip
       ? Number.MAX_SAFE_INTEGER
@@ -1073,12 +1073,15 @@ function TimelineClipComponent({
     // Resize this clip live too: a linked clip, or a selected clip following a
     // multi-trim. Each clamps the shared (snapped) delta to its own bounds.
     const deltaTime = clipTrim.appliedDelta;
+    const isInfiniteClip = isInfiniteTrimSource(clip);
     const canLoopExtendRight = canLoopExtendVectorClip(clip);
-    const maxDuration = clip.source?.naturalDuration || clip.duration;
+    const maxDuration = isInfiniteClip
+      ? Number.MAX_SAFE_INTEGER
+      : (clip.source?.naturalDuration || clip.duration);
 
     if (clipTrim.edge === 'left') {
       const maxTrim = clip.duration - 0.1;
-      const minTrim = -clip.inPoint;
+      const minTrim = isInfiniteClip ? -clip.startTime : -clip.inPoint;
       const clampedDelta = Math.max(minTrim, Math.min(maxTrim, deltaTime));
       displayStartTime = clip.startTime + clampedDelta;
       displayDuration = clip.duration - clampedDelta;
@@ -3553,6 +3556,7 @@ function TimelineClipComponent({
             width={width}
             height={Math.max(16, trackBaseHeight - 12)}
             pixelsPerSecond={zoom}
+            inPoint={displayInPoint}
           />
         </div>
       )}

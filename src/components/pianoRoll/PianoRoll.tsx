@@ -11,6 +11,7 @@ import { useTimelineStore } from '../../stores/timeline';
 import { previewMidiNote } from '../../services/audio/midiPlaybackScheduler';
 import type { MidiNote } from '../../types/midiClip';
 import { computeGhostNotes } from './ghostNotes';
+import { clipLocalToContentTime, contentTimeToClipLocal, isNoteStartInWindow } from '../../services/midi/midiClipTiming';
 
 const ROW_H = 16;          // px per pitch row
 const PX_PER_SEC = 120;    // horizontal zoom
@@ -116,7 +117,10 @@ export function PianoRoll({ clipId, onRequestClose }: PianoRollProps) {
       const drag = dragRef.current;
       if (!drag) return;
       const { x, y } = localPoint(e.clientX, e.clientY);
-      const time = Math.max(0, x / PX_PER_SEC);
+      // Map the cursor's screen offset to CONTENT time through the clip window
+      // (#232), so note times stay anchored to the content, not the window edge.
+      const liveInPoint = useTimelineStore.getState().clips.find((c) => c.id === clipId)?.inPoint ?? 0;
+      const time = Math.max(0, clipLocalToContentTime({ inPoint: liveInPoint }, x / PX_PER_SEC));
 
       if (drag.kind === 'create') {
         const next = { pitch: drag.pitch, start: drag.startTime, duration: Math.max(0.02, time - drag.startTime) };
@@ -182,7 +186,7 @@ export function PianoRoll({ clipId, onRequestClose }: PianoRollProps) {
     if (e.button !== 0) return;
     const { x, y } = localPoint(e.clientX, e.clientY);
     const pitch = yToPitch(y);
-    const startTime = Math.max(0, x / PX_PER_SEC);
+    const startTime = Math.max(0, clipLocalToContentTime(clip, x / PX_PER_SEC));
     // Audible feedback for the note being drawn (issue #182, Phase 4) — routed
     // through the track's synth bus so preview respects its volume/pan.
     const track = useTimelineStore.getState().tracks.find((t) => t.id === clip?.trackId);
@@ -202,7 +206,7 @@ export function PianoRoll({ clipId, onRequestClose }: PianoRollProps) {
     const track = useTimelineStore.getState().tracks.find((t) => t.id === clip?.trackId);
     previewMidiNote(track?.midiInstrument, note.pitch, note.velocity, clip?.trackId);
     const { x } = localPoint(e.clientX, e.clientY);
-    const grabTime = x / PX_PER_SEC;
+    const grabTime = clipLocalToContentTime(clip, x / PX_PER_SEC);
     dragRef.current = { kind: 'move', noteId: note.id, grabOffsetTime: grabTime - note.start };
     setDragActive(true);
     e.preventDefault();
@@ -326,9 +330,10 @@ export function PianoRoll({ clipId, onRequestClose }: PianoRollProps) {
             />
           ))}
 
-          {/* Notes */}
-          {notes.map((note) => {
-            const left = note.start * PX_PER_SEC;
+          {/* Notes — only those whose start is inside the clip window are shown
+              and editable; notes outside it are preserved but hidden (#232). */}
+          {notes.filter((note) => isNoteStartInWindow(clip, note)).map((note) => {
+            const left = contentTimeToClipLocal(clip, note.start) * PX_PER_SEC;
             const width = Math.max(2, note.duration * PX_PER_SEC);
             const top = pitchToY(note.pitch);
             return (
@@ -356,7 +361,7 @@ export function PianoRoll({ clipId, onRequestClose }: PianoRollProps) {
           {pendingNote && (
             <div
               style={{
-                position: 'absolute', left: pendingNote.start * PX_PER_SEC, top: pitchToY(pendingNote.pitch),
+                position: 'absolute', left: contentTimeToClipLocal(clip, pendingNote.start) * PX_PER_SEC, top: pitchToY(pendingNote.pitch),
                 width: Math.max(2, pendingNote.duration * PX_PER_SEC), height: ROW_H - 1,
                 background: 'rgba(120,170,255,0.5)', border: '1px solid rgba(180,210,255,0.9)',
                 borderRadius: 2, boxSizing: 'border-box', pointerEvents: 'none',

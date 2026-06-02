@@ -18,6 +18,12 @@ interface ClipMidiPreviewProps {
   width: number;
   height: number;
   pixelsPerSecond: number;
+  /**
+   * Content time (seconds) at the clip's left edge — the clip's in-point. Notes
+   * are drawn at `(note.start - inPoint) * pixelsPerSecond` so the preview tracks
+   * the in/out window when the clip is resized (#232). Defaults to 0.
+   */
+  inPoint?: number;
   /** Bar color (defaults to a light blue that reads on the MIDI clip body). */
   color?: string;
 }
@@ -39,6 +45,7 @@ function ClipMidiPreviewImpl({
   width,
   height,
   pixelsPerSecond,
+  inPoint = 0,
   color = 'rgba(198, 218, 255, 1)',
 }: ClipMidiPreviewProps): React.ReactElement {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -88,9 +95,9 @@ function ClipMidiPreviewImpl({
       // timeline). Notes starting at/after the clip end are silent (the synth
       // skips them), so they are not drawn; tails crossing the end are clamped
       // to the boundary — mirroring midiPlaybackScheduler exactly.
-      const noteStartPx = note.start * pixelsPerSecond;
+      const noteStartPx = (note.start - inPoint) * pixelsPerSecond;
       if (noteStartPx >= cssWidth || noteStartPx + note.duration * pixelsPerSecond <= 0) continue;
-      const clampedEndPx = Math.min((note.start + note.duration) * pixelsPerSecond, cssWidth);
+      const clampedEndPx = Math.min((note.start - inPoint + note.duration) * pixelsPerSecond, cssWidth);
       const rawWidthPx = clampedEndPx - noteStartPx;
       const noteWidthPx = Math.max(MIN_BAR_WIDTH, rawWidthPx);
 
@@ -104,7 +111,7 @@ function ClipMidiPreviewImpl({
         : noteWidthPx;
       ctx.fillRect(noteStartPx, y, drawWidth, barHeight);
     }
-  }, [notes, cssWidth, cssHeight, pixelsPerSecond, color]);
+  }, [notes, cssWidth, cssHeight, pixelsPerSecond, inPoint, color]);
 
   return (
     <canvas
