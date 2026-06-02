@@ -73,6 +73,10 @@ import {
 import { getTrimHandleArrowDirections } from './utils/trimHandleDirections';
 import type { ClipAudioEditOperation, VideoBakeRegion } from '../../types';
 import type { AudioStemKind } from '../../types/audio';
+import {
+  hasLegacyWaveformSamples,
+  hasTimelineWaveformData,
+} from '../../utils/audioWaveformPresence';
 
 const KEYFRAME_TICK_SNAP_THRESHOLD_PX = 10;
 const TIMELINE_VIEWPORT_FALLBACK_PX = 1600;
@@ -676,6 +680,7 @@ function TimelineClipComponent({
   const clipAudioKeyframes = useTimelineStore(s => s.clipKeyframes.get(clip.id) ?? EMPTY_CLIP_KEYFRAMES);
   const processedWaveformPyramidRef = clip.audioState?.processedAnalysisRefs?.processedWaveformPyramidId;
   const sourceWaveformPyramidRef = clip.audioState?.sourceAnalysisRefs?.waveformPyramidId;
+  const hasLegacyWaveformData = hasLegacyWaveformSamples(clip);
   const processedSpectrogramTileSetRef = clip.audioState?.processedAnalysisRefs?.spectrogramTileSetIds?.[0];
   const sourceSpectrogramTileSetRef = clip.audioState?.sourceAnalysisRefs?.spectrogramTileSetIds?.[0];
   const processedWaveformState = useTimelineWaveformPyramidState(processedWaveformPyramidRef);
@@ -745,8 +750,7 @@ function TimelineClipComponent({
   );
   const hasWaveformDisplayFallback = Boolean(
     sourceWaveformPyramid ||
-    (clip.waveform?.length ?? 0) > 0 ||
-    clip.waveformChannels?.some(channel => channel.length > 0),
+    hasLegacyWaveformData,
   );
   const shouldSuppressBackgroundProcessedWaveformUi = audioDisplayMode !== 'spectral' &&
     needsProcessedAudioAnalysis &&
@@ -1161,7 +1165,7 @@ function TimelineClipComponent({
   );
 
   useEffect(() => {
-    if (!waveformsEnabled || !isAudioClip || sourceWaveformPyramidRef || clip.waveformGenerating || isClipDragActive) {
+    if (!waveformsEnabled || !isAudioClip || sourceWaveformPyramidRef || hasLegacyWaveformData || clip.waveformGenerating || isClipDragActive) {
       return;
     }
 
@@ -1204,7 +1208,7 @@ function TimelineClipComponent({
       if (
         !currentClip ||
         currentClip.waveformGenerating ||
-        currentClip.audioState?.sourceAnalysisRefs?.waveformPyramidId
+        hasTimelineWaveformData(currentClip)
       ) {
         inFlightSourceWaveformPyramidUpgrades.delete(fileKey);
         return;
@@ -1230,6 +1234,7 @@ function TimelineClipComponent({
     clip.waveformGenerating,
     isClipDragActive,
     isAudioClip,
+    hasLegacyWaveformData,
     sourceWaveformPyramidRef,
     waveformsEnabled,
     width,

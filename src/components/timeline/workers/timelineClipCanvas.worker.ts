@@ -26,6 +26,7 @@ interface DrawMessage {
   clips: WorkerPlainClip[];
   height: number;
   cssWidth: number;
+  canvasOffsetX: number;
   pxPerSecond: number;
   dpr: number;
   selectedIds: string[];
@@ -60,7 +61,7 @@ function withAlpha(color: string, alpha: number): string {
 
 function draw(msg: DrawMessage): void {
   if (!canvas || !ctx) return;
-  const { clips, height, cssWidth, pxPerSecond, dpr, trackColor } = msg;
+  const { clips, height, cssWidth, canvasOffsetX, pxPerSecond, dpr, trackColor } = msg;
   const selected = new Set(msg.selectedIds);
   const excluded = new Set(msg.excludeIds);
 
@@ -79,8 +80,11 @@ function draw(msg: DrawMessage): void {
 
   for (const clip of clips) {
     if (excluded.has(clip.id)) continue;
-    const x = clip.startTime * pxPerSecond;
+    const absoluteX = clip.startTime * pxPerSecond;
     const w = clip.duration * pxPerSecond;
+    if (absoluteX + w < canvasOffsetX || absoluteX > canvasOffsetX + cssWidth) continue;
+
+    const x = absoluteX - canvasOffsetX;
     const isSel = selected.has(clip.id);
     if (w < LOD_BAR_PX) {
       ctx.fillStyle = isSel ? fillSelected : fill;

@@ -2,7 +2,7 @@ import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { TimelineTrack } from '../../src/components/timeline/TimelineTrack';
 import type { TimelineTrackProps } from '../../src/components/timeline/types';
-import type { TimelineTrack as TimelineTrackType } from '../../src/types';
+import type { TimelineClip, TimelineTrack as TimelineTrackType } from '../../src/types';
 
 function createTrack(): TimelineTrackType {
   return {
@@ -15,6 +15,23 @@ function createTrack(): TimelineTrackType {
     solo: false,
     locked: false,
   } as TimelineTrackType;
+}
+
+function createClip(overrides: Partial<TimelineClip> = {}): TimelineClip {
+  return {
+    id: 'clip-video',
+    trackId: 'track-video',
+    name: 'Canvas Clip',
+    file: new File([], 'clip.mp4'),
+    startTime: 2,
+    duration: 4,
+    inPoint: 0,
+    outPoint: 4,
+    source: { type: 'video', mediaFileId: 'media-video', naturalDuration: 4 },
+    effects: [],
+    transform: { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, opacity: 1 },
+    ...overrides,
+  } as TimelineClip;
 }
 
 function renderTimelineTrack(overrides: Partial<TimelineTrackProps> = {}) {
@@ -30,8 +47,11 @@ function renderTimelineTrack(overrides: Partial<TimelineTrackProps> = {}) {
     selectedClipIds: new Set(),
     selectedKeyframeIds: new Set(),
     activeTimelineToolId: 'select',
+    waveformsEnabled: true,
+    audioDisplayMode: 'detailed',
     isClipDragActive: false,
     clipDrag: null,
+    clipDragPreview: null,
     clipTrim: null,
     externalDrag: null,
     zoom: 10,
@@ -102,5 +122,39 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(onEmptyContextMenu).toHaveBeenCalledTimes(1);
     expect(onEmptyContextMenu.mock.calls[0][1]).toBe('track-video');
     expect(onEmptyContextMenu.mock.calls[0][2]).toBe(7);
+  });
+
+  it('routes a primary click on a canvas-rendered clip to the clip handler', () => {
+    const onClipMouseDown = vi.fn();
+    const onEmptyMouseDown = vi.fn();
+    const { row } = renderTimelineTrack({
+      clips: [createClip()],
+      onClipMouseDown,
+      onEmptyMouseDown,
+      renderClip: (clip) => <div className="timeline-clip" data-clip-id={clip.id} />,
+    });
+
+    fireEvent.mouseDown(row, { button: 0, clientX: 45, clientY: 24 });
+
+    expect(onClipMouseDown).toHaveBeenCalledTimes(1);
+    expect(onClipMouseDown.mock.calls[0][1]).toBe('clip-video');
+    expect(onEmptyMouseDown).not.toHaveBeenCalled();
+  });
+
+  it('keeps the canvas renderer active at extreme zoom', () => {
+    const renderClip = vi.fn((clip: TimelineClip) => (
+      <div className="timeline-clip" data-clip-id={clip.id} />
+    ));
+
+    const { container } = renderTimelineTrack({
+      clips: [createClip()],
+      zoom: 5000,
+      timeToPixel: (time) => time * 5000,
+      pixelToTime: (pixel) => pixel / 5000,
+      renderClip,
+    });
+
+    expect(container.querySelector('.timeline-clip-canvas')).toBeTruthy();
+    expect(renderClip).not.toHaveBeenCalled();
   });
 });

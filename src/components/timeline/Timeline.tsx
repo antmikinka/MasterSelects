@@ -74,7 +74,7 @@ import {
   MIN_TRACK_HEADER_WIDTH,
   MAX_TRACK_HEADER_WIDTH,
 } from '../../stores/timeline/constants';
-import type { TimelineTrackFocusMode } from '../../stores/timeline/types';
+import type { TimelineClipDragPreview, TimelineTrackFocusMode } from '../../stores/timeline/types';
 import type { ClipDragState, ClipKeyframeTimeGroup, ContextMenuState, TimelineControlsProps, TimelineEmptyContextMenuState, TimelineRulerCacheRange } from './types';
 import { isProxyFrameCountComplete } from '../../stores/mediaStore/helpers/proxyCompleteness';
 import { parseVectorAnimationStateProperty } from '../../types/vectorAnimation';
@@ -136,6 +136,22 @@ function clipDragAffectsTrack(
 
   if (drag.multiSelectClipIds?.some((clipId) => clipMap.get(clipId)?.trackId === trackId)) return true;
   if (drag.overlapClipIds?.some((clipId) => clipMap.get(clipId)?.trackId === trackId)) return true;
+  return false;
+}
+
+function clipDragPreviewAffectsTrack(
+  preview: TimelineClipDragPreview | null,
+  trackId: string,
+  clipMap: Map<string, TimelineClipType>,
+): boolean {
+  if (!preview) return false;
+
+  for (const [clipId, patch] of Object.entries(preview.patches)) {
+    const clip = clipMap.get(clipId);
+    if (clip?.trackId === trackId) return true;
+    if ((patch.trackId ?? clip?.trackId) === trackId) return true;
+  }
+
   return false;
 }
 
@@ -488,6 +504,7 @@ export function Timeline() {
   const slotGridProgress = useTimelineStore(state => state.slotGridProgress);
   const timelineSessionId = useTimelineStore(state => state.timelineSessionId);
   const propertiesSelection = useTimelineStore(state => state.propertiesSelection);
+  const clipDragPreview = useTimelineStore(state => state.clipDragPreview);
 
   // UI settings (rarely changes)
   const { snappingEnabled, inPoint, outPoint, loopPlayback, toolMode, activeTimelineToolId, thumbnailsEnabled, waveformsEnabled, audioDisplayMode, audioLayerAdvancedMode, audioFocusMode, trackFocusMode, showAudioRegionEditMarkers } =
@@ -1531,6 +1548,7 @@ export function Timeline() {
     deselectAllKeyframes,
     setTimelineRangeSelection,
     clearTimelineRangeSelection,
+    timeToPixel,
     pixelToTime,
     isTrackExpanded: isTrackExpandedForRender,
     getTrackBaseHeight: getRenderedTrackBaseHeight,
@@ -3440,6 +3458,9 @@ export function Timeline() {
                   const trackClipDrag = clipDragAffectsTrack(clipDrag, track.id, clipMap)
                     ? clipDrag
                     : null;
+                  const trackClipDragPreview = clipDragPreviewAffectsTrack(clipDragPreview, track.id, clipMap)
+                    ? clipDragPreview
+                    : null;
 
                   return (
                     <TimelineTrack
@@ -3460,8 +3481,11 @@ export function Timeline() {
                       selectedClipIds={selectedClipIds}
                       selectedKeyframeIds={selectedKeyframeIds}
                       activeTimelineToolId={activeTimelineToolId}
+                      waveformsEnabled={waveformsEnabled}
+                      audioDisplayMode={audioDisplayMode}
                       isClipDragActive={clipDrag !== null}
                       clipDrag={trackClipDrag}
+                      clipDragPreview={trackClipDragPreview}
                       clipTrim={clipTrim}
                       externalDrag={externalDrag}
                       zoom={zoom}

@@ -12,6 +12,7 @@ import type {
 } from '../../types';
 import type {
   TimelineAudioDisplayMode,
+  TimelineClipDragPreview,
   TimelineToolId,
   TimelineTrackFocusMode,
   TimelineVideoBakeRegionSelection,
@@ -256,8 +257,11 @@ export interface TimelineTrackProps {
   selectedClipIds: Set<string>;
   selectedKeyframeIds: Set<string>;
   activeTimelineToolId: TimelineToolId;
+  waveformsEnabled: boolean;
+  audioDisplayMode: TimelineAudioDisplayMode;
   isClipDragActive: boolean;
   clipDrag: ClipDragState | null;
+  clipDragPreview: TimelineClipDragPreview | null;
   clipTrim: ClipTrimState | null;
   externalDrag: ExternalDragState | null;
   zoom: number;

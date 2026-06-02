@@ -143,6 +143,16 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
         thumbnails: clip.thumbnails ? [...clip.thumbnails] : undefined,
         waveform: clip.waveform ? [...clip.waveform] : undefined,
         waveformChannels: clip.waveformChannels?.map(channel => [...channel]),
+        audioAnalysisRefs: clip.audioState
+          ? {
+              sourceAnalysisRefs: clip.audioState.sourceAnalysisRefs
+                ? structuredClone(clip.audioState.sourceAnalysisRefs)
+                : undefined,
+              processedAnalysisRefs: clip.audioState.processedAnalysisRefs
+                ? structuredClone(clip.audioState.processedAnalysisRefs)
+                : undefined,
+            }
+          : undefined,
         isComposition: clip.isComposition,
         compositionId: clip.compositionId,
         is3D: clip.is3D,
@@ -336,6 +346,16 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
         thumbnails: clipData.thumbnails ? [...clipData.thumbnails] : undefined,
         waveform: clipData.waveform ? [...clipData.waveform] : undefined,
         waveformChannels: clipData.waveformChannels?.map(channel => [...channel]),
+        audioState: clipData.audioAnalysisRefs
+          ? {
+              sourceAnalysisRefs: clipData.audioAnalysisRefs.sourceAnalysisRefs
+                ? structuredClone(clipData.audioAnalysisRefs.sourceAnalysisRefs)
+                : undefined,
+              processedAnalysisRefs: clipData.audioAnalysisRefs.processedAnalysisRefs
+                ? structuredClone(clipData.audioAnalysisRefs.processedAnalysisRefs)
+                : undefined,
+            }
+          : undefined,
         isComposition: clipData.isComposition,
         compositionId: clipData.compositionId,
         is3D: clipData.is3D,

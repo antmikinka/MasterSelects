@@ -28,7 +28,7 @@ export const flags = {
   guidedActionsAIReplay: true,  // Visual replay for AI tool calls
   guidedActionsTutorials: true,  // Tutorial scenarios using guided actions
   guidedActionsRecorder: false,  // Future guided action authoring/recording layer
-  timelineCanvasClips: true,  // issue #228 P3: DEFAULT — draw timeline clip bodies on a canvas (LOD) instead of one DOM node per clip; React/DOM keeps chrome + active-clip overlay. DOM clip path retained only as a fallback (extreme zoom over MAX_CANVAS_WIDTH_PX) and for the active/selected/dragged overlay clips.
+  timelineCanvasClips: true,  // issue #228 P3: DEFAULT — draw timeline clip bodies on viewport-sliced canvases (LOD) instead of one DOM node per clip; React/DOM keeps chrome + invisible active-clip interaction shells. Visible DOM clip path is only the feature-flag rollback.
   timelineCanvasWorker: false,  // issue #228 P4: render the clip canvas in an OffscreenCanvas Web Worker (off main thread); requires timelineCanvasClips. Worker path draws rects/LOD/labels (thumbnails are a follow-up)
 };
 

@@ -4,15 +4,29 @@ import React, { memo, useMemo, useRef, useEffect, useState } from 'react';
 import type { TimelineTrackProps } from './types';
 import type { AnimatableProperty, BezierHandle, ClipMask, Keyframe } from '../../types';
 import { CurveEditor } from './CurveEditor';
-import { parseVectorAnimationInputProperty, parseVectorAnimationStateProperty } from '../../types/vectorAnimation';
+import {
+  isVectorAnimationSourceType,
+  parseVectorAnimationInputProperty,
+  parseVectorAnimationStateProperty,
+  shouldLoopVectorAnimation,
+} from '../../types/vectorAnimation';
 import { useTimelineStore } from '../../stores/timeline';
 import { flags } from '../../engine/featureFlags';
-import { TimelineClipCanvas, MAX_CANVAS_WIDTH_PX } from './TimelineClipCanvas';
+import { TimelineClipCanvas } from './TimelineClipCanvas';
 
 const TRACK_VIEWPORT_FALLBACK_PX = 1600;
 const TRACK_VIEWPORT_MIN_PX = 1600;
 const TRACK_RENDER_OVERSCAN_PX = 1200;
 const EPSILON = 0.0001;
+
+const isInfiniteTimelineSourceType = (sourceType: string | null | undefined): boolean => (
+  sourceType === 'text' ||
+  sourceType === 'image' ||
+  sourceType === 'solid' ||
+  sourceType === 'camera' ||
+  sourceType === 'splat-effector' ||
+  sourceType === 'math-scene'
+);
 
 type KeyframeTrackClip = {
   id: string;
@@ -38,6 +52,24 @@ const usesCameraPropertyModel = (clip: KeyframeTrackClip | null | undefined): bo
 
 const shouldHide3DOnlyProperties = (clip: KeyframeTrackClip | null | undefined): boolean => {
   return !clip?.is3D && !usesCameraPropertyModel(clip);
+};
+
+const getCanvasClipSourceDuration = (clip: {
+  duration: number;
+  inPoint?: number;
+  outPoint?: number;
+  source?: { naturalDuration?: number } | null;
+}): number => {
+  const naturalDuration = clip.source?.naturalDuration;
+  if (Number.isFinite(naturalDuration) && naturalDuration && naturalDuration > 0) {
+    return naturalDuration;
+  }
+  return Math.max(
+    clip.outPoint ?? 0,
+    (clip.inPoint ?? 0) + clip.duration,
+    clip.duration,
+    0.1,
+  );
 };
 
 const getTransformPropertyOrder = (clip: KeyframeTrackClip | null | undefined): string[] => (
@@ -236,7 +268,10 @@ function TimelineTrackComponent({
   selectedClipIds,
   selectedKeyframeIds,
   activeTimelineToolId,
+  waveformsEnabled,
+  audioDisplayMode,
   clipDrag,
+  clipDragPreview,
   clipTrim,
   externalDrag,
   onEmptyMouseDown,
@@ -248,6 +283,8 @@ function TimelineTrackComponent({
   onResizeStart,
   isResizeActive = false,
   renderClip,
+  onClipMouseDown,
+  onClipContextMenu,
   clipKeyframes,
   renderKeyframeDiamonds,
   timeToPixel,
@@ -296,10 +333,10 @@ function TimelineTrackComponent({
     });
   }, [allTrackClips, clipDrag, clipTrim?.clipId, visibleEndTime, visibleStartTime]);
   const trackClipIds = useMemo(() => new Set(allTrackClips.map((clip) => clip.id)), [allTrackClips]);
-  // issue #228 Phase 1/2: when the flag is on, draw clip bodies on a single
-  // canvas per track instead of one DOM node per clip. Content width is the
-  // furthest clip end in px; at extreme zoom it can exceed the browser canvas
-  // limit, in which case we fall back to the DOM clip path.
+  // issue #228: when the flag is on, draw clip bodies on a viewport-sliced
+  // canvas per track instead of one DOM node per clip. The canvas backing store
+  // no longer scales with total timeline width, so high zoom does not need the
+  // visible legacy DOM fallback.
   const trackContentWidth = useMemo(() => {
     let max = 0;
     for (const clip of allTrackClips) {
@@ -308,17 +345,13 @@ function TimelineTrackComponent({
     }
     return max;
   }, [allTrackClips, timeToPixel]);
-  const useCanvasClips = flags.timelineCanvasClips &&
-    trackContentWidth <= MAX_CANVAS_WIDTH_PX;
-  // Phase 2 interaction: the canvas is display-only. Only the clips the user is
-  // currently ACTING ON — hovered, dragged, trimmed — are rendered as real
-  // interactive DOM clips on top; the canvas skips them (excludeIds) so there is
-  // no double-draw/ghost. Selection is NOT included here: the canvas already
-  // draws the selected state, so a select-all must not remount 100 heavy DOM
-  // clips (that regressed perf to ~3fps, issue #228). A selected clip becomes
-  // DOM only when hovered (to interact) or dragged (multiSelectClipIds).
+  const useCanvasClips = flags.timelineCanvasClips;
+  // Canvas mode has a single visible renderer: TimelineClipCanvas. DOM clips are
+  // mounted only as invisible interaction shells for the clip under the cursor or
+  // an active gesture. They must never replace the visible canvas body, otherwise
+  // thumbnails/waveforms visibly switch between two renderers.
   const [hoveredClipId, setHoveredClipId] = useState<string | null>(null);
-  const domClipIds = useMemo(() => {
+  const domControlClipIds = useMemo(() => {
     const ids = new Set<string>();
     if (!useCanvasClips) return ids;
     if (hoveredClipId) ids.add(hoveredClipId);
@@ -329,14 +362,85 @@ function TimelineTrackComponent({
     if (clipTrim?.clipId) ids.add(clipTrim.clipId);
     return ids;
   }, [useCanvasClips, hoveredClipId, clipDrag, clipTrim]);
-  const domOverlayClips = useMemo(
-    () => (useCanvasClips ? allTrackClips.filter((clip) => domClipIds.has(clip.id)) : []),
-    [useCanvasClips, allTrackClips, domClipIds],
+  const canvasClips = useMemo(() => {
+    if (!useCanvasClips) return allTrackClips;
+    const nextClips = new Map(allTrackClips.map((clip) => [clip.id, clip]));
+
+    if (clipDragPreview) {
+      for (const clip of clips) {
+        const patch = clipDragPreview.patches[clip.id];
+        if (!patch) continue;
+        const patchTrackId = patch.trackId ?? clip.trackId;
+        if (patchTrackId === track.id && !nextClips.has(clip.id)) {
+          nextClips.set(clip.id, clip);
+        }
+      }
+    } else if (clipDrag && clipDrag.currentTrackId === track.id) {
+      const draggedClip = clips.find((clip) => clip.id === clipDrag.clipId);
+      if (draggedClip && !nextClips.has(draggedClip.id)) {
+        nextClips.set(draggedClip.id, draggedClip);
+      }
+    }
+
+    return Array.from(nextClips.values());
+  }, [useCanvasClips, clipDrag, clipDragPreview, track.id, allTrackClips, clips]);
+  const canvasContentWidth = useMemo(() => {
+    let max = trackContentWidth;
+    for (const clip of canvasClips) {
+      const end = timeToPixel(clip.startTime + clip.duration);
+      if (end > max) max = end;
+    }
+    if (clipTrim) {
+      const clip = canvasClips.find((candidate) => candidate.id === clipTrim.clipId);
+      if (clip) {
+        const sourceType = clip.source?.type;
+        const sourceDuration = getCanvasClipSourceDuration(clip);
+        let previewEnd = clip.startTime + clip.duration;
+        let sourceExtensionEnd = previewEnd;
+
+        if (clipTrim.edge === 'right') {
+          const maxExtend = isInfiniteTimelineSourceType(sourceType) ||
+            (
+              isVectorAnimationSourceType(sourceType) &&
+              shouldLoopVectorAnimation(clip.source?.vectorAnimationSettings)
+            )
+            ? Number.MAX_SAFE_INTEGER
+            : sourceDuration - clipTrim.originalOutPoint;
+          const minTrim = -(clipTrim.originalDuration - 0.1);
+          const clampedDelta = Math.max(minTrim, Math.min(maxExtend, clipTrim.appliedDelta));
+          const previewDuration = Math.max(0.001, clipTrim.originalDuration + clampedDelta);
+          const previewOutPoint = clipTrim.originalOutPoint + clampedDelta;
+          previewEnd = clipTrim.originalStartTime + previewDuration;
+          sourceExtensionEnd = previewEnd + Math.max(0, sourceDuration - previewOutPoint);
+        } else {
+          const minTrim = isInfiniteTimelineSourceType(sourceType)
+            ? -clipTrim.originalStartTime
+            : -clipTrim.originalInPoint;
+          const maxTrim = clipTrim.originalDuration - 0.1;
+          const clampedDelta = Math.max(minTrim, Math.min(maxTrim, clipTrim.appliedDelta));
+          previewEnd = clipTrim.originalStartTime + clampedDelta + Math.max(0.001, clipTrim.originalDuration - clampedDelta);
+          sourceExtensionEnd = previewEnd;
+        }
+
+        if (Number.isFinite(previewEnd)) {
+          max = Math.max(max, timeToPixel(previewEnd));
+        }
+        if (Number.isFinite(sourceExtensionEnd)) {
+          max = Math.max(max, timeToPixel(sourceExtensionEnd));
+        }
+      }
+    }
+    return max;
+  }, [canvasClips, clipTrim, timeToPixel, trackContentWidth]);
+  const domControlClips = useMemo(
+    () => (useCanvasClips ? canvasClips.filter((clip) => domControlClipIds.has(clip.id)) : []),
+    [useCanvasClips, canvasClips, domControlClipIds],
   );
   const hitTestClipAtClientX = (clientX: number, rowEl: HTMLElement): string | null => {
     const rect = rowEl.getBoundingClientRect();
     const time = pixelToTime(clientX - rect.left);
-    for (const clip of allTrackClips) {
+    for (let index = allTrackClips.length - 1; index >= 0; index -= 1) {
+      const clip = allTrackClips[index];
       if (time >= clip.startTime && time < clip.startTime + clip.duration) return clip.id;
     }
     return null;
@@ -405,6 +509,17 @@ function TimelineTrackComponent({
         } : undefined}
         onMouseLeave={useCanvasClips ? () => setHoveredClipId(null) : undefined}
         onMouseDown={(event) => {
+          if (useCanvasClips && event.button === 0) {
+            const target = event.target as HTMLElement;
+            if (!target.closest('.timeline-clip, .timeline-clip-preview')) {
+              const hit = hitTestClipAtClientX(event.clientX, event.currentTarget);
+              if (hit) {
+                setHoveredClipId(hit);
+                onClipMouseDown(event, hit);
+                return;
+              }
+            }
+          }
           if (event.button !== 2) return;
           const target = event.target as HTMLElement;
           if (target.closest('.timeline-clip, .timeline-clip-preview')) return;
@@ -415,6 +530,13 @@ function TimelineTrackComponent({
         onContextMenu={(event) => {
           const target = event.target as HTMLElement;
           if (target.closest('.timeline-clip, .timeline-clip-preview')) return;
+          if (useCanvasClips) {
+            const hit = hitTestClipAtClientX(event.clientX, event.currentTarget);
+            if (hit) {
+              onClipContextMenu(event, hit);
+              return;
+            }
+          }
           const rect = event.currentTarget.getBoundingClientRect();
           const time = Math.max(0, pixelToTime(event.clientX - rect.left));
           onEmptyContextMenu(event, track.id, time);
@@ -424,23 +546,33 @@ function TimelineTrackComponent({
         {useCanvasClips ? (
           <>
             <TimelineClipCanvas
-              clips={allTrackClips}
+              clips={canvasClips}
+              trackId={track.id}
               height={baseHeight}
-              contentWidth={trackContentWidth}
+              contentWidth={canvasContentWidth}
               timeToPixel={timeToPixel}
               selectedClipIds={selectedClipIds}
+              hoveredClipId={hoveredClipId}
               trackColor={trackColor ?? 'rgba(120, 160, 200, 1)'}
-              excludeIds={domClipIds}
               scrollX={scrollX}
               viewportWidth={viewportWidth}
+              waveformsEnabled={waveformsEnabled}
+              audioDisplayMode={audioDisplayMode}
+              clipDrag={clipDrag}
+              clipDragPreview={clipDragPreview}
+              clipTrim={clipTrim}
             />
-            {domOverlayClips.map((clip) => renderClip(clip, track.id))}
+            {domControlClips.map((clip) => (
+              <div key={`canvas-control-${clip.id}`} className="timeline-canvas-dom-overlay">
+                {renderClip(clip, track.id)}
+              </div>
+            ))}
           </>
         ) : (
           trackClips.map((clip) => renderClip(clip, track.id))
         )}
         {/* Render clip being dragged TO this track */}
-        {clipDrag &&
+        {!useCanvasClips && clipDrag &&
           clipDrag.currentTrackId === track.id &&
           clipDrag.originalTrackId !== track.id &&
           clips
@@ -511,7 +643,9 @@ function areTimelineTrackPropsEqual(
     previous.isClipDragActive &&
     next.isClipDragActive &&
     previous.clipDrag === null &&
-    next.clipDrag === null
+    next.clipDrag === null &&
+    previous.clipDragPreview === null &&
+    next.clipDragPreview === null
   ) {
     return previous.track === next.track &&
       previous.trackColor === next.trackColor &&
@@ -525,6 +659,8 @@ function areTimelineTrackPropsEqual(
       previous.selectedClipIds === next.selectedClipIds &&
       previous.selectedKeyframeIds === next.selectedKeyframeIds &&
       previous.activeTimelineToolId === next.activeTimelineToolId &&
+      previous.waveformsEnabled === next.waveformsEnabled &&
+      previous.audioDisplayMode === next.audioDisplayMode &&
       previous.isClipDragActive === next.isClipDragActive &&
       previous.clipTrim === next.clipTrim &&
       previous.externalDrag === next.externalDrag &&

@@ -34,6 +34,7 @@ interface UseMarqueeSelectionProps {
   clearTimelineRangeSelection: ReturnType<typeof useTimelineStore.getState>['clearTimelineRangeSelection'];
 
   // Helpers
+  timeToPixel: (time: number) => number;
   pixelToTime: (pixel: number) => number;
   isTrackExpanded: (trackId: string) => boolean;
   getTrackBaseHeight: (track: TimelineTrack) => number;
@@ -63,6 +64,7 @@ export function useMarqueeSelection({
   deselectAllKeyframes,
   setTimelineRangeSelection,
   clearTimelineRangeSelection,
+  timeToPixel,
   pixelToTime,
   isTrackExpanded: _isTrackExpanded,
   getTrackBaseHeight: _getTrackBaseHeight,
@@ -75,14 +77,31 @@ export function useMarqueeSelection({
     marqueeRef.current = marquee;
   }, [marquee]);
 
+  const getTimelineContentOriginX = useCallback((): number => {
+    const container = trackLanesRef.current;
+    if (!container) return 0;
+
+    const containerRect = container.getBoundingClientRect();
+    const rowEl = container.querySelector<HTMLElement>('.track-clip-row') ??
+      container.querySelector<HTMLElement>('.track-lanes-scroll');
+    if (!rowEl) return 0;
+
+    const rowRect = rowEl.getBoundingClientRect();
+    return rowRect.left - containerRect.left + scrollX;
+  }, [scrollX, trackLanesRef]);
+
+  const stackXToTimelineTime = useCallback(
+    (x: number): number => Math.max(0, pixelToTime(x - getTimelineContentOriginX())),
+    [getTimelineContentOriginX, pixelToTime],
+  );
+
   // Helper: Calculate which clips intersect with a rectangle.
   //
   // Computed from clip DATA, not from clip DOM elements: in canvas mode (issue
-  // #228) clips are drawn on a canvas and have no per-clip DOM node, so a DOM
-  // query would find nothing. We take each clip's X from its time geometry
-  // (x = startTime * pxPerSecond, the same basis as the canvas/DOM clips) and
-  // its Y from the track's still-DOM clip-row element. This also fixes the old
-  // DOM path, where viewport-culled off-screen clips couldn't be marquee-selected.
+  // #228) clips are drawn on a canvas and have no per-clip DOM node. We take each
+  // clip's X from the same timeToPixel helper as the renderer and its Y from the
+  // track's still-DOM clip-row element. This also fixes the old DOM path, where
+  // viewport-culled off-screen clips couldn't be marquee-selected.
   const getClipsInRect = useCallback(
     (left: number, right: number, top: number, bottom: number): Set<string> => {
       const result = new Set<string>();
@@ -90,24 +109,28 @@ export function useMarqueeSelection({
       if (!container) return result;
 
       const containerRect = container.getBoundingClientRect();
-      const timeUnitPx = pixelToTime(1);
-      const pxPerSecond = timeUnitPx !== 0 ? 1 / timeUnitPx : 0; // inverse of pixelToTime (linear)
+      const visitedTrackIds = new Set<string>();
 
       container.querySelectorAll<HTMLElement>('.track-lane[data-track-id]').forEach((laneEl) => {
         const trackId = laneEl.dataset.trackId;
-        if (!trackId) return;
+        if (!trackId || visitedTrackIds.has(trackId)) return;
+        visitedTrackIds.add(trackId);
+
+        const track = _tracks.find((candidate) => candidate.id === trackId);
+        if (!track || track.locked || track.visible === false) return;
 
         const rowEl = laneEl.querySelector<HTMLElement>('.track-clip-row') ?? laneEl;
         const rowRect = rowEl.getBoundingClientRect();
         const rowTop = rowRect.top - containerRect.top;
         const rowBottom = rowRect.bottom - containerRect.top;
-        if (!(rowBottom > top && rowTop < bottom)) return; // track outside vertical band
+        const rowContentLeft = rowRect.left - containerRect.left + scrollX;
+        if (Math.min(rowBottom, bottom) - Math.max(rowTop, top) <= 1) return; // track outside vertical band
 
         for (const clip of clips) {
           if (clip.trackId !== trackId) continue;
-          const clipLeft = clip.startTime * pxPerSecond;
-          const clipRight = (clip.startTime + clip.duration) * pxPerSecond;
-          if (clipRight > left && clipLeft < right) {
+          const clipLeft = rowContentLeft + timeToPixel(clip.startTime);
+          const clipRight = rowContentLeft + timeToPixel(clip.startTime + clip.duration);
+          if (Math.min(clipRight, right) - Math.max(clipLeft, left) > 1) {
             result.add(clip.id);
           }
         }
@@ -115,7 +138,7 @@ export function useMarqueeSelection({
 
       return result;
     },
-    [pixelToTime, trackLanesRef, clips]
+    [timeToPixel, trackLanesRef, clips, _tracks, scrollX]
   );
 
   // Helper: Calculate which keyframes intersect with a rectangle
@@ -211,7 +234,7 @@ export function useMarqueeSelection({
       const isInKeyframeArea = target.closest('.keyframe-track-row') !== null;
 
       if (isRangeSelectionTool) {
-        const startTime = Math.max(0, pixelToTime(startX));
+        const startTime = stackXToTimelineTime(startX);
         setMarquee({
           mode: 'range',
           startX,
@@ -267,7 +290,7 @@ export function useMarqueeSelection({
       isDraggingPlayhead,
       scrollX,
       activeTimelineToolId,
-      pixelToTime,
+      stackXToTimelineTime,
       setTimelineRangeSelection,
       clearTimelineRangeSelection,
       getTrackIdsInRect,
@@ -305,8 +328,8 @@ export function useMarqueeSelection({
 
       if (m.mode === 'range') {
         setTimelineRangeSelection({
-          startTime: Math.max(0, pixelToTime(left)),
-          endTime: Math.max(0, pixelToTime(right)),
+          startTime: stackXToTimelineTime(left),
+          endTime: stackXToTimelineTime(right),
           trackIds: getTrackIdsInRect(top, bottom),
         });
         return;
@@ -362,7 +385,7 @@ export function useMarqueeSelection({
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [marquee, trackLanesRef, scrollX, pixelToTime, setTimelineRangeSelection, getTrackIdsInRect, selectClip, getClipsInRect, getKeyframesInRect, selectKeyframe, deselectAllKeyframes]);
+  }, [marquee, trackLanesRef, scrollX, stackXToTimelineTime, setTimelineRangeSelection, getTrackIdsInRect, selectClip, getClipsInRect, getKeyframesInRect, selectKeyframe, deselectAllKeyframes]);
 
   return {
     marquee,

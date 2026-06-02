@@ -41,6 +41,7 @@ import type {
   AudioSendState,
   SpectralImageLayer,
   VideoBakeRegion,
+  ClipAudioState,
   ClipAudioStemState,
   AudioStemKind,
 } from '../../types';
@@ -1147,6 +1148,7 @@ export interface ClipboardClipData {
   thumbnails?: string[];
   waveform?: number[];
   waveformChannels?: number[][];
+  audioAnalysisRefs?: Pick<ClipAudioState, 'processedAnalysisRefs' | 'sourceAnalysisRefs'>;
   // Composition clips
   isComposition?: boolean;
   compositionId?: string;

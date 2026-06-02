@@ -1,25 +1,46 @@
-// TimelineClipCanvas — issue #228, Phase 1 (read-only).
+// TimelineClipCanvas — issue #228 canvas clip renderer.
 //
-// Draws a whole track's clip bodies onto a single <canvas> instead of mounting
-// one heavy DOM component per clip. This makes a 100–1000 clip comp render in
+// Draws a track's visible clip bodies onto a viewport-sized <canvas> instead of
+// mounting one heavy DOM component per clip. This makes large comps render in
 // O(visible clips) draw calls with a Level-of-Detail scheme, instead of paying
 // React reconciliation + browser layout/paint for hundreds of DOM nodes.
 //
-// Coordinate space: the canvas lives inside `.track-clip-row` and draws each
-// clip at the SAME absolute x as the DOM path (`left = timeToPixel(startTime)`),
-// so it inherits the existing horizontal scroll transform automatically — no
-// scroll math is duplicated here. At extreme zoom the required canvas width can
-// exceed the browser's max canvas size; the caller falls back to the DOM path
-// in that case (see MAX_CANVAS_WIDTH_PX).
-//
-// Phase 1 is intentionally display-only (no hit-testing / handles). Interaction
-// stays on the DOM path; Phase 2 adds canvas hit-testing + a single active-clip
-// overlay.
+// Coordinate space: the canvas is absolutely positioned inside `.track-clip-row`
+// at a finite absolute timeline X (`canvasOffsetX`). Draw code subtracts that
+// offset from `timeToPixel(...)`, so high zoom never requires a giant backing
+// store and never needs to switch back to visible legacy DOM clips. Interaction
+// handles still use invisible DOM shells for the active/hovered clip.
 
-import { memo, useEffect, useReducer, useRef } from 'react';
+import { memo, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { thumbnailCacheService } from '../../services/thumbnailCacheService';
 import { getThumbnailBitmap, ensureThumbnailBitmap } from './utils/thumbnailBitmapCache';
 import { flags } from '../../engine/featureFlags';
+import type { TimelineAudioDisplayMode, TimelineClipDragPreview } from '../../stores/timeline/types';
+import { useTimelineStore } from '../../stores/timeline';
+import {
+  getCachedTimelineWaveformPyramid,
+  loadTimelineWaveformPyramid,
+} from '../../services/audio/timelineWaveformPyramidCache';
+import {
+  buildWaveformLod,
+  normalizeWaveformColumnsForDisplay,
+  resolveWaveformDisplayReferencePeak,
+  smoothWaveformColumns,
+  type TimelineWaveformPyramid,
+  type WaveformColumn,
+} from './utils/waveformLod';
+import type { ClipDragState, ClipTrimState } from './types';
+import type { ClipAudioState } from '../../types/audio';
+import {
+  isVectorAnimationSourceType,
+  shouldLoopVectorAnimation,
+  type VectorAnimationClipSettings,
+} from '../../types/vectorAnimation';
+import {
+  getPreferredWaveformPyramidRef,
+  hasLegacyWaveformSamples,
+  hasTimelineWaveformData,
+} from '../../utils/audioWaveformPresence';
 
 // Browser 2D canvas backing-store limit is ~16384px in Chrome; stay safely under.
 export const MAX_CANVAS_WIDTH_PX = 16000;
@@ -27,9 +48,15 @@ export const MAX_CANVAS_WIDTH_PX = 16000;
 // Level-of-Detail thresholds, in CSS px of clip width.
 const LOD_BAR_PX = 4;        // below this: nothing meaningful, draw a thin bar
 const LOD_LABEL_PX = 14;     // above this: room for a (truncated) label
-const LOD_THUMB_PX = 10;     // above this: draw at least one thumbnail (matches DOM path, which shows >=1)
+const LOD_THUMB_PX = LOD_BAR_PX; // above this: draw at least one poster thumbnail
 const CANVAS_THUMB_SLOT_PX = 71; // target width of one filmstrip frame (matches DOM THUMB_WIDTH)
 const MAX_THUMB_SLOTS = 48;  // hard cap per clip
+const WAVEFORM_PYRAMID_AUTO_UPGRADE_ZOOM = 250;
+const WAVEFORM_PYRAMID_AUTO_UPGRADE_WIDTH = 16_384;
+const WAVEFORM_GENERATION_DELAY_MS = 300;
+const MAX_RENDERED_WAVEFORM_CHANNELS = 2;
+
+const inFlightCanvasWaveformUpgrades = new Set<string>();
 
 export interface CanvasClip {
   id: string;
@@ -41,32 +68,50 @@ export interface CanvasClip {
   outPoint?: number;
   reversed?: boolean;
   mediaFileId?: string;
-  source?: { type?: string | null; mediaFileId?: string } | null;
+  waveform?: number[];
+  waveformChannels?: number[][];
+  waveformGenerating?: boolean;
+  waveformProgress?: number;
+  file?: File;
+  audioState?: ClipAudioState;
+  source?: {
+    type?: string | null;
+    mediaFileId?: string;
+    naturalDuration?: number;
+    vectorAnimationSettings?: VectorAnimationClipSettings;
+  } | null;
 }
 
 interface TimelineClipCanvasProps {
   clips: readonly CanvasClip[];
+  trackId: string;
   /** Row height in CSS px (the clip body area). */
   height: number;
-  /** Absolute content width in CSS px (max clip end). Caller caps to MAX_CANVAS_WIDTH_PX. */
+  /** Absolute content width in CSS px (max clip end); used for viewport slicing only. */
   contentWidth: number;
   /** Timeline px-per-second → px mapping, identical to the DOM clip path. */
   timeToPixel: (time: number) => number;
   selectedClipIds: ReadonlySet<string>;
+  hoveredClipId?: string | null;
   /** Base track color (CSS color string) used for clip fills. */
   trackColor: string;
-  /** Clip ids currently rendered as interactive DOM overlays — skipped here to avoid double-draw. */
-  excludeIds?: ReadonlySet<string>;
   /** Current horizontal scroll offset in px (absolute timeline space). */
   scrollX: number;
   /** Visible viewport width in px — thumbnails are only loaded/drawn for clips inside it. */
   viewportWidth: number;
+  waveformsEnabled?: boolean;
+  audioDisplayMode?: TimelineAudioDisplayMode;
+  clipDrag?: ClipDragState | null;
+  clipDragPreview?: TimelineClipDragPreview | null;
+  clipTrim?: ClipTrimState | null;
+  waveformPyramids?: WaveformPyramidMap;
 }
 
 // Only decode/draw thumbnails for clips within the visible window (+ overscan).
 // Without this, opening a 100-clip comp kicks off 100+ ImageBitmap decodes at
 // once and freezes the tab (issue #228).
 const THUMBNAIL_VIEWPORT_OVERSCAN_PX = 600;
+const CANVAS_RENDER_OVERSCAN_PX = 1200;
 
 function withAlpha(color: string, alpha: number): string {
   if (color.startsWith('#') && (color.length === 7 || color.length === 4)) {
@@ -90,6 +135,491 @@ function withAlpha(color: string, alpha: number): string {
 function clipShowsThumbnails(clip: CanvasClip): string | null {
   if (clip.source?.type !== 'video') return null;
   return clip.source?.mediaFileId ?? clip.mediaFileId ?? null;
+}
+
+type WaveformPyramidMap = ReadonlyMap<string, TimelineWaveformPyramid | null>;
+
+function isCanvasAudioClip(clip: CanvasClip): boolean {
+  return clip.source?.type === 'audio' ||
+    hasLegacyWaveformSamples(clip);
+}
+
+function getWaveformPyramidForClip(clip: CanvasClip, waveformPyramids: WaveformPyramidMap | undefined): TimelineWaveformPyramid | null {
+  const refId = getPreferredWaveformPyramidRef(clip);
+  if (!refId) return null;
+  return waveformPyramids?.get(refId) ?? getCachedTimelineWaveformPyramid(refId) ?? null;
+}
+
+function isInfiniteSourceType(sourceType: string | null | undefined): boolean {
+  return sourceType === 'text' ||
+    sourceType === 'image' ||
+    sourceType === 'solid' ||
+    sourceType === 'camera' ||
+    sourceType === 'splat-effector' ||
+    sourceType === 'math-scene';
+}
+
+function canLoopExtendRight(clip: CanvasClip): boolean {
+  return isVectorAnimationSourceType(clip.source?.type) &&
+    shouldLoopVectorAnimation(clip.source?.vectorAnimationSettings);
+}
+
+function getClipSourceDuration(clip: CanvasClip): number {
+  const naturalDuration = clip.source?.naturalDuration;
+  if (Number.isFinite(naturalDuration) && naturalDuration && naturalDuration > 0) {
+    return naturalDuration;
+  }
+  return Math.max(
+    clip.outPoint ?? 0,
+    (clip.inPoint ?? 0) + clip.duration,
+    clip.duration,
+    0.1,
+  );
+}
+
+function drawCanvasWaveformCenterLine(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  alpha = 0.16,
+): void {
+  const midY = height / 2;
+  ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, midY);
+  ctx.lineTo(width, midY);
+  ctx.stroke();
+}
+
+function buildCanvasSignedEnvelopePath(
+  ctx: CanvasRenderingContext2D,
+  columns: WaveformColumn[],
+  width: number,
+  height: number,
+  minFloor = 0,
+  scale = 1,
+): void {
+  const midY = height / 2;
+  const halfHeight = Math.max(1, (height - 6) / 2);
+  const count = columns.length;
+  const normalizedScale = Math.max(0, Math.min(1, scale));
+
+  const xAt = (index: number) => {
+    if (count <= 1) return width / 2;
+    return (index / (count - 1)) * width;
+  };
+  const topYAt = (index: number) => {
+    const column = columns[index];
+    return midY - Math.max(column.max, column.peak * minFloor, 0) * normalizedScale * halfHeight;
+  };
+  const bottomYAt = (index: number) => {
+    const column = columns[index];
+    return midY + Math.max(-column.min, column.peak * minFloor, 0) * normalizedScale * halfHeight;
+  };
+
+  ctx.beginPath();
+  ctx.moveTo(0, topYAt(0));
+
+  for (let index = 0; index < count - 1; index += 1) {
+    const previousX = xAt(index);
+    const currentX = xAt(index + 1);
+    const previousY = topYAt(index);
+    const currentY = topYAt(index + 1);
+    ctx.quadraticCurveTo(previousX, previousY, (previousX + currentX) / 2, (previousY + currentY) / 2);
+  }
+  ctx.quadraticCurveTo(width, topYAt(count - 1), width, topYAt(count - 1));
+
+  ctx.lineTo(width, bottomYAt(count - 1));
+
+  for (let index = count - 1; index > 0; index -= 1) {
+    const nextX = xAt(index);
+    const currentX = xAt(index - 1);
+    const nextY = bottomYAt(index);
+    const currentY = bottomYAt(index - 1);
+    ctx.quadraticCurveTo(nextX, nextY, (nextX + currentX) / 2, (nextY + currentY) / 2);
+  }
+  ctx.quadraticCurveTo(0, bottomYAt(0), 0, bottomYAt(0));
+  ctx.closePath();
+}
+
+function buildCanvasSmoothEnvelopePath(
+  ctx: CanvasRenderingContext2D,
+  columns: WaveformColumn[],
+  width: number,
+  height: number,
+  valueForColumn: (column: WaveformColumn) => number,
+): void {
+  const midY = height / 2;
+  const halfHeight = Math.max(1, (height - 6) / 2);
+  const count = columns.length;
+
+  const xAt = (index: number) => {
+    if (count <= 1) return width / 2;
+    return (index / (count - 1)) * width;
+  };
+  const topYAt = (index: number) => midY - valueForColumn(columns[index]) * halfHeight;
+  const bottomYAt = (index: number) => midY + valueForColumn(columns[index]) * halfHeight;
+
+  ctx.beginPath();
+  ctx.moveTo(0, topYAt(0));
+  for (let index = 0; index < count - 1; index += 1) {
+    const previousX = xAt(index);
+    const currentX = xAt(index + 1);
+    const previousY = topYAt(index);
+    const currentY = topYAt(index + 1);
+    ctx.quadraticCurveTo(previousX, previousY, (previousX + currentX) / 2, (previousY + currentY) / 2);
+  }
+  ctx.quadraticCurveTo(width, topYAt(count - 1), width, topYAt(count - 1));
+  ctx.lineTo(width, bottomYAt(count - 1));
+  for (let index = count - 1; index > 0; index -= 1) {
+    const nextX = xAt(index);
+    const currentX = xAt(index - 1);
+    const nextY = bottomYAt(index);
+    const currentY = bottomYAt(index - 1);
+    ctx.quadraticCurveTo(nextX, nextY, (nextX + currentX) / 2, (nextY + currentY) / 2);
+  }
+  ctx.quadraticCurveTo(0, bottomYAt(0), 0, bottomYAt(0));
+  ctx.closePath();
+}
+
+function drawDetailedCanvasWaveform(ctx: CanvasRenderingContext2D, columns: WaveformColumn[], width: number, height: number): void {
+  const gradient = ctx.createLinearGradient(0, 0, 0, height);
+  gradient.addColorStop(0, 'rgba(216, 230, 240, 0.10)');
+  gradient.addColorStop(0.5, 'rgba(224, 238, 248, 0.22)');
+  gradient.addColorStop(1, 'rgba(216, 230, 240, 0.10)');
+  buildCanvasSignedEnvelopePath(ctx, columns, width, height, 0.01, 0.82);
+  ctx.fillStyle = gradient;
+  ctx.fill();
+
+  const rmsGradient = ctx.createLinearGradient(0, 0, 0, height);
+  rmsGradient.addColorStop(0, 'rgba(92, 203, 255, 0.18)');
+  rmsGradient.addColorStop(0.5, 'rgba(178, 230, 255, 0.44)');
+  rmsGradient.addColorStop(1, 'rgba(92, 203, 255, 0.18)');
+  buildCanvasSmoothEnvelopePath(ctx, columns, width, height, (column) => Math.min(column.rms * 0.84, column.peak * 0.72));
+  ctx.fillStyle = rmsGradient;
+  ctx.fill();
+
+  drawCanvasWaveformCenterLine(ctx, width, height);
+}
+
+function drawCompactCanvasWaveform(ctx: CanvasRenderingContext2D, columns: WaveformColumn[], width: number, height: number): void {
+  buildCanvasSignedEnvelopePath(ctx, columns, width, height, 0.08);
+  ctx.fillStyle = 'rgba(235, 241, 248, 0.62)';
+  ctx.fill();
+  drawCanvasWaveformCenterLine(ctx, width, height, 0.12);
+}
+
+function resolveCanvasWaveformChannelIndexes(
+  pyramid: TimelineWaveformPyramid | null,
+  waveformChannels: readonly (readonly number[])[] | undefined,
+  height: number,
+): number[] {
+  const pyramidIndexes = pyramid?.levels
+    .find(level => level.channels.length > 0)
+    ?.channels.map(channel => channel.channelIndex) ?? [];
+  const legacyIndexes = waveformChannels
+    ?.map((channel, index) => (channel.length > 0 ? index : -1))
+    .filter(index => index >= 0) ?? [];
+  const indexes = pyramidIndexes.length > 0
+    ? pyramidIndexes
+    : legacyIndexes.length > 0
+      ? legacyIndexes
+      : [0];
+  const maxChannels = height < 42 ? 1 : MAX_RENDERED_WAVEFORM_CHANNELS;
+  return indexes.slice(0, maxChannels);
+}
+
+function drawAudioWaveform(
+  ctx: CanvasRenderingContext2D,
+  clip: CanvasClip,
+  pyramid: TimelineWaveformPyramid | null,
+  x: number,
+  top: number,
+  w: number,
+  h: number,
+  mode: TimelineAudioDisplayMode,
+  pixelsPerSecond: number,
+): void {
+  const channels = clip.waveformChannels?.filter(channel => channel.length > 0);
+  const fallback = clip.waveform && clip.waveform.length > 0 ? [clip.waveform] : [];
+  const drawableChannels = channels && channels.length > 0 ? channels : fallback;
+  const hasDrawableWaveform = Boolean(pyramid || drawableChannels.length > 0);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(x, top, w, h, Math.min(4, h / 4));
+  ctx.clip();
+
+  ctx.fillStyle = mode === 'spectral' ? 'rgba(8, 14, 24, 0.44)' : 'rgba(4, 10, 18, 0.22)';
+  ctx.fillRect(x, top, w, h);
+
+  if (!hasDrawableWaveform || w < 2) {
+    ctx.save();
+    ctx.translate(x, top);
+    drawCanvasWaveformCenterLine(ctx, w, h, clip.waveformGenerating ? 0.34 : 0.18);
+    if (clip.waveformGenerating) {
+      const progress = Math.max(0.04, Math.min(1, (clip.waveformProgress ?? 30) / 100));
+      const progressGradient = ctx.createLinearGradient(0, 0, w, 0);
+      progressGradient.addColorStop(0, 'rgba(92, 203, 255, 0.52)');
+      progressGradient.addColorStop(1, 'rgba(178, 230, 255, 0.12)');
+      ctx.fillStyle = progressGradient;
+      ctx.fillRect(0, h - 3, w * progress, 2);
+    }
+    ctx.restore();
+    ctx.restore();
+    return;
+  }
+
+  const renderChannels = resolveCanvasWaveformChannelIndexes(pyramid, clip.waveformChannels, h);
+  const laneGap = renderChannels.length > 1 ? 2 : 0;
+  const laneHeight = Math.max(8, (h - laneGap * (renderChannels.length - 1)) / renderChannels.length);
+  const naturalDuration = Math.max(0.001, pyramid?.duration ?? clip.source?.naturalDuration ?? clip.outPoint ?? clip.duration);
+  const inPoint = Math.max(0, Math.min(naturalDuration, clip.inPoint ?? 0));
+  const outPoint = Math.max(inPoint + 0.001, Math.min(naturalDuration, clip.outPoint ?? inPoint + clip.duration));
+
+  ctx.save();
+  ctx.translate(x, top);
+
+  renderChannels.forEach((channelIndex, laneIndex) => {
+    const laneTop = laneIndex * (laneHeight + laneGap);
+    if (laneIndex > 0) {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+      ctx.beginPath();
+      ctx.moveTo(0, laneTop - laneGap / 2);
+      ctx.lineTo(w, laneTop - laneGap / 2);
+      ctx.stroke();
+    }
+
+    const lod = buildWaveformLod({
+      waveform: clip.waveform ?? [],
+      waveformChannels: clip.waveformChannels,
+      pyramid,
+      width: w,
+      inPoint,
+      outPoint,
+      naturalDuration,
+      pixelsPerSecond,
+      channelIndex,
+    });
+    if (!lod || lod.columns.length === 0) {
+      ctx.save();
+      ctx.translate(0, laneTop);
+      drawCanvasWaveformCenterLine(ctx, w, laneHeight, 0.18);
+      ctx.restore();
+      return;
+    }
+
+    const smoothed = smoothWaveformColumns(lod.columns, lod.source === 'pyramid' ? 1 : 2, 0.45);
+    const normalized = normalizeWaveformColumnsForDisplay(smoothed, {
+      targetPeak: mode === 'compact' ? 0.52 : 0.66,
+      minReferencePeak: mode === 'spectral' ? 0.025 : 0.032,
+      maxGain: mode === 'spectral' ? 20 : 16,
+      referencePeak: resolveWaveformDisplayReferencePeak(smoothed, { minReferencePeak: mode === 'spectral' ? 0.025 : 0.032 }),
+      perceptualScale: mode !== 'compact',
+      noiseFloorDb: mode === 'spectral' ? -42 : -30,
+    });
+
+    ctx.save();
+    ctx.translate(0, laneTop);
+    if (mode === 'compact') {
+      drawCompactCanvasWaveform(ctx, normalized, w, laneHeight);
+    } else {
+      drawDetailedCanvasWaveform(ctx, normalized, w, laneHeight);
+    }
+    ctx.restore();
+  });
+
+  ctx.restore();
+  ctx.restore();
+}
+
+interface CanvasClipGeometry {
+  startTime: number;
+  duration: number;
+  inPoint: number;
+  outPoint: number;
+  visible: boolean;
+  trimEdge?: 'left' | 'right';
+  originalStartTime: number;
+  originalEndTime: number;
+  sourceDuration: number;
+}
+
+function resolveClipGeometry(clip: CanvasClip, props: TimelineClipCanvasProps): CanvasClipGeometry {
+  const { clipDrag, clipDragPreview, clipTrim, trackId } = props;
+  let startTime = clip.startTime;
+  let duration = clip.duration;
+  let inPoint = clip.inPoint ?? 0;
+  let outPoint = clip.outPoint ?? inPoint + duration;
+  let visible = clip.trackId === trackId;
+  let trimEdge: 'left' | 'right' | undefined;
+  const sourceDuration = getClipSourceDuration(clip);
+  const dragPreviewPatch = clipDragPreview?.patches[clip.id];
+
+  if (clipDrag?.clipId === clip.id) {
+    visible = clipDrag.currentTrackId === trackId;
+    const previewStartTime = dragPreviewPatch ? Math.max(0, dragPreviewPatch.startTime) : startTime;
+    startTime = clipDrag.snappedTime !== null ? clipDrag.snappedTime : previewStartTime;
+  } else if (clipDrag?.multiSelectClipIds?.includes(clip.id) && clipDrag.multiSelectTimeDelta !== undefined) {
+    startTime = Math.max(0, clip.startTime + clipDrag.multiSelectTimeDelta);
+  } else if (dragPreviewPatch) {
+    startTime = Math.max(0, dragPreviewPatch.startTime);
+    visible = (dragPreviewPatch.trackId ?? clip.trackId) === trackId;
+  }
+
+  if (clipTrim?.clipId === clip.id) {
+    trimEdge = clipTrim.edge;
+    const deltaTime = clipTrim.appliedDelta;
+    const sourceType = clip.source?.type;
+    const isInfiniteClip = isInfiniteSourceType(sourceType);
+    if (clipTrim.edge === 'left') {
+      const maxTrim = clipTrim.originalDuration - 0.1;
+      const minTrim = isInfiniteClip
+        ? -clipTrim.originalStartTime
+        : -clipTrim.originalInPoint;
+      const clampedDelta = Math.max(minTrim, Math.min(maxTrim, deltaTime));
+      startTime = clipTrim.originalStartTime + clampedDelta;
+      duration = clipTrim.originalDuration - clampedDelta;
+      inPoint = clipTrim.originalInPoint + clampedDelta;
+      outPoint = clipTrim.originalOutPoint;
+    } else {
+      const maxExtend = isInfiniteClip || canLoopExtendRight(clip)
+        ? Number.MAX_SAFE_INTEGER
+        : sourceDuration - clipTrim.originalOutPoint;
+      const minTrim = -(clipTrim.originalDuration - 0.1);
+      const clampedDelta = Math.max(minTrim, Math.min(maxExtend, deltaTime));
+      startTime = clipTrim.originalStartTime;
+      duration = clipTrim.originalDuration + clampedDelta;
+      inPoint = clipTrim.originalInPoint;
+      outPoint = clipTrim.originalOutPoint + clampedDelta;
+    }
+  }
+
+  return {
+    startTime,
+    duration: Math.max(0.001, duration),
+    inPoint,
+    outPoint,
+    visible,
+    trimEdge,
+    originalStartTime: clip.startTime,
+    originalEndTime: clip.startTime + clip.duration,
+    sourceDuration,
+  };
+}
+
+function drawSourceExtensionGhost(
+  ctx: CanvasRenderingContext2D,
+  edge: 'left' | 'right',
+  x: number,
+  top: number,
+  w: number,
+  h: number,
+): void {
+  if (w <= 0 || h <= 0) return;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, top, w, h);
+  ctx.clip();
+
+  const fill = ctx.createLinearGradient(0, top, 0, top + h);
+  fill.addColorStop(0, 'rgba(251, 191, 36, 0.24)');
+  fill.addColorStop(1, 'rgba(251, 191, 36, 0.08)');
+  ctx.fillStyle = fill;
+  ctx.fillRect(x, top, w, h);
+
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+  ctx.lineWidth = 1;
+  for (let offset = -h; offset < w + h; offset += 10) {
+    ctx.beginPath();
+    ctx.moveTo(x + offset, top + h);
+    ctx.lineTo(x + offset + h, top);
+    ctx.stroke();
+  }
+
+  ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.46)';
+  ctx.strokeRect(x + 0.5, top + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
+  ctx.setLineDash([]);
+
+  ctx.strokeStyle = 'rgba(251, 191, 36, 0.92)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  if (edge === 'left') {
+    ctx.moveTo(x + w - 1, top);
+    ctx.lineTo(x + w - 1, top + h);
+  } else {
+    ctx.moveTo(x + 1, top);
+    ctx.lineTo(x + 1, top + h);
+  }
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawSourceExtensionGhosts(
+  ctx: CanvasRenderingContext2D,
+  props: TimelineClipCanvasProps,
+  geometry: CanvasClipGeometry,
+  clipTop: number,
+  clipHeight: number,
+  visibleLeft: number,
+  visibleRight: number,
+  canvasOffsetX: number,
+): void {
+  if (!geometry.trimEdge) return;
+
+  const displayEnd = geometry.startTime + geometry.duration;
+  let drewPrimaryGhost = false;
+  const pushGhost = (edge: 'left' | 'right', startTime: number, endTime: number) => {
+    const ghostStartTime = Math.max(0, Math.min(startTime, endTime));
+    const ghostEndTime = Math.max(ghostStartTime, Math.max(startTime, endTime));
+    if (ghostEndTime - ghostStartTime <= 0.001) return false;
+
+    const rawLeft = props.timeToPixel(ghostStartTime);
+    const rawRight = props.timeToPixel(ghostEndTime);
+    const clippedLeft = Math.max(rawLeft, visibleLeft);
+    const clippedRight = Math.min(rawRight, visibleRight);
+    if (clippedRight - clippedLeft < 1) return false;
+
+    drawSourceExtensionGhost(ctx, edge, clippedLeft - canvasOffsetX, clipTop, clippedRight - clippedLeft, clipHeight);
+    return true;
+  };
+
+  if (geometry.trimEdge === 'left') {
+    const availableLeftDuration = Math.min(
+      Math.max(0, geometry.inPoint),
+      Math.max(0, geometry.startTime),
+    );
+    if (availableLeftDuration > 0.001) {
+      drewPrimaryGhost = pushGhost('left', geometry.startTime - availableLeftDuration, geometry.startTime) || drewPrimaryGhost;
+    }
+  }
+
+  if (geometry.trimEdge === 'right') {
+    const availableRightDuration = Math.max(0, geometry.sourceDuration - geometry.outPoint);
+    if (availableRightDuration > 0.001) {
+      drewPrimaryGhost = pushGhost('right', displayEnd, displayEnd + availableRightDuration) || drewPrimaryGhost;
+    }
+  }
+
+  if (
+    !drewPrimaryGhost &&
+    geometry.trimEdge === 'left' &&
+    Math.abs(geometry.startTime - geometry.originalStartTime) > 0.001
+  ) {
+    pushGhost('left', Math.min(geometry.startTime, geometry.originalStartTime), Math.max(geometry.startTime, geometry.originalStartTime));
+  }
+
+  if (
+    !drewPrimaryGhost &&
+    geometry.trimEdge === 'right' &&
+    Math.abs(displayEnd - geometry.originalEndTime) > 0.001
+  ) {
+    pushGhost('right', Math.min(displayEnd, geometry.originalEndTime), Math.max(displayEnd, geometry.originalEndTime));
+  }
 }
 
 /** Cover-fit draw of a bitmap into a destination rect, clipped by the caller. */
@@ -144,13 +674,16 @@ function drawClips(
   ctx: CanvasRenderingContext2D,
   props: TimelineClipCanvasProps,
   cssWidth: number,
+  canvasOffsetX: number,
   requestRedraw: () => void,
 ): void {
-  const { clips, height, timeToPixel, selectedClipIds, trackColor, excludeIds, scrollX, viewportWidth } = props;
+  const { clips, height, timeToPixel, selectedClipIds, hoveredClipId, trackColor, scrollX, viewportWidth, waveformsEnabled, audioDisplayMode = 'detailed', waveformPyramids } = props;
   ctx.clearRect(0, 0, cssWidth, height);
 
   const thumbVisibleLeft = scrollX - THUMBNAIL_VIEWPORT_OVERSCAN_PX;
   const thumbVisibleRight = scrollX + viewportWidth + THUMBNAIL_VIEWPORT_OVERSCAN_PX;
+  const renderVisibleLeft = scrollX - CANVAS_RENDER_OVERSCAN_PX;
+  const renderVisibleRight = scrollX + viewportWidth + CANVAS_RENDER_OVERSCAN_PX;
 
   const radius = Math.min(4, height / 4);
   const fill = withAlpha(trackColor, 0.55);
@@ -162,9 +695,19 @@ function drawClips(
   ctx.textBaseline = 'middle';
 
   for (const clip of clips) {
-    if (excludeIds?.has(clip.id)) continue; // rendered as an interactive DOM overlay
-    const x = timeToPixel(clip.startTime);
-    const w = timeToPixel(clip.duration);
+    const geometry = resolveClipGeometry(clip, props);
+    if (!geometry.visible) continue;
+    const absoluteX = timeToPixel(geometry.startTime);
+    const absoluteW = timeToPixel(geometry.duration);
+    const absoluteRight = absoluteX + absoluteW;
+    const visibleAbsLeft = Math.max(absoluteX, canvasOffsetX, renderVisibleLeft);
+    const visibleAbsRight = Math.min(absoluteRight, canvasOffsetX + cssWidth, renderVisibleRight);
+    const visibleW = visibleAbsRight - visibleAbsLeft;
+    if (visibleW <= 0) continue;
+
+    const x = absoluteX - canvasOffsetX;
+    const visibleX = visibleAbsLeft - canvasOffsetX;
+    const w = absoluteW;
     if (w < LOD_BAR_PX) {
       ctx.fillStyle = selectedClipIds.has(clip.id) ? fillSelected : fill;
       ctx.fillRect(x, 1, Math.max(1, w), height - 2);
@@ -172,6 +715,7 @@ function drawClips(
     }
 
     const selected = selectedClipIds.has(clip.id);
+    const hovered = hoveredClipId === clip.id;
     const top = 1;
     const h = height - 2;
 
@@ -181,40 +725,77 @@ function drawClips(
     ctx.fillStyle = selected ? fillSelected : fill;
     ctx.fill();
 
+    if (waveformsEnabled && isCanvasAudioClip(clip)) {
+      const waveformPyramid = getWaveformPyramidForClip(clip, waveformPyramids);
+      const visibleStartRatio = Math.max(0, Math.min(1, (visibleAbsLeft - absoluteX) / Math.max(1, absoluteW)));
+      const visibleEndRatio = Math.max(visibleStartRatio, Math.min(1, (visibleAbsRight - absoluteX) / Math.max(1, absoluteW)));
+      const sourceSpan = Math.max(0.001, geometry.outPoint - geometry.inPoint);
+      drawAudioWaveform(
+        ctx,
+        {
+          ...clip,
+          inPoint: geometry.inPoint + sourceSpan * visibleStartRatio,
+          outPoint: geometry.inPoint + sourceSpan * visibleEndRatio,
+        },
+        waveformPyramid,
+        visibleX,
+        top,
+        visibleW,
+        h,
+        audioDisplayMode,
+        timeToPixel(1),
+      );
+    }
+
     // Filmstrip thumbnails clipped to the body — only for clips in the viewport,
     // so opening a large comp doesn't decode every clip's thumbnails at once.
-    const inThumbWindow = x + w > thumbVisibleLeft && x < thumbVisibleRight;
-    const mediaFileId = (w >= LOD_THUMB_PX && inThumbWindow) ? clipShowsThumbnails(clip) : null;
+    const inThumbWindow = absoluteRight > thumbVisibleLeft && absoluteX < thumbVisibleRight;
+    const mediaFileId = (visibleW >= LOD_THUMB_PX && inThumbWindow) ? clipShowsThumbnails(clip) : null;
     if (mediaFileId) {
+      const visibleStartRatio = Math.max(0, Math.min(1, (visibleAbsLeft - absoluteX) / Math.max(1, absoluteW)));
+      const visibleEndRatio = Math.max(visibleStartRatio, Math.min(1, (visibleAbsRight - absoluteX) / Math.max(1, absoluteW)));
+      const sourceSpan = Math.max(0.001, geometry.outPoint - geometry.inPoint);
+      const visibleClip = {
+        ...clip,
+        inPoint: geometry.inPoint + sourceSpan * visibleStartRatio,
+        outPoint: geometry.inPoint + sourceSpan * visibleEndRatio,
+      };
       ctx.save();
       ctx.beginPath();
-      ctx.roundRect(x, top, w, h, radius);
+      ctx.rect(visibleX, top, visibleW, h);
       ctx.clip();
-      drawThumbnails(ctx, clip, mediaFileId, x, top, w, h, requestRedraw);
+      drawThumbnails(ctx, visibleClip, mediaFileId, visibleX, top, visibleW, h, requestRedraw);
       // Darken bottom strip so the label stays readable over thumbnails.
       const grad = ctx.createLinearGradient(0, top + h - 16, 0, top + h);
       grad.addColorStop(0, 'rgba(0,0,0,0)');
       grad.addColorStop(1, 'rgba(0,0,0,0.55)');
       ctx.fillStyle = grad;
-      ctx.fillRect(x, top + h - 16, w, 16);
+      ctx.fillRect(visibleX, top + h - 16, visibleW, 16);
       ctx.restore();
     }
+
+    drawSourceExtensionGhosts(ctx, props, geometry, top, h, renderVisibleLeft, renderVisibleRight, canvasOffsetX);
 
     // Border.
     ctx.beginPath();
     ctx.roundRect(x, top, w, h, radius);
-    ctx.lineWidth = selected ? 2 : 1;
-    ctx.strokeStyle = selected ? selectedBorder : border;
+    ctx.lineWidth = selected ? 2 : hovered ? 1.5 : 1;
+    ctx.strokeStyle = selected ? selectedBorder : hovered ? 'rgba(255,255,255,0.58)' : border;
     ctx.stroke();
 
     // Label, only when there is room.
-    if (w >= LOD_LABEL_PX && clip.name) {
+    if (visibleW >= LOD_LABEL_PX && clip.name) {
+      const labelLeft = Math.max(x + 5, visibleX + 5);
+      const labelRight = Math.min(x + w - 5, visibleX + visibleW - 5);
+      const labelW = labelRight - labelLeft;
+      if (labelW <= 4) continue;
+
       ctx.save();
       ctx.beginPath();
-      ctx.rect(x + 5, top, w - 10, h);
+      ctx.rect(labelLeft, top, labelW, h);
       ctx.clip();
       ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
-      ctx.fillText(clip.name, x + 6, mediaFileId ? top + h - 8 : top + h / 2);
+      ctx.fillText(clip.name, labelLeft + 1, mediaFileId ? top + h - 8 : top + h / 2);
       ctx.restore();
     }
   }
@@ -224,15 +805,47 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number | null>(null);
   const [redrawNonce, bumpRedraw] = useReducer((n: number) => n + 1, 0);
-  const { clips, height, contentWidth, timeToPixel, selectedClipIds, trackColor, excludeIds, scrollX, viewportWidth } = props;
-  const cssWidth = Math.max(1, Math.min(contentWidth, MAX_CANVAS_WIDTH_PX));
+  const {
+    clips,
+    trackId,
+    height,
+    contentWidth,
+    timeToPixel,
+    selectedClipIds,
+    hoveredClipId,
+    trackColor,
+    scrollX,
+    viewportWidth,
+    waveformsEnabled,
+    audioDisplayMode,
+    clipDrag,
+    clipDragPreview,
+    clipTrim,
+  } = props;
   // Quantize scroll so we only redraw (to load newly-visible thumbnails) every
   // ~200px scrolled, not every pixel; the THUMBNAIL_VIEWPORT_OVERSCAN_PX covers
   // the gap. The draw still uses the exact scrollX for the window.
   const scrollBucket = Math.round(scrollX / 200);
+  const canvasOffsetX = Math.max(0, scrollBucket * 200 - CANVAS_RENDER_OVERSCAN_PX);
+  const cssWidth = Math.max(
+    1,
+    Math.min(
+      MAX_CANVAS_WIDTH_PX,
+      Math.ceil(viewportWidth + CANVAS_RENDER_OVERSCAN_PX * 2),
+    ),
+  );
+  const waveformRefKey = useMemo(() => {
+    const refs = new Set<string>();
+    for (const clip of clips) {
+      const refId = getPreferredWaveformPyramidRef(clip);
+      if (refId) refs.add(refId);
+    }
+    return Array.from(refs).sort().join('|');
+  }, [clips]);
+  const [waveformPyramids, setWaveformPyramids] = useState<Map<string, TimelineWaveformPyramid | null>>(() => new Map());
 
   // Phase 4: optionally render in an OffscreenCanvas worker (off main thread).
-  const workerMode = flags.timelineCanvasWorker;
+  const workerMode = flags.timelineCanvasWorker && !waveformsEnabled && !clipDrag && !clipDragPreview && !clipTrim;
   const workerRef = useRef<Worker | null>(null);
   const workerReadyRef = useRef(false);
 
@@ -242,6 +855,106 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
     if (workerMode) return;
     return thumbnailCacheService.subscribe(() => bumpRedraw());
   }, [workerMode]);
+
+  useEffect(() => {
+    if (!waveformsEnabled || !waveformRefKey) return;
+    let cancelled = false;
+    const refs = waveformRefKey.split('|').filter(Boolean);
+
+    const publish = (refId: string, pyramid: TimelineWaveformPyramid | null) => {
+      if (cancelled) return;
+      setWaveformPyramids((prev) => {
+        if (prev.has(refId) && prev.get(refId) === pyramid) return prev;
+        const next = new Map(prev);
+        next.set(refId, pyramid);
+        return next;
+      });
+      bumpRedraw();
+    };
+
+    for (const refId of refs) {
+      const cached = getCachedTimelineWaveformPyramid(refId);
+      if (cached) {
+        publish(refId, cached);
+        continue;
+      }
+      if (waveformPyramids.has(refId)) continue;
+      loadTimelineWaveformPyramid(refId)
+        .then((pyramid) => publish(refId, pyramid))
+        .catch(() => publish(refId, null));
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [waveformsEnabled, waveformRefKey, waveformPyramids]);
+
+  useEffect(() => {
+    if (!waveformsEnabled || clipDrag || clipDragPreview) return;
+    if (audioDisplayMode !== 'detailed') {
+      const shouldUpgradeCompact =
+        audioDisplayMode === 'compact' &&
+        (timeToPixel(1) >= WAVEFORM_PYRAMID_AUTO_UPGRADE_ZOOM || cssWidth > WAVEFORM_PYRAMID_AUTO_UPGRADE_WIDTH);
+      if (!shouldUpgradeCompact) return;
+    }
+
+    const timer = window.setTimeout(() => {
+      const store = useTimelineStore.getState();
+      if (store.clipDragPreview) return;
+
+      const visibleLeft = scrollX - CANVAS_RENDER_OVERSCAN_PX;
+      const visibleRight = scrollX + viewportWidth + CANVAS_RENDER_OVERSCAN_PX;
+      for (const clip of clips) {
+        if (!isCanvasAudioClip(clip)) continue;
+        const x = timeToPixel(clip.startTime);
+        const w = timeToPixel(clip.duration);
+        if (x + w < visibleLeft || x > visibleRight) continue;
+
+        const currentClip = store.clips.find((candidate) => candidate.id === clip.id);
+        if (
+          !currentClip ||
+          currentClip.waveformGenerating ||
+          hasTimelineWaveformData(currentClip)
+        ) {
+          continue;
+        }
+
+        const sourceKey = currentClip.file
+          ? [
+              currentClip.id,
+              currentClip.file.name,
+              currentClip.file.size,
+              currentClip.file.lastModified,
+            ].join(':')
+          : [
+              currentClip.id,
+              currentClip.mediaFileId ?? currentClip.source?.mediaFileId ?? 'no-media-file',
+              currentClip.name,
+            ].join(':');
+        const requestKey = `${currentClip.id}:${sourceKey}:${audioDisplayMode ?? 'detailed'}`;
+        if (inFlightCanvasWaveformUpgrades.has(requestKey)) continue;
+
+        inFlightCanvasWaveformUpgrades.add(requestKey);
+        void store.generateWaveformForClip(currentClip.id)
+          .finally(() => {
+            inFlightCanvasWaveformUpgrades.delete(requestKey);
+          });
+      }
+    }, WAVEFORM_GENERATION_DELAY_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    audioDisplayMode,
+    clipDrag,
+    clipDragPreview,
+    clips,
+    cssWidth,
+    scrollBucket,
+    scrollX,
+    timeToPixel,
+    viewportWidth,
+    waveformsEnabled,
+  ]);
 
   // Worker lifecycle: transfer the canvas's drawing surface to the worker once.
   useEffect(() => {
@@ -267,6 +980,7 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
     const canvas = canvasRef.current;
     const worker = workerRef.current;
     if (!canvas || !worker || !workerReadyRef.current) return;
+    canvas.style.left = `${canvasOffsetX}px`;
     canvas.style.width = `${cssWidth}px`;
     canvas.style.height = `${height}px`;
     const dpr = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 1;
@@ -275,13 +989,14 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
       clips: clips.map((c) => ({ id: c.id, startTime: c.startTime, duration: c.duration, name: c.name })),
       height,
       cssWidth,
+      canvasOffsetX,
       pxPerSecond: timeToPixel(1),
       dpr,
       selectedIds: Array.from(selectedClipIds),
-      excludeIds: excludeIds ? Array.from(excludeIds) : [],
+      excludeIds: [],
       trackColor,
     });
-  }, [workerMode, clips, height, cssWidth, timeToPixel, selectedClipIds, trackColor, excludeIds]);
+  }, [workerMode, clips, height, cssWidth, canvasOffsetX, timeToPixel, selectedClipIds, trackColor]);
 
   useEffect(() => {
     if (workerMode) return;
@@ -291,10 +1006,26 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
     if (!ctx) return;
 
     const dpr = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 1;
-    canvas.width = Math.round(cssWidth * dpr);
-    canvas.height = Math.round(height * dpr);
-    canvas.style.width = `${cssWidth}px`;
-    canvas.style.height = `${height}px`;
+    const targetWidth = Math.round(cssWidth * dpr);
+    const targetHeight = Math.round(height * dpr);
+    if (canvas.width !== targetWidth) {
+      canvas.width = targetWidth;
+    }
+    if (canvas.height !== targetHeight) {
+      canvas.height = targetHeight;
+    }
+    const cssWidthStyle = `${cssWidth}px`;
+    const cssHeightStyle = `${height}px`;
+    const cssLeftStyle = `${canvasOffsetX}px`;
+    if (canvas.style.left !== cssLeftStyle) {
+      canvas.style.left = cssLeftStyle;
+    }
+    if (canvas.style.width !== cssWidthStyle) {
+      canvas.style.width = cssWidthStyle;
+    }
+    if (canvas.style.height !== cssHeightStyle) {
+      canvas.style.height = cssHeightStyle;
+    }
 
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(() => {
@@ -302,8 +1033,26 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       drawClips(
         ctx,
-        { clips, height, contentWidth, timeToPixel, selectedClipIds, trackColor, excludeIds, scrollX, viewportWidth },
+        {
+          clips,
+          trackId,
+          height,
+          contentWidth,
+          timeToPixel,
+          selectedClipIds,
+          hoveredClipId,
+          trackColor,
+          scrollX,
+          viewportWidth,
+          waveformsEnabled,
+          audioDisplayMode,
+          clipDrag,
+          clipDragPreview,
+          clipTrim,
+          waveformPyramids,
+        },
         cssWidth,
+        canvasOffsetX,
         bumpRedraw,
       );
     });
@@ -316,13 +1065,13 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
     };
     // scrollX intentionally excluded; scrollBucket drives viewport-thumbnail redraws.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workerMode, clips, height, contentWidth, cssWidth, timeToPixel, selectedClipIds, trackColor, excludeIds, scrollBucket, viewportWidth, redrawNonce]);
+  }, [workerMode, clips, trackId, height, contentWidth, cssWidth, canvasOffsetX, timeToPixel, selectedClipIds, hoveredClipId, trackColor, scrollBucket, viewportWidth, waveformsEnabled, audioDisplayMode, clipDrag, clipDragPreview, clipTrim, waveformPyramids, redrawNonce]);
 
   return (
     <canvas
       ref={canvasRef}
       className="timeline-clip-canvas"
-      style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}
+      style={{ position: 'absolute', left: canvasOffsetX, top: 0, pointerEvents: 'none' }}
       aria-hidden="true"
     />
   );

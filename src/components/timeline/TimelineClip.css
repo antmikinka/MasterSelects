@@ -18,6 +18,65 @@
   border: 1px solid #4a6a90;
 }
 
+.timeline-canvas-dom-overlay .timeline-clip {
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  filter: none !important;
+  outline: none !important;
+  overflow: visible;
+}
+
+.timeline-canvas-dom-overlay .timeline-clip:hover,
+.timeline-canvas-dom-overlay .timeline-clip.selected,
+.timeline-canvas-dom-overlay .timeline-clip.composition,
+.timeline-canvas-dom-overlay .timeline-clip.composition.selected,
+.timeline-canvas-dom-overlay .timeline-clip.dragging,
+.timeline-canvas-dom-overlay .timeline-clip.linked-dragging,
+.timeline-canvas-dom-overlay .timeline-clip.slipping,
+.timeline-canvas-dom-overlay .timeline-clip.sliding {
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  box-shadow: none !important;
+  filter: none !important;
+  outline: none !important;
+}
+
+.timeline-canvas-dom-overlay .timeline-clip::before,
+.timeline-canvas-dom-overlay .timeline-clip::after {
+  display: none;
+}
+
+.timeline-canvas-dom-overlay .timeline-clip > :not(.trim-handle):not(.fade-handle) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.timeline-canvas-dom-overlay .clip-thumbnails,
+.timeline-canvas-dom-overlay .clip-static-artwork,
+.timeline-canvas-dom-overlay .clip-content,
+.timeline-canvas-dom-overlay .clip-transcript-markers,
+.timeline-canvas-dom-overlay .clip-transcribing-indicator,
+.timeline-canvas-dom-overlay .clip-analysis-overlay,
+.timeline-canvas-dom-overlay .analysis-legend-labels,
+.timeline-canvas-dom-overlay .clip-analyzing-indicator,
+.timeline-canvas-dom-overlay .clip-keyframe-ticks,
+.timeline-canvas-dom-overlay .fade-curve-container,
+.timeline-canvas-dom-overlay .clip-youtube-preview,
+.timeline-canvas-dom-overlay .clip-download-progress,
+.timeline-canvas-dom-overlay .clip-download-status,
+.timeline-canvas-dom-overlay .clip-download-error-badge,
+.timeline-canvas-dom-overlay .clip-proxy-generating,
+.timeline-canvas-dom-overlay .clip-proxy-badge,
+.timeline-canvas-dom-overlay .clip-audio-proxy-generating,
+.timeline-canvas-dom-overlay .clip-audio-proxy-badge,
+.timeline-canvas-dom-overlay .clip-reload-badge,
+.timeline-canvas-dom-overlay .clip-source-extension-ghost {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .timeline-clip.audio {
   background: linear-gradient(
     180deg,

@@ -67,6 +67,7 @@ import {
   clipAudioAnalysisJobService,
   isClipAudioAnalysisJobCancelledError,
 } from '../../services/audio/ClipAudioAnalysisJobService';
+import { hasTimelineWaveformData } from '../../utils/audioWaveformPresence';
 
 const log = Logger.create('ClipSlice');
 
@@ -1058,6 +1059,7 @@ export const createClipSlice: SliceCreator<CoreClipActions> = (set, get) => ({
     const { clips } = get();
     const clip = clips.find(c => c.id === clipId);
     if (!clip || clip.waveformGenerating) return;
+    if (!options.force && hasTimelineWaveformData(clip)) return;
     const includePyramid = options.previewOnly !== true;
 
     set({

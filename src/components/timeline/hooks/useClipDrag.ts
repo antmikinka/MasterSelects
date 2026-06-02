@@ -407,7 +407,12 @@ export function useClipDrag({
 
       const clipElement = e.currentTarget as HTMLElement;
       const clipRect = clipElement.getBoundingClientRect();
-      const grabOffsetX = e.clientX - clipRect.left;
+      const pxPerSecondUnit = pixelToTime(1);
+      const pxPerSecond = pxPerSecondUnit !== 0 ? 1 / pxPerSecondUnit : 0;
+      const clipLeft = clipElement.classList.contains('track-clip-row')
+        ? clipRect.left + clip.startTime * pxPerSecond
+        : clipRect.left;
+      const grabOffsetX = e.clientX - clipLeft;
       const lanesRectInit = trackLanesRef.current?.getBoundingClientRect();
       const grabY = lanesRectInit ? e.clientY - lanesRectInit.top : 0;
       const toolGesture = activeTimelineToolId === 'slip' || activeTimelineToolId === 'slide'

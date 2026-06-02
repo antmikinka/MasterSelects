@@ -15,16 +15,18 @@
 | P1 | Canvas thumbnails (filmstrip, ImageBitmap cache) | ✅ done | 86f95755 |
 | P2 | Canvas interaction via active-clip DOM overlay + hover hit-test | ✅ done | 9f2e338c |
 | P4 | OffscreenCanvas Web Worker path (flag `timelineCanvasWorker`, default OFF) | ✅ done | d01c3cd9 |
-| P3 | Make canvas the **default** (DOM path kept as fallback) | ✅ done | b8df7c0b |
+| P3 | Make canvas the **default** and remove visible high-zoom DOM fallback | ✅ done | b8df7c0b + issue branch |
 | P3 | Finish god-object dissolution (gate audio subscriptions) | ⏳ follow-up | |
-| P1 | Waveforms on canvas (audio clips) | ⏳ follow-up | |
+| P1 | Waveforms on canvas (audio clips) | done on issue branch | |
 
 **P3 note:** the canvas is now the production default (`timelineCanvasClips: true`).
-The user authorized shipping it without a prior live-validation pass. The per-clip
-DOM path is **kept** as a fallback for extreme zoom (content width over
-`MAX_CANVAS_WIDTH_PX`) and for the active/selected/dragged overlay clips, so editing
-keeps full fidelity. Quick rollback if visual issues surface: set
-`timelineCanvasClips` back to `false`. The **full god-object dissolution** (moving
+The per-clip visible DOM path is no longer used as an extreme-zoom fallback. The
+track canvas is viewport-sliced and positioned in absolute timeline space, so its
+backing store stays below browser canvas limits even when the full timeline would
+be far wider than `MAX_CANVAS_WIDTH_PX`. In canvas mode, mounted DOM clips are
+invisible interaction shells for active handles/context-menu affordances while the
+canvas remains the single visible clip-body renderer. Quick rollback if visual
+issues surface: set `timelineCanvasClips` back to `false`. The **full god-object dissolution** (moving
 the ~30 audio-only subscriptions + their JSX into an audio-clip child component) is
 a tracked follow-up — deliberately not done as a blind pass, since the risk of
 breaking audio editing outweighs the marginal gain now that the canvas already
@@ -135,8 +137,8 @@ The clip's pixel width decides how much to draw:
 | Clip pixel width | What we draw |
 |---|---|
 | `< 4 px` | merge into a density bar (see 2.6); no per-clip work |
-| `4–24 px` | solid color bar + selection state only |
-| `24–96 px` | color + **one poster thumbnail** + truncated label |
+| `4–14 px` | color + **one poster thumbnail** when available |
+| `14–96 px` | color + **one poster thumbnail** + truncated label |
 | `> 96 px` | full filmstrip thumbnails + waveform + label + (handles via overlay) |
 
 Fully zoomed out, 1000 clips might each be 2 px wide → we draw a handful of aggregated density bars, not 1000 anything. This is impossible to do cheaply with DOM (you'd still mount 1000 nodes) but trivial on canvas.
@@ -150,7 +152,7 @@ Fully zoomed out, 1000 clips might each be 2 px wide → we draw a handful of ag
 
 ### 2.4 Waveform on canvas (reuse `waveformLod`)
 
-`ClipWaveform.tsx` already builds an LOD pyramid and draws to a 2D context. Lift the *draw* function out of the React component into a pure `drawWaveform(ctx, pyramid, window, style)` used by both the old DOM path (during migration) and the new clip canvas. No new DSP needed.
+`ClipWaveform.tsx` already builds an LOD pyramid and draws to a 2D context. The issue branch now has `TimelineClipCanvas` loading cached waveform-pyramid refs, requesting detailed waveform generation for visible audio clips, and drawing detailed LOD waveform columns directly in the track canvas. The old DOM waveform remains fallback/interaction support, but it is no longer required for the visible audio clip body in canvas mode.
 
 ### 2.5 Hit-testing & interaction (no DOM per clip)
 
@@ -217,7 +219,7 @@ Each phase is shippable and behind a feature flag where it changes rendering.
 - Add `featureFlags.timelineCanvasClips`.
 - Build `TimelineClipCanvas` rendering clip backgrounds + LOD + labels for all tracks. Thumbnails/waveforms first via existing data, drawn as bitmaps.
 - When the flag is on, the DOM clip path renders **nothing** (or only the active overlay); the canvas owns the clip bodies. Selection/scroll/zoom drive canvas redraws.
-- Keep DOM path as fallback for parity testing.
+- Keep DOM path as a feature-flag rollback for parity testing during migration.
 - **Exit criteria:** 1000-clip synthetic comp scrolls and zooms at ≥55fps; `rafGap` ≤ 18 ms idle.
 
 ### Phase 2 — Interaction parity
@@ -259,10 +261,10 @@ Benchmark harness: a script that programmatically creates N clips (via the AI br
 
 ## 6. Risks & mitigations
 
-- **Interaction parity is the hard part** (trim/fade/region/spectral edits, context menus). Mitigation: keep these as DOM overlays for the active clip; reuse existing handlers; phase behind a flag with the DOM path as fallback until QA passes.
+- **Interaction parity is the hard part** (trim/fade/region/spectral edits, context menus). Mitigation: keep these as invisible DOM overlays for the active clip; reuse existing handlers; keep the feature flag as the rollback path.
 - **Text/label crispness & accessibility on canvas.** Mitigation: draw labels at devicePixelRatio; keep a11y affordances on the active-clip DOM overlay; canvas is decorative/visual like the preview already is.
 - **Theme/CSS styling moves into draw code.** Mitigation: read CSS custom properties (`--track-color`, etc.) once per redraw into a style object; centralize clip visual style constants.
-- **Large refactor on a shared branch.** Mitigation: feature-flagged, additive; the DOM path stays until Phase 3. No deletion until parity is proven.
+- **Large refactor on a shared branch.** Mitigation: feature-flagged, additive; the visible DOM path remains available only through rollback while active-clip interaction shells preserve editing parity.
 
 ## 7. First concrete steps
 
