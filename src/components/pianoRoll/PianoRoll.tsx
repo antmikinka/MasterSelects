@@ -76,7 +76,9 @@ export function PianoRoll({ clipId, onRequestClose }: PianoRollProps) {
   const removeMidiNote = useTimelineStore((state) => state.removeMidiNote);
 
   const clipDuration = clip?.duration ?? 0;
-  const contentWidth = Math.max(clipDuration, 4) * PX_PER_SEC;
+  // The piano roll is exactly the clip's real time span — no padding. Clip length
+  // rules the editor length (#232); resize the clip on the timeline for more room.
+  const contentWidth = clipDuration * PX_PER_SEC;
   const notes = clip?.midiData?.notes ?? [];
 
   // Center the view near middle C on first mount so notes land in view.

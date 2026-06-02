@@ -3553,9 +3553,6 @@ function TimelineClipComponent({
             width={width}
             height={Math.max(16, trackBaseHeight - 12)}
             pixelsPerSecond={zoom}
-            inPoint={displayInPoint}
-            renderStartPx={waveformRenderWindow.startPx}
-            renderWidth={waveformRenderWindow.width}
           />
         </div>
       )}

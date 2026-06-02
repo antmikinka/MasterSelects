@@ -4,51 +4,46 @@
 // "fit notes to view") so the used register fills the height instead of being
 // squashed into the full 0–127 span.
 //
-// Canvas-based and memoized, mirroring ClipWaveform: one fillRect per note,
-// redrawn only when notes / size / zoom / trim change. Only notes inside the
-// visible render window are drawn, so long clips stay cheap.
+// The canvas spans the FULL clip width so the whole musical content is always
+// shown and stays proportional to the clip (X = note.start * pixelsPerSecond,
+// literal timeline time). The backing store is capped for very wide clips: it
+// then renders at slightly lower resolution but never drops notes.
 
 import { memo, useEffect, useRef } from 'react';
 import type { MidiNote } from '../../../types/midiClip';
 
 interface ClipMidiPreviewProps {
   notes: MidiNote[];
-  /** Full clip pixel width (content space, before render-window clipping). */
+  /** Full clip pixel width (content space) — the canvas spans exactly this. */
   width: number;
   height: number;
   pixelsPerSecond: number;
-  /** Clip trim origin (seconds): notes before this are scrolled off the left. */
-  inPoint: number;
-  /** Visible portion of the clip in content px [startPx, startPx + windowWidth]. */
-  renderStartPx: number;
-  renderWidth: number;
   /** Bar color (defaults to a light blue that reads on the MIDI clip body). */
   color?: string;
 }
 
-const MIN_BAR_HEIGHT = 1.5;
+const MIN_BAR_HEIGHT = 2;
 const MAX_BAR_HEIGHT = 4;
-const MIN_BAR_WIDTH = 1;
+// Each note is at least this wide so even short notes on a narrow (zoomed-out)
+// clip stay visible — legibility of the time structure over literal width.
+const MIN_BAR_WIDTH = 2;
 const PITCH_PADDING = 1; // semitones of headroom above/below the used range
 const VERTICAL_INSET = 3; // px breathing room top/bottom inside the canvas
+// Cap the backing-store width so a deeply-zoomed/long clip can't allocate a huge
+// canvas. Beyond this the preview renders at reduced horizontal resolution but
+// still shows every note across the full width.
+const MAX_BACKING_WIDTH = 4096;
 
 function ClipMidiPreviewImpl({
   notes,
   width,
   height,
   pixelsPerSecond,
-  inPoint,
-  renderStartPx,
-  renderWidth,
-  color = 'rgba(173, 198, 255, 0.92)',
+  color = 'rgba(198, 218, 255, 1)',
 }: ClipMidiPreviewProps): React.ReactElement {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Size and position the canvas to the visible render window only (not the full
-  // clip), so deep-zoomed or very long clips never allocate a giant canvas.
-  const clipWidth = Math.max(1, Math.round(width));
-  const canvasLeft = Math.max(0, Math.min(clipWidth, Math.floor(renderStartPx)));
-  const canvasWidth = Math.max(1, Math.min(Math.ceil(renderWidth) || clipWidth, clipWidth - canvasLeft));
+  const cssWidth = Math.max(1, Math.round(width));
   const cssHeight = Math.max(1, Math.round(height));
 
   useEffect(() => {
@@ -58,13 +53,15 @@ function ClipMidiPreviewImpl({
     if (!ctx) return;
 
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    canvas.width = Math.round(canvasWidth * dpr);
-    canvas.height = Math.round(cssHeight * dpr);
+    // Horizontal scale: full DPR until the clip is wider than the cap, then
+    // shrink so the backing store stays bounded (content still spans the width).
+    const scaleX = Math.min(dpr, MAX_BACKING_WIDTH / cssWidth);
+    canvas.width = Math.max(1, Math.round(cssWidth * scaleX));
+    canvas.height = Math.max(1, Math.round(cssHeight * dpr));
 
-    // Translate so note positions are in clip-content px while the canvas itself
-    // is offset by canvasLeft within the clip.
-    ctx.setTransform(dpr, 0, 0, dpr, -canvasLeft * dpr, 0);
-    ctx.clearRect(canvasLeft, 0, canvasWidth, cssHeight);
+    ctx.setTransform(scaleX, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false; // crisp bar edges so dense notes stay distinct
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
 
     if (notes.length === 0 || pixelsPerSecond <= 0) return;
 
@@ -85,29 +82,35 @@ function ClipMidiPreviewImpl({
       Math.max(MIN_BAR_HEIGHT, usableHeight / pitchSpan),
     );
 
-    // Only draw notes overlapping the visible canvas window.
-    const windowStartPx = canvasLeft;
-    const windowEndPx = canvasLeft + canvasWidth;
-
     ctx.fillStyle = color;
     for (const note of notes) {
-      const noteStartPx = (note.start - inPoint) * pixelsPerSecond;
-      const noteWidthPx = Math.max(MIN_BAR_WIDTH, note.duration * pixelsPerSecond);
-      const noteEndPx = noteStartPx + noteWidthPx;
-      if (noteEndPx < windowStartPx || noteStartPx > windowEndPx) continue;
+      // X is literal clip-local time: x = note.start * zoom (1:1 with the
+      // timeline). Notes starting at/after the clip end are silent (the synth
+      // skips them), so they are not drawn; tails crossing the end are clamped
+      // to the boundary — mirroring midiPlaybackScheduler exactly.
+      const noteStartPx = note.start * pixelsPerSecond;
+      if (noteStartPx >= cssWidth || noteStartPx + note.duration * pixelsPerSecond <= 0) continue;
+      const clampedEndPx = Math.min((note.start + note.duration) * pixelsPerSecond, cssWidth);
+      const rawWidthPx = clampedEndPx - noteStartPx;
+      const noteWidthPx = Math.max(MIN_BAR_WIDTH, rawWidthPx);
 
       // High pitch on top: invert the normalized position.
       const norm = (note.pitch - minPitch) / pitchSpan;
       const y = VERTICAL_INSET + (1 - norm) * usableHeight - barHeight / 2;
-      ctx.fillRect(noteStartPx, y, noteWidthPx, barHeight);
+      // Leave a hairline seam between long legato notes so consecutive notes
+      // stay distinguishable; never shrink a min-width note to nothing.
+      const drawWidth = rawWidthPx > MIN_BAR_WIDTH + 1
+        ? Math.max(MIN_BAR_WIDTH, noteWidthPx - 1)
+        : noteWidthPx;
+      ctx.fillRect(noteStartPx, y, drawWidth, barHeight);
     }
-  }, [notes, canvasLeft, canvasWidth, cssHeight, pixelsPerSecond, inPoint, color]);
+  }, [notes, cssWidth, cssHeight, pixelsPerSecond, color]);
 
   return (
     <canvas
       ref={canvasRef}
       className="clip-midi-preview-canvas"
-      style={{ left: canvasLeft, width: canvasWidth, height: cssHeight }}
+      style={{ width: cssWidth, height: cssHeight }}
       aria-hidden="true"
     />
   );
