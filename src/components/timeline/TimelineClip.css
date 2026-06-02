@@ -1688,6 +1688,24 @@
   overflow: hidden;
 }
 
+/* MIDI note preview (#232) — fills the clip body behind the name label. */
+.clip-midi-preview {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.clip-midi-preview-canvas {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: block;
+}
+
 .waveform-container {
   position: relative;
   width: 100%;

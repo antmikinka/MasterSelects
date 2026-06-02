@@ -24,6 +24,7 @@ import {
 } from '../../types/vectorAnimation';
 import { ClipSpectrogram } from './components/ClipSpectrogram';
 import { ClipWaveform } from './components/ClipWaveform';
+import { ClipMidiPreview } from './components/ClipMidiPreview';
 import { ClipAnalysisOverlay } from './components/ClipAnalysisOverlay';
 import { FadeCurve } from './components/FadeCurve';
 import { useThumbnailCache } from '../../hooks/useThumbnailCache';
@@ -949,6 +950,9 @@ function TimelineClipComponent({
   const isAudioClip = clip.source?.type === 'audio' ||
     clip.file?.type?.startsWith('audio/') ||
     audioExtensions.includes(fileExt);
+
+  // Determine if this is a MIDI clip (note-data clip rendered by the track synth)
+  const isMidiClip = clip.source?.type === 'midi';
 
   // Determine if this is a text clip
   const isTextClip = clip.source?.type === 'text';
@@ -3538,6 +3542,20 @@ function TimelineClipComponent({
           />
         </div>
       )}
+      {/* MIDI note preview — mini piano-roll guide to the clip's content (#232) */}
+      {isMidiClip && clip.midiData && clip.midiData.notes.length > 0 && (
+        <div className="clip-midi-preview">
+          <ClipMidiPreview
+            notes={clip.midiData.notes}
+            width={width}
+            height={Math.max(16, trackBaseHeight - 12)}
+            pixelsPerSecond={zoom}
+            inPoint={displayInPoint}
+            renderStartPx={waveformRenderWindow.startPx}
+            renderWidth={waveformRenderWindow.width}
+          />
+        </div>
+      )}
       {/* Audio waveform / spectrogram */}
       {waveformsEnabled && isAudioClip && (
         audioDisplayMode === 'spectral'
@@ -4150,7 +4168,9 @@ function TimelineClipComponent({
               <span className="clip-text-icon" title="3D Effector Clip">E</span>
             )}
             <span className="clip-name">
-              {isTextClip && clip.textProperties
+              {isMidiClip
+                ? 'MIDI'
+                : isTextClip && clip.textProperties
                 ? clip.textProperties.text.slice(0, 30) || 'Text'
                 : isMathSceneClip && clip.mathScene
                   ? clip.mathScene.objects.find((object) => object.type === 'function')?.expression || 'Math Scene'
@@ -4160,7 +4180,7 @@ function TimelineClipComponent({
             </span>
             {/* PickWhip disabled */}
           </div>
-          <span className="clip-duration">{formatTime(displayDuration)}</span>
+          {!isMidiClip && <span className="clip-duration">{formatTime(displayDuration)}</span>}
         </div>
       </div>
       {/* Transcript word markers */}
