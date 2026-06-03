@@ -183,8 +183,19 @@ const canSkipLegacyClipBody = (
     activeSlots[0] === 'fade' &&
     mountReasons.some((reason) => reason === 'fade') &&
     mountReasons.every((reason) => reason === 'fade' || reason === 'hover');
+  const keyframeOnlyShell =
+    activeSlots.length === 1 &&
+    activeSlots[0] === 'keyframe' &&
+    mountReasons.some((reason) => reason === 'selected-keyframes') &&
+    mountReasons.every((reason) => reason === 'selected-keyframes' || reason === 'hover');
 
-  return trimOnlyShell || contextMenuShell || dragOnlyShell || hoverOnlyShell || stemOnlyShell || fadeOnlyShell;
+  return trimOnlyShell ||
+    contextMenuShell ||
+    dragOnlyShell ||
+    hoverOnlyShell ||
+    stemOnlyShell ||
+    fadeOnlyShell ||
+    keyframeOnlyShell;
 };
 
 const clampShellRectX = (rect: ClipInteractionShellRect, viewport: ClipInteractionShellRect): ClipInteractionShellRect => {
@@ -444,6 +455,7 @@ function TimelineTrackComponent({
   expandedCurveProperties,
   onSelectKeyframe,
   onMoveKeyframe,
+  onMoveKeyframeGroup,
   onUpdateBezierHandle,
   addKeyframe,
 }: TimelineTrackProps) {
@@ -1070,6 +1082,9 @@ function TimelineTrackComponent({
                     commands={{
                       onFadeStart: (event, context, edge) => onFadeStart(event, context.clip.id, edge),
                       onTrimStart: (event, context, edge) => onTrimStart(event, context.clip.id, edge),
+                      onMoveKeyframeGroup: (keyframeIds, newTime) => {
+                        onMoveKeyframeGroup?.(keyframeIds, newTime);
+                      },
                     }}
                     className="timeline-canvas-interaction-shell"
                     style={{ pointerEvents: 'none' }}

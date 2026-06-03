@@ -85,6 +85,7 @@ function renderTimelineTrack(overrides: Partial<TimelineTrackProps> = {}) {
     expandedCurveProperties: new Map(),
     onSelectKeyframe: vi.fn(),
     onMoveKeyframe: vi.fn(),
+    onMoveKeyframeGroup: vi.fn(),
     onUpdateBezierHandle: vi.fn(),
     addKeyframe: vi.fn(),
     ...overrides,
@@ -539,7 +540,56 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(renderClip).not.toHaveBeenCalled();
   });
 
-  it('keeps a keyframe shell and legacy overlay mounted for selected clip keyframes', () => {
+  it('renders selected clip keyframe ticks through the shell without the legacy overlay', () => {
+    const renderClip = vi.fn((clip: TimelineClip) => (
+      <div className="timeline-clip" data-clip-id={clip.id} />
+    ));
+    const onMoveKeyframeGroup = vi.fn();
+
+    const { container } = renderTimelineTrack({
+      clips: [createClip()],
+      clipKeyframes: new Map([
+        [
+          'clip-video',
+          [
+            {
+              id: 'kf-opacity',
+              clipId: 'clip-video',
+              time: 1,
+              property: 'opacity',
+              value: 0.5,
+              easing: 'linear',
+            },
+          ],
+        ],
+      ]),
+      selectedKeyframeIds: new Set(['kf-opacity']),
+      renderClip,
+      onMoveKeyframeGroup,
+    });
+
+    const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+    const tick = container.querySelector<HTMLElement>('.clip-interaction-shell .keyframe-tick');
+
+    expect(shell).toBeTruthy();
+    expect(shell?.dataset.clipId).toBe('clip-video');
+    expect(shell?.dataset.mountReasons).toBe('selected-keyframes');
+    expect(shell?.dataset.activeSlots).toBe('keyframe');
+    expect(shell?.style.pointerEvents).toBe('none');
+    expect(tick).toBeTruthy();
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
+    expect(renderClip).not.toHaveBeenCalled();
+
+    fireEvent.mouseDown(tick as HTMLElement, { button: 0, clientX: 20 });
+    fireEvent.mouseMove(document, { clientX: 30 });
+    fireEvent.mouseUp(document);
+
+    expect(onMoveKeyframeGroup).toHaveBeenCalledTimes(1);
+    expect(onMoveKeyframeGroup.mock.calls[0][0]).toEqual(['kf-opacity']);
+    expect(onMoveKeyframeGroup.mock.calls[0][1]).toBeCloseTo(2);
+  });
+
+  it('keeps the legacy overlay when keyframes are mixed with an active audio region', () => {
     const renderClip = vi.fn((clip: TimelineClip) => (
       <div className="timeline-clip" data-clip-id={clip.id} />
     ));
@@ -562,17 +612,24 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
         ],
       ]),
       selectedKeyframeIds: new Set(['kf-opacity']),
+      audioRegionSelection: {
+        clipId: 'clip-video',
+        trackId: 'track-video',
+        startTime: 2.5,
+        endTime: 3.5,
+        sourceInPoint: 0.5,
+        sourceOutPoint: 1.5,
+      },
       renderClip,
     });
 
     const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
 
     expect(shell).toBeTruthy();
-    expect(shell?.dataset.clipId).toBe('clip-video');
-    expect(shell?.dataset.mountReasons).toBe('selected-keyframes');
-    expect(shell?.dataset.activeSlots).toBe('keyframe');
-    expect(shell?.style.pointerEvents).toBe('none');
+    expect(shell?.dataset.mountReasons).toBe('selected-keyframes audio-region-active');
+    expect(shell?.dataset.activeSlots).toBe('keyframe audio-region');
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeTruthy();
+    expect(renderClip).toHaveBeenCalled();
   });
 
   it('keeps an audio-region shell and legacy overlay mounted for an active audio region', () => {

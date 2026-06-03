@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
 import { ClipFadeHandles } from './ClipFadeHandles';
+import { ClipKeyframeTicks } from './ClipKeyframeTicks';
 import { ClipTrimHandles } from './ClipTrimHandles';
 import { ClipStemControls } from './ClipStemControls';
 import {
@@ -46,6 +47,10 @@ function renderBuiltInModule(
 
   if (slot === 'fade') {
     return <ClipFadeHandles key={slot} context={context} commands={commands} />;
+  }
+
+  if (slot === 'keyframe') {
+    return <ClipKeyframeTicks key={slot} context={context} commands={commands} />;
   }
 
   if (slot === 'stem') {

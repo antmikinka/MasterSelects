@@ -304,6 +304,7 @@ export interface TimelineTrackProps {
   expandedCurveProperties: Map<string, Set<AnimatableProperty>>;
   onSelectKeyframe: (keyframeId: string, addToSelection: boolean) => void;
   onMoveKeyframe: (keyframeId: string, newTime: number) => void;
+  onMoveKeyframeGroup?: (keyframeIds: string[], newTime: number) => void;
   onUpdateBezierHandle: (keyframeId: string, handle: 'in' | 'out', position: BezierHandle) => void;
   addKeyframe: (clipId: string, property: AnimatableProperty, value: number, time?: number, easing?: string | null) => void;
 }

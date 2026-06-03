@@ -330,6 +330,11 @@ export interface ClipInteractionShellCommands {
     context: ClipInteractionShellCommandContext,
     edge: ClipInteractionShellEdge,
   ) => void;
+  onMoveKeyframeGroup?: (
+    keyframeIds: string[],
+    newTime: number,
+    context: ClipInteractionShellCommandContext,
+  ) => void;
   onModuleCommand?: (
     slot: ClipInteractionShellModuleSlot,
     command: string,

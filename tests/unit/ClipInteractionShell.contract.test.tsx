@@ -292,6 +292,61 @@ describe('ClipInteractionShell contract', () => {
     expect(onFadeStart.mock.calls[0][2]).toBe('left');
   });
 
+  it('renders active keyframe ticks and dispatches grouped keyframe moves', () => {
+    const onMoveKeyframeGroup = vi.fn();
+    const props = createShellProps({
+      mountState: {
+        clipId: 'clip-a',
+        shouldMount: true,
+        reasons: ['selected-keyframes'],
+        hasVisibleKeyframes: true,
+      },
+      activeModules: {
+        keyframe: {
+          slot: 'keyframe',
+          enabled: true,
+          activeProperty: 'opacity',
+          keyframes: [
+            {
+              id: 'kf-a',
+              clipId: 'clip-a',
+              time: 1,
+              property: 'opacity',
+              value: 0.5,
+              easing: 'linear',
+            },
+          ],
+          keyframeGroups: [
+            {
+              time: 1,
+              keyframeIds: ['kf-a'],
+              properties: ['opacity'],
+            },
+          ],
+          selectedKeyframeIds: ['kf-a'],
+        },
+      },
+      commands: { onMoveKeyframeGroup },
+    });
+
+    const { container } = render(<ClipInteractionShell {...props} />);
+    const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+    const tick = container.querySelector<HTMLElement>('.keyframe-tick');
+
+    expect(shell?.dataset.activeSlots).toBe('keyframe');
+    expect(tick).toBeTruthy();
+    expect(tick?.style.left).toBe('25%');
+
+    fireEvent.mouseDown(tick as HTMLElement, { button: 0, clientX: 40 });
+    fireEvent.mouseMove(document, { clientX: 80 });
+    fireEvent.mouseUp(document);
+
+    expect(onMoveKeyframeGroup).toHaveBeenCalledTimes(1);
+    expect(onMoveKeyframeGroup.mock.calls[0][0]).toEqual(['kf-a']);
+    expect(onMoveKeyframeGroup.mock.calls[0][1]).toBeCloseTo(2);
+    expect(onMoveKeyframeGroup.mock.calls[0][2].clip.id).toBe('clip-a');
+  });
+
   it('renders active stem progress through the shell module', () => {
     const props = createShellProps({
       mountState: {

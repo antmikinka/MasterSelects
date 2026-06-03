@@ -3548,6 +3548,7 @@ export function Timeline() {
                       expandedCurveProperties={expandedCurveProperties}
                       onSelectKeyframe={selectKeyframe}
                       onMoveKeyframe={moveKeyframe}
+                      onMoveKeyframeGroup={moveKeyframes}
                       onUpdateBezierHandle={updateBezierHandle}
                       addKeyframe={addKeyframe}
                     />

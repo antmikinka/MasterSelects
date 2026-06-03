@@ -2711,4 +2711,13 @@
 .timeline-clip.selected .keyframe-tick::after {
   opacity: 1;
 }
+
+.timeline-canvas-dom-overlay .clip-interaction-shell .clip-keyframe-ticks {
+  opacity: 1;
+  pointer-events: none;
+}
+
+.timeline-canvas-dom-overlay .clip-interaction-shell .keyframe-tick {
+  pointer-events: auto;
+}
 }
