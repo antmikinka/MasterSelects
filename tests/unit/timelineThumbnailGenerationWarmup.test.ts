@@ -20,7 +20,7 @@ function createDeps(
   overrides: Partial<ReturnType<TimelineThumbnailGenerationWarmupDeps['getState']>> = {},
   status: ThumbnailStatus = 'none',
 ): TimelineThumbnailGenerationWarmupDeps {
-  const generateForSource = vi.fn<TimelineThumbnailGenerationWarmupDeps['generateForSource']>()
+  const generateForSourceUrl = vi.fn<TimelineThumbnailGenerationWarmupDeps['generateForSourceUrl']>()
     .mockResolvedValue(undefined);
   const video = createVideo();
 
@@ -51,7 +51,8 @@ function createDeps(
       ...overrides,
     }),
     getStatus: vi.fn().mockReturnValue(status),
-    generateForSource,
+    generateForSourceUrl,
+    maxConcurrentGenerations: 2,
     setTimeout,
     clearTimeout,
   };
@@ -74,12 +75,13 @@ describe('timeline thumbnail generation warmup', () => {
       { mediaFileId: 'media-a', status: 'generated' },
     ]);
 
-    expect(deps.generateForSource).toHaveBeenCalledTimes(1);
-    expect(deps.generateForSource).toHaveBeenCalledWith(
+    expect(deps.generateForSourceUrl).toHaveBeenCalledTimes(1);
+    expect(deps.generateForSourceUrl).toHaveBeenCalledWith(
       'media-a',
-      expect.objectContaining({ src: 'blob:video-a' }),
+      'blob:video-a',
       4,
       'hash-a',
+      'anonymous',
     );
   });
 
@@ -92,7 +94,7 @@ describe('timeline thumbnail generation warmup', () => {
       { mediaFileId: 'media-a', status: 'blocked' },
     ]);
 
-    expect(deps.generateForSource).not.toHaveBeenCalled();
+    expect(deps.generateForSourceUrl).not.toHaveBeenCalled();
   });
 
   it('does not generate when thumbnails are already ready or generating', async () => {
@@ -104,13 +106,13 @@ describe('timeline thumbnail generation warmup', () => {
       { mediaFileId: 'media-a', status: 'ready' },
     ]);
 
-    expect(deps.generateForSource).not.toHaveBeenCalled();
+    expect(deps.generateForSourceUrl).not.toHaveBeenCalled();
   });
 
   it('coalesces overlapping generation requests by media id and file hash', async () => {
     let resolveGeneration: (() => void) | undefined;
     const deps = createDeps();
-    vi.mocked(deps.generateForSource).mockReturnValue(
+    vi.mocked(deps.generateForSourceUrl).mockReturnValue(
       new Promise<void>((resolve) => {
         resolveGeneration = resolve;
       }),
@@ -120,11 +122,62 @@ describe('timeline thumbnail generation warmup', () => {
     const first = warmVisibleTimelineThumbnailGeneration(refs, { deps });
     const second = warmVisibleTimelineThumbnailGeneration(refs, { deps });
 
-    expect(deps.generateForSource).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(deps.generateForSourceUrl).toHaveBeenCalledTimes(1));
     resolveGeneration?.();
 
     await expect(first).resolves.toEqual([{ mediaFileId: 'media-a', status: 'generated' }]);
     await expect(second).resolves.toEqual([{ mediaFileId: 'media-a', status: 'generated' }]);
+  });
+
+  it('limits concurrent visible thumbnail generation jobs', async () => {
+    const deps = createDeps({
+      clips: [
+        {
+          id: 'clip-a',
+          duration: 4,
+          source: { type: 'video', mediaFileId: 'media-a', naturalDuration: 4 },
+        },
+        {
+          id: 'clip-b',
+          duration: 4,
+          source: { type: 'video', mediaFileId: 'media-b', naturalDuration: 4 },
+        },
+      ],
+      mediaFiles: [
+        { id: 'media-a', fileHash: 'hash-a', duration: 4, url: 'blob:media-a' },
+        { id: 'media-b', fileHash: 'hash-b', duration: 4, url: 'blob:media-b' },
+      ],
+    });
+    deps.maxConcurrentGenerations = 1;
+    let resolveFirst: (() => void) | undefined;
+    let resolveSecond: (() => void) | undefined;
+    vi.mocked(deps.generateForSourceUrl).mockImplementation((mediaFileId) => (
+      new Promise<void>((resolve) => {
+        if (mediaFileId === 'media-a') {
+          resolveFirst = resolve;
+        } else {
+          resolveSecond = resolve;
+        }
+      })
+    ));
+
+    const first = warmVisibleTimelineThumbnailGeneration([
+      { mediaFileId: 'media-a', fileHash: 'hash-a' },
+    ], { deps });
+    await vi.waitFor(() => expect(deps.generateForSourceUrl).toHaveBeenCalledTimes(1));
+
+    const second = warmVisibleTimelineThumbnailGeneration([
+      { mediaFileId: 'media-b', fileHash: 'hash-b' },
+    ], { deps });
+    await Promise.resolve();
+    expect(deps.generateForSourceUrl).toHaveBeenCalledTimes(1);
+
+    resolveFirst?.();
+    await expect(first).resolves.toEqual([{ mediaFileId: 'media-a', status: 'generated' }]);
+    await vi.waitFor(() => expect(deps.generateForSourceUrl).toHaveBeenCalledTimes(2));
+
+    resolveSecond?.();
+    await expect(second).resolves.toEqual([{ mediaFileId: 'media-b', status: 'generated' }]);
   });
 
   it('can cancel scheduled thumbnail generation before work starts', () => {
@@ -140,7 +193,7 @@ describe('timeline thumbnail generation warmup', () => {
     cancel();
     vi.advanceTimersByTime(60);
 
-    expect(deps.generateForSource).not.toHaveBeenCalled();
+    expect(deps.generateForSourceUrl).not.toHaveBeenCalled();
   });
 
   it('binds default browser timers before scheduling visible generation', () => {
@@ -170,7 +223,7 @@ describe('timeline thumbnail generation warmup', () => {
     expect(receiverAwareClearTimeout).toHaveBeenCalledTimes(1);
   });
 
-  it('skips refs when no matching video element is available', async () => {
+  it('generates from the media file URL when no matching video element is available', async () => {
     const deps = createDeps({
       clips: [
         {
@@ -179,13 +232,27 @@ describe('timeline thumbnail generation warmup', () => {
           source: { type: 'video', mediaFileId: 'media-a' },
         },
       ],
+      mediaFiles: [
+        {
+          id: 'media-a',
+          fileHash: 'hash-a',
+          duration: 4,
+          url: 'blob:media-file-url',
+        },
+      ],
     });
 
     await expect(warmVisibleTimelineThumbnailGeneration([
       { mediaFileId: 'media-a', fileHash: 'hash-a' },
     ], { deps })).resolves.toEqual([
-      { mediaFileId: 'media-a', status: 'skipped' },
+      { mediaFileId: 'media-a', status: 'generated' },
     ]);
-    expect(deps.generateForSource).not.toHaveBeenCalled();
+    expect(deps.generateForSourceUrl).toHaveBeenCalledWith(
+      'media-a',
+      'blob:media-file-url',
+      4,
+      'hash-a',
+      'anonymous',
+    );
   });
 });

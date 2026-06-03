@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createThumbnailGenerationVideo,
+  createThumbnailGenerationVideoFromUrl,
   thumbnailCacheService,
 } from '../../src/services/thumbnailCacheService';
 import {
@@ -65,6 +66,29 @@ describe('thumbnailCacheService', () => {
     expect(clonedVideo.load).toHaveBeenCalled();
   });
 
+  it('creates an isolated thumbnail video from a source URL', () => {
+    const clonedVideo = {
+      src: '',
+      preload: 'metadata',
+      muted: false,
+      playsInline: false,
+      crossOrigin: '',
+      load: vi.fn(),
+    } as unknown as HTMLVideoElement;
+    const createElementSpy = vi.spyOn(document, 'createElement').mockReturnValue(clonedVideo);
+
+    const result = createThumbnailGenerationVideoFromUrl('blob:source-url', 'use-credentials');
+
+    expect(result).toBe(clonedVideo);
+    expect(createElementSpy).toHaveBeenCalledWith('video');
+    expect(clonedVideo.src).toBe('blob:source-url');
+    expect(clonedVideo.preload).toBe('auto');
+    expect(clonedVideo.muted).toBe(true);
+    expect(clonedVideo.playsInline).toBe(true);
+    expect(clonedVideo.crossOrigin).toBe('use-credentials');
+    expect(clonedVideo.load).toHaveBeenCalled();
+  });
+
   it('generates thumbnails from the isolated video instead of the preview video', async () => {
     const previewVideo = {
       src: 'blob:preview-video',
@@ -113,6 +137,51 @@ describe('thumbnailCacheService', () => {
       12,
       undefined,
       expect.any(AbortSignal)
+    );
+    expect(isolatedVideo.pause).toHaveBeenCalled();
+    expect(isolatedVideo.removeAttribute).toHaveBeenCalledWith('src');
+  });
+
+  it('generates thumbnails from a source URL without a hydrated preview video', async () => {
+    const isolatedVideo = {
+      src: '',
+      readyState: 2,
+      duration: 12,
+      preload: 'metadata',
+      muted: false,
+      playsInline: false,
+      crossOrigin: '',
+      load: vi.fn(),
+      pause: vi.fn(),
+      removeAttribute: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      play: vi.fn().mockResolvedValue(undefined),
+    } as unknown as HTMLVideoElement;
+
+    vi.spyOn(document, 'createElement').mockReturnValue(isolatedVideo);
+    const service = thumbnailCacheService as unknown as ThumbnailCacheServiceTestAccess;
+    vi.spyOn(service, 'loadFromDB').mockResolvedValue(false);
+    const generateSpy = vi
+      .spyOn(service, 'generateThumbnails')
+      .mockResolvedValue(undefined);
+
+    await thumbnailCacheService.generateForSourceUrl(
+      `media-thumb-url-test-${Date.now()}`,
+      'blob:source-url',
+      12,
+      'hash-a',
+      'use-credentials',
+    );
+
+    expect(isolatedVideo.src).toBe('blob:source-url');
+    expect(isolatedVideo.crossOrigin).toBe('use-credentials');
+    expect(generateSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      isolatedVideo,
+      12,
+      'hash-a',
+      expect.any(AbortSignal),
     );
     expect(isolatedVideo.pause).toHaveBeenCalled();
     expect(isolatedVideo.removeAttribute).toHaveBeenCalledWith('src');

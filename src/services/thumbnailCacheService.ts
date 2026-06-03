@@ -22,8 +22,10 @@ export type ThumbnailStatus = 'none' | 'generating' | 'ready' | 'error';
 // Event listeners for status changes (so React can re-render)
 type StatusListener = (mediaFileId: string, status: ThumbnailStatus) => void;
 
-export function createThumbnailGenerationVideo(sourceVideo: HTMLVideoElement): HTMLVideoElement | null {
-  const sourceUrl = sourceVideo.currentSrc || sourceVideo.src;
+export function createThumbnailGenerationVideoFromUrl(
+  sourceUrl: string,
+  crossOrigin = 'anonymous',
+): HTMLVideoElement | null {
   if (!sourceUrl) {
     return null;
   }
@@ -33,9 +35,16 @@ export function createThumbnailGenerationVideo(sourceVideo: HTMLVideoElement): H
   video.preload = 'auto';
   video.muted = true;
   video.playsInline = true;
-  video.crossOrigin = sourceVideo.crossOrigin || 'anonymous';
+  video.crossOrigin = crossOrigin || 'anonymous';
   video.load();
   return video;
+}
+
+export function createThumbnailGenerationVideo(sourceVideo: HTMLVideoElement): HTMLVideoElement | null {
+  return createThumbnailGenerationVideoFromUrl(
+    sourceVideo.currentSrc || sourceVideo.src,
+    sourceVideo.crossOrigin || 'anonymous',
+  );
 }
 
 async function prepareThumbnailGenerationVideo(
@@ -306,6 +315,22 @@ class ThumbnailCacheService {
     duration: number,
     fileHash?: string
   ): Promise<void> {
+    await this.generateForSourceUrl(
+      mediaFileId,
+      sourceVideo.currentSrc || sourceVideo.src,
+      duration,
+      fileHash,
+      sourceVideo.crossOrigin || 'anonymous',
+    );
+  }
+
+  async generateForSourceUrl(
+    mediaFileId: string,
+    sourceUrl: string,
+    duration: number,
+    fileHash?: string,
+    crossOrigin = 'anonymous',
+  ): Promise<void> {
     // Already generating or ready?
     const currentStatus = this.getStatus(mediaFileId);
     if (currentStatus === 'generating' || currentStatus === 'ready') {
@@ -327,10 +352,10 @@ class ThumbnailCacheService {
     // Generate fresh thumbnails
     const abortController = new AbortController();
     this.abortControllers.set(mediaFileId, abortController);
-    const thumbnailVideo = createThumbnailGenerationVideo(sourceVideo);
+    const thumbnailVideo = createThumbnailGenerationVideoFromUrl(sourceUrl, crossOrigin);
 
     if (!thumbnailVideo) {
-      log.warn('Thumbnail generation skipped - source video has no usable src', { mediaFileId });
+      log.warn('Thumbnail generation skipped - source has no usable URL', { mediaFileId });
       this.abortControllers.delete(mediaFileId);
       this.notify(mediaFileId, 'error');
       return;

@@ -16,6 +16,7 @@ import {
 } from './timelineWarmupTimers';
 
 const DEFAULT_VISIBLE_THUMBNAIL_GENERATION_DELAY_MS = 250;
+const DEFAULT_MAX_CONCURRENT_THUMBNAIL_GENERATIONS = 2;
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 
@@ -35,6 +36,7 @@ export interface TimelineThumbnailGenerationClipRef {
 
 export interface TimelineThumbnailGenerationMediaFileRef {
   id: string;
+  url?: string;
   duration?: number;
   fileHash?: string;
 }
@@ -49,12 +51,14 @@ export interface TimelineThumbnailGenerationState {
 export interface TimelineThumbnailGenerationWarmupDeps {
   getState: () => TimelineThumbnailGenerationState;
   getStatus: (mediaFileId: string) => ThumbnailStatus;
-  generateForSource: (
+  generateForSourceUrl: (
     mediaFileId: string,
-    sourceVideo: HTMLVideoElement,
+    sourceUrl: string,
     duration: number,
     fileHash?: string,
+    crossOrigin?: string,
   ) => Promise<void>;
+  maxConcurrentGenerations?: number;
   setTimeout: typeof setTimeout;
   clearTimeout: typeof clearTimeout;
 }
@@ -74,13 +78,16 @@ export interface TimelineThumbnailGenerationWarmupResult {
 interface TimelineThumbnailGenerationRequest {
   mediaFileId: string;
   fileHash?: string;
-  sourceVideo: HTMLVideoElement;
+  sourceUrl: string;
+  crossOrigin?: string;
   duration: number;
   requestKey: string;
 }
 
 const scheduledThumbnailGenerationTimers = new Map<string, TimerHandle>();
 const inFlightThumbnailGenerations = new Map<string, Promise<TimelineThumbnailGenerationWarmupResult>>();
+let activeThumbnailGenerationCount = 0;
+const queuedThumbnailGenerationSlots: Array<() => void> = [];
 
 function getDefaultDeps(): TimelineThumbnailGenerationWarmupDeps {
   return {
@@ -94,8 +101,8 @@ function getDefaultDeps(): TimelineThumbnailGenerationWarmupDeps {
       };
     },
     getStatus: (mediaFileId) => thumbnailCacheService.getStatus(mediaFileId),
-    generateForSource: (mediaFileId, sourceVideo, duration, fileHash) => (
-      thumbnailCacheService.generateForSource(mediaFileId, sourceVideo, duration, fileHash)
+    generateForSourceUrl: (mediaFileId, sourceUrl, duration, fileHash, crossOrigin) => (
+      thumbnailCacheService.generateForSourceUrl(mediaFileId, sourceUrl, duration, fileHash, crossOrigin)
     ),
     ...getTimelineWarmupTimerDeps(),
   };
@@ -146,16 +153,15 @@ function resolveThumbnailGenerationRequest(
   const mediaFile = state.mediaFiles.find((file) => file.id === ref.mediaFileId);
   const fileHash = ref.fileHash ?? mediaFile?.fileHash;
   const clip = state.clips.find((candidate) => (
-    getClipMediaFileId(candidate) === ref.mediaFileId &&
-    Boolean(candidate.source?.videoElement)
+    getClipMediaFileId(candidate) === ref.mediaFileId
   ));
   const video = clip?.source?.videoElement;
-  if (!clip || !video) return null;
-  if (!(video.currentSrc || video.src)) return null;
+  const sourceUrl = mediaFile?.url || video?.currentSrc || video?.src || '';
+  if (!clip || !sourceUrl) return null;
 
   const duration = getFinitePositiveDuration(
     clip.source?.naturalDuration,
-    video.duration,
+    video?.duration,
     mediaFile?.duration,
     clip.outPoint,
     clip.duration,
@@ -165,10 +171,59 @@ function resolveThumbnailGenerationRequest(
   return {
     mediaFileId: ref.mediaFileId,
     fileHash,
-    sourceVideo: video,
+    sourceUrl,
+    crossOrigin: video?.crossOrigin || 'anonymous',
     duration,
     requestKey: getThumbnailGenerationKey(ref.mediaFileId, fileHash),
   };
+}
+
+async function acquireThumbnailGenerationSlot(limit: number): Promise<void> {
+  if (activeThumbnailGenerationCount < limit) {
+    activeThumbnailGenerationCount += 1;
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    queuedThumbnailGenerationSlots.push(resolve);
+  });
+}
+
+function releaseThumbnailGenerationSlot(): void {
+  const next = queuedThumbnailGenerationSlots.shift();
+  if (next) {
+    next();
+    return;
+  }
+  activeThumbnailGenerationCount = Math.max(0, activeThumbnailGenerationCount - 1);
+}
+
+async function runThumbnailGenerationRequest(
+  request: TimelineThumbnailGenerationRequest,
+  deps: TimelineThumbnailGenerationWarmupDeps,
+): Promise<TimelineThumbnailGenerationWarmupResult> {
+  await acquireThumbnailGenerationSlot(
+    Math.max(1, deps.maxConcurrentGenerations ?? DEFAULT_MAX_CONCURRENT_THUMBNAIL_GENERATIONS),
+  );
+
+  try {
+    const latestState = deps.getState();
+    if (latestState.isPlaying || latestState.clipDragPreview) {
+      return { mediaFileId: request.mediaFileId, status: 'blocked' };
+    }
+
+    await deps.generateForSourceUrl(
+      request.mediaFileId,
+      request.sourceUrl,
+      request.duration,
+      request.fileHash,
+      request.crossOrigin,
+    );
+
+    return { mediaFileId: request.mediaFileId, status: 'generated' };
+  } finally {
+    releaseThumbnailGenerationSlot();
+  }
 }
 
 export async function warmVisibleTimelineThumbnailGeneration(
@@ -208,13 +263,7 @@ export async function warmVisibleTimelineThumbnailGeneration(
 
     let generation = inFlightThumbnailGenerations.get(request.requestKey);
     if (!generation) {
-      generation = deps.generateForSource(
-        request.mediaFileId,
-        request.sourceVideo,
-        request.duration,
-        request.fileHash,
-      )
-        .then(() => ({ mediaFileId: request.mediaFileId, status: 'generated' as const }))
+      generation = runThumbnailGenerationRequest(request, deps)
         .finally(() => {
           inFlightThumbnailGenerations.delete(request.requestKey);
         });
@@ -266,4 +315,6 @@ export function resetTimelineThumbnailGenerationWarmupForTest(): void {
   clearTimelineWarmupTimers(scheduledThumbnailGenerationTimers.values());
   scheduledThumbnailGenerationTimers.clear();
   inFlightThumbnailGenerations.clear();
+  activeThumbnailGenerationCount = 0;
+  queuedThumbnailGenerationSlots.splice(0);
 }
