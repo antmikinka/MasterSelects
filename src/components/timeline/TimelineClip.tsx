@@ -1,7 +1,7 @@
 // TimelineClip component - Clip rendering within tracks
 
 import './TimelineClip.css';
-import { memo, type CSSProperties, useRef, useState, useEffect, useCallback, useMemo } from 'react';
+import { memo, type CSSProperties, useRef, useState, useCallback, useMemo } from 'react';
 import type { TimelineClipProps } from './types';
 import { useTimelineStore } from '../../stores/timeline';
 import { useMediaStore } from '../../stores/mediaStore';
@@ -23,7 +23,6 @@ import { useTimelineSpectrogramTileSetState } from './hooks/useTimelineSpectrogr
 import { useTimelineWaveformPyramidState } from './hooks/useTimelineWaveformPyramid';
 import {
   clipRequiresProcessedWaveformPyramid,
-  createProcessedClipAudioStateHash,
 } from '../../services/audio/processedWaveformEligibility';
 import { canDeriveProcessedWaveformPyramid } from '../../services/audio/DerivedWaveformPyramidService';
 import {
@@ -70,15 +69,7 @@ import { getTrimHandleArrowDirections } from './utils/trimHandleDirections';
 import {
   hasLegacyWaveformSamples,
 } from '../../utils/audioWaveformPresence';
-import {
-  createTimelineSourceWaveformGenerationRequest,
-  scheduleVisibleTimelineSourceWaveformGeneration,
-} from '../../services/timeline/timelineSourceWaveformWarmup';
 import { useClipThumbnailFilmstripPlan } from './hooks/useClipThumbnailFilmstripPlan';
-import {
-  scheduleTimelineProcessedWaveformDerivation,
-  scheduleTimelineSpectrogramTileGeneration,
-} from '../../services/timeline/timelineAudioArtifactGenerationWarmup';
 import { useClipAudioMediaViewProps } from './hooks/useClipAudioMediaViewProps';
 import { useClipAudioRegionControls } from './hooks/useClipAudioRegionControls';
 import { useClipStemSwitcher } from './hooks/useClipStemSwitcher';
@@ -94,13 +85,12 @@ import {
 import { useClipKeyframeTickDrag } from './hooks/useClipKeyframeTickDrag';
 import { useClipSpectralImageLayers } from './hooks/useClipSpectralImageLayers';
 import { useClipOverlayActions } from './hooks/useClipOverlayActions';
+import { useClipAudioArtifactWarmups } from './hooks/useClipAudioArtifactWarmups';
 
 const TIMELINE_VIEWPORT_FALLBACK_PX = 1600;
 const TIMELINE_VIEWPORT_MIN_PX = 1600;
 const TIMELINE_RENDER_OVERSCAN_PX = 512;
 const CLIP_RIGHT_STICKY_PADDING_PX = 8;
-const WAVEFORM_PYRAMID_AUTO_UPGRADE_ZOOM = 250;
-const WAVEFORM_PYRAMID_AUTO_UPGRADE_WIDTH = 16_384;
 const EMPTY_CLIP_KEYFRAMES = [] as const;
 const EMPTY_AUDIO_EDIT_STACK = [] as const;
 const EMPTY_WAVEFORM: number[] = [];
@@ -566,112 +556,20 @@ function TimelineClipComponent({
     displayOutPoint,
   });
 
-  useEffect(() => {
-    if (!passiveMediaEnabled || !waveformsEnabled || !isAudioClip || clip.waveformGenerating || isClipDragActive) {
-      return;
-    }
-
-    const shouldUpgrade =
-      audioDisplayMode === 'detailed' ||
-      (audioDisplayMode === 'compact' && (zoom >= WAVEFORM_PYRAMID_AUTO_UPGRADE_ZOOM || width > WAVEFORM_PYRAMID_AUTO_UPGRADE_WIDTH));
-
-    if (!shouldUpgrade) return;
-
-    const request = createTimelineSourceWaveformGenerationRequest(clip, audioDisplayMode);
-    if (!request) return;
-
-    return scheduleVisibleTimelineSourceWaveformGeneration([request]);
-  }, [
+  useClipAudioArtifactWarmups({
+    clip,
+    clipAudioKeyframes,
     audioDisplayMode,
-    clip.audioState,
-    clip.file,
-    clip.mediaFileId,
-    clip.name,
-    clip.source?.mediaFileId,
-    clip.source?.type,
-    clip.id,
-    clip.waveform,
-    clip.waveformChannels,
-    clip.waveformGenerating,
-    isClipDragActive,
-    isAudioClip,
     passiveMediaEnabled,
     waveformsEnabled,
+    isAudioClip,
+    isClipDragActive,
+    processedWaveformPyramidRef,
+    sourceSpectrogramTileSetRef,
+    processedSpectrogramTileSetRef,
     width,
     zoom,
-  ]);
-
-  const processedWaveformRequestKey = useMemo(
-    () => passiveMediaEnabled
-      ? `${clip.id}:${createProcessedClipAudioStateHash(clip, { keyframes: clipAudioKeyframes })}`
-      : `${clip.id}:passive-media-suppressed`,
-    [clip, clipAudioKeyframes, passiveMediaEnabled],
-  );
-
-  useEffect(() => {
-    if (
-      !waveformsEnabled ||
-      !passiveMediaEnabled ||
-      !isAudioClip ||
-      audioDisplayMode === 'spectral' ||
-      processedWaveformPyramidRef ||
-      clip.waveformGenerating ||
-      isClipDragActive
-    ) {
-      return;
-    }
-
-    return scheduleTimelineProcessedWaveformDerivation({
-      clipId: clip.id,
-      requestKey: processedWaveformRequestKey,
-    });
-  }, [
-    clip.id,
-    clip.waveformGenerating,
-    audioDisplayMode,
-    isClipDragActive,
-    isAudioClip,
-    passiveMediaEnabled,
-    processedWaveformPyramidRef,
-    processedWaveformRequestKey,
-    waveformsEnabled,
-  ]);
-
-  const spectrogramRequestKey = [
-    'spectrogram',
-    processedWaveformRequestKey,
-    sourceSpectrogramTileSetRef ?? '',
-    processedSpectrogramTileSetRef ?? '',
-  ].join(':');
-
-  useEffect(() => {
-    if (
-      !waveformsEnabled ||
-      !passiveMediaEnabled ||
-      !isAudioClip ||
-      audioDisplayMode !== 'spectral' ||
-      clip.waveformGenerating ||
-      isClipDragActive
-    ) {
-      return;
-    }
-
-    return scheduleTimelineSpectrogramTileGeneration({
-      clipId: clip.id,
-      requestKey: spectrogramRequestKey,
-    });
-  }, [
-    audioDisplayMode,
-    clip.id,
-    clip.waveformGenerating,
-    isClipDragActive,
-    isAudioClip,
-    passiveMediaEnabled,
-    processedSpectrogramTileSetRef,
-    sourceSpectrogramTileSetRef,
-    spectrogramRequestKey,
-    waveformsEnabled,
-  ]);
+  });
 
   const waveformNaturalDuration = processedWaveformPyramid
     ? Math.max(0.001, processedWaveformPyramid.duration)
