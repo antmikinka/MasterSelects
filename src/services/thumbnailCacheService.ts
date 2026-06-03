@@ -19,8 +19,29 @@ const BATCH_SIZE = 10; // Write to IndexedDB every N frames
 
 export type ThumbnailStatus = 'none' | 'generating' | 'ready' | 'error';
 
-// Event listeners for status changes (so React can re-render)
-type StatusListener = (mediaFileId: string, status: ThumbnailStatus) => void;
+export type ThumbnailCacheEventType =
+  | 'status'
+  | 'frames-loaded'
+  | 'frame-ready'
+  | 'memory-evicted'
+  | 'source-cleared';
+
+export interface ThumbnailCacheEvent {
+  type: ThumbnailCacheEventType;
+  mediaFileId: string;
+  status: ThumbnailStatus;
+  secondIndex?: number;
+  secondIndices?: readonly number[];
+  count?: number;
+}
+
+// Event listeners for status/frame changes (so React can re-render). The third
+// argument is optional to keep existing two-argument subscribers compatible.
+export type StatusListener = (
+  mediaFileId: string,
+  status: ThumbnailStatus,
+  event?: ThumbnailCacheEvent,
+) => void;
 
 export function createThumbnailGenerationVideoFromUrl(
   sourceUrl: string,
@@ -199,10 +220,19 @@ class ThumbnailCacheService {
     return () => this.listeners.delete(listener);
   }
 
-  private notify(mediaFileId: string, status: ThumbnailStatus): void {
+  private notify(
+    mediaFileId: string,
+    status: ThumbnailStatus,
+    event: Omit<ThumbnailCacheEvent, 'mediaFileId' | 'status'> = { type: 'status' },
+  ): void {
     this.status.set(mediaFileId, status);
+    const payload: ThumbnailCacheEvent = {
+      mediaFileId,
+      status,
+      ...event,
+    };
     for (const listener of this.listeners) {
-      try { listener(mediaFileId, status); } catch { /* ignore */ }
+      try { listener(mediaFileId, status, payload); } catch { /* ignore */ }
     }
   }
 
@@ -407,12 +437,19 @@ class ThumbnailCacheService {
     frames: Array<{ secondIndex: number; blob: Blob }>
   ): void {
     const sourceCache = new Map<number, string>();
+    const secondIndices: number[] = [];
     for (const frame of frames) {
       const url = URL.createObjectURL(frame.blob);
       registerThumbnailBitmapSource(url, mediaFileId);
       sourceCache.set(frame.secondIndex, url);
+      secondIndices.push(frame.secondIndex);
     }
     this.cache.set(mediaFileId, sourceCache);
+    this.notify(mediaFileId, 'ready', {
+      type: 'frames-loaded',
+      secondIndices,
+      count: secondIndices.length,
+    });
   }
 
   /** Core generation: seek video to each second, capture frame */
@@ -474,6 +511,12 @@ class ThumbnailCacheService {
         const url = URL.createObjectURL(blob);
         registerThumbnailBitmapSource(url, mediaFileId);
         sourceCache.set(s, url);
+        this.notify(mediaFileId, 'generating', {
+          type: 'frame-ready',
+          secondIndex: s,
+          secondIndices: [s],
+          count: 1,
+        });
 
         // Queue for IndexedDB batch write
         batch.push({
@@ -488,11 +531,6 @@ class ThumbnailCacheService {
         if (batch.length >= BATCH_SIZE) {
           await projectDB.saveSourceThumbnailsBatch(batch);
           batch = [];
-        }
-
-        // Notify periodically so UI updates progressively
-        if (s % 5 === 0) {
-          this.notify(mediaFileId, 'generating');
         }
       } catch (e) {
         log.debug('Thumbnail capture failed at second', { secondIndex: s, error: e });
@@ -546,6 +584,11 @@ class ThumbnailCacheService {
         URL.revokeObjectURL(url);
       }
       this.cache.delete(mediaFileId);
+      this.notify(mediaFileId, 'none', {
+        type: 'memory-evicted',
+        secondIndices: [...sourceCache.keys()],
+        count: sourceCache.size,
+      });
     }
     this.status.delete(mediaFileId);
     this.durations.delete(mediaFileId);
@@ -558,6 +601,7 @@ class ThumbnailCacheService {
     this.evictFromMemory(mediaFileId);
     try {
       await projectDB.deleteSourceThumbnails(mediaFileId);
+      this.notify(mediaFileId, 'none', { type: 'source-cleared' });
     } catch (e) {
       log.warn('Failed to delete thumbnails from IndexedDB', { mediaFileId, error: e });
     }

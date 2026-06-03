@@ -12,7 +12,7 @@
 // handles still use invisible DOM shells for the active/hovered clip.
 
 import { memo, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { thumbnailCacheService } from '../../services/thumbnailCacheService';
+import { thumbnailCacheService, type ThumbnailCacheEvent } from '../../services/thumbnailCacheService';
 import { reportTimelineCanvasDrawDiagnostics, type TimelineCanvasDrawDiagnostics } from '../../services/timeline/timelineCanvasDiagnostics';
 import {
   collectVisibleTimelineThumbnailRefs,
@@ -127,6 +127,13 @@ interface TimelineClipCanvasProps {
   clipTrim?: ClipTrimState | null;
   waveformPyramids?: WaveformPyramidMap;
 }
+
+interface VisibleThumbnailSecondRange {
+  startSecond: number;
+  endSecond: number;
+}
+
+type VisibleThumbnailSecondRangeMap = Map<string, VisibleThumbnailSecondRange[]>;
 
 // Only decode/draw thumbnails for clips within the visible window (+ overscan).
 // Without this, opening a 100-clip comp kicks off 100+ ImageBitmap decodes at
@@ -475,7 +482,10 @@ interface CanvasClipGeometry {
   sourceDuration: number;
 }
 
-function resolveClipGeometry(clip: CanvasClip, props: TimelineClipCanvasProps): CanvasClipGeometry {
+function resolveClipGeometry(
+  clip: CanvasClip,
+  props: Pick<TimelineClipCanvasProps, 'clipDrag' | 'clipDragPreview' | 'clipTrim' | 'trackId'>,
+): CanvasClipGeometry {
   const { clipDrag, clipDragPreview, clipTrim, trackId } = props;
   let startTime = clip.startTime;
   let duration = clip.duration;
@@ -536,6 +546,89 @@ function resolveClipGeometry(clip: CanvasClip, props: TimelineClipCanvasProps): 
     originalEndTime: clip.startTime + clip.duration,
     sourceDuration,
   };
+}
+
+function addVisibleThumbnailSecondRange(
+  rangesByMediaId: VisibleThumbnailSecondRangeMap,
+  mediaFileId: string,
+  startSecond: number,
+  endSecond: number,
+): void {
+  const normalizedRange = {
+    startSecond: Math.max(0, Math.floor(Math.min(startSecond, endSecond))),
+    endSecond: Math.max(0, Math.ceil(Math.max(startSecond, endSecond))),
+  };
+  const ranges = rangesByMediaId.get(mediaFileId);
+  if (ranges) {
+    ranges.push(normalizedRange);
+    return;
+  }
+  rangesByMediaId.set(mediaFileId, [normalizedRange]);
+}
+
+function collectVisibleThumbnailSecondRanges(input: {
+  clips: readonly CanvasClip[];
+  trackId: string;
+  scrollX: number;
+  viewportWidth: number;
+  timeToPixel: (time: number) => number;
+  clipDrag?: ClipDragState | null;
+  clipDragPreview?: TimelineClipDragPreview | null;
+  clipTrim?: ClipTrimState | null;
+}): VisibleThumbnailSecondRangeMap {
+  const rangesByMediaId: VisibleThumbnailSecondRangeMap = new Map();
+  const visibleLeft = input.scrollX - THUMBNAIL_VIEWPORT_OVERSCAN_PX;
+  const visibleRight = input.scrollX + input.viewportWidth + THUMBNAIL_VIEWPORT_OVERSCAN_PX;
+
+  for (const clip of input.clips) {
+    const mediaFileId = clipShowsThumbnails(clip);
+    if (!mediaFileId) continue;
+
+    const geometry = resolveClipGeometry(clip, input);
+    if (!geometry.visible) continue;
+
+    const absoluteX = input.timeToPixel(geometry.startTime);
+    const absoluteW = input.timeToPixel(geometry.duration);
+    if (absoluteW <= 0) continue;
+
+    const overlapLeft = Math.max(absoluteX, visibleLeft);
+    const overlapRight = Math.min(absoluteX + absoluteW, visibleRight);
+    if (overlapRight <= overlapLeft) continue;
+
+    const sourceDuration = Math.max(0.001, geometry.outPoint - geometry.inPoint);
+    const overlapStartRatio = Math.max(0, Math.min(1, (overlapLeft - absoluteX) / absoluteW));
+    const overlapEndRatio = Math.max(0, Math.min(1, (overlapRight - absoluteX) / absoluteW));
+    const sourceStart = geometry.inPoint + overlapStartRatio * sourceDuration;
+    const sourceEnd = geometry.inPoint + overlapEndRatio * sourceDuration;
+
+    // getThumbnailsForRange may use adjacent seconds, so include a small buffer
+    // around the exact visible source interval.
+    addVisibleThumbnailSecondRange(rangesByMediaId, mediaFileId, sourceStart - 1, sourceEnd + 1);
+  }
+
+  return rangesByMediaId;
+}
+
+function getThumbnailCacheEventSeconds(event: ThumbnailCacheEvent | undefined): readonly number[] | null {
+  if (!event) return null;
+  if (event.secondIndices && event.secondIndices.length > 0) return event.secondIndices;
+  return typeof event.secondIndex === 'number' ? [event.secondIndex] : null;
+}
+
+function thumbnailCacheEventIntersectsVisibleRanges(
+  mediaFileId: string,
+  event: ThumbnailCacheEvent | undefined,
+  visibleRangesByMediaId: VisibleThumbnailSecondRangeMap,
+): boolean {
+  const ranges = visibleRangesByMediaId.get(mediaFileId);
+  if (!ranges || ranges.length === 0) return false;
+
+  const changedSeconds = getThumbnailCacheEventSeconds(event);
+  if (!changedSeconds) return true;
+
+  return changedSeconds.some((secondIndex) => (
+    ranges.some((range) => secondIndex >= range.startSecond && secondIndex <= range.endSecond)
+  ));
 }
 
 function drawSourceExtensionGhost(
@@ -853,7 +946,7 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number | null>(null);
   const thumbnailRedrawRafRef = useRef<number | null>(null);
-  const visibleThumbnailMediaIdsRef = useRef<Set<string>>(new Set());
+  const visibleThumbnailSecondRangesRef = useRef<VisibleThumbnailSecondRangeMap>(new Map());
   const [redrawNonce, bumpRedraw] = useReducer((n: number) => n + 1, 0);
   const {
     clips,
@@ -970,19 +1063,30 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
       mediaFileHashById,
     });
   }, [clips, mediaFileHashById, scrollX, timeToPixel, viewportWidth]);
+  const visibleThumbnailSecondRanges = useMemo(
+    () => collectVisibleThumbnailSecondRanges({
+      clips,
+      trackId,
+      scrollX,
+      viewportWidth,
+      timeToPixel,
+      clipDrag,
+      clipDragPreview,
+      clipTrim,
+    }),
+    [clips, clipDrag, clipDragPreview, clipTrim, scrollX, timeToPixel, trackId, viewportWidth],
+  );
 
   useEffect(() => {
-    visibleThumbnailMediaIdsRef.current = new Set(
-      visibleThumbnailRefs.map((ref) => ref.mediaFileId),
-    );
-  }, [visibleThumbnailRefs]);
+    visibleThumbnailSecondRangesRef.current = visibleThumbnailSecondRanges;
+  }, [visibleThumbnailSecondRanges]);
 
   // Redraw when the thumbnail cache gains frames for any of our media files.
   // (Main-thread path only — the worker path does not draw thumbnails yet.)
   useEffect(() => {
     if (workerMode) return;
-    const unsubscribe = thumbnailCacheService.subscribe((mediaFileId) => {
-      if (!visibleThumbnailMediaIdsRef.current.has(mediaFileId)) return;
+    const unsubscribe = thumbnailCacheService.subscribe((mediaFileId, _status, event) => {
+      if (!thumbnailCacheEventIntersectsVisibleRanges(mediaFileId, event, visibleThumbnailSecondRangesRef.current)) return;
       if (thumbnailRedrawRafRef.current !== null) return;
       thumbnailRedrawRafRef.current = requestAnimationFrame(() => {
         thumbnailRedrawRafRef.current = null;

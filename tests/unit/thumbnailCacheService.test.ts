@@ -3,7 +3,9 @@ import {
   createThumbnailGenerationVideo,
   createThumbnailGenerationVideoFromUrl,
   thumbnailCacheService,
+  type ThumbnailCacheEvent,
 } from '../../src/services/thumbnailCacheService';
+import { projectDB } from '../../src/services/projectDB';
 import {
   clearThumbnailBitmapCache,
   ensureThumbnailBitmap,
@@ -225,5 +227,155 @@ describe('thumbnailCacheService', () => {
     expect(bitmap.close).toHaveBeenCalledTimes(1);
     expect(revokeObjectUrlSpy).toHaveBeenCalledWith('blob:source-thumb-frame');
     expect(getThumbnailBitmap('blob:source-thumb-frame')).toBeNull();
+  });
+
+  it('emits frame indexes when cached thumbnails are loaded into memory', () => {
+    const service = thumbnailCacheService as unknown as ThumbnailCacheServiceTestAccess;
+    const mediaFileId = `media-thumb-event-load-${Date.now()}`;
+    const events: ThumbnailCacheEvent[] = [];
+    vi.spyOn(URL, 'createObjectURL')
+      .mockReturnValueOnce('blob:source-thumb-0')
+      .mockReturnValueOnce('blob:source-thumb-2');
+    const unsubscribe = thumbnailCacheService.subscribe((_mediaFileId, _status, event) => {
+      if (event) events.push(event);
+    });
+
+    service.loadFramesIntoCache(mediaFileId, [
+      { secondIndex: 0, blob: new Blob(['thumb-0']) },
+      { secondIndex: 2, blob: new Blob(['thumb-2']) },
+    ]);
+    unsubscribe();
+
+    expect(events).toContainEqual({
+      type: 'frames-loaded',
+      mediaFileId,
+      status: 'ready',
+      secondIndices: [0, 2],
+      count: 2,
+    });
+  });
+
+  it('keeps legacy two-argument thumbnail subscribers compatible', () => {
+    const service = thumbnailCacheService as unknown as ThumbnailCacheServiceTestAccess;
+    const mediaFileId = `media-thumb-event-legacy-${Date.now()}`;
+    const statuses: Array<[string, string]> = [];
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:source-thumb-legacy');
+    const legacyListener = (changedMediaFileId: string, status: string) => {
+      statuses.push([changedMediaFileId, status]);
+    };
+    const unsubscribe = thumbnailCacheService.subscribe(legacyListener);
+
+    service.loadFramesIntoCache(mediaFileId, [
+      { secondIndex: 1, blob: new Blob(['thumb-1']) },
+    ]);
+    unsubscribe();
+
+    expect(statuses).toEqual([[mediaFileId, 'ready']]);
+  });
+
+  it('emits frame-ready events while generating thumbnails', async () => {
+    const service = thumbnailCacheService as unknown as ThumbnailCacheServiceTestAccess;
+    const mediaFileId = `media-thumb-event-generate-${Date.now()}`;
+    const events: ThumbnailCacheEvent[] = [];
+    const seekedListeners = new Set<() => void>();
+    let objectUrlIndex = 0;
+    const originalCreateElement = document.createElement.bind(document);
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: vi.fn(() => ({ drawImage: vi.fn() })),
+      toBlob: vi.fn((callback: BlobCallback) => callback(new Blob(['thumb']))),
+    } as unknown as HTMLCanvasElement;
+    const video = {
+      readyState: 2,
+      addEventListener: vi.fn((event: string, callback: EventListenerOrEventListenerObject) => {
+        if (event === 'seeked') {
+          seekedListeners.add(callback as () => void);
+        }
+      }),
+      removeEventListener: vi.fn((event: string, callback: EventListenerOrEventListenerObject) => {
+        if (event === 'seeked') {
+          seekedListeners.delete(callback as () => void);
+        }
+      }),
+      set currentTime(_value: number) {
+        queueMicrotask(() => {
+          for (const listener of [...seekedListeners]) {
+            listener();
+          }
+        });
+      },
+      get currentTime() {
+        return 0;
+      },
+    } as unknown as HTMLVideoElement;
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string) => (
+      tagName === 'canvas' ? canvas : originalCreateElement(tagName)
+    ));
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(() => `blob:generated-thumb-${objectUrlIndex++}`);
+    vi.spyOn(projectDB, 'saveSourceThumbnailsBatch').mockResolvedValue(undefined);
+    const unsubscribe = thumbnailCacheService.subscribe((_mediaFileId, _status, event) => {
+      if (event?.type === 'frame-ready') events.push(event);
+    });
+
+    await service.generateThumbnails(mediaFileId, video, 2, 'hash-a', new AbortController().signal);
+    unsubscribe();
+
+    expect(events).toEqual([
+      {
+        type: 'frame-ready',
+        mediaFileId,
+        status: 'generating',
+        secondIndex: 0,
+        secondIndices: [0],
+        count: 1,
+      },
+      {
+        type: 'frame-ready',
+        mediaFileId,
+        status: 'generating',
+        secondIndex: 1,
+        secondIndices: [1],
+        count: 1,
+      },
+    ]);
+  });
+
+  it('emits memory eviction and source clear events', async () => {
+    const service = thumbnailCacheService as unknown as ThumbnailCacheServiceTestAccess;
+    const evictedMediaFileId = `media-thumb-event-evict-${Date.now()}`;
+    const clearedMediaFileId = `media-thumb-event-clear-${Date.now()}`;
+    const events: ThumbnailCacheEvent[] = [];
+    vi.spyOn(URL, 'createObjectURL')
+      .mockReturnValueOnce('blob:source-thumb-evict')
+      .mockReturnValueOnce('blob:source-thumb-clear');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    vi.spyOn(projectDB, 'deleteSourceThumbnails').mockResolvedValue(undefined);
+    const unsubscribe = thumbnailCacheService.subscribe((_mediaFileId, _status, event) => {
+      if (event) events.push(event);
+    });
+
+    service.loadFramesIntoCache(evictedMediaFileId, [
+      { secondIndex: 3, blob: new Blob(['thumb-3']) },
+    ]);
+    thumbnailCacheService.evictFromMemory(evictedMediaFileId);
+    service.loadFramesIntoCache(clearedMediaFileId, [
+      { secondIndex: 4, blob: new Blob(['thumb-4']) },
+    ]);
+    await thumbnailCacheService.clearSource(clearedMediaFileId);
+    unsubscribe();
+
+    expect(events).toContainEqual({
+      type: 'memory-evicted',
+      mediaFileId: evictedMediaFileId,
+      status: 'none',
+      secondIndices: [3],
+      count: 1,
+    });
+    expect(events).toContainEqual({
+      type: 'source-cleared',
+      mediaFileId: clearedMediaFileId,
+      status: 'none',
+    });
   });
 });
