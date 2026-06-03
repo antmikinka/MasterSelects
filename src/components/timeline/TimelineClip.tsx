@@ -1,11 +1,10 @@
 // TimelineClip component - Clip rendering within tracks
 
 import './TimelineClip.css';
-import { memo, type CSSProperties, useRef, useState, useCallback, useMemo } from 'react';
+import { memo, useRef, useState, useCallback, useMemo } from 'react';
 import type { TimelineClipProps } from './types';
 import { useTimelineStore } from '../../stores/timeline';
 import { useMediaStore } from '../../stores/mediaStore';
-import { getTimelineTrackColor, TIMELINE_TRACK_COLOR_HIDDEN } from './trackColor';
 import { ClipAudioEditStackControls } from './components/ClipAudioEditStackControls';
 import { ClipAudioRegionSelectionOverlay } from './components/ClipAudioRegionSelectionOverlay';
 import { ClipSpectralRegionOverlays } from './components/ClipSpectralRegionOverlays';
@@ -35,10 +34,6 @@ import { resolveAudioWaveformDiagnostics } from './utils/audioWaveformDiagnostic
 import { resolveAudioVolumeAutomationCurveKeyframes } from './utils/audioAutomationCurve';
 import { resolveClipLabelHex } from './utils/resolveClipLabelHex';
 import { resolveClipMediaClassification } from './utils/clipMediaClassification';
-import {
-  getTimelineClipSourceDuration,
-} from './utils/clipSourceTiming';
-import { resolveSourceExtensionGhosts } from './utils/sourceExtensionGhosts';
 import {
   getSpectralMaxFrequencyHz,
 } from './utils/spectralSelection';
@@ -75,9 +70,8 @@ import { useClipAudioRenderState } from './hooks/useClipAudioRenderState';
 import { useClipAudioAnalysisDisplayState } from './hooks/useClipAudioAnalysisDisplayState';
 import { useClipTimelineRenderGeometry } from './hooks/useClipTimelineRenderGeometry';
 import { useClipTimelineToolPointer } from './hooks/useClipTimelineToolPointer';
+import { useClipVisualChrome } from './hooks/useClipVisualChrome';
 
-const TIMELINE_RENDER_OVERSCAN_PX = 512;
-const CLIP_RIGHT_STICKY_PADDING_PX = 8;
 const EMPTY_CLIP_KEYFRAMES = [] as const;
 const EMPTY_AUDIO_EDIT_STACK = [] as const;
 const EMPTY_SPECTRAL_LAYERS = [] as const;
@@ -434,21 +428,6 @@ function TimelineClipComponent({
     .map(k => `${k.id}:${k.time.toFixed(3)}:${k.value}:${k.handleIn?.x ?? ''}:${k.handleIn?.y ?? ''}:${k.handleOut?.x ?? ''}:${k.handleOut?.y ?? ''}`)
     .join('|');
 
-  const clipMetaOffset = clip.isLoading
-    ? 0
-    : Math.min(
-        Math.max(0, scrollX - left),
-        Math.max(0, width - 48)
-      );
-  const clipRightOverflow = left + width - (scrollX + visibleTimelineViewportWidth);
-  const clipRightStickyOffset = Math.max(
-    0,
-    Math.min(
-      Math.max(0, width - 18),
-      clipRightOverflow > 0 ? clipRightOverflow + CLIP_RIGHT_STICKY_PADDING_PX : 0
-    )
-  );
-
   const keyframeTickGroups = keyframeTimeGroups;
   const [audioRegionDrag, setAudioRegionDrag] = useState<AudioRegionDragState | null>(null);
   const [videoBakeRegionDrag, setVideoBakeRegionDrag] = useState<VideoBakeRegionDragState | null>(null);
@@ -634,19 +613,68 @@ function TimelineClipComponent({
     setAudioSpectralRegionSelection,
   });
 
-  // Check if this clip is part of a multi-select drag
-  const isInMultiSelectDrag = clipDrag?.multiSelectClipIds?.includes(clip.id) && clipDrag.multiSelectTimeDelta !== undefined;
-  const isClipBodyDragging = isDragging || isLinkedToDragging || isInMultiSelectDrag;
-  const showFocusCollisionHighlight = trackFocusMode !== 'balanced' && !!clipDrag?.overlapClipIds?.length;
-  const isOverlapCollisionTarget = showFocusCollisionHighlight && !!clipDrag?.overlapClipIds?.includes(clip.id);
-  const isOverlapCollisionSource = showFocusCollisionHighlight && isClipBodyDragging;
-  const isTrackLocked = track.locked === true;
-  const canHandleTimelineToolPointer = !isClipDragActive && !isTrackLocked && !isClipBodyDragging;
-  const trackTypeIndex = useMemo(
-    () => tracks.filter(candidate => candidate.type === track.type).findIndex(candidate => candidate.id === track.id),
-    [track.id, track.type, tracks],
-  );
-  const trackColor = timelineTrackColorsVisible ? getTimelineTrackColor(track, trackTypeIndex) : TIMELINE_TRACK_COLOR_HIDDEN;
+  const {
+    clipClass,
+    clipStyle,
+    clipMetaOffset,
+    sourceExtensionGhosts,
+    isTrackLocked,
+    canHandleTimelineToolPointer,
+  } = useClipVisualChrome({
+    clip,
+    track,
+    tracks,
+    clipDrag,
+    clipTrim,
+    isSelected,
+    isInLinkedGroup,
+    isDragging,
+    isClipDragActive,
+    isTrimming,
+    isFading,
+    isLinkedToDragging,
+    isLinkedToTrimming,
+    isAudioClip,
+    audioFocusMode,
+    audioDisplayMode,
+    audioRegionSelected: Boolean(audioRegionSelection),
+    spectralRegionSelected: Boolean(audioSpectralRegionSelection),
+    videoBakeRegionSelected: Boolean(videoBakeRegionSelection),
+    clipTypeClass,
+    hasProxy,
+    isGeneratingProxy,
+    hasProxyError,
+    hasAudioProxy,
+    isGeneratingAudioProxy,
+    hasAudioProxyError,
+    showActiveStemSeparation,
+    hasKeyframes,
+    showWaveformGenerationIndicator,
+    waveformProcessingState,
+    spectrogramProcessingState,
+    processedWaveformStatusClassName: processedWaveformStatus?.className ?? '',
+    processedSpectrogramStatusClassName: processedSpectrogramStatus?.className ?? '',
+    audioWaveformDiagnosticClassNames: audioWaveformDiagnostics?.classNames ?? [],
+    aiMovePhase,
+    aiMove,
+    animationDelay,
+    timelineToolCursor,
+    trackFocusMode,
+    timelineTrackColorsVisible,
+    isSolidClip,
+    mediaLabelHex,
+    passiveDecorationsEnabled,
+    left,
+    width,
+    scrollX,
+    visibleTimelineViewportWidth,
+    displayStartTime,
+    displayDuration,
+    displayInPoint,
+    displayOutPoint,
+    renderTimelineViewportWidth,
+    timeToPixel,
+  });
 
   const {
     shouldShowCutIndicator,
@@ -671,56 +699,6 @@ function TimelineClipComponent({
     applyTimelineEditOperation,
     setActiveTimelineTool,
   });
-
-  const clipClass = [
-    'timeline-clip',
-    isSelected ? 'selected' : '',
-    isInLinkedGroup ? 'linked-group' : '',
-    isDragging ? 'dragging' : '',
-    clipDrag?.toolGesture === 'slip' && (isDragging || isLinkedToDragging) ? 'slipping' : '',
-    clipDrag?.toolGesture === 'slide' && (isDragging || isLinkedToDragging) ? 'sliding' : '',
-    isInMultiSelectDrag ? 'dragging multiselect-dragging' : '',
-    isLinkedToDragging ? 'linked-dragging' : '',
-    isTrimming ? 'trimming' : '',
-    isLinkedToTrimming ? 'linked-trimming' : '',
-    isFading ? 'fading' : '',
-    isDragging && clipDrag?.forcingOverlap ? 'forcing-overlap' : '',
-    isOverlapCollisionSource ? 'overlap-collision-source' : '',
-    isOverlapCollisionTarget ? 'overlap-collision-target' : '',
-    clipTypeClass,
-    isAudioClip ? `audio-mode-${audioDisplayMode}` : '',
-    isAudioClip && audioFocusMode ? 'audio-focus-active' : '',
-    audioRegionSelection ? 'audio-region-selected' : '',
-    audioSpectralRegionSelection ? 'spectral-region-selected' : '',
-    videoBakeRegionSelection ? 'video-bake-region-selected' : '',
-    clip.videoState?.bakeRegions?.length ? 'has-video-bake-regions' : '',
-    clip.isLoading ? 'loading' : '',
-    clip.needsReload ? 'needs-reload' : '',
-    hasProxy ? 'has-proxy' : '',
-    isGeneratingProxy ? 'generating-proxy' : '',
-    hasProxyError ? 'proxy-error' : '',
-    hasAudioProxy ? 'has-audio-proxy' : '',
-    isGeneratingAudioProxy ? 'generating-audio-proxy' : '',
-    hasAudioProxyError ? 'audio-proxy-error' : '',
-    showActiveStemSeparation ? 'separating-stems' : '',
-    hasKeyframes(clip.id) ? 'has-keyframes' : '',
-    clip.reversed ? 'reversed' : '',
-    clip.transcriptStatus === 'ready' ? 'has-transcript' : '',
-    showWaveformGenerationIndicator ? 'generating-waveform' : '',
-    waveformProcessingState,
-    spectrogramProcessingState,
-    audioDisplayMode === 'spectral' ? '' : (processedWaveformStatus?.className ?? ''),
-    audioDisplayMode === 'spectral' ? (processedSpectrogramStatus?.className ?? '') : '',
-    ...(audioWaveformDiagnostics?.classNames ?? []),
-    clip.parentClipId ? 'has-parent' : '',
-    clip.isPendingDownload ? 'pending-download' : '',
-    clip.downloadError ? 'download-error' : '',
-    clip.isComposition ? 'composition' : '',
-    aiMovePhase !== 'idle' ? 'ai-moving' : '',
-    isTrackLocked ? 'track-locked' : '',
-  ]
-    .filter(Boolean)
-    .join(' ');
 
   const spectralRegionOverlay = useMemo(() => resolveSpectralRegionOverlay({
     selection: audioSpectralRegionSelection,
@@ -853,73 +831,6 @@ function TimelineClipComponent({
   if (clip.trackId !== trackId && !isDragging) {
     return null;
   }
-  const clipStyle = {
-    left,
-    width,
-    cursor: isTrackLocked ? 'not-allowed' : timelineToolCursor,
-    animationDelay: `${animationDelay}s`,
-    '--track-color': trackColor,
-    '--clip-right-sticky-offset': `${clipRightStickyOffset}px`,
-    // FLIP move animation: initial phase applies offset transform, animating phase transitions to 0
-    ...(aiMovePhase === 'initial' && aiMove ? {
-      transform: `translateX(${timeToPixel(aiMove.fromStartTime) - left}px)`,
-    } : aiMovePhase === 'animating' && aiMove ? {
-      transform: 'translateX(0)',
-      transition: `transform ${aiMove.animationDuration}ms cubic-bezier(0.22, 1, 0.36, 1)`,
-    } : {}),
-    ...(isAudioClip && audioFocusMode ? {
-      background: `linear-gradient(180deg, color-mix(in srgb, ${trackColor} 72%, #202020), color-mix(in srgb, ${trackColor} 34%, #101010))`,
-      borderColor: trackColor,
-    } : isSolidClip && clip.solidColor ? {
-      background: clip.solidColor,
-      borderColor: clip.solidColor,
-    } : mediaLabelHex ? {
-      background: mediaLabelHex,
-      borderColor: mediaLabelHex,
-    } : {}),
-  } as CSSProperties & {
-    '--track-color'?: string;
-    '--clip-right-sticky-offset'?: string;
-  };
-  const sourceExtensionGhosts = useMemo(() => resolveSourceExtensionGhosts({
-    enabled: passiveDecorationsEnabled,
-    isTrimming,
-    isLinkedToTrimming,
-    trimEdge: clipTrim?.edge,
-    clipWidth: width,
-    clipLeft: left,
-    clipStartTime: clip.startTime,
-    clipDuration: clip.duration,
-    displayStartTime,
-    displayDuration,
-    displayInPoint,
-    displayOutPoint,
-    sourceDuration: getTimelineClipSourceDuration(clip),
-    scrollX,
-    viewportWidth: renderTimelineViewportWidth,
-    overscanPx: TIMELINE_RENDER_OVERSCAN_PX,
-    timeToPixel,
-  }), [
-    clip.duration,
-    clip.inPoint,
-    clip.outPoint,
-    clip.source?.naturalDuration,
-    clip.startTime,
-    clipTrim?.edge,
-    displayDuration,
-    displayInPoint,
-    displayOutPoint,
-    displayStartTime,
-    isLinkedToTrimming,
-    isTrimming,
-    left,
-    passiveDecorationsEnabled,
-    renderTimelineViewportWidth,
-    scrollX,
-    timeToPixel,
-    width,
-  ]);
-
   return (
     <div
       className={`${clipClass}${isBladeToolActive ? ' cut-mode' : ''} ${animationClass}`}
