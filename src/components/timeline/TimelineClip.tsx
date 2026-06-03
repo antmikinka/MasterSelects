@@ -24,12 +24,6 @@ import {
   collectAudioEffectInstanceRouteSettings,
   collectLegacyAudioEffectRouteSettings,
 } from '../../services/audio/audioGraphRouteSettings';
-import {
-  resolveAudioEditOperationOverlays,
-  resolveClipVideoBakeRegionOverlays,
-  type AudioEditOperationOverlay,
-  type ClipVideoBakeRegionOverlay,
-} from './utils/activeRegionOverlays';
 import { resolveAudioWaveformDiagnostics } from './utils/audioWaveformDiagnostics';
 import { resolveAudioVolumeAutomationCurveKeyframes } from './utils/audioAutomationCurve';
 import { resolveClipLabelHex } from './utils/resolveClipLabelHex';
@@ -37,10 +31,6 @@ import { resolveClipMediaClassification } from './utils/clipMediaClassification'
 import {
   getSpectralMaxFrequencyHz,
 } from './utils/spectralSelection';
-import {
-  resolveSpectralImageLayerOverlays,
-  resolveSpectralRegionOverlay,
-} from './utils/spectralRegionOverlays';
 import type { TimelineAudioRegionSelection } from '../../stores/timeline/types';
 import {
   getTimelineToolCursor,
@@ -71,10 +61,10 @@ import { useClipAudioAnalysisDisplayState } from './hooks/useClipAudioAnalysisDi
 import { useClipTimelineRenderGeometry } from './hooks/useClipTimelineRenderGeometry';
 import { useClipTimelineToolPointer } from './hooks/useClipTimelineToolPointer';
 import { useClipVisualChrome } from './hooks/useClipVisualChrome';
+import { useClipRegionOverlayState } from './hooks/useClipRegionOverlayState';
 
 const EMPTY_CLIP_KEYFRAMES = [] as const;
 const EMPTY_AUDIO_EDIT_STACK = [] as const;
-const EMPTY_SPECTRAL_LAYERS = [] as const;
 
 function TimelineClipComponent({
   clip,
@@ -700,100 +690,32 @@ function TimelineClipComponent({
     setActiveTimelineTool,
   });
 
-  const spectralRegionOverlay = useMemo(() => resolveSpectralRegionOverlay({
-    selection: audioSpectralRegionSelection,
-    displayStartTime,
-    displayDuration,
-    width,
-    trackBaseHeight,
-    maxFrequencyHz: spectralMaxFrequencyHz,
-  }), [
-    audioSpectralRegionSelection,
-    displayDuration,
-    displayStartTime,
-    spectralMaxFrequencyHz,
-    trackBaseHeight,
-    width,
-  ]);
-  const sourceTimeToDisplayTimelineTime = useCallback((sourceTime: number): number => {
-    const sourceStart = Math.max(0, displayInPoint ?? 0);
-    const sourceEnd = Math.max(sourceStart + 0.001, displayOutPoint ?? sourceStart + displayDuration);
-    const sourceRatio = Math.max(0, Math.min(1, (sourceTime - sourceStart) / (sourceEnd - sourceStart)));
-    const timelineRatio = clip.reversed ? 1 - sourceRatio : sourceRatio;
-    return displayStartTime + timelineRatio * displayDuration;
-  }, [clip.reversed, displayDuration, displayInPoint, displayOutPoint, displayStartTime]);
-  const spectralLayers = clip.audioState?.spectralLayers ?? EMPTY_SPECTRAL_LAYERS;
-  const spectralImageLayerOverlays = useMemo(() => resolveSpectralImageLayerOverlays({
-    enabled: canSelectSpectralRegion || audioDisplayMode === 'spectral',
-    layers: spectralLayers,
-    displayStartTime,
-    displayDuration,
-    width,
-    trackBaseHeight,
-    maxFrequencyHz: spectralMaxFrequencyHz,
-    sourceTimeToDisplayTimelineTime,
-    mediaFilesById: spectralImageFilesById,
-  }), [
+  const {
+    spectralRegionOverlay,
+    spectralImageLayerOverlays,
+    audioEditOperationOverlays,
+    clipVideoBakeRegionOverlays,
+  } = useClipRegionOverlayState({
+    clip,
+    isAudioClip,
+    audioFocusMode,
+    showAudioRegionEditMarkers,
     audioDisplayMode,
     canSelectSpectralRegion,
-    displayDuration,
-    displayStartTime,
-    sourceTimeToDisplayTimelineTime,
-    spectralLayers,
-    spectralImageFilesById,
-    spectralMaxFrequencyHz,
-    trackBaseHeight,
-    width,
-  ]);
-  const audioEditOperationOverlays = useMemo<AudioEditOperationOverlay[]>(() => {
-    if (!isAudioClip || !audioFocusMode || !showAudioRegionEditMarkers || displayAudioEditStack.length === 0) {
-      return [];
-    }
-
-    return resolveAudioEditOperationOverlays({
-      operations: displayAudioEditStack,
-      audioRegionSelection,
-      clipId: clip.id,
-      trackId: clip.trackId,
-      displayStartTime,
-      displayDuration,
-      width,
-      trackBaseHeight,
-      sourceTimeToDisplayTimelineTime,
-    });
-  }, [
     audioRegionSelection,
-    clip.id,
-    clip.trackId,
-    displayAudioEditStack,
-    audioFocusMode,
-    displayDuration,
-    displayStartTime,
-    isAudioClip,
-    showAudioRegionEditMarkers,
-    sourceTimeToDisplayTimelineTime,
-    trackBaseHeight,
-    width,
-  ]);
-  const clipVideoBakeRegionOverlays = useMemo<ClipVideoBakeRegionOverlay[]>(() => (
-    resolveClipVideoBakeRegionOverlays({
-      isAudioClip,
-      bakeRegions: clip.videoState?.bakeRegions,
-      selection: videoBakeRegionSelection,
-      displayStartTime,
-      displayDuration,
-      width,
-      sourceTimeToVideoBakeTimelineTime,
-    })
-  ), [
-    clip.videoState?.bakeRegions,
-    displayDuration,
-    displayStartTime,
-    isAudioClip,
-    sourceTimeToVideoBakeTimelineTime,
+    audioSpectralRegionSelection,
     videoBakeRegionSelection,
+    displayAudioEditStack,
+    displayStartTime,
+    displayDuration,
+    displayInPoint,
+    displayOutPoint,
     width,
-  ]);
+    trackBaseHeight,
+    spectralMaxFrequencyHz,
+    spectralImageFilesById,
+    sourceTimeToVideoBakeTimelineTime,
+  });
   const {
     audioBakePending,
     handleBakeClipVideoRegion,
