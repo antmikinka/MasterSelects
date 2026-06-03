@@ -22,10 +22,6 @@ import {
 import { useTimelineSpectrogramTileSetState } from './hooks/useTimelineSpectrogramTileSet';
 import { useTimelineWaveformPyramidState } from './hooks/useTimelineWaveformPyramid';
 import {
-  clipRequiresProcessedWaveformPyramid,
-} from '../../services/audio/processedWaveformEligibility';
-import { canDeriveProcessedWaveformPyramid } from '../../services/audio/DerivedWaveformPyramidService';
-import {
   collectAudioEffectInstanceRouteSettings,
   collectLegacyAudioEffectRouteSettings,
 } from '../../services/audio/audioGraphRouteSettings';
@@ -35,7 +31,6 @@ import {
   type AudioEditOperationOverlay,
   type ClipVideoBakeRegionOverlay,
 } from './utils/activeRegionOverlays';
-import { resolveProcessedAudioAnalysisDisplayStatus } from './utils/audioAnalysisDisplayStatus';
 import { resolveAudioWaveformDiagnostics } from './utils/audioWaveformDiagnostics';
 import { resolveAudioVolumeAutomationCurveKeyframes } from './utils/audioAutomationCurve';
 import { resolveClipLabelHex } from './utils/resolveClipLabelHex';
@@ -85,6 +80,7 @@ import { useClipSpectralImageLayers } from './hooks/useClipSpectralImageLayers';
 import { useClipOverlayActions } from './hooks/useClipOverlayActions';
 import { useClipAudioArtifactWarmups } from './hooks/useClipAudioArtifactWarmups';
 import { useClipAudioRenderState } from './hooks/useClipAudioRenderState';
+import { useClipAudioAnalysisDisplayState } from './hooks/useClipAudioAnalysisDisplayState';
 
 const TIMELINE_VIEWPORT_FALLBACK_PX = 1600;
 const TIMELINE_VIEWPORT_MIN_PX = 1600;
@@ -262,68 +258,28 @@ function TimelineClipComponent({
     const legacySettings = collectLegacyAudioEffectRouteSettings(clip.effects, clipAudioEffectIds);
     return Math.max(0, Math.min(8, graphSettings.volume * legacySettings.volume));
   }, [clip.audioState?.effectStack, clip.effects]);
-  const rawWaveformProcessingState = processedWaveformPyramidRef && !processedWaveformState.pyramid
-    ? `waveform-processed-${processedWaveformState.status}`
-    : '';
-  const spectrogramProcessingState = audioDisplayMode === 'spectral'
-    && processedSpectrogramTileSetRef
-    && !processedSpectrogramState.tileSet
-    ? `spectrogram-processed-${processedSpectrogramState.status}`
-    : '';
-  const needsProcessedAudioAnalysis = useMemo(
-    () => clipRequiresProcessedWaveformPyramid(clip, clipAudioKeyframes),
-    [clip, clipAudioKeyframes],
-  );
-  const canDeriveVisibleProcessedWaveform = useMemo(
-    () => canDeriveProcessedWaveformPyramid(clip, clipAudioKeyframes),
-    [clip, clipAudioKeyframes],
-  );
-  const hasWaveformDisplayFallback = Boolean(
-    sourceWaveformPyramid ||
+  const {
+    waveformProcessingState,
+    spectrogramProcessingState,
+    processedWaveformStatus,
+    processedSpectrogramStatus,
+    audioAnalysisDisplayStatus,
+    showWaveformGenerationIndicator,
+  } = useClipAudioAnalysisDisplayState({
+    clip,
+    clipAudioKeyframes,
+    audioDisplayMode,
+    processedWaveformPyramidRef,
+    processedWaveformReady: Boolean(processedWaveformPyramid),
+    processedWaveformLoadStatus: processedWaveformState.status,
+    sourceWaveformReady: Boolean(sourceWaveformPyramid),
     hasLegacyWaveformData,
-  );
-  const shouldSuppressBackgroundProcessedWaveformUi = audioDisplayMode !== 'spectral' &&
-    needsProcessedAudioAnalysis &&
-    hasWaveformDisplayFallback &&
-    (canDeriveVisibleProcessedWaveform || usePredictiveAudioWaveform);
-  const waveformProcessingState = shouldSuppressBackgroundProcessedWaveformUi
-    ? ''
-    : rawWaveformProcessingState;
-  const canResolveAudioSourceForAnalysis = Boolean(
-    clip.isComposition ||
-    clip.file ||
-    clip.mediaFileId ||
-    clip.source?.mediaFileId,
-  );
-  const processedWaveformStatus = shouldSuppressBackgroundProcessedWaveformUi
-    ? null
-    : resolveProcessedAudioAnalysisDisplayStatus({
-        artifactLabel: 'waveform',
-        needsProcessed: needsProcessedAudioAnalysis,
-        processedRef: processedWaveformPyramidRef,
-        processedReady: Boolean(processedWaveformPyramid),
-        fallbackAvailable: hasWaveformDisplayFallback,
-        loadStatus: processedWaveformState.status,
-        jobActive: clip.audioAnalysisJob?.artifactKinds.includes('processed-waveform-pyramid') === true,
-        autoGenerateEligible: canResolveAudioSourceForAnalysis,
-      });
-  const processedSpectrogramStatus = resolveProcessedAudioAnalysisDisplayStatus({
-    artifactLabel: 'spectrogram',
-    needsProcessed: needsProcessedAudioAnalysis,
-    processedRef: processedSpectrogramTileSetRef,
-    processedReady: Boolean(processedSpectrogramTileSet),
-    fallbackAvailable: Boolean(sourceSpectrogramTileSet),
-    loadStatus: processedSpectrogramState.status,
-    jobActive: clip.audioAnalysisJob?.artifactKinds.includes('spectrogram-tiles') === true,
-    autoGenerateEligible: canResolveAudioSourceForAnalysis,
+    usePredictiveAudioWaveform,
+    processedSpectrogramTileSetRef,
+    processedSpectrogramReady: Boolean(processedSpectrogramTileSet),
+    processedSpectrogramLoadStatus: processedSpectrogramState.status,
+    sourceSpectrogramReady: Boolean(sourceSpectrogramTileSet),
   });
-  const audioAnalysisDisplayStatus = audioDisplayMode === 'spectral'
-    ? processedSpectrogramStatus
-    : processedWaveformStatus;
-  const isBackgroundProcessedWaveformJob = clip.audioAnalysisJob?.processed === true &&
-    clip.audioAnalysisJob.artifactKinds.includes('processed-waveform-pyramid');
-  const showWaveformGenerationIndicator = clip.waveformGenerating &&
-    !(isBackgroundProcessedWaveformJob && shouldSuppressBackgroundProcessedWaveformUi);
   const isBladeToolActive = isTimelineBladeTool(activeTimelineToolId);
   const isPointerToolActive = isTimelinePointerTool(activeTimelineToolId);
   const timelineToolCursor = getTimelineToolCursor(activeTimelineToolId);
