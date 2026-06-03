@@ -2055,6 +2055,17 @@
   cursor: ew-resize;
 }
 
+.clip-audio-region-selection.read-only,
+.clip-audio-region-selection.read-only * {
+  pointer-events: none;
+}
+
+.shell-audio-region-module {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
 .clip-video-bake-region {
   position: absolute;
   top: 0;

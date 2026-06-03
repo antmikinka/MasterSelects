@@ -347,6 +347,62 @@ describe('ClipInteractionShell contract', () => {
     expect(onMoveKeyframeGroup.mock.calls[0][2].clip.id).toBe('clip-a');
   });
 
+  it('renders active audio-region visuals through the shell module', () => {
+    const props = createShellProps({
+      clip: {
+        ...createShellProps().clip,
+        source: { type: 'audio' },
+        audioState: {
+          editStack: [
+            {
+              id: 'gain-op',
+              type: 'gain',
+              enabled: true,
+              timeRange: { start: 1, end: 3 },
+              params: { gainDb: -6, fadeInSeconds: 0.2, fadeOutSeconds: 0.3 },
+              createdAt: 1,
+            },
+          ],
+        },
+      },
+      mountState: {
+        clipId: 'clip-a',
+        shouldMount: true,
+        reasons: ['audio-region-active'],
+        hasActiveAudioRegion: true,
+      },
+      activeModules: {
+        audioRegion: {
+          slot: 'audio-region',
+          enabled: true,
+          selection: {
+            clipId: 'clip-a',
+            trackId: 'track-video',
+            startTime: 2,
+            endTime: 4,
+            sourceInPoint: 1,
+            sourceOutPoint: 3,
+          },
+          mode: 'select',
+        },
+      },
+    });
+
+    const { container } = render(<ClipInteractionShell {...props} />);
+    const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+    const module = container.querySelector<HTMLElement>('.shell-audio-region-module');
+    const selection = container.querySelector<HTMLElement>('.clip-audio-region-selection');
+    const gainValue = container.querySelector<HTMLElement>('.clip-audio-region-gain-value');
+
+    expect(shell?.dataset.activeSlots).toBe('audio-region');
+    expect(module?.dataset.clipInteractionSlot).toBe('audio-region');
+    expect(selection).toBeTruthy();
+    expect(selection?.classList.contains('read-only')).toBe(true);
+    expect(selection?.style.left).toBe('40px');
+    expect(selection?.style.width).toBe('80px');
+    expect(gainValue?.textContent).toBe('-6.0 dB');
+  });
+
   it('renders active stem progress through the shell module', () => {
     const props = createShellProps({
       mountState: {

@@ -13,11 +13,12 @@ interface ClipAudioRegionSelectionOverlayProps {
   moving: boolean;
   resizing: boolean;
   gainControl: AudioRegionGainControlOverlay | null;
-  onSelectionMouseDown: (e: React.MouseEvent<HTMLDivElement>) => void;
-  onContextMenu: (e: React.MouseEvent) => void;
-  onEdgeMouseDown: (edge: 'left' | 'right') => (e: React.MouseEvent<HTMLSpanElement>) => void;
-  onGainMouseDown: (mode: AudioRegionGainHandleMode) => (e: React.MouseEvent<HTMLButtonElement | HTMLDivElement>) => void;
-  onResetGain: () => void;
+  onSelectionMouseDown?: (e: React.MouseEvent<HTMLDivElement>) => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
+  onEdgeMouseDown?: (edge: 'left' | 'right') => (e: React.MouseEvent<HTMLSpanElement>) => void;
+  onGainMouseDown?: (mode: AudioRegionGainHandleMode) => (e: React.MouseEvent<HTMLButtonElement | HTMLDivElement>) => void;
+  onResetGain?: () => void;
+  interactive?: boolean;
 }
 
 export const ClipAudioRegionSelectionOverlay = memo(function ClipAudioRegionSelectionOverlay({
@@ -31,26 +32,27 @@ export const ClipAudioRegionSelectionOverlay = memo(function ClipAudioRegionSele
   onEdgeMouseDown,
   onGainMouseDown,
   onResetGain,
+  interactive = true,
 }: ClipAudioRegionSelectionOverlayProps) {
   return (
     <div
-      className={`clip-audio-region-selection ${snappedToZeroCrossing ? 'snapped' : ''} ${moving ? 'moving' : ''} ${resizing ? 'resizing' : ''}`}
+      className={`clip-audio-region-selection ${snappedToZeroCrossing ? 'snapped' : ''} ${moving ? 'moving' : ''} ${resizing ? 'resizing' : ''} ${interactive ? '' : 'read-only'}`}
       style={{
         left: overlay.left,
         width: overlay.width,
       }}
-      onMouseDown={onSelectionMouseDown}
-      onContextMenu={onContextMenu}
+      onMouseDown={interactive ? onSelectionMouseDown : undefined}
+      onContextMenu={interactive ? onContextMenu : undefined}
       title="Drag to move the selected audio region; drag edges to resize"
     >
       <span
         className="clip-audio-region-edge left"
-        onMouseDown={onEdgeMouseDown('left')}
+        onMouseDown={interactive ? onEdgeMouseDown?.('left') : undefined}
         title="Drag to resize the selected audio region start"
       />
       <span
         className="clip-audio-region-edge right"
-        onMouseDown={onEdgeMouseDown('right')}
+        onMouseDown={interactive ? onEdgeMouseDown?.('right') : undefined}
         title="Drag to resize the selected audio region end"
       />
       {gainControl && (
@@ -60,26 +62,26 @@ export const ClipAudioRegionSelectionOverlay = memo(function ClipAudioRegionSele
         >
           <div
             className="clip-audio-region-gain-line"
-            onMouseDown={onGainMouseDown('gain')}
-            onDoubleClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onResetGain();
-            }}
+            onMouseDown={interactive ? onGainMouseDown?.('gain') : undefined}
+            onDoubleClick={interactive ? (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onResetGain?.();
+              } : undefined}
             title="Drag to set region gain; double-click to reset"
           />
           <button
             type="button"
             className="clip-audio-region-fade-handle fade-in"
             style={{ left: gainControl.fadeInPx }}
-            onMouseDown={onGainMouseDown('fade-in')}
+            onMouseDown={interactive ? onGainMouseDown?.('fade-in') : undefined}
             title={`Fade in gain change: ${gainControl.fadeInSeconds.toFixed(2)}s`}
           />
           <button
             type="button"
             className="clip-audio-region-fade-handle fade-out"
             style={{ right: gainControl.fadeOutPx }}
-            onMouseDown={onGainMouseDown('fade-out')}
+            onMouseDown={interactive ? onGainMouseDown?.('fade-out') : undefined}
             title={`Fade out gain change: ${gainControl.fadeOutSeconds.toFixed(2)}s`}
           />
           <span className="clip-audio-region-gain-value">

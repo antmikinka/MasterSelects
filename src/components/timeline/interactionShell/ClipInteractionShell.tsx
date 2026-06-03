@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react';
+import { ClipAudioRegionControls } from './ClipAudioRegionControls';
 import { ClipFadeHandles } from './ClipFadeHandles';
 import { ClipKeyframeTicks } from './ClipKeyframeTicks';
 import { ClipTrimHandles } from './ClipTrimHandles';
@@ -51,6 +52,10 @@ function renderBuiltInModule(
 
   if (slot === 'keyframe') {
     return <ClipKeyframeTicks key={slot} context={context} commands={commands} />;
+  }
+
+  if (slot === 'audio-region') {
+    return <ClipAudioRegionControls key={slot} context={context} />;
   }
 
   if (slot === 'stem') {

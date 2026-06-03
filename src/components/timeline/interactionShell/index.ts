@@ -1,4 +1,5 @@
 export { ClipInteractionShell } from './ClipInteractionShell';
+export { ClipAudioRegionControls } from './ClipAudioRegionControls';
 export { ClipFadeHandles } from './ClipFadeHandles';
 export { ClipKeyframeTicks } from './ClipKeyframeTicks';
 export { ClipTrimHandles } from './ClipTrimHandles';

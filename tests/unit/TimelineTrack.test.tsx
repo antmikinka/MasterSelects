@@ -656,6 +656,7 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(shell?.dataset.mountReasons).toBe('audio-region-active');
     expect(shell?.dataset.activeSlots).toBe('audio-region');
     expect(shell?.style.pointerEvents).toBe('none');
+    expect(container.querySelector('.clip-interaction-shell .clip-audio-region-selection')).toBeTruthy();
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeTruthy();
   });
 
