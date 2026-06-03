@@ -95,6 +95,7 @@ import {
 import { useClipAudioMediaViewProps } from './hooks/useClipAudioMediaViewProps';
 import { useClipAudioRegionControls } from './hooks/useClipAudioRegionControls';
 import { useClipStemSwitcher } from './hooks/useClipStemSwitcher';
+import { useClipAnimationState } from './hooks/useClipAnimationState';
 
 const KEYFRAME_TICK_SNAP_THRESHOLD_PX = 10;
 const TIMELINE_VIEWPORT_FALLBACK_PX = 1600;
@@ -424,74 +425,12 @@ function TimelineClipComponent({
   // Look up media label color from mediaStore
   const mediaLabelHex = useMediaStore(s => resolveClipLabelHex(clip, s));
 
-  // Animation phase for enter/exit transitions
-  const clipAnimationPhase = useTimelineStore(s => s.clipAnimationPhase);
-  const compositionSwitchDirection = useTimelineStore(s => s.compositionSwitchDirection);
-  const clipEntranceKey = useTimelineStore(s => s.clipEntranceAnimationKey);
-  const aiMove = useTimelineStore(s => s.aiMovingClips.get(clip.id));
-  const [mountEntranceKey] = useState(clipEntranceKey);
-
-  // Only compute stagger order during composition entrance animation. Doing a
-  // full clips sort inside every TimelineClip render gets very expensive once
-  // AI splits create hundreds of clips.
-  const animationDelay = clipAnimationPhase === 'entering'
-    ? Math.max(0, (() => {
-        const sorted = [...clips].sort((a, b) => {
-          const aTrack = tracks.findIndex(t => t.id === a.trackId);
-          const bTrack = tracks.findIndex(t => t.id === b.trackId);
-          if (aTrack !== bTrack) return aTrack - bTrack;
-          return a.startTime - b.startTime;
-        });
-        return sorted.findIndex(c => c.id === clip.id);
-      })()) * 0.02
-    : 0;
-
-  // Determine animation class:
-  // - 'exiting': apply exit animation
-  // - 'entering' + new clips: apply entrance animation (only during composition switch)
-  // - Otherwise: no animation
-  const isNewClip = mountEntranceKey === clipEntranceKey && clipEntranceKey > 0;
-  const exitAnimationClass = compositionSwitchDirection === 'backward'
-    ? 'exit-animate exit-animate-left'
-    : 'exit-animate exit-animate-right';
-  const entranceAnimationClass = compositionSwitchDirection === 'backward'
-    ? 'entrance-animate entrance-animate-right'
-    : 'entrance-animate entrance-animate-left';
-  const animationClass = clipAnimationPhase === 'exiting'
-    ? exitAnimationClass
-    : (clipAnimationPhase === 'entering' && isNewClip)
-      ? entranceAnimationClass
-      : '';
-
-  // AI move animation (FLIP technique)
-  const [aiMovePhase, setAiMovePhase] = useState<'idle' | 'initial' | 'animating'>('idle');
-  const aiMoveRef = useRef<number | null>(null);
-  const aiMoveStartedAt = aiMove?.startedAt;
-  const aiMoveDuration = aiMove?.animationDuration ?? 200;
-
-  useEffect(() => {
-    if (aiMoveStartedAt !== undefined) {
-      // Double-rAF to ensure the initial transform is painted before starting transition
-      const raf1 = requestAnimationFrame(() => {
-        setAiMovePhase('initial');
-        const raf2 = requestAnimationFrame(() => {
-          setAiMovePhase('animating');
-        });
-        aiMoveRef.current = raf2;
-      });
-      const timer = setTimeout(() => {
-        setAiMovePhase('idle');
-      }, aiMoveDuration + 50);
-      return () => {
-        cancelAnimationFrame(raf1);
-        if (aiMoveRef.current) cancelAnimationFrame(aiMoveRef.current);
-        clearTimeout(timer);
-      };
-    } else {
-      const frame = requestAnimationFrame(() => setAiMovePhase('idle'));
-      return () => cancelAnimationFrame(frame);
-    }
-  }, [aiMoveDuration, aiMoveStartedAt]);
+  const {
+    aiMove,
+    aiMovePhase,
+    animationClass,
+    animationDelay,
+  } = useClipAnimationState({ clip, clips, tracks });
 
   // Check if this clip should show blade indicator (either directly hovered or linked to hovered clip)
   const isDirectlyHovered = timelineToolPreview?.clipId === clip.id;
