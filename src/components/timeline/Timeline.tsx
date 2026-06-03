@@ -2873,7 +2873,6 @@ export function Timeline() {
           fadeInDuration={getFadeInDuration(clip.id)}
           fadeOutDuration={getFadeOutDuration(clip.id)}
           opacityKeyframes={clipKeyframeList.filter(k => k.property === 'opacity')}
-          allKeyframeTimes={keyframeTimeGroups.map(group => group.time)}
           keyframeTimeGroups={keyframeTimeGroups}
           onMoveKeyframeGroup={moveKeyframes}
           timeToPixel={timeToPixel}

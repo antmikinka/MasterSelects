@@ -256,7 +256,6 @@ function TimelineClipComponent({
   fadeInDuration,
   fadeOutDuration,
   opacityKeyframes,
-  allKeyframeTimes,
   keyframeTimeGroups,
   onMoveKeyframeGroup,
   timeToPixel,
@@ -949,12 +948,7 @@ function TimelineClipComponent({
     )
   );
 
-  const keyframeTickGroups: ClipKeyframeTickGroup[] = useMemo(() => (
-    keyframeTimeGroups ?? allKeyframeTimes.map(time => ({
-      time,
-      keyframeIds: [],
-    }))
-  ), [allKeyframeTimes, keyframeTimeGroups]);
+  const keyframeTickGroups: ClipKeyframeTickGroup[] = keyframeTimeGroups;
   const [keyframeGroupDrag, setKeyframeGroupDrag] = useState<KeyframeGroupDragState | null>(null);
   const [audioRegionDrag, setAudioRegionDrag] = useState<AudioRegionDragState | null>(null);
   const [videoBakeRegionDrag, setVideoBakeRegionDrag] = useState<VideoBakeRegionDragState | null>(null);

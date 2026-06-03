@@ -368,8 +368,7 @@ export interface TimelineClipProps {
     handleIn?: { x: number; y: number };
     handleOut?: { x: number; y: number };
   }>;  // Opacity keyframes for fade curve visualization
-  allKeyframeTimes: number[];  // Unique keyframe times for tick marks on clip bar
-  keyframeTimeGroups?: ClipKeyframeTimeGroup[];  // Keyframe IDs grouped by clip-local time for global clip-bar handles
+  keyframeTimeGroups: ClipKeyframeTimeGroup[];  // Keyframe IDs grouped by clip-local time for global clip-bar handles
   onMoveKeyframeGroup?: (keyframeIds: string[], newTime: number) => void;
   timeToPixel: (time: number) => number;
   formatTime: (seconds: number) => string;

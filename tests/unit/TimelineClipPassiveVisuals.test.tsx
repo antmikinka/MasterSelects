@@ -88,18 +88,16 @@ function renderClip(passiveVisualsSuppressed: boolean) {
       isClipDragActive={false}
       clipDrag={null}
       clipTrim={null}
-      clipFade={null}
       zoom={20}
       scrollX={0}
       timelineViewportWidth={800}
-      timelineRef={{ current: document.createElement('div') }}
-      proxyEnabled
+      proxyEnabled={true}
       proxyStatus="ready"
       proxyProgress={100}
       audioProxyStatus="none"
       audioProxyProgress={0}
-      showTranscriptMarkers
-      snappingEnabled
+      showTranscriptMarkers={true}
+      snappingEnabled={true}
       onMouseDown={vi.fn()}
       onDoubleClick={vi.fn()}
       onContextMenu={vi.fn()}
@@ -109,14 +107,10 @@ function renderClip(passiveVisualsSuppressed: boolean) {
       fadeInDuration={0}
       fadeOutDuration={0}
       opacityKeyframes={[]}
-      allKeyframeTimes={[]}
+      keyframeTimeGroups={[]}
       onMoveKeyframeGroup={vi.fn()}
       timeToPixel={(time) => time * 20}
-      pixelToTime={(pixel) => pixel / 20}
       formatTime={(seconds) => `${seconds.toFixed(2)}s`}
-      onPickWhipDragStart={vi.fn()}
-      onPickWhipDragEnd={vi.fn()}
-      onSetClipParent={vi.fn()}
       passiveVisualsSuppressed={passiveVisualsSuppressed}
     />,
   );
