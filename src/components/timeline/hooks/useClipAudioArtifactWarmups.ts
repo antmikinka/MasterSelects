@@ -21,7 +21,6 @@ export function useClipAudioArtifactWarmups(input: {
   clip: TimelineClip;
   clipAudioKeyframes: readonly Keyframe[];
   audioDisplayMode: TimelineAudioDisplayMode;
-  passiveMediaEnabled: boolean;
   waveformsEnabled: boolean;
   isAudioClip: boolean;
   isClipDragActive: boolean;
@@ -35,7 +34,6 @@ export function useClipAudioArtifactWarmups(input: {
     clip,
     clipAudioKeyframes,
     audioDisplayMode,
-    passiveMediaEnabled,
     waveformsEnabled,
     isAudioClip,
     isClipDragActive,
@@ -47,7 +45,7 @@ export function useClipAudioArtifactWarmups(input: {
   } = input;
 
   useEffect(() => {
-    if (!passiveMediaEnabled || !waveformsEnabled || !isAudioClip || clip.waveformGenerating || isClipDragActive) {
+    if (!waveformsEnabled || !isAudioClip || clip.waveformGenerating || isClipDragActive) {
       return;
     }
 
@@ -95,23 +93,19 @@ export function useClipAudioArtifactWarmups(input: {
     clip.waveformGenerating,
     isClipDragActive,
     isAudioClip,
-    passiveMediaEnabled,
     waveformsEnabled,
     width,
     zoom,
   ]);
 
   const processedWaveformRequestKey = useMemo(
-    () => passiveMediaEnabled
-      ? `${clip.id}:${createProcessedClipAudioStateHash(clip, { keyframes: clipAudioKeyframes })}`
-      : `${clip.id}:passive-media-suppressed`,
-    [clip, clipAudioKeyframes, passiveMediaEnabled],
+    () => `${clip.id}:${createProcessedClipAudioStateHash(clip, { keyframes: clipAudioKeyframes })}`,
+    [clip, clipAudioKeyframes],
   );
 
   useEffect(() => {
     if (
       !waveformsEnabled ||
-      !passiveMediaEnabled ||
       !isAudioClip ||
       audioDisplayMode === 'spectral' ||
       processedWaveformPyramidRef ||
@@ -131,7 +125,6 @@ export function useClipAudioArtifactWarmups(input: {
     audioDisplayMode,
     isClipDragActive,
     isAudioClip,
-    passiveMediaEnabled,
     processedWaveformPyramidRef,
     processedWaveformRequestKey,
     waveformsEnabled,
@@ -147,7 +140,6 @@ export function useClipAudioArtifactWarmups(input: {
   useEffect(() => {
     if (
       !waveformsEnabled ||
-      !passiveMediaEnabled ||
       !isAudioClip ||
       audioDisplayMode !== 'spectral' ||
       clip.waveformGenerating ||
@@ -166,7 +158,6 @@ export function useClipAudioArtifactWarmups(input: {
     clip.waveformGenerating,
     isClipDragActive,
     isAudioClip,
-    passiveMediaEnabled,
     processedSpectrogramTileSetRef,
     sourceSpectrogramTileSetRef,
     spectrogramRequestKey,

@@ -20,8 +20,6 @@ import { ClipWaveform } from './ClipWaveform';
 
 interface ClipPassiveBackgroundLayerProps {
   sourceExtensionGhosts: readonly SourceExtensionGhost[];
-  passiveDecorationsEnabled: boolean;
-  passiveMediaEnabled: boolean;
   waveformsEnabled: boolean;
   clip: TimelineClip;
   proxyEnabled: boolean;
@@ -52,8 +50,6 @@ interface ClipPassiveBackgroundLayerProps {
 
 export const ClipPassiveBackgroundLayer = memo(function ClipPassiveBackgroundLayer({
   sourceExtensionGhosts,
-  passiveDecorationsEnabled,
-  passiveMediaEnabled,
   waveformsEnabled,
   clip,
   proxyEnabled,
@@ -83,7 +79,7 @@ export const ClipPassiveBackgroundLayer = memo(function ClipPassiveBackgroundLay
 }: ClipPassiveBackgroundLayerProps) {
   return (
     <>
-      {passiveDecorationsEnabled && sourceExtensionGhosts.map((ghost) => (
+      {sourceExtensionGhosts.map((ghost) => (
         <div
           key={ghost.edge}
           className={`clip-source-extension-ghost ${ghost.edge}`}
@@ -91,7 +87,7 @@ export const ClipPassiveBackgroundLayer = memo(function ClipPassiveBackgroundLay
         />
       ))}
       <ClipPassiveStatusBadges
-        enabled={passiveDecorationsEnabled}
+        enabled={true}
         clip={clip}
         proxyEnabled={proxyEnabled}
         isGeneratingProxy={isGeneratingProxy}
@@ -110,12 +106,12 @@ export const ClipPassiveBackgroundLayer = memo(function ClipPassiveBackgroundLay
         stemSwitcher={stemSwitcher}
       />
       <ClipCoverageBadges
-        enabled={passiveDecorationsEnabled}
+        enabled={true}
         clip={clip}
         mediaFiles={mediaFiles}
         isAudioClip={isAudioClip}
       />
-      {passiveDecorationsEnabled && showWaveformGenerationIndicator && (
+      {showWaveformGenerationIndicator && (
         <div
           className="clip-waveform-indicator"
           title={clip.audioAnalysisJob ? `${clip.audioAnalysisJob.label}: ${clip.audioAnalysisJob.phase}` : undefined}
@@ -126,7 +122,7 @@ export const ClipPassiveBackgroundLayer = memo(function ClipPassiveBackgroundLay
           />
         </div>
       )}
-      {passiveMediaEnabled && waveformsEnabled && isAudioClip && (
+      {waveformsEnabled && isAudioClip && (
         audioDisplayMode === 'spectral'
         || hasWaveformForRender
       ) && (
@@ -144,7 +140,6 @@ export const ClipPassiveBackgroundLayer = memo(function ClipPassiveBackgroundLay
 });
 
 interface ClipPassiveForegroundLayerProps {
-  passiveDecorationsEnabled: boolean;
   clip: TimelineClip;
   waveformsEnabled: boolean;
   width: number;
@@ -181,7 +176,6 @@ interface ClipPassiveForegroundLayerProps {
 }
 
 export const ClipPassiveForegroundLayer = memo(function ClipPassiveForegroundLayer({
-  passiveDecorationsEnabled,
   clip,
   waveformsEnabled,
   width,
@@ -219,7 +213,7 @@ export const ClipPassiveForegroundLayer = memo(function ClipPassiveForegroundLay
   return (
     <>
       <ClipPreThumbnailDecorations
-        enabled={passiveDecorationsEnabled}
+        enabled={true}
         clip={clip}
         waveformsEnabled={waveformsEnabled}
         width={width}
@@ -256,29 +250,27 @@ export const ClipPassiveForegroundLayer = memo(function ClipPassiveForegroundLay
         />
       )}
       <ClipPostThumbnailDecorations
-        enabled={passiveDecorationsEnabled}
+        enabled={true}
         clip={clip}
       />
-      {passiveDecorationsEnabled && (
-        <ClipContentMeta
-          clip={clip}
-          clipMetaOffset={clipMetaOffset}
-          displayDuration={displayDuration}
-          formatTime={formatTime}
-          isSolidClip={isSolidClip}
-          isTextClip={isTextClip}
-          isText3DClip={isText3DClip}
-          isMathSceneClip={isMathSceneClip}
-          isVectorAnimationClip={isVectorAnimationClip}
-          vectorAnimationIcon={vectorAnimationIcon}
-          vectorAnimationTitle={vectorAnimationTitle}
-          isSplatEffectorClip={isSplatEffectorClip}
-          staticClipIconKind={staticClipIconKind}
-          text3DProperties={text3DProperties}
-        />
-      )}
+      <ClipContentMeta
+        clip={clip}
+        clipMetaOffset={clipMetaOffset}
+        displayDuration={displayDuration}
+        formatTime={formatTime}
+        isSolidClip={isSolidClip}
+        isTextClip={isTextClip}
+        isText3DClip={isText3DClip}
+        isMathSceneClip={isMathSceneClip}
+        isVectorAnimationClip={isVectorAnimationClip}
+        vectorAnimationIcon={vectorAnimationIcon}
+        vectorAnimationTitle={vectorAnimationTitle}
+        isSplatEffectorClip={isSplatEffectorClip}
+        staticClipIconKind={staticClipIconKind}
+        text3DProperties={text3DProperties}
+      />
       <ClipTranscriptAnalysisOverlays
-        enabled={passiveDecorationsEnabled}
+        enabled={true}
         showTranscriptMarkers={showTranscriptMarkers}
         clip={clip}
         displayDuration={displayDuration}

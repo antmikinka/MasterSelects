@@ -155,8 +155,6 @@ function TimelineClipComponent({
     selectClip,
     clipAudioKeyframes,
   } = useClipStoreBindings(clip);
-  const passiveMediaEnabled = true;
-  const passiveDecorationsEnabled = true;
   const processedWaveformPyramidRef = clip.audioState?.processedAnalysisRefs?.processedWaveformPyramidId;
   const sourceWaveformPyramidRef = clip.audioState?.sourceAnalysisRefs?.waveformPyramidId;
   const hasLegacyWaveformData = hasLegacyWaveformSamples(clip);
@@ -303,7 +301,6 @@ function TimelineClipComponent({
     timelineViewportWidth,
     scrollX,
     thumbnailsEnabled,
-    passiveMediaEnabled,
     isAudioClip,
     showsStaticClipArtwork,
     timeToPixel,
@@ -313,7 +310,6 @@ function TimelineClipComponent({
     clip,
     clipAudioKeyframes,
     audioDisplayMode,
-    passiveMediaEnabled,
     waveformsEnabled,
     isAudioClip,
     isClipDragActive,
@@ -583,7 +579,6 @@ function TimelineClipComponent({
     timelineTrackColorsVisible,
     isSolidClip,
     mediaLabelHex,
-    passiveDecorationsEnabled,
     left,
     width,
     scrollX,
@@ -712,8 +707,6 @@ function TimelineClipComponent({
       )}
       <ClipPassiveBackgroundLayer
         sourceExtensionGhosts={sourceExtensionGhosts}
-        passiveDecorationsEnabled={passiveDecorationsEnabled}
-        passiveMediaEnabled={passiveMediaEnabled}
         waveformsEnabled={waveformsEnabled}
         clip={clip}
         proxyEnabled={proxyEnabled}
@@ -812,7 +805,6 @@ function TimelineClipComponent({
         onSpectralRegionDoubleClick={handleSpectralRegionDoubleClick}
       />
       <ClipPassiveForegroundLayer
-        passiveDecorationsEnabled={passiveDecorationsEnabled}
         clip={clip}
         waveformsEnabled={waveformsEnabled}
         width={width}

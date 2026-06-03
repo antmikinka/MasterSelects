@@ -29,9 +29,8 @@ describe('thumbnail filmstrip plan', () => {
     expect(resolveVisibleThumbCount({ startPx: 100, width: 240 }, 80)).toBe(4);
   });
 
-  it('enables source cache only for passive video clips without composition segments', () => {
+  it('enables source cache only for video clips without composition segments', () => {
     expect(resolveThumbnailCacheEligibility({
-      passiveMediaEnabled: true,
       sourceType: 'video',
       sourceMediaFileId: 'media-1',
       isComposition: false,
@@ -43,7 +42,6 @@ describe('thumbnail filmstrip plan', () => {
     });
 
     expect(resolveThumbnailCacheEligibility({
-      passiveMediaEnabled: true,
       sourceType: 'video',
       sourceMediaFileId: 'media-1',
       isComposition: true,
@@ -56,7 +54,6 @@ describe('thumbnail filmstrip plan', () => {
 
   it('separates segment and regular thumbnail display decisions', () => {
     expect(resolveThumbnailDisplayPlan({
-      passiveMediaEnabled: true,
       thumbnailsEnabled: true,
       isAudioClip: false,
       showsStaticClipArtwork: false,
@@ -72,7 +69,6 @@ describe('thumbnail filmstrip plan', () => {
     });
 
     expect(resolveThumbnailDisplayPlan({
-      passiveMediaEnabled: true,
       thumbnailsEnabled: true,
       isAudioClip: false,
       showsStaticClipArtwork: false,

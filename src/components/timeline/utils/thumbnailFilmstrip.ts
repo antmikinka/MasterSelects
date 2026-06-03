@@ -36,7 +36,6 @@ export function resolveVisibleThumbCount(
 }
 
 export function resolveThumbnailCacheEligibility(input: {
-  passiveMediaEnabled: boolean;
   sourceType?: string;
   sourceMediaFileId?: string;
   isComposition?: boolean;
@@ -44,7 +43,6 @@ export function resolveThumbnailCacheEligibility(input: {
 }): ThumbnailCacheEligibility {
   const isCompositionWithSegments = Boolean(input.isComposition && input.clipSegments && input.clipSegments.length > 0);
   const useSourceCache = Boolean(
-    input.passiveMediaEnabled &&
     input.sourceType === 'video' &&
     input.sourceMediaFileId &&
     !isCompositionWithSegments,
@@ -58,7 +56,6 @@ export function resolveThumbnailCacheEligibility(input: {
 }
 
 export function resolveThumbnailDisplayPlan(input: {
-  passiveMediaEnabled: boolean;
   thumbnailsEnabled: boolean;
   isAudioClip: boolean;
   showsStaticClipArtwork: boolean;
@@ -69,8 +66,7 @@ export function resolveThumbnailDisplayPlan(input: {
   hasCachedSourceThumbnails: boolean;
   legacyThumbnailCount: number;
 }): ThumbnailDisplayPlan {
-  const canShowPassiveThumbnails = input.passiveMediaEnabled &&
-    input.thumbnailsEnabled &&
+  const canShowPassiveThumbnails = input.thumbnailsEnabled &&
     !input.isAudioClip &&
     !input.showsStaticClipArtwork;
 

@@ -49,7 +49,6 @@ export function useClipVisualChrome(input: {
   timelineTrackColorsVisible: boolean;
   isSolidClip: boolean;
   mediaLabelHex: string | null;
-  passiveDecorationsEnabled: boolean;
   left: number;
   width: number;
   scrollX: number;
@@ -168,7 +167,7 @@ export function useClipVisualChrome(input: {
   };
 
   const sourceExtensionGhosts = useMemo(() => resolveSourceExtensionGhosts({
-    enabled: input.passiveDecorationsEnabled,
+    enabled: true,
     isTrimming: input.isTrimming,
     isLinkedToTrimming: input.isLinkedToTrimming,
     trimEdge: input.clipTrim?.edge,
@@ -195,7 +194,6 @@ export function useClipVisualChrome(input: {
     input.isLinkedToTrimming,
     input.isTrimming,
     input.left,
-    input.passiveDecorationsEnabled,
     input.renderTimelineViewportWidth,
     input.scrollX,
     input.timeToPixel,

@@ -43,7 +43,6 @@ export function useClipTimelineRenderGeometry(input: {
   timelineViewportWidth: number;
   scrollX: number;
   thumbnailsEnabled: boolean;
-  passiveMediaEnabled: boolean;
   isAudioClip: boolean;
   showsStaticClipArtwork: boolean;
   timeToPixel: TimelineClipProps['timeToPixel'];
@@ -167,7 +166,6 @@ export function useClipTimelineRenderGeometry(input: {
   ), [input.scrollX, renderTimelineViewportWidth, staticContentRenderLeft, width]);
   const thumbnailPlan = useClipThumbnailFilmstripPlan({
     clip: input.clip,
-    passiveMediaEnabled: input.passiveMediaEnabled,
     thumbnailsEnabled: input.thumbnailsEnabled,
     isAudioClip: input.isAudioClip,
     showsStaticClipArtwork: input.showsStaticClipArtwork,

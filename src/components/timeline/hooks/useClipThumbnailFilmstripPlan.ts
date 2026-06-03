@@ -33,7 +33,6 @@ export interface ClipThumbnailFilmstripPlan {
 
 export function useClipThumbnailFilmstripPlan(input: {
   clip: TimelineClip;
-  passiveMediaEnabled: boolean;
   thumbnailsEnabled: boolean;
   isAudioClip: boolean;
   showsStaticClipArtwork: boolean;
@@ -63,7 +62,6 @@ export function useClipThumbnailFilmstripPlan(input: {
   ), [input.displayInPoint, input.displayOutPoint, input.width, thumbnailRenderWindow]);
   const sourceMediaFileId = input.clip.source?.mediaFileId || input.clip.mediaFileId;
   const thumbnailCacheEligibility = resolveThumbnailCacheEligibility({
-    passiveMediaEnabled: input.passiveMediaEnabled,
     sourceType: input.clip.source?.type,
     sourceMediaFileId,
     isComposition: input.clip.isComposition,
@@ -81,7 +79,6 @@ export function useClipThumbnailFilmstripPlan(input: {
   const legacyThumbnails = input.clip.thumbnails ?? EMPTY_LEGACY_THUMBNAILS;
   const compositionSegments = input.clip.clipSegments ?? EMPTY_COMPOSITION_SEGMENTS;
   const thumbnailDisplayPlan = resolveThumbnailDisplayPlan({
-    passiveMediaEnabled: input.passiveMediaEnabled,
     thumbnailsEnabled: input.thumbnailsEnabled,
     isAudioClip: input.isAudioClip,
     showsStaticClipArtwork: input.showsStaticClipArtwork,
