@@ -3536,7 +3536,6 @@ export function Timeline() {
                       onDragLeave={handleCombinedDragLeave}
                       onResizeStart={handleTrackResizeStart}
                       isResizeActive={activeTrackResizeId === track.id}
-                      renderLegacyClip={(clip, trackId, trackBaseHeightOverride) => renderClipForSection(clip, trackId, trackBaseHeightOverride)}
                       clipKeyframes={clipKeyframes}
                       renderKeyframeDiamonds={renderKeyframeDiamonds}
                       timeToPixel={timeToPixel}

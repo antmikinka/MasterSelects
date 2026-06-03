@@ -289,11 +289,6 @@ export interface TimelineTrackProps {
   onDragLeave: (e: React.DragEvent) => void;
   onResizeStart?: (e: React.PointerEvent, trackId: string) => void;
   isResizeActive?: boolean;
-  renderLegacyClip: (
-    clip: TimelineClip,
-    trackId: string,
-    trackBaseHeightOverride?: number,
-  ) => React.ReactNode;
   // For keyframe tracks - clipKeyframes map triggers re-render when keyframes change
   clipKeyframes: Map<string, Array<{ id: string; clipId: string; time: number; property: AnimatableProperty; value: number; easing: string }>>;
   renderKeyframeDiamonds: (trackId: string, property: AnimatableProperty) => React.ReactNode;

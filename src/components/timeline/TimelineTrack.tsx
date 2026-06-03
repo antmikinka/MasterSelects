@@ -11,7 +11,6 @@ import {
   shouldLoopVectorAnimation,
 } from '../../types/vectorAnimation';
 import { useTimelineStore } from '../../stores/timeline';
-import { flags } from '../../engine/featureFlags';
 import { TimelineClipCanvas, type CanvasFadeVisuals } from './TimelineClipCanvas';
 import {
   ClipInteractionShell,
@@ -399,7 +398,6 @@ function TimelineTrackComponent({
   isResizeActive = false,
   onTrimStart,
   onFadeStart,
-  renderLegacyClip,
   onClipMouseDown,
   onClipContextMenu,
   clipKeyframes,
@@ -536,10 +534,9 @@ function TimelineTrackComponent({
     clipStemSeparationJobs,
     hoveredClipId,
   ]);
-  // issue #228: when the flag is on, draw clip bodies on a viewport-sliced
-  // canvas per track instead of one DOM node per clip. The canvas backing store
-  // no longer scales with total timeline width, so high zoom does not need the
-  // visible legacy DOM fallback.
+  // issue #228: draw clip bodies on a viewport-sliced canvas per track instead
+  // of one DOM node per clip. The canvas backing store no longer scales with
+  // total timeline width, so high zoom does not need a visible legacy DOM fallback.
   const trackContentWidth = useMemo(() => {
     let max = 0;
     for (const clip of allTrackClips) {
@@ -548,14 +545,12 @@ function TimelineTrackComponent({
     }
     return max;
   }, [allTrackClips, timeToPixel]);
-  const useCanvasClips = flags.timelineCanvasClips;
-  // Canvas mode has a single visible renderer: TimelineClipCanvas. DOM clips are
+  // The track has a single visible renderer: TimelineClipCanvas. DOM nodes are
   // mounted only as invisible interaction shells for the clip under the cursor or
   // an active gesture. They must never replace the visible canvas body, otherwise
   // thumbnails/waveforms visibly switch between two renderers.
   const domControlClipIds = useMemo(() => {
     const ids = new Set<string>();
-    if (!useCanvasClips) return ids;
     if (hoveredClipId) ids.add(hoveredClipId);
     if (clipDrag) {
       ids.add(clipDrag.clipId);
@@ -570,7 +565,6 @@ function TimelineTrackComponent({
     });
     return ids;
   }, [
-    useCanvasClips,
     hoveredClipId,
     clipDrag,
     clipTrim,
@@ -613,7 +607,6 @@ function TimelineTrackComponent({
     };
   }, [clipKeyframes, track.type]);
   const canvasClips = useMemo(() => {
-    if (!useCanvasClips) return allTrackClips;
     const nextClips = new Map(allTrackClips.map((clip) => [clip.id, clip]));
 
     if (clipDragPreview) {
@@ -636,7 +629,7 @@ function TimelineTrackComponent({
       const fade = getClipFadeVisualState(clip);
       return fade.keyframes.length >= 2 ? { ...clip, fade } : clip;
     });
-  }, [useCanvasClips, clipDrag, clipDragPreview, track.id, allTrackClips, clips, getClipFadeVisualState]);
+  }, [clipDrag, clipDragPreview, track.id, allTrackClips, clips, getClipFadeVisualState]);
   const canvasContentWidth = useMemo(() => {
     let max = trackContentWidth;
     for (const clip of canvasClips) {
@@ -686,8 +679,8 @@ function TimelineTrackComponent({
     return max;
   }, [canvasClips, clipTrim, timeToPixel, trackContentWidth]);
   const domControlClips = useMemo(
-    () => (useCanvasClips ? canvasClips.filter((clip) => domControlClipIds.has(clip.id)) : []),
-    [useCanvasClips, canvasClips, domControlClipIds],
+    () => canvasClips.filter((clip) => domControlClipIds.has(clip.id)),
+    [canvasClips, domControlClipIds],
   );
   useEffect(() => {
     const activeShellSlotCounts: Partial<Record<ClipInteractionShellModuleSlot, number>> = {};
@@ -708,16 +701,14 @@ function TimelineTrackComponent({
     });
 
     reportTimelineCanvasDomDiagnostics(track.id, {
-      domOverlayCount: useCanvasClips ? domControlClips.length : 0,
-      domClipBodyCount: useCanvasClips ? 0 : trackClips.length,
+      domOverlayCount: domControlClips.length,
+      domClipBodyCount: 0,
       shellCount: domControlClips.length,
       activeShellSlotCounts,
     });
   }, [
     track.id,
-    useCanvasClips,
     domControlClips,
-    trackClips.length,
     clipTrim,
     clipFade,
     clipContextMenu,
@@ -933,15 +924,15 @@ function TimelineTrackComponent({
       <div
         className="track-clip-row"
         style={{ height: baseHeight }}
-        onMouseMove={useCanvasClips ? (event) => {
-          // Canvas mode: hit-test under the cursor so the hovered clip mounts as
-          // a real interactive DOM clip on top of the canvas.
+        onMouseMove={(event) => {
+          // Hit-test under the cursor so the hovered clip mounts as a real
+          // interaction shell on top of the canvas.
           const hit = hitTestClipAtClientX(event.clientX, event.currentTarget);
           setHoveredClipId((prev) => (prev === hit ? prev : hit));
-        } : undefined}
-        onMouseLeave={useCanvasClips ? () => setHoveredClipId(null) : undefined}
+        }}
+        onMouseLeave={() => setHoveredClipId(null)}
         onMouseDown={(event) => {
-          if (useCanvasClips && event.button === 0) {
+          if (event.button === 0) {
             const target = event.target as HTMLElement;
             if (!target.closest('.timeline-clip, .timeline-clip-preview')) {
               const hit = hitTestClipAtClientX(event.clientX, event.currentTarget);
@@ -962,12 +953,10 @@ function TimelineTrackComponent({
         onContextMenu={(event) => {
           const target = event.target as HTMLElement;
           if (target.closest('.timeline-clip, .timeline-clip-preview')) return;
-          if (useCanvasClips) {
-            const hit = hitTestClipAtClientX(event.clientX, event.currentTarget);
-            if (hit) {
-              onClipContextMenu(event, hit);
-              return;
-            }
+          const hit = hitTestClipAtClientX(event.clientX, event.currentTarget);
+          if (hit) {
+            onClipContextMenu(event, hit);
+            return;
           }
           const rect = event.currentTarget.getBoundingClientRect();
           const time = Math.max(0, pixelToTime(event.clientX - rect.left));
@@ -975,63 +964,50 @@ function TimelineTrackComponent({
         }}
       >
         {/* Render clips belonging to this track */}
-        {useCanvasClips ? (
-          <>
-            <TimelineClipCanvas
-              clips={canvasClips}
-              trackId={track.id}
-              height={baseHeight}
-              contentWidth={canvasContentWidth}
-              timeToPixel={timeToPixel}
-              selectedClipIds={selectedClipIds}
-              hoveredClipId={hoveredClipId}
-              trackColor={trackColor ?? 'rgba(120, 160, 200, 1)'}
-              scrollX={scrollX}
-              viewportWidth={viewportWidth}
-              waveformsEnabled={waveformsEnabled}
-              audioDisplayMode={audioDisplayMode}
-              clipDrag={clipDrag}
-              clipDragPreview={clipDragPreview}
-              clipTrim={clipTrim}
-            />
-            {domControlClips.map((clip) => {
-              const activeModules = getClipShellActiveModules(clip);
-              const mountState = getClipShellMountState(clip.id);
-              return (
-                <div
-                  key={`canvas-control-${clip.id}`}
-                  className="timeline-canvas-dom-overlay"
-                >
-                  <ClipInteractionShell
-                    clip={clip}
-                    track={track}
-                    geometry={getClipShellGeometry(clip)}
-                    mountState={mountState}
-                    activeModules={activeModules}
-                    commands={{
-                      onFadeStart: (event, context, edge) => onFadeStart(event, context.clip.id, edge),
-                      onTrimStart: (event, context, edge) => onTrimStart(event, context.clip.id, edge),
-                      onMoveKeyframeGroup: (keyframeIds, newTime) => {
-                        onMoveKeyframeGroup?.(keyframeIds, newTime);
-                      },
-                    }}
-                    className="timeline-canvas-interaction-shell"
-                    style={{ pointerEvents: 'none' }}
-                  />
-                </div>
-              );
-            })}
-          </>
-        ) : (
-          trackClips.map((clip) => renderLegacyClip(clip, track.id))
-        )}
-        {/* Render clip being dragged TO this track */}
-        {!useCanvasClips && clipDrag &&
-          clipDrag.currentTrackId === track.id &&
-          clipDrag.originalTrackId !== track.id &&
-          clips
-            .filter((c) => c.id === clipDrag.clipId && !trackClipIds.has(c.id))
-            .map((clip) => renderLegacyClip(clip, track.id))}
+        <TimelineClipCanvas
+          clips={canvasClips}
+          trackId={track.id}
+          height={baseHeight}
+          contentWidth={canvasContentWidth}
+          timeToPixel={timeToPixel}
+          selectedClipIds={selectedClipIds}
+          hoveredClipId={hoveredClipId}
+          trackColor={trackColor ?? 'rgba(120, 160, 200, 1)'}
+          scrollX={scrollX}
+          viewportWidth={viewportWidth}
+          waveformsEnabled={waveformsEnabled}
+          audioDisplayMode={audioDisplayMode}
+          clipDrag={clipDrag}
+          clipDragPreview={clipDragPreview}
+          clipTrim={clipTrim}
+        />
+        {domControlClips.map((clip) => {
+          const activeModules = getClipShellActiveModules(clip);
+          const mountState = getClipShellMountState(clip.id);
+          return (
+            <div
+              key={`canvas-control-${clip.id}`}
+              className="timeline-canvas-dom-overlay"
+            >
+              <ClipInteractionShell
+                clip={clip}
+                track={track}
+                geometry={getClipShellGeometry(clip)}
+                mountState={mountState}
+                activeModules={activeModules}
+                commands={{
+                  onFadeStart: (event, context, edge) => onFadeStart(event, context.clip.id, edge),
+                  onTrimStart: (event, context, edge) => onTrimStart(event, context.clip.id, edge),
+                  onMoveKeyframeGroup: (keyframeIds, newTime) => {
+                    onMoveKeyframeGroup?.(keyframeIds, newTime);
+                  },
+                }}
+                className="timeline-canvas-interaction-shell"
+                style={{ pointerEvents: 'none' }}
+              />
+            </div>
+          );
+        })}
         {/* External file drag preview - video clip */}
         {externalDrag && externalDrag.trackId === track.id && renderExternalPreview(
           'timeline-clip-preview',

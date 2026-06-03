@@ -80,7 +80,6 @@ function renderTimelineTrack(overrides: Partial<TimelineTrackProps> = {}) {
     onDragOver: vi.fn(),
     onDragEnter: vi.fn(),
     onDragLeave: vi.fn(),
-    renderLegacyClip: () => null,
     clipKeyframes: new Map(),
     renderKeyframeDiamonds: () => null,
     timeToPixel: (time) => time * 10,
@@ -150,7 +149,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
       clips: [createClip()],
       onClipMouseDown,
       onEmptyMouseDown,
-      renderLegacyClip: (clip) => <div className="timeline-clip" data-clip-id={clip.id} />,
     });
 
     fireEvent.mouseDown(row, { button: 0, clientX: 45, clientY: 24 });
@@ -161,30 +159,21 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
   });
 
   it('keeps the canvas renderer active at extreme zoom', () => {
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { container } = renderTimelineTrack({
       clips: [createClip()],
       zoom: 5000,
       timeToPixel: (time) => time * 5000,
       pixelToTime: (pixel) => pixel / 5000,
-      renderLegacyClip,
     });
 
     expect(container.querySelector('.timeline-clip-canvas')).toBeTruthy();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 
   it('mounts a hover-only interaction shell without the legacy overlay body', () => {
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { container, row } = renderTimelineTrack({
       clips: [createClip()],
-      renderLegacyClip,
     });
 
     fireEvent.mouseMove(row, { clientX: 45, clientY: 24 });
@@ -200,17 +189,12 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(shell?.dataset.activeSlots).toBe('');
     expect(shell?.style.pointerEvents).toBe('none');
     expect(legacyClip).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 
   it('reports zero DOM clip bodies for canvas interaction shells', () => {
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { row } = renderTimelineTrack({
       clips: [createClip()],
-      renderLegacyClip,
     });
 
     fireEvent.mouseMove(row, { clientX: 45, clientY: 24 });
@@ -225,21 +209,16 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(totals.domOverlayCount).toBe(1);
     expect(totals.shellCount).toBe(1);
     expect(totals.domClipBodyCount).toBe(0);
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 
   it('routes a primary click through the hover-only shell without the legacy body', () => {
     const onClipMouseDown = vi.fn();
     const onEmptyMouseDown = vi.fn();
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { container, row } = renderTimelineTrack({
       clips: [createClip()],
       onClipMouseDown,
       onEmptyMouseDown,
-      renderLegacyClip,
     });
 
     fireEvent.mouseMove(row, { clientX: 45, clientY: 24 });
@@ -249,21 +228,16 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(onClipMouseDown.mock.calls[0][1]).toBe('clip-video');
     expect(onEmptyMouseDown).not.toHaveBeenCalled();
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 
   it('routes a clip context menu through the hover-only shell without the legacy body', () => {
     const onClipContextMenu = vi.fn();
     const onEmptyContextMenu = vi.fn();
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { container, row } = renderTimelineTrack({
       clips: [createClip()],
       onClipContextMenu,
       onEmptyContextMenu,
-      renderLegacyClip,
     });
 
     fireEvent.mouseMove(row, { clientX: 45, clientY: 24 });
@@ -273,31 +247,22 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(onClipContextMenu.mock.calls[0][1]).toBe('clip-video');
     expect(onEmptyContextMenu).not.toHaveBeenCalled();
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 
   it('does not mount selected-only DOM controls in canvas mode', () => {
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { container } = renderTimelineTrack({
       clips: [createClip()],
       selectedClipIds: new Set(['clip-video']),
-      renderLegacyClip,
     });
 
     expect(container.querySelector('.timeline-clip-canvas')).toBeTruthy();
     expect(container.querySelector('.clip-interaction-shell')).toBeNull();
     expect(container.querySelector('.timeline-canvas-dom-overlay')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 
   it('mounts a fade shell without the legacy overlay body for an active fade clip', () => {
     const onFadeStart = vi.fn();
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { container } = renderTimelineTrack({
       clips: [createClip()],
@@ -349,7 +314,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
         originalFadeDuration: 0.2,
       },
       onFadeStart,
-      renderLegacyClip,
     });
 
     const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
@@ -366,7 +330,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(rightFadeHandle?.style.right).toBe('4px');
     expect(container.querySelector('.fade-curve-svg')).toBeTruthy();
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
 
     fireEvent.mouseDown(leftFadeHandle as HTMLElement, { button: 0 });
 
@@ -377,12 +340,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
 
   it('mounts shell trim handles for the active trim clip and dispatches trim commands', () => {
     const onTrimStart = vi.fn();
-    const renderLegacyClip = vi.fn<TimelineTrackProps['renderLegacyClip']>((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id}>
-        <div className="trim-handle left" />
-        <div className="trim-handle right" />
-      </div>
-    ));
 
     const { container } = renderTimelineTrack({
       clips: [createClip()],
@@ -401,7 +358,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
         appliedDelta: 0,
       },
       onTrimStart,
-      renderLegacyClip,
     });
 
     const overlay = container.querySelector<HTMLElement>('.timeline-canvas-dom-overlay');
@@ -413,7 +369,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(shell?.dataset.activeSlots).toBe('trim');
     expect(container.querySelectorAll('.shell-trim-handle')).toHaveLength(2);
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
 
     fireEvent.mouseDown(shellRightHandle as HTMLElement, { button: 0 });
 
@@ -423,9 +378,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
   });
 
   it('mounts a context-menu shell without the legacy overlay body for the open clip menu', () => {
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { container } = renderTimelineTrack({
       clips: [createClip()],
@@ -434,7 +386,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
         x: 96,
         y: 32,
       },
-      renderLegacyClip,
     });
 
     const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
@@ -445,13 +396,9 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(shell?.dataset.activeSlots).toBe('context-menu');
     expect(shell?.style.pointerEvents).toBe('none');
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 
   it('mounts a drag-only shell without the legacy overlay body for an active clip drag', () => {
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { container } = renderTimelineTrack({
       clips: [createClip()],
@@ -472,7 +419,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
         forcingOverlap: false,
         dragStartTime: 100,
       },
-      renderLegacyClip,
     });
 
     const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
@@ -482,13 +428,9 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(shell?.dataset.mountReasons).toBe('drag');
     expect(shell?.dataset.activeSlots).toBe('');
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 
   it('keeps a drag-hover shell without the legacy overlay body', () => {
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { container, row } = renderTimelineTrack({
       clips: [createClip()],
@@ -509,7 +451,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
         forcingOverlap: false,
         dragStartTime: 100,
       },
-      renderLegacyClip,
     });
 
     fireEvent.mouseMove(row, { clientX: 45, clientY: 24 });
@@ -521,13 +462,9 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(shell?.dataset.mountReasons).toBe('hover drag');
     expect(shell?.dataset.activeSlots).toBe('');
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 
   it('keeps a multi-drag-hover shell without the legacy overlay body', () => {
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
     const secondaryClip = createClip({
       id: 'clip-secondary',
       name: 'Secondary Clip',
@@ -558,7 +495,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
         dragStartTime: 100,
         multiSelectClipIds: ['clip-secondary'],
       },
-      renderLegacyClip,
     });
 
     fireEvent.mouseMove(row, { clientX: 105, clientY: 24 });
@@ -569,13 +505,9 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(secondaryShell?.dataset.mountReasons).toBe('hover multi-drag');
     expect(secondaryShell?.dataset.activeSlots).toBe('');
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 
   it('renders selected clip keyframe ticks through the shell without the legacy overlay', () => {
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
     const onMoveKeyframeGroup = vi.fn();
 
     const { container } = renderTimelineTrack({
@@ -596,7 +528,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
         ],
       ]),
       selectedKeyframeIds: new Set(['kf-opacity']),
-      renderLegacyClip,
       onMoveKeyframeGroup,
     });
 
@@ -610,7 +541,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(shell?.style.pointerEvents).toBe('none');
     expect(tick).toBeTruthy();
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
 
     fireEvent.mouseDown(tick as HTMLElement, { button: 0, clientX: 20 });
     fireEvent.mouseMove(document, { clientX: 30 });
@@ -622,9 +552,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
   });
 
   it('renders mixed keyframe and audio-region shell modules without the legacy overlay body', () => {
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { container } = renderTimelineTrack({
       clips: [createClip()],
@@ -652,7 +579,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
         sourceInPoint: 0.5,
         sourceOutPoint: 1.5,
       },
-      renderLegacyClip,
     });
 
     const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
@@ -663,13 +589,9 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(container.querySelector('.clip-interaction-shell .keyframe-tick')).toBeTruthy();
     expect(container.querySelector('.clip-interaction-shell .clip-audio-region-selection')).toBeTruthy();
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 
   it('renders mixed context-menu and keyframe shell modules without the legacy overlay body', () => {
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { container } = renderTimelineTrack({
       clips: [createClip()],
@@ -694,7 +616,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
         x: 96,
         y: 32,
       },
-      renderLegacyClip,
     });
 
     const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
@@ -704,13 +625,9 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(shell?.dataset.activeSlots).toBe('keyframe context-menu');
     expect(container.querySelector('.clip-interaction-shell .keyframe-tick')).toBeTruthy();
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 
   it('renders an audio-region shell without the legacy overlay body for an active audio region', () => {
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { container } = renderTimelineTrack({
       clips: [createClip()],
@@ -722,7 +639,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
         sourceInPoint: 0.5,
         sourceOutPoint: 1.5,
       },
-      renderLegacyClip,
     });
 
     const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
@@ -733,13 +649,9 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(shell?.style.pointerEvents).toBe('none');
     expect(container.querySelector('.clip-interaction-shell .clip-audio-region-selection')).toBeTruthy();
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 
   it('renders a spectral-region shell without the legacy overlay body for an active spectral selection', () => {
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { container } = renderTimelineTrack({
       clips: [createClip()],
@@ -753,7 +665,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
         frequencyMinHz: 120,
         frequencyMaxHz: 2400,
       },
-      renderLegacyClip,
     });
 
     const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
@@ -764,13 +675,9 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(shell?.style.pointerEvents).toBe('none');
     expect(container.querySelector('.clip-interaction-shell .clip-spectral-region-selection')).toBeTruthy();
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 
   it('renders a video-bake shell without the legacy overlay body for a clip bake region', () => {
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { container } = renderTimelineTrack({
       clips: [
@@ -793,7 +700,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
           },
         }),
       ],
-      renderLegacyClip,
     });
 
     const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
@@ -804,13 +710,9 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(shell?.style.pointerEvents).toBe('none');
     expect(container.querySelector('.clip-interaction-shell .clip-video-bake-region')).toBeTruthy();
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 
   it('renders a stem shell module without the legacy overlay body for an active stem job', () => {
-    const renderLegacyClip = vi.fn((clip: TimelineClip) => (
-      <div className="timeline-clip" data-clip-id={clip.id} />
-    ));
 
     const { container } = renderTimelineTrack({
       clips: [createClip()],
@@ -826,7 +728,6 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
           updatedAt: 2,
         },
       },
-      renderLegacyClip,
     });
 
     const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
@@ -839,6 +740,5 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(stemModule).toBeTruthy();
     expect(container.querySelector('.stem-percent')?.textContent).toBe('50%');
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
-    expect(renderLegacyClip).not.toHaveBeenCalled();
   });
 });
