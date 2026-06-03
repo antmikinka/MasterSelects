@@ -104,3 +104,41 @@ export function partitionMidiNotesAtCut(
 
   return { left, right };
 }
+
+/** One source MIDI clip's contribution to a merge (subset of TimelineClip). */
+export interface MidiMergeSegment {
+  startTime: number;
+  inPoint: number;
+  outPoint: number;
+  notes: readonly MidiNote[];
+}
+
+/**
+ * Combine several MIDI clips ("glue") into one note set on a merged clip whose
+ * content origin sits at `mergedStartTime` (the merged clip has `inPoint = 0`).
+ *
+ * This is the inverse of {@link partitionMidiNotesAtCut}: every note keeps its
+ * ABSOLUTE timeline position. A note's absolute start is `startTime + (start -
+ * inPoint)` (the windowed model), so in the merged clip it becomes
+ * `absoluteStart - mergedStartTime`. Only notes whose start is inside their
+ * source clip's window are taken (same rule as {@link isNoteStartInWindow}), so
+ * hidden/out-of-window notes are not resurrected — keeping cut↔glue symmetric.
+ * Overlapping clips simply contribute their notes side by side (polyphony).
+ *
+ * `makeNote` mirrors the partition callback so callers share one note builder.
+ */
+export function mergeMidiNotes(
+  segments: readonly MidiMergeSegment[],
+  mergedStartTime: number,
+  makeNote: (source: MidiNote, rebased: { start: number; duration: number }) => MidiNote,
+): MidiNote[] {
+  const merged: MidiNote[] = [];
+  for (const segment of segments) {
+    for (const note of segment.notes) {
+      if (!isNoteStartInWindow(segment, note)) continue;
+      const absoluteStart = segment.startTime + (note.start - segment.inPoint);
+      merged.push(makeNote(note, { start: absoluteStart - mergedStartTime, duration: note.duration }));
+    }
+  }
+  return merged;
+}

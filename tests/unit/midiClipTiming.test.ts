@@ -3,9 +3,11 @@ import {
   clipLocalToContentTime,
   contentTimeToClipLocal,
   isNoteStartInWindow,
+  mergeMidiNotes,
   noteAbsoluteStart,
   partitionMidiNotesAtCut,
   type MidiClipWindow,
+  type MidiMergeSegment,
 } from '../../src/services/midi/midiClipTiming';
 import type { MidiNote } from '../../src/types/midiClip';
 
@@ -112,6 +114,58 @@ describe('partitionMidiNotesAtCut', () => {
     const absBefore = startTime + 2.5; // original abs (inPoint 0)
     const absAfter = rightClipStart + right[0].start;
     expect(absAfter).toBeCloseTo(absBefore);
+  });
+});
+
+describe('mergeMidiNotes', () => {
+  let nextId = 0;
+  const makeNote = (source: MidiNote, rebased: { start: number; duration: number }): MidiNote => ({
+    id: `m${nextId++}`,
+    pitch: source.pitch,
+    velocity: source.velocity,
+    start: rebased.start,
+    duration: rebased.duration,
+  });
+  const seg = (startTime: number, inPoint: number, duration: number, notes: MidiNote[]): MidiMergeSegment =>
+    ({ startTime, inPoint, outPoint: inPoint + duration, notes });
+  const note = (start: number, duration: number, pitch = 60, velocity = 0.8): MidiNote =>
+    ({ id: 'src', pitch, start, duration, velocity });
+
+  it('combines clips keeping every note at its absolute timeline position', () => {
+    // Clip A at 0 (note at content 1) and clip B at 4 (note at content 0.5).
+    const a = seg(0, 0, 4, [note(1, 0.5, 60)]);
+    const b = seg(4, 0, 4, [note(0.5, 0.5, 64)]);
+    const merged = mergeMidiNotes([a, b], 0, makeNote);
+    expect(merged).toHaveLength(2);
+    // A's note: abs 1 -> merged start 1. B's note: abs 4.5 -> merged start 4.5.
+    expect(merged.find(n => n.pitch === 60)).toMatchObject({ start: 1 });
+    expect(merged.find(n => n.pitch === 64)).toMatchObject({ start: 4.5 });
+  });
+
+  it('drops out-of-window notes and keeps overlapping clips polyphonic', () => {
+    // Window [1, 3]: the note at content 0.5 is hidden; both clips overlap at abs 2.
+    const a = seg(0, 1, 2, [note(0.5, 0.2, 60), note(2, 1, 62)]); // 0.5 hidden, 2 -> abs 1
+    const b = seg(1, 0, 3, [note(1, 1, 67)]);                     // abs 2
+    const merged = mergeMidiNotes([a, b], 0, makeNote);
+    expect(merged.map(n => n.pitch).toSorted((x, y) => x - y)).toEqual([62, 67]);
+  });
+
+  it('round-trips cut -> glue: notes return to their original absolute positions', () => {
+    const startTime = 10;
+    const cut = 2;
+    const original = [note(0.5, 0.5, 60), note(2.5, 0.5, 64), note(3.2, 0.4, 67)];
+    const absOf = (n: MidiNote) => startTime + (n.start - 0); // inPoint 0
+
+    // Cut at content 2 -> left clip (start 10, inPoint 0) and right clip (start 12, inPoint 0).
+    const { left, right } = partitionMidiNotesAtCut(original, { inPoint: 0, outPoint: 4 }, cut, makeNote);
+    const leftSeg = seg(startTime, 0, cut, left);
+    const rightSeg = seg(startTime + cut, 0, 4 - cut, right);
+
+    // Glue them back; merged clip origin is the left clip's start.
+    const merged = mergeMidiNotes([leftSeg, rightSeg], startTime, makeNote);
+    const mergedAbs = merged.map(n => startTime + n.start).toSorted((x, y) => x - y);
+    const originalAbs = original.map(absOf).toSorted((x, y) => x - y);
+    expect(mergedAbs).toEqual(originalAbs);
   });
 });
 

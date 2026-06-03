@@ -113,6 +113,7 @@ export type TimelineToolId =
   | 'range-select'
   | 'blade'
   | 'blade-all-tracks'
+  | 'glue'
   | 'split-at-playhead'
   | 'split-all-at-playhead'
   | 'trim-start-to-playhead'

@@ -2393,7 +2393,9 @@ function TimelineClipComponent({
         ? 'Track select'
         : result.operation.type === 'split-all-at-time'
           ? 'Blade all tracks'
-          : 'Blade clip',
+          : result.operation.type === 'merge-midi-clips'
+            ? 'Glue MIDI clips'
+            : 'Blade clip',
       });
     }
     if (result.nextToolId) setActiveTimelineTool(result.nextToolId);
