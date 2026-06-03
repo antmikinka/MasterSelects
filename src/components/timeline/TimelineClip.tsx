@@ -48,8 +48,6 @@ import {
 } from './utils/spectralRegionOverlays';
 import type { TimelineAudioRegionSelection } from '../../stores/timeline/types';
 import {
-  dispatchTimelineClipPointerClick,
-  dispatchTimelineClipPointerMove,
   getTimelineToolCursor,
   isTimelineBladeTool,
   isTimelinePointerTool,
@@ -76,6 +74,7 @@ import { useClipAudioArtifactWarmups } from './hooks/useClipAudioArtifactWarmups
 import { useClipAudioRenderState } from './hooks/useClipAudioRenderState';
 import { useClipAudioAnalysisDisplayState } from './hooks/useClipAudioAnalysisDisplayState';
 import { useClipTimelineRenderGeometry } from './hooks/useClipTimelineRenderGeometry';
+import { useClipTimelineToolPointer } from './hooks/useClipTimelineToolPointer';
 
 const TIMELINE_RENDER_OVERSCAN_PX = 512;
 const CLIP_RIGHT_STICKY_PADDING_PX = 8;
@@ -288,20 +287,6 @@ function TimelineClipComponent({
     animationClass,
     animationDelay,
   } = useClipAnimationState({ clip, clips, tracks });
-
-  // Check if this clip should show blade indicator (either directly hovered or linked to hovered clip)
-  const isDirectlyHovered = timelineToolPreview?.clipId === clip.id;
-  const linkedClip = clip.linkedClipId ? clips.find(c => c.id === clip.linkedClipId) : null;
-  const isLinkedToHovered = linkedClip && timelineToolPreview?.clipId === linkedClip.id;
-  // Also check reverse link - if another clip links to this one
-  const reverseLinkedClip = clips.find(c => c.linkedClipId === clip.id);
-  const isReverseLinkedToHovered = reverseLinkedClip && timelineToolPreview?.clipId === reverseLinkedClip.id;
-  const shouldShowCutIndicator = isBladeToolActive &&
-    timelineToolPreview &&
-    isTimelineBladeTool(timelineToolPreview.toolId) &&
-    timelineToolPreview.plane === 'clip-local' &&
-    !timelineToolPreview.blocked &&
-    (isDirectlyHovered || isLinkedToHovered || isReverseLinkedToHovered);
 
   const {
     isAudioClip,
@@ -663,6 +648,30 @@ function TimelineClipComponent({
   );
   const trackColor = timelineTrackColorsVisible ? getTimelineTrackColor(track, trackTypeIndex) : TIMELINE_TRACK_COLOR_HIDDEN;
 
+  const {
+    shouldShowCutIndicator,
+    cutIndicatorX,
+    handleMouseMove,
+    handleMouseLeave,
+    handleClick,
+  } = useClipTimelineToolPointer({
+    clip,
+    track,
+    clips,
+    activeTimelineToolId,
+    timelineToolPreview,
+    canHandleTimelineToolPointer,
+    playheadPosition,
+    snappingEnabled,
+    displayStartTime,
+    displayDuration,
+    width,
+    isBladeToolActive,
+    setTimelineToolPreview,
+    applyTimelineEditOperation,
+    setActiveTimelineTool,
+  });
+
   const clipClass = [
     'timeline-clip',
     isSelected ? 'selected' : '',
@@ -713,66 +722,6 @@ function TimelineClipComponent({
     .filter(Boolean)
     .join(' ');
 
-  const getClipPointerContext = (e: React.MouseEvent) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    return {
-      toolId: activeTimelineToolId,
-      clip,
-      track,
-      clips,
-      playheadPosition,
-      snappingEnabled,
-      displayStartTime,
-      displayDuration,
-      width,
-      clientX: e.clientX,
-      rectLeft: rect.left,
-      altKey: e.altKey,
-    };
-  };
-
-  // Timeline tool pointer handlers
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!canHandleTimelineToolPointer) return;
-
-    const result = dispatchTimelineClipPointerMove(getClipPointerContext(e));
-    if (!result.handled) {
-      if (timelineToolPreview?.clipId === clip.id) setTimelineToolPreview(null);
-      return;
-    }
-    setTimelineToolPreview(result.preview ?? null);
-  };
-
-  const handleMouseLeave = () => {
-    if (!canHandleTimelineToolPointer) return;
-
-    if (timelineToolPreview?.clipId === clip.id) setTimelineToolPreview(null);
-  };
-
-  const handleClick = (e: React.MouseEvent) => {
-    const result = dispatchTimelineClipPointerClick(getClipPointerContext(e));
-    if (!result.handled) return;
-    e.preventDefault();
-    e.stopPropagation();
-
-    if (result.operation) {
-      applyTimelineEditOperation(result.operation, {
-        source: 'ui',
-      historyLabel: result.operation.type === 'select-clips-from-time'
-        ? 'Track select'
-        : result.operation.type === 'split-all-at-time'
-          ? 'Blade all tracks'
-          : 'Blade clip',
-      });
-    }
-    if (result.nextToolId) setActiveTimelineTool(result.nextToolId);
-    setTimelineToolPreview(null);
-  };
-
-  // Calculate cut indicator position for this clip
-  const cutIndicatorX = shouldShowCutIndicator && timelineToolPreview?.time !== undefined
-    ? ((timelineToolPreview.time - displayStartTime) / displayDuration) * width
-    : null;
   const spectralRegionOverlay = useMemo(() => resolveSpectralRegionOverlay({
     selection: audioSpectralRegionSelection,
     displayStartTime,
