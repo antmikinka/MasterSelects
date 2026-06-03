@@ -11,8 +11,8 @@ import {
   canLoopExtendTimelineVectorClip,
   isInfiniteTimelineSourceType,
 } from '../utils/clipSourceTiming';
+import { MIN_CLIP_DURATION } from '../timelineRenderConstants';
 
-const MIN_CLIP_DURATION = 0.1;
 const EPSILON = 0.0001;
 // Pixel radius within which a trim edge snaps to a clip edge / playhead / marker.
 const TRIM_SNAP_PIXELS = 12;

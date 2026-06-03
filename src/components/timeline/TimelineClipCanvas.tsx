@@ -33,6 +33,7 @@ import { getThumbnailBitmap, ensureThumbnailBitmap } from '../../services/timeli
 import { flags } from '../../engine/featureFlags';
 import type { TimelineAudioDisplayMode, TimelineClipDragPreview } from '../../stores/timeline/types';
 import { useMediaStore } from '../../stores/mediaStore';
+import { MIN_CLIP_DURATION } from './timelineRenderConstants';
 import {
   buildWaveformLod,
   normalizeWaveformColumnsForDisplay,
@@ -459,7 +460,7 @@ function resolveClipGeometry(clip: CanvasClip, props: TimelineClipCanvasProps): 
     const sourceType = clip.source?.type;
     const isInfiniteClip = isInfiniteTimelineSourceType(sourceType);
     if (clipTrim.edge === 'left') {
-      const maxTrim = clipTrim.originalDuration - 0.1;
+      const maxTrim = clipTrim.originalDuration - MIN_CLIP_DURATION;
       const minTrim = isInfiniteClip
         ? -clipTrim.originalStartTime
         : -clipTrim.originalInPoint;
@@ -472,7 +473,7 @@ function resolveClipGeometry(clip: CanvasClip, props: TimelineClipCanvasProps): 
       const maxExtend = isInfiniteClip || canLoopExtendTimelineVectorClip(clip)
         ? Number.MAX_SAFE_INTEGER
         : sourceDuration - clipTrim.originalOutPoint;
-      const minTrim = -(clipTrim.originalDuration - 0.1);
+      const minTrim = -(clipTrim.originalDuration - MIN_CLIP_DURATION);
       const clampedDelta = Math.max(minTrim, Math.min(maxExtend, deltaTime));
       startTime = clipTrim.originalStartTime;
       duration = clipTrim.originalDuration + clampedDelta;

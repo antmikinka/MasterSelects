@@ -2,7 +2,6 @@ import { useCallback, useMemo } from 'react';
 import type {
   ClipAudioEditOperation,
   ClipAudioRegionGainPreview,
-  Keyframe,
   TimelineClip,
 } from '../../../types';
 import type {
@@ -20,8 +19,9 @@ import type {
   AudioRegionMoveDragState,
   AudioRegionResizeDragState,
 } from './useClipRegionInteractions';
+import type { AudioAutomationCurveKeyframe } from '../utils/audioAutomationCurve';
+import { TIMELINE_RENDER_OVERSCAN_PX } from '../timelineRenderConstants';
 
-const TIMELINE_RENDER_OVERSCAN_PX = 512;
 const EMPTY_AUDIO_EDIT_STACK = [] as const;
 const EMPTY_WAVEFORM: number[] = [];
 
@@ -47,7 +47,7 @@ export function useClipAudioRenderState(input: {
   spectrogramNaturalDuration: number;
   spectrogramVariant: 'processed' | 'source';
   waveformRenderWindow: TimelineHorizontalRenderWindow;
-  audioVolumeAutomationKeyframes: readonly Keyframe[];
+  audioVolumeAutomationKeyframes: readonly AudioAutomationCurveKeyframe[];
   isAudioClip: boolean;
   isTrimming: boolean;
   isLinkedToTrimming: boolean;

@@ -1,0 +1,2 @@
+export const TIMELINE_RENDER_OVERSCAN_PX = 512;
+export const MIN_CLIP_DURATION = 0.1;

@@ -70,9 +70,3 @@ export function useTimelineWaveformPyramidState(
 
   return loaded.refId === refId ? loaded : fallback;
 }
-
-export function useTimelineWaveformPyramid(
-  refId: string | undefined,
-): TimelineWaveformPyramid | null {
-  return useTimelineWaveformPyramidState(refId).pyramid;
-}

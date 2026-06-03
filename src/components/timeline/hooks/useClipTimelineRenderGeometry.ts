@@ -9,10 +9,13 @@ import {
   resolveTimelineViewportWidth,
 } from '../utils/waveformRenderGeometry';
 import { useClipThumbnailFilmstripPlan } from './useClipThumbnailFilmstripPlan';
+import {
+  MIN_CLIP_DURATION,
+  TIMELINE_RENDER_OVERSCAN_PX,
+} from '../timelineRenderConstants';
 
 const TIMELINE_VIEWPORT_FALLBACK_PX = 1600;
 const TIMELINE_VIEWPORT_MIN_PX = 1600;
-const TIMELINE_RENDER_OVERSCAN_PX = 512;
 
 function getSlippedSourceWindow(
   clip: TimelineClipProps['clip'],
@@ -67,7 +70,7 @@ export function useClipTimelineRenderGeometry(input: {
       : (input.clip.source?.naturalDuration || input.clip.duration);
 
     if (input.clipTrim.edge === 'left') {
-      const maxTrim = input.clipTrim.originalDuration - 0.1;
+      const maxTrim = input.clipTrim.originalDuration - MIN_CLIP_DURATION;
       const minTrim = isInfiniteClip
         ? -input.clipTrim.originalStartTime
         : -input.clipTrim.originalInPoint;
@@ -79,7 +82,7 @@ export function useClipTimelineRenderGeometry(input: {
       const maxExtend = canLoopExtendRight
         ? Number.MAX_SAFE_INTEGER
         : maxDuration - input.clipTrim.originalOutPoint;
-      const minTrim = -(input.clipTrim.originalDuration - 0.1);
+      const minTrim = -(input.clipTrim.originalDuration - MIN_CLIP_DURATION);
       const clampedDelta = Math.max(minTrim, Math.min(maxExtend, deltaTime));
       displayDuration = input.clipTrim.originalDuration + clampedDelta;
       displayOutPoint = input.clipTrim.originalOutPoint + clampedDelta;
@@ -90,7 +93,7 @@ export function useClipTimelineRenderGeometry(input: {
     const maxDuration = input.clip.source?.naturalDuration || input.clip.duration;
 
     if (input.clipTrim.edge === 'left') {
-      const maxTrim = input.clip.duration - 0.1;
+      const maxTrim = input.clip.duration - MIN_CLIP_DURATION;
       const minTrim = -input.clip.inPoint;
       const clampedDelta = Math.max(minTrim, Math.min(maxTrim, deltaTime));
       displayStartTime = input.clip.startTime + clampedDelta;
@@ -100,7 +103,7 @@ export function useClipTimelineRenderGeometry(input: {
       const maxExtend = canLoopExtendRight
         ? Number.MAX_SAFE_INTEGER
         : maxDuration - input.clip.outPoint;
-      const minTrim = -(input.clip.duration - 0.1);
+      const minTrim = -(input.clip.duration - MIN_CLIP_DURATION);
       const clampedDelta = Math.max(minTrim, Math.min(maxExtend, deltaTime));
       displayDuration = input.clip.duration + clampedDelta;
       displayOutPoint = input.clip.outPoint + clampedDelta;
@@ -161,7 +164,7 @@ export function useClipTimelineRenderGeometry(input: {
       viewportWidth: renderTimelineViewportWidth,
       overscanPx: TIMELINE_RENDER_OVERSCAN_PX,
     })
-  ), [input.scrollX, input.timeToPixel, renderTimelineViewportWidth, staticContentRenderLeft, width]);
+  ), [input.scrollX, renderTimelineViewportWidth, staticContentRenderLeft, width]);
   const thumbnailPlan = useClipThumbnailFilmstripPlan({
     clip: input.clip,
     passiveMediaEnabled: input.passiveMediaEnabled,

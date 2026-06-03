@@ -85,7 +85,7 @@ export function useClipAudioAnalysisDisplayState(input: {
     : processedWaveformStatus;
   const isBackgroundProcessedWaveformJob = input.clip.audioAnalysisJob?.processed === true &&
     input.clip.audioAnalysisJob.artifactKinds.includes('processed-waveform-pyramid');
-  const showWaveformGenerationIndicator = input.clip.waveformGenerating &&
+  const showWaveformGenerationIndicator = Boolean(input.clip.waveformGenerating) &&
     !(isBackgroundProcessedWaveformJob && shouldSuppressBackgroundProcessedWaveformUi);
 
   return {

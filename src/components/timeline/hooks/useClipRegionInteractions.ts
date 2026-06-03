@@ -120,7 +120,7 @@ export function useClipRegionInteractions(input: {
   addClipVideoBakeRegion: (
     clipId: string,
     selection: Omit<TimelineVideoBakeRegionSelection, 'scope' | 'clipId'>,
-  ) => TimelineVideoBakeRegionSelection | null;
+  ) => string | null;
 }): ClipRegionInteractions {
   const {
     clip,

@@ -24,6 +24,7 @@ import {
   type ClipInteractionShellRect,
 } from './interactionShell';
 import { reportTimelineCanvasDomDiagnostics } from '../../services/timeline/timelineCanvasDiagnostics';
+import { MIN_CLIP_DURATION } from './timelineRenderConstants';
 
 const TRACK_VIEWPORT_FALLBACK_PX = 1600;
 const TRACK_VIEWPORT_MIN_PX = 1600;
@@ -97,6 +98,24 @@ const createShellRect = (x: number, y: number, width: number, height: number): C
   width: Math.max(0, width),
   height: Math.max(0, height),
 });
+
+const canSkipLegacyClipBody = (
+  activeSlots: readonly ClipInteractionShellModuleSlot[],
+  mountReasons: readonly ClipInteractionShellMountReason[],
+): boolean => {
+  const trimOnlyShell = activeSlots.length === 1 && activeSlots[0] === 'trim';
+  const contextMenuShell =
+    activeSlots.length === 1 &&
+    activeSlots[0] === 'context-menu' &&
+    mountReasons.includes('context-menu-open') &&
+    mountReasons.every((reason) => reason === 'context-menu-open' || reason === 'hover');
+  const dragOnlyShell =
+    activeSlots.length === 0 &&
+    mountReasons.length > 0 &&
+    mountReasons.every((reason) => reason === 'drag' || reason === 'multi-drag');
+
+  return trimOnlyShell || contextMenuShell || dragOnlyShell;
+};
 
 const clampShellRectX = (rect: ClipInteractionShellRect, viewport: ClipInteractionShellRect): ClipInteractionShellRect => {
   const left = Math.max(rect.x, viewport.x);
@@ -567,7 +586,7 @@ function TimelineTrackComponent({
             )
             ? Number.MAX_SAFE_INTEGER
             : sourceDuration - clipTrim.originalOutPoint;
-          const minTrim = -(clipTrim.originalDuration - 0.1);
+          const minTrim = -(clipTrim.originalDuration - MIN_CLIP_DURATION);
           const clampedDelta = Math.max(minTrim, Math.min(maxExtend, clipTrim.appliedDelta));
           const previewDuration = Math.max(0.001, clipTrim.originalDuration + clampedDelta);
           const previewOutPoint = clipTrim.originalOutPoint + clampedDelta;
@@ -577,7 +596,7 @@ function TimelineTrackComponent({
           const minTrim = isInfiniteTimelineSourceType(sourceType)
             ? -clipTrim.originalStartTime
             : -clipTrim.originalInPoint;
-          const maxTrim = clipTrim.originalDuration - 0.1;
+          const maxTrim = clipTrim.originalDuration - MIN_CLIP_DURATION;
           const clampedDelta = Math.max(minTrim, Math.min(maxTrim, clipTrim.appliedDelta));
           previewEnd = clipTrim.originalStartTime + clampedDelta + Math.max(0.001, clipTrim.originalDuration - clampedDelta);
           sourceExtensionEnd = previewEnd;
@@ -599,25 +618,48 @@ function TimelineTrackComponent({
   );
   useEffect(() => {
     const activeShellSlotCounts: Partial<Record<ClipInteractionShellModuleSlot, number>> = {};
-    const addSlot = (slot: ClipInteractionShellModuleSlot) => {
+    const addSlot = (
+      slots: ClipInteractionShellModuleSlot[],
+      slot: ClipInteractionShellModuleSlot,
+    ) => {
+      slots.push(slot);
       activeShellSlotCounts[slot] = (activeShellSlotCounts[slot] ?? 0) + 1;
     };
+    let domClipBodyCount = useCanvasClips ? 0 : trackClips.length;
 
     domControlClips.forEach((clip) => {
-      if (clipTrim?.clipId === clip.id) addSlot('trim');
-      if (clipFade?.clipId === clip.id) addSlot('fade');
-      if (clipShellKeyframeStateByClipId.has(clip.id)) addSlot('keyframe');
-      if (clipContextMenu?.clipId === clip.id) addSlot('context-menu');
+      const activeSlots: ClipInteractionShellModuleSlot[] = [];
+      if (clipTrim?.clipId === clip.id) addSlot(activeSlots, 'trim');
+      if (clipFade?.clipId === clip.id) addSlot(activeSlots, 'fade');
+      if (clipShellKeyframeStateByClipId.has(clip.id)) addSlot(activeSlots, 'keyframe');
+      if (clipContextMenu?.clipId === clip.id) addSlot(activeSlots, 'context-menu');
       const specialState = clipShellSpecialStateByClipId.get(clip.id);
-      if (specialState?.audioRegionActive) addSlot('audio-region');
-      if (specialState?.spectralRegionActive) addSlot('spectral-region');
-      if (specialState?.videoBakeActive) addSlot('video-bake');
-      if (specialState?.stemActive) addSlot('stem');
+      if (specialState?.audioRegionActive) addSlot(activeSlots, 'audio-region');
+      if (specialState?.spectralRegionActive) addSlot(activeSlots, 'spectral-region');
+      if (specialState?.videoBakeActive) addSlot(activeSlots, 'video-bake');
+      if (specialState?.stemActive) addSlot(activeSlots, 'stem');
+
+      const mountReasons: ClipInteractionShellMountReason[] = [];
+      if (hoveredClipId === clip.id) mountReasons.push('hover');
+      if (clipDrag?.clipId === clip.id) mountReasons.push('drag');
+      if (clipDrag?.multiSelectClipIds?.includes(clip.id)) mountReasons.push('multi-drag');
+      if (clipTrim?.clipId === clip.id) mountReasons.push('trim');
+      if (clipFade?.clipId === clip.id) mountReasons.push('fade');
+      if (clipContextMenu?.clipId === clip.id) mountReasons.push('context-menu-open');
+      if (clipShellKeyframeStateByClipId.has(clip.id)) mountReasons.push('selected-keyframes');
+      if (specialState?.audioRegionActive) mountReasons.push('audio-region-active');
+      if (specialState?.spectralRegionActive) mountReasons.push('spectral-region-active');
+      if (specialState?.videoBakeActive) mountReasons.push('video-bake-active');
+      if (specialState?.stemActive) mountReasons.push('stem-active');
+
+      if (!canSkipLegacyClipBody(activeSlots, mountReasons)) {
+        domClipBodyCount += 1;
+      }
     });
 
     reportTimelineCanvasDomDiagnostics(track.id, {
       domOverlayCount: useCanvasClips ? domControlClips.length : 0,
-      domClipBodyCount: useCanvasClips ? domControlClips.length : trackClips.length,
+      domClipBodyCount,
       shellCount: domControlClips.length,
       activeShellSlotCounts,
     });
@@ -626,6 +668,8 @@ function TimelineTrackComponent({
     useCanvasClips,
     domControlClips,
     trackClips.length,
+    hoveredClipId,
+    clipDrag,
     clipTrim,
     clipFade,
     clipContextMenu,
@@ -888,17 +932,7 @@ function TimelineTrackComponent({
               const activeModules = getClipShellActiveModules(clip);
               const activeSlots = getClipInteractionShellActiveSlots(activeModules);
               const mountState = getClipShellMountState(clip.id);
-              const trimOnlyShell = activeSlots.length === 1 && activeSlots[0] === 'trim';
-              const contextMenuOnlyShell =
-                activeSlots.length === 1 &&
-                activeSlots[0] === 'context-menu' &&
-                mountState.reasons.length === 1 &&
-                mountState.reasons[0] === 'context-menu-open';
-              const dragOnlyShell =
-                activeSlots.length === 0 &&
-                mountState.reasons.length > 0 &&
-                mountState.reasons.every((reason) => reason === 'drag' || reason === 'multi-drag');
-              const skipLegacyClipBody = trimOnlyShell || contextMenuOnlyShell || dragOnlyShell;
+              const skipLegacyClipBody = canSkipLegacyClipBody(activeSlots, mountState.reasons);
               return (
                 <div
                   key={`canvas-control-${clip.id}`}

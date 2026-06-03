@@ -1,10 +1,8 @@
 // TimelineClip component - Clip rendering within tracks
 
 import './TimelineClip.css';
-import { memo, useRef, useState, useCallback, useMemo } from 'react';
+import { memo, useState, useCallback, useMemo } from 'react';
 import type { TimelineClipProps } from './types';
-import { useTimelineStore } from '../../stores/timeline';
-import { useMediaStore } from '../../stores/mediaStore';
 import { ClipAudioEditStackControls } from './components/ClipAudioEditStackControls';
 import { ClipAudioRegionSelectionOverlay } from './components/ClipAudioRegionSelectionOverlay';
 import { ClipSpectralRegionOverlays } from './components/ClipSpectralRegionOverlays';
@@ -26,7 +24,6 @@ import {
 } from '../../services/audio/audioGraphRouteSettings';
 import { resolveAudioWaveformDiagnostics } from './utils/audioWaveformDiagnostics';
 import { resolveAudioVolumeAutomationCurveKeyframes } from './utils/audioAutomationCurve';
-import { resolveClipLabelHex } from './utils/resolveClipLabelHex';
 import { resolveClipMediaClassification } from './utils/clipMediaClassification';
 import {
   getSpectralMaxFrequencyHz,
@@ -34,7 +31,6 @@ import {
 import type { TimelineAudioRegionSelection } from '../../stores/timeline/types';
 import {
   getTimelineToolCursor,
-  isTimelineBladeTool,
   isTimelinePointerTool,
 } from './tools/pointer/timelineToolPointerDispatcher';
 import { getTrimHandleArrowDirections } from './utils/trimHandleDirections';
@@ -62,8 +58,8 @@ import { useClipTimelineRenderGeometry } from './hooks/useClipTimelineRenderGeom
 import { useClipTimelineToolPointer } from './hooks/useClipTimelineToolPointer';
 import { useClipVisualChrome } from './hooks/useClipVisualChrome';
 import { useClipRegionOverlayState } from './hooks/useClipRegionOverlayState';
+import { useClipStoreBindings } from './hooks/useClipStoreBindings';
 
-const EMPTY_CLIP_KEYFRAMES = [] as const;
 const EMPTY_AUDIO_EDIT_STACK = [] as const;
 
 function TimelineClipComponent({
@@ -80,7 +76,7 @@ function TimelineClipComponent({
   isFading,
   isLinkedToDragging,
   isLinkedToTrimming,
-  isTrimFollower,
+  isTrimFollower = false,
   isClipDragActive,
   clipDrag,
   clipTrim,
@@ -109,79 +105,58 @@ function TimelineClipComponent({
   formatTime,
   passiveVisualsSuppressed = false,
 }: TimelineClipProps) {
-  const thumbnailsEnabled = useTimelineStore(s => s.thumbnailsEnabled);
-  const waveformsEnabled = useTimelineStore(s => s.waveformsEnabled);
-  const audioDisplayMode = useTimelineStore(s => s.audioDisplayMode);
-  const audioFocusMode = useTimelineStore(s => s.audioFocusMode);
-  const trackFocusMode = useTimelineStore(s => s.trackFocusMode);
-  const showAudioRegionEditMarkers = useTimelineStore(s => s.showAudioRegionEditMarkers);
-  const activeTimelineToolId = useTimelineStore(s => s.activeTimelineToolId);
-  const timelineToolPreview = useTimelineStore(s => s.timelineToolPreview);
-  const clipStemSeparationJob = useTimelineStore(s => {
-    const directJob = s.clipStemSeparationJobs[clip.id];
-    if (directJob && (directJob.clipId === clip.id || directJob.requestedClipId === clip.id)) {
-      return directJob;
-    }
-
-    const linkedJob = clip.linkedClipId ? s.clipStemSeparationJobs[clip.linkedClipId] : undefined;
-    if (linkedJob && (linkedJob.clipId === clip.id || linkedJob.requestedClipId === clip.id || linkedJob.clipId === clip.linkedClipId)) {
-      return linkedJob;
-    }
-
-    return Object.values(s.clipStemSeparationJobs).find(job =>
-      job.clipId === clip.id ||
-      job.requestedClipId === clip.id ||
-      (clip.linkedClipId ? job.clipId === clip.linkedClipId || job.requestedClipId === clip.linkedClipId : false)
-    ) ?? null;
-  });
-  const setTimelineToolPreview = useTimelineStore(s => s.setTimelineToolPreview);
-  const applyTimelineEditOperation = useTimelineStore(s => s.applyTimelineEditOperation);
-  const setActiveTimelineTool = useTimelineStore(s => s.setActiveTimelineTool);
-  const timelineTrackColorsVisible = useTimelineStore(s => s.audioLayerAdvancedMode !== false);
-  const audioRegionSelection = useTimelineStore(s =>
-    s.audioRegionSelection?.clipId === clip.id ? s.audioRegionSelection : null
-  );
-  const audioRegionGainPreview = useTimelineStore(s =>
-    s.audioRegionGainPreview?.clipId === clip.id ? s.audioRegionGainPreview : null
-  );
-  const audioSpectralRegionSelection = useTimelineStore(s =>
-    s.audioSpectralRegionSelection?.clipId === clip.id ? s.audioSpectralRegionSelection : null
-  );
-  const videoBakeRegionSelection = useTimelineStore(s =>
-    s.videoBakeRegionSelection?.scope === 'clip' && s.videoBakeRegionSelection.clipId === clip.id
-      ? s.videoBakeRegionSelection
-      : null
-  );
-  const setAudioRegionSelection = useTimelineStore(s => s.setAudioRegionSelection);
-  const clearAudioRegionSelection = useTimelineStore(s => s.clearAudioRegionSelection);
-  const setVideoBakeRegionSelection = useTimelineStore(s => s.setVideoBakeRegionSelection);
-  const clearVideoBakeRegionSelection = useTimelineStore(s => s.clearVideoBakeRegionSelection);
-  const addClipVideoBakeRegion = useTimelineStore(s => s.addClipVideoBakeRegion);
-  const bakeClipVideoBakeRegion = useTimelineStore(s => s.bakeClipVideoBakeRegion);
-  const unbakeClipVideoBakeRegion = useTimelineStore(s => s.unbakeClipVideoBakeRegion);
-  const removeClipVideoBakeRegion = useTimelineStore(s => s.removeClipVideoBakeRegion);
-  const setAudioSpectralRegionSelection = useTimelineStore(s => s.setAudioSpectralRegionSelection);
-  const clearAudioSpectralRegionSelection = useTimelineStore(s => s.clearAudioSpectralRegionSelection);
-  const hasAudioRegionClipboard = useTimelineStore(s => s.audioRegionClipboard !== null);
-  const applyAudioRegionEdit = useTimelineStore(s => s.applyAudioRegionEdit);
-  const setAudioRegionGainPreview = useTimelineStore(s => s.setAudioRegionGainPreview);
-  const clearAudioRegionGainPreview = useTimelineStore(s => s.clearAudioRegionGainPreview);
-  const setAudioRegionGainEdit = useTimelineStore(s => s.setAudioRegionGainEdit);
-  const applySpectralRegionEdit = useTimelineStore(s => s.applySpectralRegionEdit);
-  const addClipSpectralImageLayer = useTimelineStore(s => s.addClipSpectralImageLayer);
-  const copySelectedAudioRegion = useTimelineStore(s => s.copySelectedAudioRegion);
-  const pasteAudioRegionToSelection = useTimelineStore(s => s.pasteAudioRegionToSelection);
-  const setClipAudioEditOperationEnabled = useTimelineStore(s => s.setClipAudioEditOperationEnabled);
-  const setClipAudioEditOperationRange = useTimelineStore(s => s.setClipAudioEditOperationRange);
-  const removeClipAudioEditOperation = useTimelineStore(s => s.removeClipAudioEditOperation);
-  const clearClipAudioEditStack = useTimelineStore(s => s.clearClipAudioEditStack);
-  const bakeClipAudioEditStack = useTimelineStore(s => s.bakeClipAudioEditStack);
-  const unbakeClipAudioEditStack = useTimelineStore(s => s.unbakeClipAudioEditStack);
-  const setClipSourceToStem = useTimelineStore(s => s.setClipSourceToStem);
-  const prewarmStemSourceMediaFiles = useTimelineStore(s => s.prewarmStemSourceMediaFiles);
-  const mediaFiles = useMediaStore(s => s.files);
-  const selectClip = useTimelineStore(s => s.selectClip);
-  const clipAudioKeyframes = useTimelineStore(s => s.clipKeyframes.get(clip.id) ?? EMPTY_CLIP_KEYFRAMES);
+  const {
+    thumbnailsEnabled,
+    waveformsEnabled,
+    audioDisplayMode,
+    audioFocusMode,
+    trackFocusMode,
+    showAudioRegionEditMarkers,
+    activeTimelineToolId,
+    timelineToolPreview,
+    isBladeToolActive,
+    playheadPosition,
+    clipStemSeparationJob,
+    setTimelineToolPreview,
+    applyTimelineEditOperation,
+    setActiveTimelineTool,
+    timelineTrackColorsVisible,
+    audioRegionSelection,
+    audioRegionGainPreview,
+    audioSpectralRegionSelection,
+    videoBakeRegionSelection,
+    setAudioRegionSelection,
+    clearAudioRegionSelection,
+    setVideoBakeRegionSelection,
+    clearVideoBakeRegionSelection,
+    addClipVideoBakeRegion,
+    bakeClipVideoBakeRegion,
+    unbakeClipVideoBakeRegion,
+    removeClipVideoBakeRegion,
+    setAudioSpectralRegionSelection,
+    clearAudioSpectralRegionSelection,
+    hasAudioRegionClipboard,
+    applyAudioRegionEdit,
+    setAudioRegionGainPreview,
+    clearAudioRegionGainPreview,
+    setAudioRegionGainEdit,
+    applySpectralRegionEdit,
+    addClipSpectralImageLayer,
+    copySelectedAudioRegion,
+    pasteAudioRegionToSelection,
+    setClipAudioEditOperationEnabled,
+    setClipAudioEditOperationRange,
+    removeClipAudioEditOperation,
+    clearClipAudioEditStack,
+    bakeClipAudioEditStack,
+    unbakeClipAudioEditStack,
+    setClipSourceToStem,
+    prewarmStemSourceMediaFiles,
+    mediaFiles,
+    mediaLabelHex,
+    selectClip,
+    clipAudioKeyframes,
+  } = useClipStoreBindings(clip);
   const passiveMediaEnabled = !passiveVisualsSuppressed;
   const passiveDecorationsEnabled = passiveMediaEnabled;
   const processedWaveformPyramidRef = passiveMediaEnabled ? clip.audioState?.processedAnalysisRefs?.processedWaveformPyramidId : undefined;
@@ -243,7 +218,6 @@ function TimelineClipComponent({
     processedSpectrogramLoadStatus: processedSpectrogramState.status,
     sourceSpectrogramReady: Boolean(sourceSpectrogramTileSet),
   });
-  const isBladeToolActive = isTimelineBladeTool(activeTimelineToolId);
   const isPointerToolActive = isTimelinePointerTool(activeTimelineToolId);
   const timelineToolCursor = getTimelineToolCursor(activeTimelineToolId);
   const canUseTrimHandles =
@@ -256,14 +230,6 @@ function TimelineClipComponent({
   const canUseBodyToolGesture = activeTimelineToolId === 'slip' || activeTimelineToolId === 'slide';
   const leftTrimHandleDirections = getTrimHandleArrowDirections(clip, 'left');
   const rightTrimHandleDirections = getTrimHandleArrowDirections(clip, 'right');
-
-  // Subscribe to playhead position only when blade tool is active (avoids re-renders during playback)
-  const playheadPosition = useTimelineStore((state) =>
-    isBladeToolActive ? state.playheadPosition : 0
-  );
-
-  // Look up media label color from mediaStore
-  const mediaLabelHex = useMediaStore(s => resolveClipLabelHex(clip, s));
 
   const {
     aiMove,

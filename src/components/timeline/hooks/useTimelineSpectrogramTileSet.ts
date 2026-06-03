@@ -69,9 +69,3 @@ export function useTimelineSpectrogramTileSetState(
 
   return loaded.refId === refId ? loaded : fallback;
 }
-
-export function useTimelineSpectrogramTileSet(
-  refId: string | undefined,
-): TimelineSpectrogramTileSet | null {
-  return useTimelineSpectrogramTileSetState(refId).tileSet;
-}

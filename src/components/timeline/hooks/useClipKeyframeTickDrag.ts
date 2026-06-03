@@ -42,6 +42,7 @@ export function useClipKeyframeTickDrag(input: {
 
   useEffect(() => {
     if (!keyframeGroupDrag || !input.onMoveKeyframeGroup) return;
+    const onMoveKeyframeGroup = input.onMoveKeyframeGroup;
 
     const handleDocumentMouseMove = (e: MouseEvent) => {
       e.preventDefault();
@@ -70,7 +71,7 @@ export function useClipKeyframeTickDrag(input: {
         }
       }
 
-      input.onMoveKeyframeGroup(keyframeGroupDrag.keyframeIds, newTime);
+      onMoveKeyframeGroup(keyframeGroupDrag.keyframeIds, newTime);
     };
 
     const handleDocumentMouseUp = () => {

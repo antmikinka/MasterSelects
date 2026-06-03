@@ -3,8 +3,7 @@ import type { TimelineClipProps } from '../types';
 import { getTimelineTrackColor, TIMELINE_TRACK_COLOR_HIDDEN } from '../trackColor';
 import { getTimelineClipSourceDuration } from '../utils/clipSourceTiming';
 import { resolveSourceExtensionGhosts } from '../utils/sourceExtensionGhosts';
-
-const TIMELINE_RENDER_OVERSCAN_PX = 512;
+import { TIMELINE_RENDER_OVERSCAN_PX } from '../timelineRenderConstants';
 const CLIP_RIGHT_STICKY_PADDING_PX = 8;
 
 export function useClipVisualChrome(input: {
@@ -45,7 +44,7 @@ export function useClipVisualChrome(input: {
   aiMovePhase: 'idle' | 'initial' | 'animating';
   aiMove: { fromStartTime: number; animationDuration: number } | undefined;
   animationDelay: number;
-  timelineToolCursor: string;
+  timelineToolCursor?: string;
   trackFocusMode: string;
   timelineTrackColorsVisible: boolean;
   isSolidClip: boolean;
@@ -214,7 +213,6 @@ export function useClipVisualChrome(input: {
     clipMetaOffset,
     sourceExtensionGhosts,
     isTrackLocked,
-    isClipBodyDragging,
     canHandleTimelineToolPointer,
   };
 }
