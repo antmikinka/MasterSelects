@@ -399,7 +399,7 @@ function TimelineTrackComponent({
   isResizeActive = false,
   onTrimStart,
   onFadeStart,
-  renderClip,
+  renderLegacyClip,
   onClipMouseDown,
   onClipContextMenu,
   clipKeyframes,
@@ -1023,7 +1023,7 @@ function TimelineTrackComponent({
             })}
           </>
         ) : (
-          trackClips.map((clip) => renderClip(clip, track.id))
+          trackClips.map((clip) => renderLegacyClip(clip, track.id))
         )}
         {/* Render clip being dragged TO this track */}
         {!useCanvasClips && clipDrag &&
@@ -1031,7 +1031,7 @@ function TimelineTrackComponent({
           clipDrag.originalTrackId !== track.id &&
           clips
             .filter((c) => c.id === clipDrag.clipId && !trackClipIds.has(c.id))
-            .map((clip) => renderClip(clip, track.id))}
+            .map((clip) => renderLegacyClip(clip, track.id))}
         {/* External file drag preview - video clip */}
         {externalDrag && externalDrag.trackId === track.id && renderExternalPreview(
           'timeline-clip-preview',
@@ -1140,7 +1140,7 @@ function areTimelineTrackPropsEqual(
   // unconditionally, so every track re-rendered on every parent (Timeline) render
   // — including playhead updates that don't touch a track's props. With a real
   // shallow compare we skip those unrelated re-renders while still updating
-  // whenever any prop reference changes (renderClip, clips, selection, callbacks…).
+  // whenever any prop reference changes (legacy renderer, clips, selection, callbacks...).
   const prevKeys = Object.keys(previous) as Array<keyof TimelineTrackProps>;
   const nextKeys = Object.keys(next) as Array<keyof TimelineTrackProps>;
   if (prevKeys.length !== nextKeys.length) return false;

@@ -289,7 +289,7 @@ export interface TimelineTrackProps {
   onDragLeave: (e: React.DragEvent) => void;
   onResizeStart?: (e: React.PointerEvent, trackId: string) => void;
   isResizeActive?: boolean;
-  renderClip: (
+  renderLegacyClip: (
     clip: TimelineClip,
     trackId: string,
     trackBaseHeightOverride?: number,

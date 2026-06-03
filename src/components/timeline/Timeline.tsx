@@ -2757,7 +2757,7 @@ export function Timeline() {
   );
 
   // Render a clip
-  const renderClip = useCallback(
+  const renderLegacyClip = useCallback(
     (
       clip: TimelineClipType,
       trackId: string,
@@ -3170,7 +3170,7 @@ export function Timeline() {
           style={{ height: baseHeight }}
         >
           <div className="track-clip-row" style={{ height: baseHeight }}>
-            {renderClip(draggedClipForNewTrack, trackId, baseHeight, ghostTrack)}
+            {renderLegacyClip(draggedClipForNewTrack, trackId, baseHeight, ghostTrack)}
           </div>
         </div>
       );
@@ -3210,7 +3210,7 @@ export function Timeline() {
       const track = allSectionTracks.find(candidate => candidate.id === trackId)
         ?? timelineViewTrackMap.get(trackId)
         ?? trackMap.get(trackId);
-      return renderClip(
+      return renderLegacyClip(
         clip,
         trackId,
         trackBaseHeightOverride ?? (track ? getSectionTrackBaseHeight(track, sectionKind) : undefined),
@@ -3536,7 +3536,7 @@ export function Timeline() {
                       onDragLeave={handleCombinedDragLeave}
                       onResizeStart={handleTrackResizeStart}
                       isResizeActive={activeTrackResizeId === track.id}
-                      renderClip={(clip, trackId, trackBaseHeightOverride) => renderClipForSection(clip, trackId, trackBaseHeightOverride)}
+                      renderLegacyClip={(clip, trackId, trackBaseHeightOverride) => renderClipForSection(clip, trackId, trackBaseHeightOverride)}
                       clipKeyframes={clipKeyframes}
                       renderKeyframeDiamonds={renderKeyframeDiamonds}
                       timeToPixel={timeToPixel}
