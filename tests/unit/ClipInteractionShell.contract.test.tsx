@@ -715,6 +715,88 @@ describe('ClipInteractionShell contract', () => {
     }
   });
 
+  it('renders spectral region controls through the shell module', () => {
+    const previousTimelineState = useTimelineStore.getState();
+    const applySpectralRegionEditSpy = vi.spyOn(
+      useTimelineStore.getState(),
+      'applySpectralRegionEdit',
+    ).mockReturnValue('operation-a');
+
+    useTimelineStore.setState({
+      audioFocusMode: true,
+      audioDisplayMode: 'spectral',
+      activeTimelineToolId: 'select',
+      audioSpectralRegionSelection: {
+        clipId: 'clip-a',
+        trackId: 'track-audio',
+        startTime: 2,
+        endTime: 4,
+        sourceInPoint: 1,
+        sourceOutPoint: 3,
+        frequencyMinHz: 120,
+        frequencyMaxHz: 2400,
+      },
+    });
+
+    const props = createShellProps({
+      clip: {
+        ...createShellProps().clip,
+        trackId: 'track-audio',
+        source: { type: 'audio' },
+      },
+      track: {
+        id: 'track-audio',
+        type: 'audio',
+        locked: false,
+        muted: false,
+        visible: true,
+      },
+      mountState: {
+        clipId: 'clip-a',
+        shouldMount: true,
+        reasons: ['spectral-region-active'],
+        hasActiveSpectralRegion: true,
+      },
+      activeModules: {
+        spectralRegion: {
+          slot: 'spectral-region',
+          enabled: true,
+          selection: useTimelineStore.getState().audioSpectralRegionSelection,
+          imageLayers: [],
+        },
+      },
+    });
+
+    let unmount: (() => void) | undefined;
+
+    try {
+      const rendered = render(<ClipInteractionShell {...props} />);
+      unmount = rendered.unmount;
+      const { container } = rendered;
+      const module = container.querySelector<HTMLElement>('.shell-spectral-region-module');
+      const region = container.querySelector<HTMLElement>('.clip-spectral-region-selection');
+      const maskButton = Array.from(container.querySelectorAll<HTMLButtonElement>('.clip-spectral-region-toolbar button'))
+        .find(button => button.textContent === 'Mask');
+
+      expect(module?.dataset.clipInteractionSlot).toBe('spectral-region');
+      expect(region).toBeTruthy();
+      expect(maskButton).toBeTruthy();
+
+      fireEvent.click(maskButton as HTMLButtonElement);
+
+      expect(applySpectralRegionEditSpy).toHaveBeenCalledWith('spectral-mask');
+    } finally {
+      unmount?.();
+      applySpectralRegionEditSpy.mockRestore();
+      useTimelineStore.setState({
+        audioFocusMode: previousTimelineState.audioFocusMode,
+        audioDisplayMode: previousTimelineState.audioDisplayMode,
+        activeTimelineToolId: previousTimelineState.activeTimelineToolId,
+        audioSpectralRegionSelection: previousTimelineState.audioSpectralRegionSelection,
+      });
+    }
+  });
+
   it('renders active stem progress through the shell module', () => {
     const props = createShellProps({
       mountState: {

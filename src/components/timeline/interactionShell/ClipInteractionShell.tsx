@@ -5,6 +5,7 @@ import { ClipKeyframeTicks } from './ClipKeyframeTicks';
 import { ClipTrimHandles } from './ClipTrimHandles';
 import { ClipStemControls } from './ClipStemControls';
 import { ClipVideoBakeControls } from './ClipVideoBakeControls';
+import { ClipSpectralRegionControls } from './ClipSpectralRegionControls';
 import {
   CLIP_INTERACTION_SHELL_MODULE_SLOTS,
   getClipInteractionShellActiveSlots,
@@ -57,6 +58,10 @@ function renderBuiltInModule(
 
   if (slot === 'audio-region') {
     return <ClipAudioRegionControls key={slot} context={context} />;
+  }
+
+  if (slot === 'spectral-region') {
+    return <ClipSpectralRegionControls key={slot} context={context} />;
   }
 
   if (slot === 'stem') {

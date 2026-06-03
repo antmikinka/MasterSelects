@@ -1,4 +1,3 @@
-import type { SpectralImageLayer } from '../../../types';
 import type { MediaFile } from '../../../stores/mediaStore/types';
 import type { TimelineSpectralRegionSelection } from '../../../stores/timeline/types';
 import { spectralYFromFrequencyHz } from './spectralSelection';
@@ -10,9 +9,22 @@ export interface SpectralRegionOverlay {
   height: number;
 }
 
+export interface SpectralImageLayerOverlayLayer {
+  id: string;
+  imageMediaFileId: string;
+  timeStart: number;
+  duration: number;
+  frequencyMin: number;
+  frequencyMax: number;
+  opacity?: number;
+  enabled?: boolean;
+  blendMode?: 'attenuate' | 'boost' | 'gate' | 'sidechain-mask' | 'replace';
+  gainDb?: number;
+}
+
 export interface SpectralImageLayerOverlay extends SpectralRegionOverlay {
   id: string;
-  layer: SpectralImageLayer;
+  layer: SpectralImageLayerOverlayLayer;
   mediaFile?: MediaFile;
 }
 
@@ -67,7 +79,7 @@ export function resolveSpectralRegionOverlay(input: {
 
 export function resolveSpectralImageLayerOverlays(input: {
   enabled: boolean;
-  layers: readonly SpectralImageLayer[];
+  layers: readonly SpectralImageLayerOverlayLayer[];
   displayStartTime: number;
   displayDuration: number;
   width: number;

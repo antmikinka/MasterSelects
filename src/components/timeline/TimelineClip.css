@@ -2072,6 +2072,16 @@
   pointer-events: none;
 }
 
+.shell-spectral-region-module {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.shell-spectral-region-module .clip-spectral-region-hitarea {
+  pointer-events: auto;
+}
+
 .clip-video-bake-region {
   position: absolute;
   top: 0;
