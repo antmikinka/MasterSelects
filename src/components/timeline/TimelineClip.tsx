@@ -41,7 +41,6 @@ import { resolveAudioVolumeAutomationCurveKeyframes } from './utils/audioAutomat
 import { resolveClipLabelHex } from './utils/resolveClipLabelHex';
 import {
   resolveHorizontalRenderWindow,
-  resolveStableWaveformRenderGeometry,
   resolveTimelineViewportWidth,
 } from './utils/waveformRenderGeometry';
 import { resolveClipMediaClassification } from './utils/clipMediaClassification';
@@ -70,7 +69,6 @@ import {
   hasLegacyWaveformSamples,
 } from '../../utils/audioWaveformPresence';
 import { useClipThumbnailFilmstripPlan } from './hooks/useClipThumbnailFilmstripPlan';
-import { useClipAudioMediaViewProps } from './hooks/useClipAudioMediaViewProps';
 import { useClipAudioRegionControls } from './hooks/useClipAudioRegionControls';
 import { useClipStemSwitcher } from './hooks/useClipStemSwitcher';
 import { useClipAnimationState } from './hooks/useClipAnimationState';
@@ -86,6 +84,7 @@ import { useClipKeyframeTickDrag } from './hooks/useClipKeyframeTickDrag';
 import { useClipSpectralImageLayers } from './hooks/useClipSpectralImageLayers';
 import { useClipOverlayActions } from './hooks/useClipOverlayActions';
 import { useClipAudioArtifactWarmups } from './hooks/useClipAudioArtifactWarmups';
+import { useClipAudioRenderState } from './hooks/useClipAudioRenderState';
 
 const TIMELINE_VIEWPORT_FALLBACK_PX = 1600;
 const TIMELINE_VIEWPORT_MIN_PX = 1600;
@@ -93,7 +92,6 @@ const TIMELINE_RENDER_OVERSCAN_PX = 512;
 const CLIP_RIGHT_STICKY_PADDING_PX = 8;
 const EMPTY_CLIP_KEYFRAMES = [] as const;
 const EMPTY_AUDIO_EDIT_STACK = [] as const;
-const EMPTY_WAVEFORM: number[] = [];
 const EMPTY_SPECTRAL_LAYERS = [] as const;
 
 function getSlippedSourceWindow(
@@ -651,148 +649,45 @@ function TimelineClipComponent({
   const [audioRegionResizeDrag, setAudioRegionResizeDrag] = useState<AudioRegionResizeDragState | null>(null);
   const [spectralRegionDrag, setSpectralRegionDrag] = useState<SpectralRegionDragState | null>(null);
 
-  const getMatchingAudioRegionOperationIds = useCallback((selection: TimelineAudioRegionSelection): string[] => {
-    const start = Math.min(selection.sourceInPoint, selection.sourceOutPoint);
-    const end = Math.max(selection.sourceInPoint, selection.sourceOutPoint);
-    return audioEditStack
-      .filter(operation => {
-        if (!operation.timeRange) return false;
-        const operationStart = Math.min(operation.timeRange.start, operation.timeRange.end);
-        const operationEnd = Math.max(operation.timeRange.start, operation.timeRange.end);
-        return Math.abs(operationStart - start) <= 0.001 &&
-          Math.abs(operationEnd - end) <= 0.001;
-      })
-      .map(operation => operation.id);
-  }, [audioEditStack]);
-
-  const activeAudioRegionOperationDrag = audioRegionMoveDrag ?? audioRegionResizeDrag;
-  const displayAudioEditStack = useMemo(() => {
-    if (!audioRegionSelection || !activeAudioRegionOperationDrag?.operationIds.length) {
-      return audioEditStack;
-    }
-
-    const operationIds = new Set(activeAudioRegionOperationDrag.operationIds);
-    const start = Math.min(audioRegionSelection.sourceInPoint, audioRegionSelection.sourceOutPoint);
-    const end = Math.max(audioRegionSelection.sourceInPoint, audioRegionSelection.sourceOutPoint);
-    const timelineStart = Math.min(audioRegionSelection.startTime, audioRegionSelection.endTime);
-    const timelineEnd = Math.max(audioRegionSelection.startTime, audioRegionSelection.endTime);
-
-    return audioEditStack.map(operation => {
-      if (!operationIds.has(operation.id) || !operation.timeRange) return operation;
-      return {
-        ...operation,
-        params: {
-          ...operation.params,
-          timelineStart,
-          timelineEnd,
-        },
-        timeRange: { start, end },
-      };
-    });
-  }, [activeAudioRegionOperationDrag, audioEditStack, audioRegionSelection]);
-  const preferSourceWaveformForAudioRegionDrag = Boolean(activeAudioRegionOperationDrag?.operationIds.length && sourceWaveformPyramid);
-  const waveformPyramidForRender = preferSourceWaveformForAudioRegionDrag
-    ? sourceWaveformPyramid
-    : waveformPyramid;
-  const waveformVariantForRender: 'processed' | 'source' | 'legacy' = preferSourceWaveformForAudioRegionDrag
-    ? 'source'
-    : waveformVariant;
-  const waveformUsesProcessedPyramidForRender = Boolean(
-    waveformPyramidForRender &&
-    processedWaveformPyramid &&
-    waveformPyramidForRender === processedWaveformPyramid,
-  );
-  const processedWaveformPyramidForRender = waveformUsesProcessedPyramidForRender
-    ? processedWaveformPyramid
-    : null;
-  const waveformNaturalDurationForRender = processedWaveformPyramidForRender
-    ? Math.max(0.001, processedWaveformPyramidForRender.duration)
-    : (clip.source?.naturalDuration || clip.duration);
-  const waveformInPointForRender = processedWaveformPyramidForRender ? 0 : displayInPoint;
-  const waveformOutPointForRender = processedWaveformPyramidForRender
-    ? Math.max(0.001, processedWaveformPyramidForRender.duration)
-    : displayOutPoint;
-  const waveformLegacyForRender = clip.waveform ?? EMPTY_WAVEFORM;
-  const waveformChannelsForRender = clip.waveformChannels;
-  const hasWaveformForRender = Boolean(
-    waveformPyramidForRender ||
-    waveformLegacyForRender.length > 0 ||
-    waveformChannelsForRender?.some(channel => channel.length > 0)
-  );
-  const waveformDisplayGainForRender = waveformDisplayGain;
-  const canApplyPredictiveAudioWaveform = waveformVariantForRender !== 'processed';
-  const predictiveAudioEditStack = canApplyPredictiveAudioWaveform
-    ? displayAudioEditStack
-    : EMPTY_AUDIO_EDIT_STACK;
-  const predictiveAudioRegionGainPreview = canApplyPredictiveAudioWaveform
-    ? audioRegionGainPreview
-    : null;
-  const originalWaveformTrimInPoint = isTrimming && clipTrim
-    ? clipTrim.originalInPoint
-    : clip.inPoint;
-  const originalWaveformTrimOutPoint = isTrimming && clipTrim
-    ? clipTrim.originalOutPoint
-    : clip.outPoint;
-  const stableWaveformGeometry = resolveStableWaveformRenderGeometry({
-    isAudioClip,
-    isTrimming,
-    isLinkedToTrimming,
-    hasClipTrim: Boolean(clipTrim),
-    usesProcessedPyramid: Boolean(processedWaveformPyramidForRender),
-    clipWidth: width,
-    clipLeft: left,
-    scrollX,
-    viewportWidth: renderTimelineViewportWidth,
-    overscanPx: TIMELINE_RENDER_OVERSCAN_PX,
-    baseRenderWindow: waveformRenderWindow,
-    waveformInPoint: waveformInPointForRender,
-    waveformOutPoint: waveformOutPointForRender,
-    originalInPoint: originalWaveformTrimInPoint,
-    originalOutPoint: originalWaveformTrimOutPoint,
-    displayDuration,
-  });
-  const useStableWaveformTrimWindow = stableWaveformGeometry.useStableTrimWindow;
-  const waveformSourceSecondsPerPixel = stableWaveformGeometry.sourceSecondsPerPixel;
-  const stableWaveformContentInPoint = stableWaveformGeometry.contentInPoint;
-  const stableWaveformContentOutPoint = stableWaveformGeometry.contentOutPoint;
-  const stableWaveformContentWidth = stableWaveformGeometry.contentWidth;
-  const stableWaveformContentOffsetPx = stableWaveformGeometry.contentOffsetPx;
-  const stableWaveformRenderWindow = stableWaveformGeometry.renderWindow;
-  const stableWaveformClipDuration = stableWaveformGeometry.clipDuration;
   const {
+    displayAudioEditStack,
+    getMatchingAudioRegionOperationIds,
+    hasWaveformForRender,
     audioSpectrogramProps,
     audioWaveformProps,
-  } = useClipAudioMediaViewProps({
-    clipId: clip.id,
-    trackBaseHeight,
-    width,
-    zoom,
-    audioDisplayMode,
+  } = useClipAudioRenderState({
+    clip,
+    clipTrim,
+    audioEditStack,
+    audioRegionSelection,
+    audioRegionGainPreview,
+    audioRegionMoveDrag,
+    audioRegionResizeDrag,
+    sourceWaveformPyramid,
+    processedWaveformPyramid,
+    waveformPyramid,
+    waveformVariant,
+    waveformDisplayGain,
     spectrogramTileSet,
     spectrogramInPoint,
     spectrogramOutPoint,
     spectrogramNaturalDuration,
     spectrogramVariant,
     waveformRenderWindow,
-    waveformLegacyForRender,
-    waveformChannelsForRender,
-    waveformNaturalDurationForRender,
-    waveformPyramidForRender,
-    waveformVariantForRender,
-    waveformDisplayGainForRender,
-    stableWaveformContentWidth,
-    stableWaveformContentInPoint,
-    stableWaveformContentOutPoint,
-    stableWaveformClipDuration,
-    stableWaveformRenderWindow,
-    stableWaveformContentOffsetPx,
     audioVolumeAutomationKeyframes,
-    predictiveAudioEditStack,
-    predictiveAudioRegionGainPreview,
-    useStableWaveformTrimWindow,
-    originalWaveformTrimInPoint,
-    originalWaveformTrimOutPoint,
-    waveformSourceSecondsPerPixel,
+    isAudioClip,
+    isTrimming,
+    isLinkedToTrimming,
+    displayInPoint,
+    displayOutPoint,
+    displayDuration,
+    width,
+    left,
+    scrollX,
+    renderTimelineViewportWidth,
+    trackBaseHeight,
+    zoom,
+    audioDisplayMode,
   });
   const {
     audioRegionOverlay,
