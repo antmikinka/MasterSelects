@@ -53,6 +53,16 @@ export interface ClipVideoBakeRegionOverlay {
   selection: boolean;
 }
 
+type ClipVideoBakeRegionOverlayInputRegion = Pick<
+  VideoBakeRegion,
+  | 'id'
+  | 'startTime'
+  | 'endTime'
+  | 'status'
+  | 'sourceInPoint'
+  | 'sourceOutPoint'
+>;
+
 function finiteNumberOr(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
@@ -213,7 +223,7 @@ export function resolveAudioEditOperationOverlays(input: {
 
 export function resolveClipVideoBakeRegionOverlays(input: {
   isAudioClip: boolean;
-  bakeRegions?: readonly VideoBakeRegion[];
+  bakeRegions?: readonly ClipVideoBakeRegionOverlayInputRegion[];
   selection?: TimelineVideoBakeRegionSelection | null;
   displayStartTime: number;
   displayDuration: number;

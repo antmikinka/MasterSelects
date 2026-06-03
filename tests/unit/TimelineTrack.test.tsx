@@ -690,7 +690,7 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeTruthy();
   });
 
-  it('keeps a video-bake shell and legacy overlay mounted for a clip bake region', () => {
+  it('renders a video-bake shell without the legacy overlay body for a clip bake region', () => {
     const renderClip = vi.fn((clip: TimelineClip) => (
       <div className="timeline-clip" data-clip-id={clip.id} />
     ));
@@ -725,7 +725,9 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(shell?.dataset.mountReasons).toBe('video-bake-active');
     expect(shell?.dataset.activeSlots).toBe('video-bake');
     expect(shell?.style.pointerEvents).toBe('none');
-    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeTruthy();
+    expect(container.querySelector('.clip-interaction-shell .clip-video-bake-region')).toBeTruthy();
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
+    expect(renderClip).not.toHaveBeenCalled();
   });
 
   it('renders a stem shell module without the legacy overlay body for an active stem job', () => {

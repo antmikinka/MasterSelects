@@ -3,6 +3,7 @@ export { ClipAudioRegionControls } from './ClipAudioRegionControls';
 export { ClipFadeHandles } from './ClipFadeHandles';
 export { ClipKeyframeTicks } from './ClipKeyframeTicks';
 export { ClipTrimHandles } from './ClipTrimHandles';
+export { ClipVideoBakeControls } from './ClipVideoBakeControls';
 export {
   CLIP_INTERACTION_SHELL_MODULE_KEYS,
   CLIP_INTERACTION_SHELL_MODULE_SLOTS,

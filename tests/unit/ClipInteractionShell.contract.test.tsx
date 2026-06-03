@@ -660,6 +660,61 @@ describe('ClipInteractionShell contract', () => {
     }
   });
 
+  it('renders clip video-bake controls through the shell module', () => {
+    const bakeRegionSpy = vi.spyOn(
+      useTimelineStore.getState(),
+      'bakeClipVideoBakeRegion',
+    ).mockResolvedValue(true);
+    const props = createShellProps({
+      mountState: {
+        clipId: 'clip-a',
+        shouldMount: true,
+        reasons: ['video-bake-active'],
+        hasActiveVideoBakeRegion: true,
+      },
+      activeModules: {
+        videoBake: {
+          slot: 'video-bake',
+          enabled: true,
+          selection: null,
+          regions: [
+            {
+              id: 'region-a',
+              scope: 'clip',
+              clipId: 'clip-a',
+              trackId: 'track-video',
+              startTime: 2,
+              endTime: 4,
+              sourceInPoint: 1,
+              sourceOutPoint: 3,
+              status: 'marked',
+              progress: undefined,
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      const { container } = render(<ClipInteractionShell {...props} />);
+      const module = container.querySelector<HTMLElement>('.shell-video-bake-module');
+      const region = container.querySelector<HTMLElement>('.clip-video-bake-region');
+      const bakeButton = container.querySelector<HTMLElement>('.clip-video-bake-btn:not(.remove)');
+
+      expect(module?.dataset.clipInteractionSlot).toBe('video-bake');
+      expect(region).toBeTruthy();
+      expect(region?.style.left).toBe('40px');
+      expect(region?.style.width).toBe('80px');
+      expect(bakeButton?.textContent).toBe('Bake');
+
+      fireEvent.click(bakeButton as HTMLElement);
+
+      expect(bakeRegionSpy).toHaveBeenCalledWith('clip-a', 'region-a');
+    } finally {
+      bakeRegionSpy.mockRestore();
+    }
+  });
+
   it('renders active stem progress through the shell module', () => {
     const props = createShellProps({
       mountState: {

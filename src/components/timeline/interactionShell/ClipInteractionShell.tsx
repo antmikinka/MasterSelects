@@ -4,6 +4,7 @@ import { ClipFadeHandles } from './ClipFadeHandles';
 import { ClipKeyframeTicks } from './ClipKeyframeTicks';
 import { ClipTrimHandles } from './ClipTrimHandles';
 import { ClipStemControls } from './ClipStemControls';
+import { ClipVideoBakeControls } from './ClipVideoBakeControls';
 import {
   CLIP_INTERACTION_SHELL_MODULE_SLOTS,
   getClipInteractionShellActiveSlots,
@@ -60,6 +61,10 @@ function renderBuiltInModule(
 
   if (slot === 'stem') {
     return <ClipStemControls key={slot} context={context} />;
+  }
+
+  if (slot === 'video-bake') {
+    return <ClipVideoBakeControls key={slot} context={context} />;
   }
 
   return defaultRenderModule(slot);

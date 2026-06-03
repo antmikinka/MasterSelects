@@ -2066,6 +2066,12 @@
   pointer-events: none;
 }
 
+.shell-video-bake-module {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
 .clip-video-bake-region {
   position: absolute;
   top: 0;
