@@ -190,9 +190,6 @@ type AudioRegionGainDragState = {
   regionTop: number;
   regionHeight: number;
   regionDuration: number;
-  startGainDb: number;
-  startFadeInSeconds: number;
-  startFadeOutSeconds: number;
   currentGainDb: number;
   currentFadeInSeconds: number;
   currentFadeOutSeconds: number;
@@ -1982,9 +1979,6 @@ function TimelineClipComponent({
       regionTop: rect.top,
       regionHeight: rect.height,
       regionDuration: audioRegionGainControl.regionDuration,
-      startGainDb,
-      startFadeInSeconds: audioRegionGainControl.fadeInSeconds,
-      startFadeOutSeconds: audioRegionGainControl.fadeOutSeconds,
       currentGainDb: startGainDb,
       currentFadeInSeconds: audioRegionGainControl.fadeInSeconds,
       currentFadeOutSeconds: audioRegionGainControl.fadeOutSeconds,
