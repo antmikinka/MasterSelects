@@ -51,3 +51,56 @@ export function contentTimeToClipLocal(clip: Pick<MidiClipWindow, 'inPoint'>, co
 export function isNoteStartInWindow(clip: Pick<MidiClipWindow, 'inPoint' | 'outPoint'>, note: Pick<MidiNote, 'start'>): boolean {
   return note.start >= clip.inPoint - EPSILON && note.start < clip.outPoint - EPSILON;
 }
+
+/** The two independent note sets produced by cutting a MIDI clip. */
+export interface MidiNoteCutResult {
+  /** Notes for the left clip, rebased so the clip's content origin is 0. */
+  left: MidiNote[];
+  /** Notes for the right clip, rebased so the clip's content origin is 0. */
+  right: MidiNote[];
+}
+
+/**
+ * Partition a MIDI clip's notes for a CUT at content time `cut`, producing two
+ * INDEPENDENT, self-contained note sets — not two windows onto a shared array.
+ *
+ * A cut differs from a resize: a resize moves one window over preserved content
+ * (so hidden notes can reappear), but a cut splits the clip into two standalone
+ * clips, matching every DAW. So here:
+ *
+ *   - A note is assigned WHOLE by where its START falls (same rule the scheduler
+ *     uses via {@link isNoteStartInWindow}), then REBASED to its new clip's
+ *     origin: left notes shift by `inPoint`, right notes by `cut`. Notes are
+ *     never sliced — a note starting just before the cut stays in the left clip
+ *     and simply rings out past the cut, exactly as it did before the split.
+ *   - Notes whose start is outside the visible window `[inPoint, outPoint)` are
+ *     dropped — they were already silent, and a standalone clip keeps no ghosts.
+ *
+ * `makeNote` builds a note for a target clip from a source note plus the rebased
+ * `start`/`duration`; the caller supplies it so this stays free of ID generation.
+ */
+export function partitionMidiNotesAtCut(
+  notes: readonly MidiNote[],
+  window: Pick<MidiClipWindow, 'inPoint' | 'outPoint'>,
+  cut: number,
+  makeNote: (source: MidiNote, rebased: { start: number; duration: number }) => MidiNote,
+): MidiNoteCutResult {
+  const { inPoint, outPoint } = window;
+  const left: MidiNote[] = [];
+  const right: MidiNote[] = [];
+
+  for (const note of notes) {
+    if (note.start >= inPoint - EPSILON && note.start < cut - EPSILON) {
+      // Starts in the left half: keep the WHOLE note (never sliced), rebased to
+      // the left clip's origin. A note that runs past the cut just rings out, as
+      // it did before the split.
+      left.push(makeNote(note, { start: note.start - inPoint, duration: note.duration }));
+    } else if (note.start >= cut - EPSILON && note.start < outPoint - EPSILON) {
+      // Starts in the right half: keep the whole note, rebased to the right origin.
+      right.push(makeNote(note, { start: note.start - cut, duration: note.duration }));
+    }
+    // else: starts outside the visible window — already silent, dropped.
+  }
+
+  return { left, right };
+}
