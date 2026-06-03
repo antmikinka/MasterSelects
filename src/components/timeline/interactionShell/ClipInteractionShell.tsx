@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
 import { ClipFadeHandles } from './ClipFadeHandles';
 import { ClipTrimHandles } from './ClipTrimHandles';
+import { ClipStemControls } from './ClipStemControls';
 import {
   CLIP_INTERACTION_SHELL_MODULE_SLOTS,
   getClipInteractionShellActiveSlots,
@@ -45,6 +46,10 @@ function renderBuiltInModule(
 
   if (slot === 'fade') {
     return <ClipFadeHandles key={slot} context={context} commands={commands} />;
+  }
+
+  if (slot === 'stem') {
+    return <ClipStemControls key={slot} context={context} />;
   }
 
   return defaultRenderModule(slot);

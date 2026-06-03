@@ -117,8 +117,13 @@ const canSkipLegacyClipBody = (
     activeSlots.length === 0 &&
     mountReasons.length === 1 &&
     mountReasons[0] === 'hover';
+  const stemOnlyShell =
+    activeSlots.length === 1 &&
+    activeSlots[0] === 'stem' &&
+    mountReasons.some((reason) => reason === 'stem-active') &&
+    mountReasons.every((reason) => reason === 'stem-active' || reason === 'hover');
 
-  return trimOnlyShell || contextMenuShell || dragOnlyShell || hoverOnlyShell;
+  return trimOnlyShell || contextMenuShell || dragOnlyShell || hoverOnlyShell || stemOnlyShell;
 };
 
 const clampShellRectX = (rect: ClipInteractionShellRect, viewport: ClipInteractionShellRect): ClipInteractionShellRect => {
@@ -796,6 +801,7 @@ function TimelineTrackComponent({
         slot: 'stem',
         stemState: clip.audioState?.stemSeparation ?? null,
         activeStemKind: selectedStemKind,
+        job: specialState?.stemJob ?? null,
         jobPhase: specialState?.stemJob?.phase,
         progress: specialState?.stemJob?.progress,
       },

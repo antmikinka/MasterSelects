@@ -1530,6 +1530,14 @@
   background: rgba(251, 191, 36, 0.72);
 }
 
+.clip-interaction-shell .shell-stem-module {
+  pointer-events: auto;
+}
+
+.clip-interaction-shell .shell-stem-module[hidden] {
+  display: none;
+}
+
 .trim-handle.left {
   left: 0;
   border-radius: 4px 0 0 4px;

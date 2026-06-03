@@ -1,4 +1,5 @@
 import { useEngineStore } from '../../../stores/engineStore';
+import { useTimelineStore } from '../../../stores/timeline';
 import { engine } from '../../../engine/WebGPUEngine';
 import { Logger } from '../../logger';
 import { redactSecrets, redactObject } from '../../security/redact';
@@ -14,7 +15,10 @@ import {
   getRuntimeDiagnostics,
 } from '../../runtimeDiagnostics';
 import { collectAudioDiagnostics } from '../../audio/audioDiagnostics';
-import { getTimelineCanvasDiagnostics } from '../../timeline/timelineCanvasDiagnostics';
+import {
+  buildTimelineCanvasStoreDiagnostics,
+  getTimelineCanvasDiagnostics,
+} from '../../timeline/timelineCanvasDiagnostics';
 import type { ToolResult } from '../types';
 
 const DEFAULT_PLAYBACK_WINDOW_MS = 5000;
@@ -99,6 +103,7 @@ function collectCacheSnapshot(): Record<string, unknown> {
 
 function collectSnapshot(playbackWindowMs = DEFAULT_PLAYBACK_WINDOW_MS) {
   const { engineStats, gpuInfo, isEngineReady } = useEngineStore.getState();
+  const timelineState = useTimelineStore.getState();
   const s = engineStats;
   const playback = getPlaybackDebugStats(s.decoder, playbackWindowMs);
   const renderLoop = engine.getRenderLoop() as (Record<string, unknown> & {
@@ -136,7 +141,10 @@ function collectSnapshot(playbackWindowMs = DEFAULT_PLAYBACK_WINDOW_MS) {
     audioDiagnostics: collectAudioDiagnostics({ windowMs: playbackWindowMs, eventLimit: 20 }),
     health: playbackHealthMonitor.snapshot(),
     cache: collectCacheSnapshot(),
-    timelineCanvas: getTimelineCanvasDiagnostics(),
+    timelineCanvas: getTimelineCanvasDiagnostics(buildTimelineCanvasStoreDiagnostics({
+      tracks: timelineState.tracks,
+      clips: timelineState.clips,
+    })),
     slotDecks: slotDeckManager.getSnapshot(),
     pipelineStats: {
       wc: wcPipelineMonitor.stats(),

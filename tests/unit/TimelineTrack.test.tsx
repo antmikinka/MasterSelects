@@ -631,7 +631,7 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeTruthy();
   });
 
-  it('keeps a stem shell and legacy overlay mounted for an active stem job', () => {
+  it('renders a stem shell module without the legacy overlay body for an active stem job', () => {
     const renderClip = vi.fn((clip: TimelineClip) => (
       <div className="timeline-clip" data-clip-id={clip.id} />
     ));
@@ -654,11 +654,15 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     });
 
     const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+    const stemModule = container.querySelector<HTMLElement>('.shell-stem-module');
 
     expect(shell).toBeTruthy();
     expect(shell?.dataset.mountReasons).toBe('stem-active');
     expect(shell?.dataset.activeSlots).toBe('stem');
     expect(shell?.style.pointerEvents).toBe('none');
-    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeTruthy();
+    expect(stemModule).toBeTruthy();
+    expect(container.querySelector('.stem-percent')?.textContent).toBe('50%');
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
+    expect(renderClip).not.toHaveBeenCalled();
   });
 });

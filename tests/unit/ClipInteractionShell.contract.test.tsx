@@ -271,6 +271,101 @@ describe('ClipInteractionShell contract', () => {
     expect(onFadeStart.mock.calls[0][2]).toBe('left');
   });
 
+  it('renders active stem progress through the shell module', () => {
+    const props = createShellProps({
+      mountState: {
+        clipId: 'clip-a',
+        shouldMount: true,
+        reasons: ['stem-active'],
+        hasActiveStemControls: true,
+      },
+      activeModules: {
+        stem: {
+          slot: 'stem',
+          enabled: true,
+          stemState: null,
+          job: {
+            jobId: 'job-a',
+            clipId: 'clip-a',
+            requestedClipId: 'clip-a',
+            modelId: 'htdemucs',
+            phase: 'separating',
+            progress: 0.42,
+            message: 'Separating',
+            startedAt: 1,
+            updatedAt: 2,
+          },
+        },
+      },
+    });
+
+    const { container } = render(<ClipInteractionShell {...props} />);
+    const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+    const stemModule = container.querySelector<HTMLElement>('.shell-stem-module');
+
+    expect(shell?.dataset.activeSlots).toBe('stem');
+    expect(stemModule).toBeTruthy();
+    expect(stemModule?.dataset.clipInteractionSlot).toBe('stem');
+    expect(container.querySelector('.stem-percent')?.textContent).toBe('42%');
+  });
+
+  it('renders completed stem choices through the shell switcher', () => {
+    const props = createShellProps({
+      clip: {
+        ...createShellProps().clip,
+        source: { type: 'audio', mediaFileId: 'source-audio' },
+      },
+      mountState: {
+        clipId: 'clip-a',
+        shouldMount: true,
+        reasons: ['stem-active'],
+        hasActiveStemControls: true,
+      },
+      activeModules: {
+        stem: {
+          slot: 'stem',
+          enabled: true,
+          stemState: {
+            activeSetId: 'set-a',
+            modelId: 'htdemucs',
+            modelVersion: '1',
+            createdAt: 1,
+            sourceFingerprint: 'fp',
+            range: { start: 0, end: 4 },
+            sampleRate: 48000,
+            channelCount: 2,
+            mixMode: 'stems',
+            stems: [
+              {
+                id: 'stem-vocals',
+                kind: 'vocals',
+                label: 'Vocals',
+                analysisArtifactId: 'analysis-a',
+                manifestArtifactId: 'manifest-a',
+                payloadRef: { kind: 'media-file', mediaFileId: 'stem-vocals-media' },
+                mediaFileId: 'stem-vocals-media',
+                enabled: true,
+                gainDb: 0,
+                phaseAligned: true,
+                modelId: 'htdemucs',
+                sourceFingerprint: 'fp',
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const { container } = render(<ClipInteractionShell {...props} />);
+    const badge = container.querySelector<HTMLElement>('.clip-stem-ready-badge');
+
+    expect(badge).toBeTruthy();
+    fireEvent.click(badge as HTMLElement);
+
+    expect(container.querySelector('.clip-stem-menu')).toBeTruthy();
+    expect(container.querySelector('[aria-label="Use Vocals stem"]')).toBeTruthy();
+  });
+
   it('does not render when mount state says the shell is not active', () => {
     const { container } = render(
       <ClipInteractionShell

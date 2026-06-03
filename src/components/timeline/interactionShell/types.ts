@@ -16,6 +16,7 @@ import type {
   VideoBakeRegion,
 } from '../../../types';
 import type {
+  ClipStemSeparationJobState,
   TimelineAudioRegionSelection,
   TimelineSpectralRegionSelection,
   TimelineToolId,
@@ -99,6 +100,7 @@ export type ClipInteractionShellClipRef = Readonly<
     | 'duration'
     | 'inPoint'
     | 'outPoint'
+    | 'mediaFileId'
     | 'source'
     | 'linkedClipId'
     | 'linkedGroupId'
@@ -244,6 +246,7 @@ export interface ClipInteractionShellStemModuleState extends ClipInteractionShel
   stemState: ClipAudioStemState | null;
   menuOpen?: boolean;
   activeStemKind?: AudioStemKind;
+  job?: ClipStemSeparationJobState | null;
   jobPhase?: string;
   progress?: number;
 }
