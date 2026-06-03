@@ -41,6 +41,15 @@ export interface PlayheadStateData {
 
   /** Clip that currently owns the held playback position */
   heldPlaybackClipId: string | null;
+
+  /** Wall-clock anchor for playback before/around React UI commits */
+  clockStartTimeMs: number | null;
+
+  /** Timeline position at clockStartTimeMs */
+  clockStartPosition: number;
+
+  /** Playback speed used by the wall-clock fallback */
+  clockPlaybackSpeed: number;
 }
 
 /**
@@ -59,7 +68,14 @@ export const playheadState: PlayheadStateData = {
   hasMasterAudio: false,
   heldPlaybackPosition: null,
   heldPlaybackClipId: null,
+  clockStartTimeMs: null,
+  clockStartPosition: 0,
+  clockPlaybackSpeed: 1,
 };
+
+function getNowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
 
 export function sanitizePlayheadPosition(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -73,8 +89,46 @@ export function getPlayheadPosition(storePosition: number): number {
   const safeStore = sanitizePlayheadPosition(storePosition, safeInternal);
 
   return playheadState.isUsingInternalPosition
-    ? safeInternal
+    ? getInternalPlaybackPosition(safeInternal)
     : safeStore;
+}
+
+export function getInternalPlaybackPosition(fallback = playheadState.position): number {
+  const held = playheadState.heldPlaybackPosition;
+  if (held !== null) {
+    return sanitizePlayheadPosition(held, fallback);
+  }
+
+  if (playheadState.hasMasterAudio) {
+    const speed = playheadState.masterClipSpeed || 1;
+    const audio = playheadState.masterAudioElement;
+    if (audio && !audio.paused && audio.readyState >= 2) {
+      return sanitizePlayheadPosition(
+        playheadState.masterClipStartTime +
+          (audio.currentTime - playheadState.masterClipInPoint) / speed,
+        fallback
+      );
+    }
+
+    const audioTime = playheadState.masterAudioClock?.();
+    if (audioTime !== null && audioTime !== undefined && Number.isFinite(audioTime)) {
+      return sanitizePlayheadPosition(
+        playheadState.masterClipStartTime +
+          (audioTime - playheadState.masterClipInPoint) / speed,
+        fallback
+      );
+    }
+  }
+
+  if (playheadState.clockStartTimeMs !== null) {
+    const elapsedSeconds = Math.max(0, (getNowMs() - playheadState.clockStartTimeMs) / 1000);
+    return sanitizePlayheadPosition(
+      playheadState.clockStartPosition + elapsedSeconds * playheadState.clockPlaybackSpeed,
+      fallback
+    );
+  }
+
+  return sanitizePlayheadPosition(playheadState.position, fallback);
 }
 
 /**
@@ -158,10 +212,13 @@ export function clearInternalPlaybackHold(clipId?: string): void {
 /**
  * Start using internal position (called when playback starts)
  */
-export function startInternalPosition(position: number): void {
+export function startInternalPosition(position: number, playbackSpeed = playheadState.clockPlaybackSpeed || 1): void {
   playheadState.position = position;
   playheadState.isUsingInternalPosition = true;
   playheadState.playbackJustStarted = true;
+  playheadState.clockStartTimeMs = getNowMs();
+  playheadState.clockStartPosition = position;
+  playheadState.clockPlaybackSpeed = playbackSpeed;
   clearInternalPlaybackHold();
 }
 
@@ -171,6 +228,8 @@ export function startInternalPosition(position: number): void {
 export function stopInternalPosition(): void {
   playheadState.isUsingInternalPosition = false;
   playheadState.playbackJustStarted = false;
+  playheadState.clockStartTimeMs = null;
+  playheadState.clockStartPosition = playheadState.position;
   clearInternalPlaybackHold();
   clearMasterAudio();
 }
@@ -180,4 +239,14 @@ export function stopInternalPosition(): void {
  */
 export function updateInternalPosition(position: number): void {
   playheadState.position = position;
+  playheadState.clockStartTimeMs = getNowMs();
+  playheadState.clockStartPosition = position;
+}
+
+export function updateInternalPlaybackSpeed(playbackSpeed: number): void {
+  const currentPosition = getInternalPlaybackPosition(playheadState.position);
+  playheadState.position = currentPosition;
+  playheadState.clockStartTimeMs = getNowMs();
+  playheadState.clockStartPosition = currentPosition;
+  playheadState.clockPlaybackSpeed = playbackSpeed;
 }

@@ -549,6 +549,7 @@ export const createFileManageSlice: MediaSliceCreator<FileManageActions> = (set,
   removeFile: (id: string) => {
     const file = get().files.find((f) => f.id === id);
     if (file) {
+      thumbnailCacheService.evictFromMemory(id);
       revokeMediaFileUrls(file);
     }
 
@@ -614,6 +615,7 @@ export const createFileManageSlice: MediaSliceCreator<FileManageActions> = (set,
       });
 
       artifactFailures.push(...artifactResult.failed);
+      await thumbnailCacheService.clearSource(file.id);
       await cleanupIndexedDbMediaArtifacts(file, { deleteHashArtifacts: !fileHashIsShared });
       revokeMediaFileUrls(file);
     }
@@ -1013,6 +1015,7 @@ export const createFileManageSlice: MediaSliceCreator<FileManageActions> = (set,
 
     // Revoke old URL
     if (mediaFile.url) URL.revokeObjectURL(mediaFile.url);
+    await thumbnailCacheService.clearSource(id);
 
     // Create new URL
     const url = URL.createObjectURL(file);
@@ -1105,7 +1108,16 @@ export const createFileManageSlice: MediaSliceCreator<FileManageActions> = (set,
  * Creates the actual video/audio elements for the clip sources.
  * Exported for use by projectSync auto-relink.
  */
-export async function updateTimelineClips(mediaFileId: string, file: File): Promise<void> {
+export type UpdateTimelineClipsOptions = {
+  generateThumbnails?: boolean;
+};
+
+export async function updateTimelineClips(
+  mediaFileId: string,
+  file: File,
+  options: UpdateTimelineClipsOptions = {},
+): Promise<void> {
+  const generateThumbnails = options.generateThumbnails !== false;
   const timelineStore = useTimelineStore.getState();
   const mediaFile = useMediaStore.getState().files.find((entry) => entry.id === mediaFileId);
   const clips = timelineStore.clips.filter(
@@ -1153,7 +1165,9 @@ export async function updateTimelineClips(mediaFileId: string, file: File): Prom
         });
         // Pre-cache frame via createImageBitmap for immediate scrubbing without play()
         engine.preCacheVideoFrame(video);
-        void thumbnailCacheService.generateForSource(mediaFileId, video, naturalDuration);
+        if (generateThumbnails) {
+          void thumbnailCacheService.generateForSource(mediaFileId, video, naturalDuration);
+        }
       }, { once: true });
 
       video.addEventListener('error', () => {

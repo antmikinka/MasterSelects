@@ -13,14 +13,26 @@
 
 import { memo, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { thumbnailCacheService } from '../../services/thumbnailCacheService';
-import { getThumbnailBitmap, ensureThumbnailBitmap } from './utils/thumbnailBitmapCache';
+import { reportTimelineCanvasDrawDiagnostics, type TimelineCanvasDrawDiagnostics } from '../../services/timeline/timelineCanvasDiagnostics';
+import {
+  collectVisibleTimelineThumbnailRefs,
+  scheduleVisibleTimelineThumbnailDbWarmup,
+  type VisibleTimelineThumbnailRef,
+} from '../../services/timeline/timelineThumbnailDbWarmup';
+import { scheduleVisibleTimelineThumbnailGeneration } from '../../services/timeline/timelineThumbnailGenerationWarmup';
+import {
+  collectTimelineWaveformArtifactRefs,
+  getCachedTimelineWaveformArtifact,
+  warmTimelineWaveformArtifacts,
+} from '../../services/timeline/timelineWaveformArtifactWarmup';
+import {
+  collectVisibleTimelineSourceWaveformGenerationRequests,
+  scheduleVisibleTimelineSourceWaveformGeneration,
+} from '../../services/timeline/timelineSourceWaveformWarmup';
+import { getThumbnailBitmap, ensureThumbnailBitmap } from '../../services/timeline/thumbnailBitmapCache';
 import { flags } from '../../engine/featureFlags';
 import type { TimelineAudioDisplayMode, TimelineClipDragPreview } from '../../stores/timeline/types';
-import { useTimelineStore } from '../../stores/timeline';
-import {
-  getCachedTimelineWaveformPyramid,
-  loadTimelineWaveformPyramid,
-} from '../../services/audio/timelineWaveformPyramidCache';
+import { useMediaStore } from '../../stores/mediaStore';
 import {
   buildWaveformLod,
   normalizeWaveformColumnsForDisplay,
@@ -39,7 +51,6 @@ import {
 import {
   getPreferredWaveformPyramidRef,
   hasLegacyWaveformSamples,
-  hasTimelineWaveformData,
 } from '../../utils/audioWaveformPresence';
 
 // Browser 2D canvas backing-store limit is ~16384px in Chrome; stay safely under.
@@ -55,8 +66,6 @@ const WAVEFORM_PYRAMID_AUTO_UPGRADE_ZOOM = 250;
 const WAVEFORM_PYRAMID_AUTO_UPGRADE_WIDTH = 16_384;
 const WAVEFORM_GENERATION_DELAY_MS = 300;
 const MAX_RENDERED_WAVEFORM_CHANNELS = 2;
-
-const inFlightCanvasWaveformUpgrades = new Set<string>();
 
 export interface CanvasClip {
   id: string;
@@ -147,7 +156,7 @@ function isCanvasAudioClip(clip: CanvasClip): boolean {
 function getWaveformPyramidForClip(clip: CanvasClip, waveformPyramids: WaveformPyramidMap | undefined): TimelineWaveformPyramid | null {
   const refId = getPreferredWaveformPyramidRef(clip);
   if (!refId) return null;
-  return waveformPyramids?.get(refId) ?? getCachedTimelineWaveformPyramid(refId) ?? null;
+  return waveformPyramids?.get(refId) ?? getCachedTimelineWaveformArtifact(refId) ?? null;
 }
 
 function isInfiniteSourceType(sourceType: string | null | undefined): boolean {
@@ -648,7 +657,7 @@ function drawThumbnails(
   w: number,
   h: number,
   requestRedraw: () => void,
-): void {
+): number {
   const count = Math.max(1, Math.min(MAX_THUMB_SLOTS, Math.floor(w / CANVAS_THUMB_SLOT_PX)));
   const urls = thumbnailCacheService.getThumbnailsForRange(
     mediaFileId,
@@ -658,16 +667,19 @@ function drawThumbnails(
     clip.reversed,
   );
   const slotW = w / count;
+  let drawn = 0;
   for (let i = 0; i < count; i++) {
     const url = urls[i];
     if (!url) continue;
     const bmp = getThumbnailBitmap(url);
     if (bmp) {
       drawCover(ctx, bmp, x + i * slotW, top, slotW, h);
+      drawn += 1;
     } else {
-      ensureThumbnailBitmap(url, requestRedraw);
+      ensureThumbnailBitmap(url, requestRedraw, mediaFileId);
     }
   }
+  return drawn;
 }
 
 function drawClips(
@@ -676,9 +688,18 @@ function drawClips(
   cssWidth: number,
   canvasOffsetX: number,
   requestRedraw: () => void,
-): void {
+): TimelineCanvasDrawDiagnostics {
   const { clips, height, timeToPixel, selectedClipIds, hoveredClipId, trackColor, scrollX, viewportWidth, waveformsEnabled, audioDisplayMode = 'detailed', waveformPyramids } = props;
   ctx.clearRect(0, 0, cssWidth, height);
+  const diagnostics: TimelineCanvasDrawDiagnostics = {
+    inputClipCount: clips.length,
+    visibleClipCount: 0,
+    drawnClipCount: 0,
+    thumbnailClipCount: 0,
+    thumbnailDrawCount: 0,
+    waveformClipCount: 0,
+    workerMode: false,
+  };
 
   const thumbVisibleLeft = scrollX - THUMBNAIL_VIEWPORT_OVERSCAN_PX;
   const thumbVisibleRight = scrollX + viewportWidth + THUMBNAIL_VIEWPORT_OVERSCAN_PX;
@@ -697,6 +718,7 @@ function drawClips(
   for (const clip of clips) {
     const geometry = resolveClipGeometry(clip, props);
     if (!geometry.visible) continue;
+    diagnostics.visibleClipCount += 1;
     const absoluteX = timeToPixel(geometry.startTime);
     const absoluteW = timeToPixel(geometry.duration);
     const absoluteRight = absoluteX + absoluteW;
@@ -704,6 +726,7 @@ function drawClips(
     const visibleAbsRight = Math.min(absoluteRight, canvasOffsetX + cssWidth, renderVisibleRight);
     const visibleW = visibleAbsRight - visibleAbsLeft;
     if (visibleW <= 0) continue;
+    diagnostics.drawnClipCount += 1;
 
     const x = absoluteX - canvasOffsetX;
     const visibleX = visibleAbsLeft - canvasOffsetX;
@@ -726,6 +749,7 @@ function drawClips(
     ctx.fill();
 
     if (waveformsEnabled && isCanvasAudioClip(clip)) {
+      diagnostics.waveformClipCount += 1;
       const waveformPyramid = getWaveformPyramidForClip(clip, waveformPyramids);
       const visibleStartRatio = Math.max(0, Math.min(1, (visibleAbsLeft - absoluteX) / Math.max(1, absoluteW)));
       const visibleEndRatio = Math.max(visibleStartRatio, Math.min(1, (visibleAbsRight - absoluteX) / Math.max(1, absoluteW)));
@@ -752,6 +776,7 @@ function drawClips(
     const inThumbWindow = absoluteRight > thumbVisibleLeft && absoluteX < thumbVisibleRight;
     const mediaFileId = (visibleW >= LOD_THUMB_PX && inThumbWindow) ? clipShowsThumbnails(clip) : null;
     if (mediaFileId) {
+      diagnostics.thumbnailClipCount += 1;
       const visibleStartRatio = Math.max(0, Math.min(1, (visibleAbsLeft - absoluteX) / Math.max(1, absoluteW)));
       const visibleEndRatio = Math.max(visibleStartRatio, Math.min(1, (visibleAbsRight - absoluteX) / Math.max(1, absoluteW)));
       const sourceSpan = Math.max(0.001, geometry.outPoint - geometry.inPoint);
@@ -764,7 +789,7 @@ function drawClips(
       ctx.beginPath();
       ctx.rect(visibleX, top, visibleW, h);
       ctx.clip();
-      drawThumbnails(ctx, visibleClip, mediaFileId, visibleX, top, visibleW, h, requestRedraw);
+      diagnostics.thumbnailDrawCount += drawThumbnails(ctx, visibleClip, mediaFileId, visibleX, top, visibleW, h, requestRedraw);
       // Darken bottom strip so the label stays readable over thumbnails.
       const grad = ctx.createLinearGradient(0, top + h - 16, 0, top + h);
       grad.addColorStop(0, 'rgba(0,0,0,0)');
@@ -799,11 +824,15 @@ function drawClips(
       ctx.restore();
     }
   }
+
+  return diagnostics;
 }
 
 function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number | null>(null);
+  const thumbnailRedrawRafRef = useRef<number | null>(null);
+  const visibleThumbnailMediaIdsRef = useRef<Set<string>>(new Set());
   const [redrawNonce, bumpRedraw] = useReducer((n: number) => n + 1, 0);
   const {
     clips,
@@ -834,35 +863,139 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
       Math.ceil(viewportWidth + CANVAS_RENDER_OVERSCAN_PX * 2),
     ),
   );
-  const waveformRefKey = useMemo(() => {
-    const refs = new Set<string>();
-    for (const clip of clips) {
-      const refId = getPreferredWaveformPyramidRef(clip);
-      if (refId) refs.add(refId);
+  const visibleWaveformClips = useMemo(() => {
+    if (!waveformsEnabled) return [] as readonly CanvasClip[];
+    const visibleLeft = scrollX - CANVAS_RENDER_OVERSCAN_PX;
+    const visibleRight = scrollX + viewportWidth + CANVAS_RENDER_OVERSCAN_PX;
+    return clips.filter((clip) => {
+      if (!isCanvasAudioClip(clip)) return false;
+      const x = timeToPixel(clip.startTime);
+      const w = timeToPixel(clip.duration);
+      return x + w >= visibleLeft && x <= visibleRight;
+    });
+  }, [clips, scrollX, timeToPixel, viewportWidth, waveformsEnabled]);
+
+  const visibleWaveformArtifactRefs = useMemo(
+    () => collectTimelineWaveformArtifactRefs(visibleWaveformClips),
+    [visibleWaveformClips],
+  );
+  const visibleSourceWaveformGenerationRequests = useMemo(() => {
+    if (!waveformsEnabled || clipDrag || clipDragPreview) return [];
+    if (audioDisplayMode !== 'detailed') {
+      const shouldUpgradeCompact =
+        audioDisplayMode === 'compact' &&
+        (timeToPixel(1) >= WAVEFORM_PYRAMID_AUTO_UPGRADE_ZOOM || cssWidth > WAVEFORM_PYRAMID_AUTO_UPGRADE_WIDTH);
+      if (!shouldUpgradeCompact) return [];
     }
-    return Array.from(refs).sort().join('|');
-  }, [clips]);
+
+    return collectVisibleTimelineSourceWaveformGenerationRequests({
+      clips: visibleWaveformClips,
+      scrollX,
+      viewportWidth,
+      overscanPx: CANVAS_RENDER_OVERSCAN_PX,
+      timeToPixel,
+      mode: audioDisplayMode,
+    });
+  }, [
+    audioDisplayMode,
+    clipDrag,
+    clipDragPreview,
+    cssWidth,
+    scrollX,
+    timeToPixel,
+    viewportWidth,
+    visibleWaveformClips,
+    waveformsEnabled,
+  ]);
+  const visibleSourceWaveformGenerationKey = useMemo(
+    () => visibleSourceWaveformGenerationRequests.map((request) => request.requestKey).join('|'),
+    [visibleSourceWaveformGenerationRequests],
+  );
+  const waveformRefKey = useMemo(
+    () => visibleWaveformArtifactRefs.join('|'),
+    [visibleWaveformArtifactRefs],
+  );
   const [waveformPyramids, setWaveformPyramids] = useState<Map<string, TimelineWaveformPyramid | null>>(() => new Map());
+  const waveformPyramidsRef = useRef<WaveformPyramidMap>(waveformPyramids);
+
+  useEffect(() => {
+    waveformPyramidsRef.current = waveformPyramids;
+  }, [waveformPyramids]);
 
   // Phase 4: optionally render in an OffscreenCanvas worker (off main thread).
   const workerMode = flags.timelineCanvasWorker && !waveformsEnabled && !clipDrag && !clipDragPreview && !clipTrim;
   const workerRef = useRef<Worker | null>(null);
   const workerReadyRef = useRef(false);
+  const mediaFilesState = useMediaStore((state) => state.files);
+  const mediaFiles = useMemo(
+    () => (Array.isArray(mediaFilesState) ? mediaFilesState : []),
+    [mediaFilesState],
+  );
+  const mediaFileHashById = useMemo(() => {
+    const map = new Map<string, string | undefined>();
+    for (const file of mediaFiles) {
+      map.set(file.id, file.fileHash);
+    }
+    return map;
+  }, [mediaFiles]);
+  const visibleThumbnailRefs = useMemo<VisibleTimelineThumbnailRef[]>(() => {
+    return collectVisibleTimelineThumbnailRefs({
+      clips,
+      scrollX,
+      viewportWidth,
+      overscanPx: THUMBNAIL_VIEWPORT_OVERSCAN_PX,
+      timeToPixel,
+      mediaFileHashById,
+    });
+  }, [clips, mediaFileHashById, scrollX, timeToPixel, viewportWidth]);
+
+  useEffect(() => {
+    visibleThumbnailMediaIdsRef.current = new Set(
+      visibleThumbnailRefs.map((ref) => ref.mediaFileId),
+    );
+  }, [visibleThumbnailRefs]);
 
   // Redraw when the thumbnail cache gains frames for any of our media files.
   // (Main-thread path only — the worker path does not draw thumbnails yet.)
   useEffect(() => {
     if (workerMode) return;
-    return thumbnailCacheService.subscribe(() => bumpRedraw());
+    const unsubscribe = thumbnailCacheService.subscribe((mediaFileId) => {
+      if (!visibleThumbnailMediaIdsRef.current.has(mediaFileId)) return;
+      if (thumbnailRedrawRafRef.current !== null) return;
+      thumbnailRedrawRafRef.current = requestAnimationFrame(() => {
+        thumbnailRedrawRafRef.current = null;
+        bumpRedraw();
+      });
+    });
+    return () => {
+      unsubscribe();
+      if (thumbnailRedrawRafRef.current !== null) {
+        cancelAnimationFrame(thumbnailRedrawRafRef.current);
+        thumbnailRedrawRafRef.current = null;
+      }
+    };
   }, [workerMode]);
 
   useEffect(() => {
+    if (workerMode || visibleThumbnailRefs.length === 0) return;
+    return scheduleVisibleTimelineThumbnailDbWarmup(visibleThumbnailRefs);
+  }, [visibleThumbnailRefs, workerMode]);
+
+  useEffect(() => {
+    if (workerMode || visibleThumbnailRefs.length === 0) return;
+    return scheduleVisibleTimelineThumbnailGeneration(visibleThumbnailRefs);
+  }, [visibleThumbnailRefs, workerMode]);
+
+  useEffect(() => {
     if (!waveformsEnabled || !waveformRefKey) return;
-    let cancelled = false;
-    const refs = waveformRefKey.split('|').filter(Boolean);
+    const controller = new AbortController();
+    const refs = waveformRefKey
+      .split('|')
+      .filter((refId) => refId && !waveformPyramidsRef.current.has(refId));
+    if (refs.length === 0) return;
 
     const publish = (refId: string, pyramid: TimelineWaveformPyramid | null) => {
-      if (cancelled) return;
+      if (controller.signal.aborted) return;
       setWaveformPyramids((prev) => {
         if (prev.has(refId) && prev.get(refId) === pyramid) return prev;
         const next = new Map(prev);
@@ -872,89 +1005,26 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
       bumpRedraw();
     };
 
-    for (const refId of refs) {
-      const cached = getCachedTimelineWaveformPyramid(refId);
-      if (cached) {
-        publish(refId, cached);
-        continue;
-      }
-      if (waveformPyramids.has(refId)) continue;
-      loadTimelineWaveformPyramid(refId)
-        .then((pyramid) => publish(refId, pyramid))
-        .catch(() => publish(refId, null));
-    }
+    void warmTimelineWaveformArtifacts(
+      refs,
+      {
+        signal: controller.signal,
+        onResult: ({ refId, pyramid }) => publish(refId, pyramid),
+      },
+    );
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
-  }, [waveformsEnabled, waveformRefKey, waveformPyramids]);
+  }, [waveformRefKey, waveformsEnabled]);
 
   useEffect(() => {
-    if (!waveformsEnabled || clipDrag || clipDragPreview) return;
-    if (audioDisplayMode !== 'detailed') {
-      const shouldUpgradeCompact =
-        audioDisplayMode === 'compact' &&
-        (timeToPixel(1) >= WAVEFORM_PYRAMID_AUTO_UPGRADE_ZOOM || cssWidth > WAVEFORM_PYRAMID_AUTO_UPGRADE_WIDTH);
-      if (!shouldUpgradeCompact) return;
-    }
-
-    const timer = window.setTimeout(() => {
-      const store = useTimelineStore.getState();
-      if (store.clipDragPreview) return;
-
-      const visibleLeft = scrollX - CANVAS_RENDER_OVERSCAN_PX;
-      const visibleRight = scrollX + viewportWidth + CANVAS_RENDER_OVERSCAN_PX;
-      for (const clip of clips) {
-        if (!isCanvasAudioClip(clip)) continue;
-        const x = timeToPixel(clip.startTime);
-        const w = timeToPixel(clip.duration);
-        if (x + w < visibleLeft || x > visibleRight) continue;
-
-        const currentClip = store.clips.find((candidate) => candidate.id === clip.id);
-        if (
-          !currentClip ||
-          currentClip.waveformGenerating ||
-          hasTimelineWaveformData(currentClip)
-        ) {
-          continue;
-        }
-
-        const sourceKey = currentClip.file
-          ? [
-              currentClip.id,
-              currentClip.file.name,
-              currentClip.file.size,
-              currentClip.file.lastModified,
-            ].join(':')
-          : [
-              currentClip.id,
-              currentClip.mediaFileId ?? currentClip.source?.mediaFileId ?? 'no-media-file',
-              currentClip.name,
-            ].join(':');
-        const requestKey = `${currentClip.id}:${sourceKey}:${audioDisplayMode ?? 'detailed'}`;
-        if (inFlightCanvasWaveformUpgrades.has(requestKey)) continue;
-
-        inFlightCanvasWaveformUpgrades.add(requestKey);
-        void store.generateWaveformForClip(currentClip.id)
-          .finally(() => {
-            inFlightCanvasWaveformUpgrades.delete(requestKey);
-          });
-      }
-    }, WAVEFORM_GENERATION_DELAY_MS);
-
-    return () => window.clearTimeout(timer);
-  }, [
-    audioDisplayMode,
-    clipDrag,
-    clipDragPreview,
-    clips,
-    cssWidth,
-    scrollBucket,
-    scrollX,
-    timeToPixel,
-    viewportWidth,
-    waveformsEnabled,
-  ]);
+    if (!waveformsEnabled || !visibleSourceWaveformGenerationKey) return;
+    return scheduleVisibleTimelineSourceWaveformGeneration(
+      visibleSourceWaveformGenerationRequests,
+      { delayMs: WAVEFORM_GENERATION_DELAY_MS },
+    );
+  }, [visibleSourceWaveformGenerationKey, visibleSourceWaveformGenerationRequests, waveformsEnabled]);
 
   // Worker lifecycle: transfer the canvas's drawing surface to the worker once.
   useEffect(() => {
@@ -1031,7 +1101,7 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawClips(
+      const diagnostics = drawClips(
         ctx,
         {
           clips,
@@ -1055,6 +1125,10 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
         canvasOffsetX,
         bumpRedraw,
       );
+      reportTimelineCanvasDrawDiagnostics(trackId, {
+        ...diagnostics,
+        workerMode,
+      });
     });
 
     return () => {

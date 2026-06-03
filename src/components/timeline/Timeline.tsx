@@ -79,6 +79,7 @@ import type { ClipDragState, ClipKeyframeTimeGroup, ContextMenuState, TimelineCo
 import { isProxyFrameCountComplete } from '../../stores/mediaStore/helpers/proxyCompleteness';
 import { parseVectorAnimationStateProperty } from '../../types/vectorAnimation';
 import { createSubcompositionFromSelection } from '../../services/timelineSubcomposition';
+import { getPlayheadPosition } from '../../services/layerBuilder';
 import { getTimelineTrackBaseHeight } from './utils/timelineAudioLayout';
 import { getTimelineTrackColor, TIMELINE_TRACK_COLOR_HIDDEN } from './trackColor';
 import {
@@ -511,6 +512,9 @@ export function Timeline() {
     useTimelineStore(useShallow(selectUISettings));
   const timelineRangeSelection = useTimelineStore(state => state.timelineRangeSelection);
   const timelineToolPreview = useTimelineStore(state => state.timelineToolPreview);
+  const audioRegionSelection = useTimelineStore(state => state.audioRegionSelection);
+  const audioRegionGainPreview = useTimelineStore(state => state.audioRegionGainPreview);
+  const audioSpectralRegionSelection = useTimelineStore(state => state.audioSpectralRegionSelection);
   const videoBakeRegions = useTimelineStore(state => state.videoBakeRegions);
   const videoBakeRegionSelection = useTimelineStore(state => state.videoBakeRegionSelection);
   const timelineToolCursor = getTimelineToolCursor(activeTimelineToolId);
@@ -650,6 +654,7 @@ export function Timeline() {
   const timelineRef = useRef<HTMLDivElement>(null);
   const timelineBodyRef = useRef<HTMLDivElement>(null);
   const trackLanesRef = useRef<HTMLDivElement>(null);
+  const playheadRef = useRef<HTMLDivElement>(null);
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
   const [scrubCacheRevision, setScrubCacheRevision] = useState(0);
   const [timelineViewportWidth, setTimelineViewportWidth] = useState(TIMELINE_VIEWPORT_FALLBACK_PX);
@@ -2760,6 +2765,7 @@ export function Timeline() {
       trackId: string,
       trackBaseHeightOverride?: number,
       trackOverride?: TimelineTrackType,
+      options?: { passiveVisualsSuppressed?: boolean },
     ) => {
       const track = trackMap.get(trackId) ?? trackOverride;
       if (!track) return null;
@@ -2880,6 +2886,7 @@ export function Timeline() {
           onPickWhipDragStart={handlePickWhipDragStart}
           onPickWhipDragEnd={handlePickWhipDragEnd}
           onSetClipParent={setClipParent}
+          passiveVisualsSuppressed={options?.passiveVisualsSuppressed}
         />
       );
     },
@@ -2923,6 +2930,30 @@ export function Timeline() {
 
   const playheadLeft = timeToPixel(playheadPosition) - scrollX + trackHeaderWidth;
   const showPlayhead = playheadLeft >= trackHeaderWidth;
+  useEffect(() => {
+    const playhead = playheadRef.current;
+    if (!playhead) return;
+
+    if (!isPlaying || isDraggingPlayhead) {
+      playhead.style.left = `${playheadLeft}px`;
+      return;
+    }
+
+    let rafId = 0;
+    const updateLivePlayhead = () => {
+      const storePosition = useTimelineStore.getState().playheadPosition;
+      const livePosition = getPlayheadPosition(storePosition);
+      playhead.style.left = `${timeToPixel(livePosition) - scrollX + trackHeaderWidth}px`;
+      rafId = requestAnimationFrame(updateLivePlayhead);
+    };
+
+    rafId = requestAnimationFrame(updateLivePlayhead);
+    return () => {
+      cancelAnimationFrame(rafId);
+      playhead.style.left = `${playheadLeft}px`;
+    };
+  }, [isPlaying, isDraggingPlayhead, playheadLeft, scrollX, timeToPixel, trackHeaderWidth]);
+
   const timelineSwitchMotionClass = clipAnimationPhase === 'exiting'
     ? (compositionSwitchDirection === 'backward' ? 'timeline-switch-exit-left' : 'timeline-switch-exit-right')
     : clipAnimationPhase === 'entering'
@@ -3186,14 +3217,21 @@ export function Timeline() {
         ]
       : [];
 
-    const renderClipForSection = (clip: TimelineClipType, trackId: string) => {
+    const renderClipForSection = (
+      clip: TimelineClipType,
+      trackId: string,
+      trackBaseHeightOverride?: number,
+      options?: { passiveVisualsSuppressed?: boolean },
+    ) => {
       const track = allSectionTracks.find(candidate => candidate.id === trackId)
         ?? timelineViewTrackMap.get(trackId)
         ?? trackMap.get(trackId);
       return renderClip(
         clip,
         trackId,
-        track ? getSectionTrackBaseHeight(track, sectionKind) : undefined,
+        trackBaseHeightOverride ?? (track ? getSectionTrackBaseHeight(track, sectionKind) : undefined),
+        undefined,
+        options,
       );
     };
 
@@ -3461,6 +3499,12 @@ export function Timeline() {
                   const trackClipDragPreview = clipDragPreviewAffectsTrack(clipDragPreview, track.id, clipMap)
                     ? clipDragPreview
                     : null;
+                  const trackClipFade = clipFade && clipMap.get(clipFade.clipId)?.trackId === track.id
+                    ? clipFade
+                    : null;
+                  const trackClipContextMenu = contextMenu && clipMap.get(contextMenu.clipId)?.trackId === track.id
+                    ? contextMenu
+                    : null;
 
                   return (
                     <TimelineTrack
@@ -3487,6 +3531,13 @@ export function Timeline() {
                       clipDrag={trackClipDrag}
                       clipDragPreview={trackClipDragPreview}
                       clipTrim={clipTrim}
+                      clipFade={trackClipFade}
+                      clipContextMenu={trackClipContextMenu}
+                      audioRegionSelection={audioRegionSelection}
+                      audioRegionGainPreview={audioRegionGainPreview}
+                      audioSpectralRegionSelection={audioSpectralRegionSelection}
+                      videoBakeRegionSelection={videoBakeRegionSelection}
+                      clipStemSeparationJobs={clipStemSeparationJobs}
                       externalDrag={externalDrag}
                       zoom={zoom}
                       scrollX={scrollX}
@@ -3502,7 +3553,7 @@ export function Timeline() {
                       onDragLeave={handleCombinedDragLeave}
                       onResizeStart={handleTrackResizeStart}
                       isResizeActive={activeTrackResizeId === track.id}
-                      renderClip={(clip, trackId) => renderClipForSection(clip, trackId)}
+                      renderClip={(clip, trackId, trackBaseHeightOverride, options) => renderClipForSection(clip, trackId, trackBaseHeightOverride, options)}
                       clipKeyframes={clipKeyframes}
                       renderKeyframeDiamonds={renderKeyframeDiamonds}
                       timeToPixel={timeToPixel}
@@ -4044,6 +4095,7 @@ export function Timeline() {
           {/* Playhead - spans from ruler through all tracks */}
           {showPlayhead && (
             <div
+              ref={playheadRef}
               className={`playhead ${timelineSwitchMotionClass}`}
               data-ai-id="timeline-playhead"
               style={{ left: playheadLeft }}

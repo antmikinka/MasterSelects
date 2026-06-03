@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { TimelineWaveformPyramid } from '../utils/waveformLod';
 import {
-  getCachedTimelineWaveformPyramid,
-  loadTimelineWaveformPyramid,
-} from '../../../services/audio/timelineWaveformPyramidCache';
+  getCachedTimelineWaveformArtifact,
+  warmTimelineWaveformArtifacts,
+} from '../../../services/timeline/timelineWaveformArtifactWarmup';
 
 export type TimelineWaveformPyramidLoadStatus = 'idle' | 'loading' | 'ready' | 'missing' | 'error';
 
@@ -14,7 +14,7 @@ export interface TimelineWaveformPyramidLoadState {
 }
 
 function createInitialState(refId: string | undefined): TimelineWaveformPyramidLoadState {
-  const cached = getCachedTimelineWaveformPyramid(refId);
+  const cached = getCachedTimelineWaveformArtifact(refId);
   if (cached) {
     return { refId, pyramid: cached, status: 'ready' };
   }
@@ -29,7 +29,7 @@ function createInitialState(refId: string | undefined): TimelineWaveformPyramidL
 export function useTimelineWaveformPyramidState(
   refId: string | undefined,
 ): TimelineWaveformPyramidLoadState {
-  const cached = getCachedTimelineWaveformPyramid(refId);
+  const cached = getCachedTimelineWaveformArtifact(refId);
   const [loaded, setLoaded] = useState<TimelineWaveformPyramidLoadState>(() => createInitialState(refId));
   const fallback = useMemo(() => createInitialState(refId), [refId]);
   const cachedState = useMemo<TimelineWaveformPyramidLoadState | null>(() => {
@@ -46,8 +46,9 @@ export function useTimelineWaveformPyramidState(
       };
     }
 
-    loadTimelineWaveformPyramid(refId)
-      .then((loaded) => {
+    warmTimelineWaveformArtifacts([refId])
+      .then(([result]) => {
+        const loaded = result?.pyramid ?? null;
         if (!cancelled) {
           setLoaded({ refId, pyramid: loaded, status: loaded ? 'ready' : 'missing' });
         }

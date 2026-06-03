@@ -5,6 +5,10 @@
 
 import { Logger } from './logger';
 import { projectDB } from './projectDB';
+import {
+  closeByThumbnailUrls,
+  registerThumbnailBitmapSource,
+} from './timeline/thumbnailBitmapCache';
 
 const log = Logger.create('ThumbnailCache');
 
@@ -174,6 +178,9 @@ class ThumbnailCacheService {
   private durations = new Map<string, number>();
   // Abort controllers for in-progress generation
   private abortControllers = new Map<string, AbortController>();
+  // IndexedDB cache-load requests in flight. These are intentionally separate
+  // from generation so timeline viewport rendering can warm memory cheaply.
+  private cachedLoadPromises = new Map<string, Promise<boolean>>();
   // Status change listeners
   private listeners = new Set<StatusListener>();
 
@@ -237,6 +244,45 @@ class ThumbnailCacheService {
   /** Get status for a source */
   getStatus(mediaFileId: string): ThumbnailStatus {
     return this.status.get(mediaFileId) ?? 'none';
+  }
+
+  /**
+   * Load already-generated thumbnails from IndexedDB into memory.
+   * This does not create video elements or generate missing frames.
+   */
+  async loadCachedForSource(mediaFileId: string, fileHash?: string): Promise<boolean> {
+    if (this.hasSource(mediaFileId)) {
+      if (this.getStatus(mediaFileId) !== 'ready') {
+        this.notify(mediaFileId, 'ready');
+      }
+      return true;
+    }
+
+    const currentStatus = this.getStatus(mediaFileId);
+    if (currentStatus === 'generating' || currentStatus === 'ready') {
+      return currentStatus === 'ready';
+    }
+
+    const existing = this.cachedLoadPromises.get(mediaFileId);
+    if (existing) return existing;
+
+    const loadPromise = this.loadFromDB(mediaFileId, fileHash)
+      .then((loaded) => {
+        if (loaded) {
+          this.notify(mediaFileId, 'ready');
+        }
+        return loaded;
+      })
+      .catch((error) => {
+        log.debug('Cached thumbnail load failed', { mediaFileId, error });
+        return false;
+      })
+      .finally(() => {
+        this.cachedLoadPromises.delete(mediaFileId);
+      });
+
+    this.cachedLoadPromises.set(mediaFileId, loadPromise);
+    return loadPromise;
   }
 
   /** Check if source has thumbnails in memory */
@@ -338,6 +384,7 @@ class ThumbnailCacheService {
     const sourceCache = new Map<number, string>();
     for (const frame of frames) {
       const url = URL.createObjectURL(frame.blob);
+      registerThumbnailBitmapSource(url, mediaFileId);
       sourceCache.set(frame.secondIndex, url);
     }
     this.cache.set(mediaFileId, sourceCache);
@@ -400,6 +447,7 @@ class ThumbnailCacheService {
 
         // Create blob URL for in-memory use
         const url = URL.createObjectURL(blob);
+        registerThumbnailBitmapSource(url, mediaFileId);
         sourceCache.set(s, url);
 
         // Queue for IndexedDB batch write
@@ -463,10 +511,13 @@ class ThumbnailCacheService {
 
   /** Evict from memory (thumbnails remain in IndexedDB) */
   evictFromMemory(mediaFileId: string): void {
+    this.cachedLoadPromises.delete(mediaFileId);
     const sourceCache = this.cache.get(mediaFileId);
     if (sourceCache) {
+      const urls = [...sourceCache.values()];
+      closeByThumbnailUrls(urls);
       // Revoke all blob URLs
-      for (const url of sourceCache.values()) {
+      for (const url of urls) {
         URL.revokeObjectURL(url);
       }
       this.cache.delete(mediaFileId);
@@ -478,6 +529,7 @@ class ThumbnailCacheService {
   /** Clear everything for a source (memory + IndexedDB) */
   async clearSource(mediaFileId: string): Promise<void> {
     this.abort(mediaFileId);
+    this.cachedLoadPromises.delete(mediaFileId);
     this.evictFromMemory(mediaFileId);
     try {
       await projectDB.deleteSourceThumbnails(mediaFileId);
@@ -494,6 +546,7 @@ class ThumbnailCacheService {
     this.cache.clear();
     this.status.clear();
     this.durations.clear();
+    this.cachedLoadPromises.clear();
     try {
       await projectDB.clearAllSourceThumbnails();
     } catch (e) {

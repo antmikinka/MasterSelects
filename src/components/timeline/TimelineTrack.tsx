@@ -1,7 +1,7 @@
 // TimelineTrack component - Individual track row
 
 import React, { memo, useMemo, useRef, useEffect, useState } from 'react';
-import type { TimelineTrackProps } from './types';
+import type { ClipKeyframeTimeGroup, TimelineTrackProps } from './types';
 import type { AnimatableProperty, BezierHandle, ClipMask, Keyframe } from '../../types';
 import { CurveEditor } from './CurveEditor';
 import {
@@ -13,10 +13,23 @@ import {
 import { useTimelineStore } from '../../stores/timeline';
 import { flags } from '../../engine/featureFlags';
 import { TimelineClipCanvas } from './TimelineClipCanvas';
+import {
+  ClipInteractionShell,
+  getClipInteractionShellActiveSlots,
+  type ClipInteractionShellActiveModules,
+  type ClipInteractionShellGeometry,
+  type ClipInteractionShellMountReason,
+  type ClipInteractionShellMountState,
+  type ClipInteractionShellModuleSlot,
+  type ClipInteractionShellRect,
+} from './interactionShell';
+import { reportTimelineCanvasDomDiagnostics } from '../../services/timeline/timelineCanvasDiagnostics';
 
 const TRACK_VIEWPORT_FALLBACK_PX = 1600;
 const TRACK_VIEWPORT_MIN_PX = 1600;
 const TRACK_RENDER_OVERSCAN_PX = 1200;
+const CLIP_SHELL_VERTICAL_INSET_PX = 4;
+const CLIP_SHELL_HANDLE_WIDTH_PX = 8;
 const EPSILON = 0.0001;
 
 const isInfiniteTimelineSourceType = (sourceType: string | null | undefined): boolean => (
@@ -77,6 +90,45 @@ const getTransformPropertyOrder = (clip: KeyframeTrackClip | null | undefined): 
     ? ['camera.fov', 'camera.near', 'camera.far', 'camera.resolutionWidth', 'camera.resolutionHeight', 'opacity', 'position.x', 'position.y', 'position.z', 'rotation.x', 'rotation.y', 'rotation.z']
     : ['opacity', 'position.x', 'position.y', 'position.z', 'scale.all', 'scale.x', 'scale.y', 'scale.z', 'rotation.x', 'rotation.y', 'rotation.z']
 );
+
+const createShellRect = (x: number, y: number, width: number, height: number): ClipInteractionShellRect => ({
+  x,
+  y,
+  width: Math.max(0, width),
+  height: Math.max(0, height),
+});
+
+const clampShellRectX = (rect: ClipInteractionShellRect, viewport: ClipInteractionShellRect): ClipInteractionShellRect => {
+  const left = Math.max(rect.x, viewport.x);
+  const right = Math.min(rect.x + rect.width, viewport.x + viewport.width);
+  return createShellRect(left, rect.y, right - left, rect.height);
+};
+
+const getClipShellKeyframeGroups = (
+  keyframes: ReadonlyArray<Pick<Keyframe, 'id' | 'time' | 'property'>>,
+): ClipKeyframeTimeGroup[] => {
+  const groups = new Map<number, ClipKeyframeTimeGroup>();
+
+  keyframes.forEach((keyframe) => {
+    const bucket = Math.round(keyframe.time * 1000000) / 1000000;
+    const group = groups.get(bucket);
+    if (group) {
+      group.keyframeIds.push(keyframe.id);
+      group.properties = [...(group.properties ?? []), keyframe.property];
+      group.hasStateChange = group.hasStateChange || Boolean(parseVectorAnimationStateProperty(keyframe.property));
+      return;
+    }
+
+    groups.set(bucket, {
+      time: keyframe.time,
+      keyframeIds: [keyframe.id],
+      properties: [keyframe.property],
+      hasStateChange: Boolean(parseVectorAnimationStateProperty(keyframe.property)),
+    });
+  });
+
+  return [...groups.values()].sort((a, b) => a.time - b.time);
+};
 
 // Render keyframe tracks for timeline area (right column) - flat list without folder structure
 function TrackPropertyTracks({
@@ -273,6 +325,13 @@ function TimelineTrackComponent({
   clipDrag,
   clipDragPreview,
   clipTrim,
+  clipFade,
+  clipContextMenu,
+  audioRegionSelection,
+  audioRegionGainPreview,
+  audioSpectralRegionSelection,
+  videoBakeRegionSelection,
+  clipStemSeparationJobs,
   externalDrag,
   onEmptyMouseDown,
   onEmptyContextMenu,
@@ -282,6 +341,7 @@ function TimelineTrackComponent({
   onDragLeave,
   onResizeStart,
   isResizeActive = false,
+  onTrimStart,
   renderClip,
   onClipMouseDown,
   onClipContextMenu,
@@ -306,6 +366,7 @@ function TimelineTrackComponent({
     });
     return Array.from(uniqueClips.values());
   }, [clips, track.id]);
+  const clipFadeClipId = clipFade?.clipId ?? null;
   const viewportWidth = typeof window === 'undefined'
     ? TRACK_VIEWPORT_FALLBACK_PX
     : Math.max(TRACK_VIEWPORT_MIN_PX, window.innerWidth);
@@ -324,15 +385,99 @@ function TimelineTrackComponent({
       // Selection alone must NOT force-render: an off-screen selected clip needs no
       // DOM (its selection is restored when scrolled into view). Forcing selected
       // clips defeated culling entirely on select-all of a large comp (issue #228).
-      if (draggedClipIds.has(clip.id) || clipTrim?.clipId === clip.id) {
+      if (draggedClipIds.has(clip.id) || clipTrim?.clipId === clip.id || clipFadeClipId === clip.id) {
         return true;
       }
       const clipStart = clip.startTime;
       const clipEnd = clip.startTime + clip.duration;
       return clipEnd >= visibleStartTime && clipStart <= visibleEndTime;
     });
-  }, [allTrackClips, clipDrag, clipTrim?.clipId, visibleEndTime, visibleStartTime]);
+  }, [allTrackClips, clipDrag, clipFadeClipId, clipTrim?.clipId, visibleEndTime, visibleStartTime]);
   const trackClipIds = useMemo(() => new Set(allTrackClips.map((clip) => clip.id)), [allTrackClips]);
+  const clipContextMenuClipId = clipContextMenu?.clipId ?? null;
+  const clipShellKeyframeStateByClipId = useMemo(() => {
+    const stateByClipId = new Map<string, {
+      keyframes: Keyframe[];
+      keyframeGroups: ClipKeyframeTimeGroup[];
+      selectedKeyframeIds: string[];
+      activeProperty?: AnimatableProperty;
+    }>();
+
+    if (selectedKeyframeIds.size === 0) return stateByClipId;
+
+    allTrackClips.forEach((clip) => {
+      const keyframes = (clipKeyframes.get(clip.id) ?? []) as Keyframe[];
+      const selectedKeyframes = keyframes.filter((keyframe) => selectedKeyframeIds.has(keyframe.id));
+      if (selectedKeyframes.length === 0) return;
+
+      stateByClipId.set(clip.id, {
+        keyframes,
+        keyframeGroups: getClipShellKeyframeGroups(keyframes),
+        selectedKeyframeIds: selectedKeyframes.map((keyframe) => keyframe.id),
+        activeProperty: selectedKeyframes[0]?.property,
+      });
+    });
+
+    return stateByClipId;
+  }, [allTrackClips, clipKeyframes, selectedKeyframeIds]);
+  const [hoveredClipId, setHoveredClipId] = useState<string | null>(null);
+  const clipShellSpecialStateByClipId = useMemo(() => {
+    const stateByClipId = new Map<string, {
+      audioRegionActive: boolean;
+      spectralRegionActive: boolean;
+      videoBakeActive: boolean;
+      stemActive: boolean;
+      stemJob?: TimelineTrackProps['clipStemSeparationJobs'][string];
+    }>();
+
+    allTrackClips.forEach((clip) => {
+      const audioRegionActive =
+        audioRegionSelection?.clipId === clip.id ||
+        audioRegionGainPreview?.clipId === clip.id;
+      const spectralLayers = clip.audioState?.spectralLayers ?? [];
+      const spectralRegionActive =
+        audioSpectralRegionSelection?.clipId === clip.id ||
+        (
+          audioDisplayMode === 'spectral' &&
+          spectralLayers.some((layer) => layer.enabled !== false && layer.duration > 0)
+        );
+      const videoBakeRegions = clip.videoState?.bakeRegions ?? [];
+      const videoBakeActive =
+        (
+          videoBakeRegionSelection?.scope === 'clip' &&
+          videoBakeRegionSelection.clipId === clip.id
+        ) ||
+        videoBakeRegions.length > 0;
+      const stemJob =
+        clipStemSeparationJobs[clip.id] ??
+        (clip.linkedClipId ? clipStemSeparationJobs[clip.linkedClipId] : undefined);
+      const stemActive = Boolean(stemJob) || (
+        hoveredClipId === clip.id &&
+        Boolean(clip.audioState?.stemSeparation)
+      );
+
+      if (!audioRegionActive && !spectralRegionActive && !videoBakeActive && !stemActive) return;
+
+      stateByClipId.set(clip.id, {
+        audioRegionActive,
+        spectralRegionActive,
+        videoBakeActive,
+        stemActive,
+        stemJob,
+      });
+    });
+
+    return stateByClipId;
+  }, [
+    allTrackClips,
+    audioRegionSelection,
+    audioRegionGainPreview,
+    audioSpectralRegionSelection,
+    audioDisplayMode,
+    videoBakeRegionSelection,
+    clipStemSeparationJobs,
+    hoveredClipId,
+  ]);
   // issue #228: when the flag is on, draw clip bodies on a viewport-sliced
   // canvas per track instead of one DOM node per clip. The canvas backing store
   // no longer scales with total timeline width, so high zoom does not need the
@@ -350,7 +495,6 @@ function TimelineTrackComponent({
   // mounted only as invisible interaction shells for the clip under the cursor or
   // an active gesture. They must never replace the visible canvas body, otherwise
   // thumbnails/waveforms visibly switch between two renderers.
-  const [hoveredClipId, setHoveredClipId] = useState<string | null>(null);
   const domControlClipIds = useMemo(() => {
     const ids = new Set<string>();
     if (!useCanvasClips) return ids;
@@ -360,8 +504,25 @@ function TimelineTrackComponent({
       clipDrag.multiSelectClipIds?.forEach((id) => ids.add(id));
     }
     if (clipTrim?.clipId) ids.add(clipTrim.clipId);
+    if (clipFadeClipId && trackClipIds.has(clipFadeClipId)) ids.add(clipFadeClipId);
+    if (clipContextMenuClipId && trackClipIds.has(clipContextMenuClipId)) ids.add(clipContextMenuClipId);
+    trackClips.forEach((clip) => {
+      if (clipShellKeyframeStateByClipId.has(clip.id)) ids.add(clip.id);
+      if (clipShellSpecialStateByClipId.has(clip.id)) ids.add(clip.id);
+    });
     return ids;
-  }, [useCanvasClips, hoveredClipId, clipDrag, clipTrim]);
+  }, [
+    useCanvasClips,
+    hoveredClipId,
+    clipDrag,
+    clipTrim,
+    clipFadeClipId,
+    clipContextMenuClipId,
+    trackClipIds,
+    trackClips,
+    clipShellKeyframeStateByClipId,
+    clipShellSpecialStateByClipId,
+  ]);
   const canvasClips = useMemo(() => {
     if (!useCanvasClips) return allTrackClips;
     const nextClips = new Map(allTrackClips.map((clip) => [clip.id, clip]));
@@ -436,6 +597,167 @@ function TimelineTrackComponent({
     () => (useCanvasClips ? canvasClips.filter((clip) => domControlClipIds.has(clip.id)) : []),
     [useCanvasClips, canvasClips, domControlClipIds],
   );
+  useEffect(() => {
+    const activeShellSlotCounts: Partial<Record<ClipInteractionShellModuleSlot, number>> = {};
+    const addSlot = (slot: ClipInteractionShellModuleSlot) => {
+      activeShellSlotCounts[slot] = (activeShellSlotCounts[slot] ?? 0) + 1;
+    };
+
+    domControlClips.forEach((clip) => {
+      if (clipTrim?.clipId === clip.id) addSlot('trim');
+      if (clipFade?.clipId === clip.id) addSlot('fade');
+      if (clipShellKeyframeStateByClipId.has(clip.id)) addSlot('keyframe');
+      if (clipContextMenu?.clipId === clip.id) addSlot('context-menu');
+      const specialState = clipShellSpecialStateByClipId.get(clip.id);
+      if (specialState?.audioRegionActive) addSlot('audio-region');
+      if (specialState?.spectralRegionActive) addSlot('spectral-region');
+      if (specialState?.videoBakeActive) addSlot('video-bake');
+      if (specialState?.stemActive) addSlot('stem');
+    });
+
+    reportTimelineCanvasDomDiagnostics(track.id, {
+      domOverlayCount: useCanvasClips ? domControlClips.length : 0,
+      domClipBodyCount: useCanvasClips ? domControlClips.length : trackClips.length,
+      shellCount: domControlClips.length,
+      activeShellSlotCounts,
+    });
+  }, [
+    track.id,
+    useCanvasClips,
+    domControlClips,
+    trackClips.length,
+    clipTrim,
+    clipFade,
+    clipContextMenu,
+    clipShellKeyframeStateByClipId,
+    clipShellSpecialStateByClipId,
+  ]);
+  const getClipShellMountState = (clipId: string): ClipInteractionShellMountState => {
+    const reasons: ClipInteractionShellMountReason[] = [];
+    if (hoveredClipId === clipId) reasons.push('hover');
+    if (clipDrag?.clipId === clipId) reasons.push('drag');
+    if (clipDrag?.multiSelectClipIds?.includes(clipId)) reasons.push('multi-drag');
+    if (clipTrim?.clipId === clipId) reasons.push('trim');
+    if (clipFade?.clipId === clipId) reasons.push('fade');
+    if (clipContextMenu?.clipId === clipId) reasons.push('context-menu-open');
+    const keyframeState = clipShellKeyframeStateByClipId.get(clipId);
+    if (keyframeState) reasons.push('selected-keyframes');
+    const specialState = clipShellSpecialStateByClipId.get(clipId);
+    if (specialState?.audioRegionActive) reasons.push('audio-region-active');
+    if (specialState?.spectralRegionActive) reasons.push('spectral-region-active');
+    if (specialState?.videoBakeActive) reasons.push('video-bake-active');
+    if (specialState?.stemActive) reasons.push('stem-active');
+
+    return {
+      clipId,
+      shouldMount: reasons.length > 0,
+      reasons,
+      isHovered: hoveredClipId === clipId,
+      isDragging: clipDrag?.clipId === clipId,
+      isMultiDragging: clipDrag?.multiSelectClipIds?.includes(clipId) ?? false,
+      isTrimming: clipTrim?.clipId === clipId,
+      isFading: clipFade?.clipId === clipId,
+      hasOpenContextMenu: clipContextMenu?.clipId === clipId,
+      hasVisibleKeyframes: Boolean(keyframeState),
+      hasActiveAudioRegion: specialState?.audioRegionActive,
+      hasActiveSpectralRegion: specialState?.spectralRegionActive,
+      hasActiveVideoBakeRegion: specialState?.videoBakeActive,
+      hasActiveStemControls: specialState?.stemActive,
+    };
+  };
+  const getClipShellGeometry = (clip: typeof clips[number]): ClipInteractionShellGeometry => {
+    const left = timeToPixel(clip.startTime);
+    const width = Math.max(1, timeToPixel(clip.duration));
+    const top = CLIP_SHELL_VERTICAL_INSET_PX;
+    const height = Math.max(1, baseHeight - CLIP_SHELL_VERTICAL_INSET_PX * 2);
+    const clipRect = createShellRect(left, top, width, height);
+    const viewportRect = createShellRect(scrollX, 0, viewportWidth, baseHeight);
+    const handleHeight = height;
+
+    return {
+      clip: clipRect,
+      visibleClip: clampShellRectX(clipRect, viewportRect),
+      track: createShellRect(0, 0, canvasContentWidth, baseHeight),
+      viewport: viewportRect,
+      trimHandles: {
+        left: createShellRect(left - CLIP_SHELL_HANDLE_WIDTH_PX / 2, top, CLIP_SHELL_HANDLE_WIDTH_PX, handleHeight),
+        right: createShellRect(left + width - CLIP_SHELL_HANDLE_WIDTH_PX / 2, top, CLIP_SHELL_HANDLE_WIDTH_PX, handleHeight),
+      },
+      fadeHandles: {
+        left: createShellRect(left, top, CLIP_SHELL_HANDLE_WIDTH_PX, CLIP_SHELL_HANDLE_WIDTH_PX),
+        right: createShellRect(left + width - CLIP_SHELL_HANDLE_WIDTH_PX, top, CLIP_SHELL_HANDLE_WIDTH_PX, CLIP_SHELL_HANDLE_WIDTH_PX),
+      },
+      keyframeRows: [],
+    };
+  };
+  const getClipShellActiveModules = (clip: typeof clips[number]): ClipInteractionShellActiveModules => {
+    const clipId = clip.id;
+    const keyframeState = clipShellKeyframeStateByClipId.get(clipId);
+    const specialState = clipShellSpecialStateByClipId.get(clipId);
+    const audioRegionGainActive = audioRegionGainPreview?.clipId === clipId;
+    const selectedStemKind = clip.audioState?.stemSeparation?.stems
+      .find((stem) => stem.id === clip.audioState?.stemSeparation?.soloStemId)
+      ?.kind;
+
+    return {
+      trim: {
+        enabled: clipTrim?.clipId === clipId,
+        slot: 'trim',
+        state: clipTrim?.clipId === clipId ? clipTrim : null,
+        activeEdges: clipTrim?.clipId === clipId ? [clipTrim.edge] : [],
+      },
+      fade: {
+        enabled: clipFade?.clipId === clipId,
+        slot: 'fade',
+        state: clipFade?.clipId === clipId ? clipFade : null,
+        activeEdges: clipFade?.clipId === clipId ? [clipFade.edge] : [],
+      },
+      keyframe: {
+        enabled: Boolean(keyframeState),
+        slot: 'keyframe',
+        activeProperty: keyframeState?.activeProperty,
+        keyframes: keyframeState?.keyframes ?? [],
+        keyframeGroups: keyframeState?.keyframeGroups ?? [],
+        selectedKeyframeIds: keyframeState?.selectedKeyframeIds ?? [],
+      },
+      audioRegion: {
+        enabled: specialState?.audioRegionActive === true,
+        slot: 'audio-region',
+        selection: audioRegionSelection?.clipId === clipId ? audioRegionSelection : null,
+        mode: audioRegionGainActive ? 'gain' : 'select',
+        gainPreviewDb: audioRegionGainActive ? audioRegionGainPreview.gainDb : undefined,
+      },
+      spectralRegion: {
+        enabled: specialState?.spectralRegionActive === true,
+        slot: 'spectral-region',
+        selection: audioSpectralRegionSelection?.clipId === clipId ? audioSpectralRegionSelection : null,
+        imageLayers: clip.audioState?.spectralLayers ?? [],
+      },
+      videoBake: {
+        enabled: specialState?.videoBakeActive === true,
+        slot: 'video-bake',
+        selection: (
+          videoBakeRegionSelection?.scope === 'clip' &&
+          videoBakeRegionSelection.clipId === clipId
+        ) ? videoBakeRegionSelection : null,
+        regions: clip.videoState?.bakeRegions ?? [],
+      },
+      stem: {
+        enabled: specialState?.stemActive === true,
+        slot: 'stem',
+        stemState: clip.audioState?.stemSeparation ?? null,
+        activeStemKind: selectedStemKind,
+        jobPhase: specialState?.stemJob?.phase,
+        progress: specialState?.stemJob?.progress,
+      },
+      contextMenu: {
+        enabled: clipContextMenu?.clipId === clipId,
+        slot: 'context-menu',
+        state: clipContextMenu?.clipId === clipId ? clipContextMenu : null,
+        isOpen: clipContextMenu?.clipId === clipId,
+      },
+    };
+  };
   const hitTestClipAtClientX = (clientX: number, rowEl: HTMLElement): string | null => {
     const rect = rowEl.getBoundingClientRect();
     const time = pixelToTime(clientX - rect.left);
@@ -562,11 +884,42 @@ function TimelineTrackComponent({
               clipDragPreview={clipDragPreview}
               clipTrim={clipTrim}
             />
-            {domControlClips.map((clip) => (
-              <div key={`canvas-control-${clip.id}`} className="timeline-canvas-dom-overlay">
-                {renderClip(clip, track.id)}
-              </div>
-            ))}
+            {domControlClips.map((clip) => {
+              const activeModules = getClipShellActiveModules(clip);
+              const activeSlots = getClipInteractionShellActiveSlots(activeModules);
+              const mountState = getClipShellMountState(clip.id);
+              const trimOnlyShell = activeSlots.length === 1 && activeSlots[0] === 'trim';
+              const contextMenuOnlyShell =
+                activeSlots.length === 1 &&
+                activeSlots[0] === 'context-menu' &&
+                mountState.reasons.length === 1 &&
+                mountState.reasons[0] === 'context-menu-open';
+              const dragOnlyShell =
+                activeSlots.length === 0 &&
+                mountState.reasons.length > 0 &&
+                mountState.reasons.every((reason) => reason === 'drag' || reason === 'multi-drag');
+              const skipLegacyClipBody = trimOnlyShell || contextMenuOnlyShell || dragOnlyShell;
+              return (
+                <div
+                  key={`canvas-control-${clip.id}`}
+                  className="timeline-canvas-dom-overlay"
+                >
+                  <ClipInteractionShell
+                    clip={clip}
+                    track={track}
+                    geometry={getClipShellGeometry(clip)}
+                    mountState={mountState}
+                    activeModules={activeModules}
+                    commands={{
+                      onTrimStart: (event, context, edge) => onTrimStart(event, context.clip.id, edge),
+                    }}
+                    className="timeline-canvas-interaction-shell"
+                    style={{ pointerEvents: 'none' }}
+                  />
+                  {skipLegacyClipBody ? null : renderClip(clip, track.id, undefined, { passiveVisualsSuppressed: true })}
+                </div>
+              );
+            })}
           </>
         ) : (
           trackClips.map((clip) => renderClip(clip, track.id))
@@ -663,12 +1016,20 @@ function areTimelineTrackPropsEqual(
       previous.audioDisplayMode === next.audioDisplayMode &&
       previous.isClipDragActive === next.isClipDragActive &&
       previous.clipTrim === next.clipTrim &&
+      previous.clipFade === next.clipFade &&
+      previous.clipContextMenu === next.clipContextMenu &&
+      previous.audioRegionSelection === next.audioRegionSelection &&
+      previous.audioRegionGainPreview === next.audioRegionGainPreview &&
+      previous.audioSpectralRegionSelection === next.audioSpectralRegionSelection &&
+      previous.videoBakeRegionSelection === next.videoBakeRegionSelection &&
+      previous.clipStemSeparationJobs === next.clipStemSeparationJobs &&
       previous.externalDrag === next.externalDrag &&
       previous.zoom === next.zoom &&
       previous.scrollX === next.scrollX &&
       previous.timelineRef === next.timelineRef &&
       previous.onEmptyMouseDown === next.onEmptyMouseDown &&
       previous.onEmptyContextMenu === next.onEmptyContextMenu &&
+      previous.onTrimStart === next.onTrimStart &&
       previous.isResizeActive === next.isResizeActive &&
       previous.clipKeyframes === next.clipKeyframes &&
       previous.expandedCurveProperties === next.expandedCurveProperties;

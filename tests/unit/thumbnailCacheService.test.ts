@@ -1,11 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createThumbnailGenerationVideo,
   thumbnailCacheService,
 } from '../../src/services/thumbnailCacheService';
+import {
+  clearThumbnailBitmapCache,
+  ensureThumbnailBitmap,
+  getThumbnailBitmap,
+} from '../../src/services/timeline/thumbnailBitmapCache';
 
 type ThumbnailCacheServiceTestAccess = typeof thumbnailCacheService & {
   loadFromDB(mediaFileId: string, fileHash?: string): Promise<boolean>;
+  loadFramesIntoCache(
+    mediaFileId: string,
+    frames: Array<{ secondIndex: number; blob: Blob }>,
+  ): void;
   generateThumbnails(
     mediaFileId: string,
     video: HTMLVideoElement,
@@ -17,6 +26,13 @@ type ThumbnailCacheServiceTestAccess = typeof thumbnailCacheService & {
 
 describe('thumbnailCacheService', () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
+    clearThumbnailBitmapCache();
+  });
+
+  afterEach(() => {
+    clearThumbnailBitmapCache();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -100,5 +116,45 @@ describe('thumbnailCacheService', () => {
     );
     expect(isolatedVideo.pause).toHaveBeenCalled();
     expect(isolatedVideo.removeAttribute).toHaveBeenCalledWith('src');
+  });
+
+  it('loads cached thumbnails without creating a video element or generating frames', async () => {
+    const service = thumbnailCacheService as unknown as ThumbnailCacheServiceTestAccess;
+    const mediaFileId = `media-cached-thumb-test-${Date.now()}`;
+    const loadFromDbSpy = vi.spyOn(service, 'loadFromDB').mockResolvedValue(true);
+    const generateSpy = vi
+      .spyOn(service, 'generateThumbnails')
+      .mockResolvedValue(undefined);
+    const createElementSpy = vi.spyOn(document, 'createElement');
+
+    await expect(thumbnailCacheService.loadCachedForSource(mediaFileId, 'hash-a')).resolves.toBe(true);
+
+    expect(loadFromDbSpy).toHaveBeenCalledWith(mediaFileId, 'hash-a');
+    expect(generateSpy).not.toHaveBeenCalled();
+    expect(createElementSpy).not.toHaveBeenCalled();
+  });
+
+  it('closes decoded thumbnail bitmaps before revoking source blob URLs on memory eviction', async () => {
+    const service = thumbnailCacheService as unknown as ThumbnailCacheServiceTestAccess;
+    const mediaFileId = `media-bitmap-evict-test-${Date.now()}`;
+    const bitmap = { close: vi.fn() } as unknown as ImageBitmap;
+    const revokeObjectUrlSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:source-thumb-frame');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      blob: () => Promise.resolve(new Blob(['thumb'])),
+    } as Response);
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue(bitmap));
+
+    service.loadFramesIntoCache(mediaFileId, [
+      { secondIndex: 0, blob: new Blob(['thumb']) },
+    ]);
+    ensureThumbnailBitmap('blob:source-thumb-frame', vi.fn(), mediaFileId);
+    await vi.waitFor(() => expect(getThumbnailBitmap('blob:source-thumb-frame')).toBe(bitmap));
+
+    thumbnailCacheService.evictFromMemory(mediaFileId);
+
+    expect(bitmap.close).toHaveBeenCalledTimes(1);
+    expect(revokeObjectUrlSpy).toHaveBeenCalledWith('blob:source-thumb-frame');
+    expect(getThumbnailBitmap('blob:source-thumb-frame')).toBeNull();
   });
 });

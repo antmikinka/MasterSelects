@@ -1761,7 +1761,7 @@ async function autoRelinkFromRawFolder(): Promise<void> {
       continue;
     }
 
-    const applied = await applyRelinkMatch(file.id, match);
+    const applied = await applyRelinkMatch(file.id, match, { generateThumbnails: false });
     if (applied) {
       relinkedByProjectScan.add(file.id);
       relinkedCount++;
@@ -1817,7 +1817,7 @@ async function autoRelinkFromRawFolder(): Promise<void> {
       // Update timeline clips with proper source elements (video/audio/image)
       for (const file of updatedFiles) {
         if (file.file && !relinkedByProjectScan.has(file.id)) {
-          await updateTimelineClips(file.id, file.file);
+          await updateTimelineClips(file.id, file.file, { generateThumbnails: false });
         }
       }
     }
@@ -1987,6 +1987,17 @@ async function reloadNestedCompositionClips(): Promise<void> {
             error,
           });
         }
+        continue;
+      }
+
+      if ((sourceType as string) === 'video' || (sourceType as string) === 'audio') {
+        nestedClip.source = {
+          type: sourceType,
+          mediaFileId: nestedSerializedClip.mediaFileId,
+          naturalDuration: nestedSerializedClip.naturalDuration ?? nestedMediaFile.duration ?? nestedSerializedClip.duration,
+          ...(nestedMediaFile.absolutePath ? { filePath: nestedMediaFile.absolutePath } : {}),
+        };
+        nestedClip.isLoading = false;
         continue;
       }
 

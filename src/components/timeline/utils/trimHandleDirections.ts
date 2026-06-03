@@ -6,8 +6,12 @@ const EPSILON = 0.001;
 
 export type TrimHandleEdge = 'left' | 'right';
 export type TrimHandleArrowDirection = 'left' | 'right';
+type TrimHandleClip = Pick<
+  TimelineClip,
+  'startTime' | 'duration' | 'inPoint' | 'outPoint' | 'source'
+>;
 
-function isInfiniteTrimSource(clip: TimelineClip): boolean {
+function isInfiniteTrimSource(clip: TrimHandleClip): boolean {
   const sourceType = clip.source?.type;
   return sourceType === 'text' ||
     sourceType === 'image' ||
@@ -17,12 +21,12 @@ function isInfiniteTrimSource(clip: TimelineClip): boolean {
     sourceType === 'math-scene';
 }
 
-function canLoopExtendVectorClip(clip: TimelineClip): boolean {
+function canLoopExtendVectorClip(clip: TrimHandleClip): boolean {
   return isVectorAnimationSourceType(clip.source?.type) &&
     shouldLoopVectorAnimation(clip.source.vectorAnimationSettings);
 }
 
-function getClipSourceDuration(clip: TimelineClip): number {
+function getClipSourceDuration(clip: TrimHandleClip): number {
   const naturalDuration = clip.source?.naturalDuration;
   if (Number.isFinite(naturalDuration) && naturalDuration && naturalDuration > 0) {
     return naturalDuration;
@@ -31,7 +35,7 @@ function getClipSourceDuration(clip: TimelineClip): number {
 }
 
 export function getTrimHandleArrowDirections(
-  clip: TimelineClip,
+  clip: TrimHandleClip,
   edge: TrimHandleEdge,
 ): TrimHandleArrowDirection[] {
   const canShorten = clip.duration > MIN_CLIP_DURATION + EPSILON;

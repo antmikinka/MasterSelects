@@ -42,6 +42,7 @@ import { mathSceneRenderer } from '../../services/mathScene/MathSceneRenderer';
 import { markDynamicCanvasUpdated } from '../../services/canvasVersion';
 import { resolveGaussianSplatSequenceData } from '../../utils/gaussianSplatSequence';
 import { resolveModelSequenceData } from '../../utils/modelSequence';
+import { releaseAllLazyTimelineMediaElements } from '../../services/timeline/lazyMediaElements';
 
 const log = Logger.create('Timeline');
 
@@ -81,15 +82,13 @@ async function getOrCreateWcp(
 
 function restoreSourceThumbnails(
   mediaFileId: string | undefined,
-  video: HTMLVideoElement,
-  duration: number
 ): void {
-  if (!mediaFileId || duration <= 0) {
+  if (!mediaFileId) {
     return;
   }
 
   const fileHash = useMediaStore.getState().files.find(f => f.id === mediaFileId)?.fileHash;
-  void thumbnailCacheService.generateForSource(mediaFileId, video, duration, fileHash);
+  void thumbnailCacheService.loadCachedForSource(mediaFileId, fileHash);
 }
 
 function restoreClipNodeGraph(serializedClip: SerializableClip) {
@@ -1729,8 +1728,11 @@ export const createSerializationUtils: SliceCreator<SerializationUtils> = (set, 
 
       // Load media element async
       const type = serializedClip.sourceType;
+      const deferMediaElementRestore = (type as string) === 'video' || (type as string) === 'audio';
       let loadFile = mediaFile.file;
-      let fileUrl = loadFile ? URL.createObjectURL(loadFile) : mediaFile.url;
+      let fileUrl = loadFile
+        ? (deferMediaElementRestore ? mediaFile.url : URL.createObjectURL(loadFile))
+        : mediaFile.url;
 
       if (
         !loadFile &&
@@ -1778,11 +1780,34 @@ export const createSerializationUtils: SliceCreator<SerializationUtils> = (set, 
         continue;
       }
 
-      if (!fileUrl && (type === 'video' || type === 'audio' || type === 'image' || type === 'model' || type === 'gaussian-splat')) {
+      if (!loadFile && !fileUrl && (type === 'video' || type === 'audio' || type === 'image' || type === 'model' || type === 'gaussian-splat')) {
         log.warn('Skipping media load - no file URL available', { clip: clip.name, mediaFileId: mediaFile.id });
         set(state => ({
           clips: state.clips.map(c => c.id === clip.id ? { ...c, isLoading: false } : c),
         }));
+        continue;
+      }
+
+      if (deferMediaElementRestore) {
+        set(state => ({
+          clips: state.clips.map(c =>
+            c.id === clip.id
+              ? {
+                  ...c,
+                  file: loadFile ?? c.file,
+                  source: {
+                    type,
+                    naturalDuration: serializedClip.naturalDuration || mediaFile.duration || clip.duration,
+                    mediaFileId: serializedClip.mediaFileId,
+                    ...(mediaFile.absolutePath ? { filePath: mediaFile.absolutePath } : {}),
+                  },
+                  isLoading: false,
+                  needsReload: false,
+                }
+              : c
+          ),
+        }));
+        wakePreviewAfterRestore();
         continue;
       }
 
@@ -1856,7 +1881,7 @@ export const createSerializationUtils: SliceCreator<SerializationUtils> = (set, 
             }));
             wakePreviewAfterRestore();
             engine.preCacheVideoFrame(video);
-            restoreSourceThumbnails(mediaId, video, video.duration || serializedClip.naturalDuration || clip.duration);
+            restoreSourceThumbnails(mediaId);
           }, { once: true });
         } else {
           // Slow path: no cached WCP — wait for canplaythrough then init
@@ -1880,7 +1905,7 @@ export const createSerializationUtils: SliceCreator<SerializationUtils> = (set, 
             wakePreviewAfterRestore();
 
             engine.preCacheVideoFrame(video);
-            restoreSourceThumbnails(mediaId, video, video.duration || serializedClip.naturalDuration || clip.duration);
+            restoreSourceThumbnails(mediaId);
 
             if (hasWebCodecs && mediaId) {
               try {
@@ -2139,6 +2164,7 @@ export const createSerializationUtils: SliceCreator<SerializationUtils> = (set, 
       clipStemSeparationJobs: {},
       timelineSessionId: nextTimelineSessionId,
     });
+    releaseAllLazyTimelineMediaElements();
 
     // Clean up media elements. WebCodecsPlayers are NOT destroyed —
     // they're kept in globalWcpCache and reused by the next composition.

@@ -1506,6 +1506,20 @@
   background: rgba(255, 255, 255, 0.5);
 }
 
+.clip-interaction-shell .shell-trim-handle {
+  opacity: 1;
+  pointer-events: auto;
+  background: var(--warning);
+}
+
+.clip-interaction-shell .shell-trim-handle:not(.active) {
+  background: rgba(255, 255, 255, 0.32);
+}
+
+.clip-interaction-shell .shell-trim-handle .trim-handle-arrows {
+  opacity: 1;
+}
+
 .trim-handle.left {
   left: 0;
   border-radius: 4px 0 0 4px;

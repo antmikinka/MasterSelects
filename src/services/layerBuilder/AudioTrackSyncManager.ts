@@ -20,6 +20,7 @@ import { calculateAudioMeterSnapshot, createSilentAudioMeterSnapshot } from '../
 import { registerTimelineAudioPlaybackStopper } from '../audio/timelineAudioPlaybackStopper';
 import { vfPipelineMonitor } from '../vfPipelineMonitor';
 import { clearMasterAudio, playheadState, setMasterAudioClock } from './PlayheadState';
+import { hydrateTimelineMediaWindow } from '../timeline/lazyMediaElements';
 
 const log = Logger.create('CutTransition');
 
@@ -363,6 +364,7 @@ export class AudioTrackSyncManager {
    */
   syncAudioElements(): void {
     const ctx = createFrameContext();
+    hydrateTimelineMediaWindow(ctx);
 
     if (!ctx.isPlaying && !ctx.isDraggingPlayhead) {
       this.releaseIdleStemRuntime();

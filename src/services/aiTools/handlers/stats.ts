@@ -14,6 +14,7 @@ import {
   getRuntimeDiagnostics,
 } from '../../runtimeDiagnostics';
 import { collectAudioDiagnostics } from '../../audio/audioDiagnostics';
+import { getTimelineCanvasDiagnostics } from '../../timeline/timelineCanvasDiagnostics';
 import type { ToolResult } from '../types';
 
 const DEFAULT_PLAYBACK_WINDOW_MS = 5000;
@@ -135,6 +136,7 @@ function collectSnapshot(playbackWindowMs = DEFAULT_PLAYBACK_WINDOW_MS) {
     audioDiagnostics: collectAudioDiagnostics({ windowMs: playbackWindowMs, eventLimit: 20 }),
     health: playbackHealthMonitor.snapshot(),
     cache: collectCacheSnapshot(),
+    timelineCanvas: getTimelineCanvasDiagnostics(),
     slotDecks: slotDeckManager.getSnapshot(),
     pipelineStats: {
       wc: wcPipelineMonitor.stats(),

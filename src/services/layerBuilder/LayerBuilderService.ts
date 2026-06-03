@@ -47,6 +47,7 @@ import { resolveSharedSplatUseNativeRenderer } from '../../engine/scene/runtime/
 import { vectorAnimationRuntimeManager } from '../vectorAnimation/VectorAnimationRuntimeManager';
 import { isVectorAnimationSourceType } from '../../types/vectorAnimation';
 import { mathSceneRenderer } from '../mathScene/MathSceneRenderer';
+import { hydrateTimelineMediaWindow } from '../timeline/lazyMediaElements';
 
 const log = Logger.create('LayerBuilder');
 const SCRUB_PROXY_HOLD_MAX_DRIFT_SECONDS = 0.15;
@@ -283,6 +284,7 @@ export class LayerBuilderService {
   buildLayersFromStore(): Layer[] {
     // Create frame context (single store read)
     const ctx = createFrameContext();
+    hydrateTimelineMediaWindow(ctx);
     this.syncActiveVectorAnimationClips(ctx);
     this.syncActiveMathSceneClips(ctx);
     const { activeLayerSlots = {}, activeCompositionId } = useMediaStore.getState();
@@ -878,13 +880,13 @@ export class LayerBuilderService {
       height: clip.source?.videoElement?.videoHeight,
     });
 
-    // Check for proxy usage. Normal playback should stay on the live video
-    // path; JPEG proxy frame playback behaves like fast scrubbing and causes
-    // visible cadence drops at dense cut boundaries.
+    // Check for proxy usage. Normal playback and paused inspection should stay
+    // on the live video path; JPEG proxy frames are an interactive scrub aid and
+    // can be stale/corrupt after large project restores.
     const useProxyLayer =
       ctx.proxyEnabled &&
       mediaFile?.proxyFps &&
-      (!ctx.isPlaying || ctx.isDraggingPlayhead || ctx.hasClipDragPreview);
+      (ctx.isDraggingPlayhead || ctx.hasClipDragPreview);
     if (useProxyLayer) {
       const proxyLayer = this.tryBuildProxyLayer(clip, layerIndex, timeInfo.clipTime, mediaFile, ctx, opacityOverride);
       if (proxyLayer) return proxyLayer;

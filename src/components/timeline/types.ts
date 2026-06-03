@@ -9,10 +9,14 @@ import type {
   BezierHandle,
   EasingType,
   RotationInterpolationMode,
+  ClipAudioRegionGainPreview,
 } from '../../types';
 import type {
+  ClipStemSeparationJobState,
+  TimelineAudioRegionSelection,
   TimelineAudioDisplayMode,
   TimelineClipDragPreview,
+  TimelineSpectralRegionSelection,
   TimelineToolId,
   TimelineTrackFocusMode,
   TimelineVideoBakeRegionSelection,
@@ -263,6 +267,13 @@ export interface TimelineTrackProps {
   clipDrag: ClipDragState | null;
   clipDragPreview: TimelineClipDragPreview | null;
   clipTrim: ClipTrimState | null;
+  clipFade: ClipFadeState | null;
+  clipContextMenu: ContextMenuState | null;
+  audioRegionSelection: TimelineAudioRegionSelection | null;
+  audioRegionGainPreview: ClipAudioRegionGainPreview | null;
+  audioSpectralRegionSelection: TimelineSpectralRegionSelection | null;
+  videoBakeRegionSelection: TimelineVideoBakeRegionSelection | null;
+  clipStemSeparationJobs: Record<string, ClipStemSeparationJobState>;
   externalDrag: ExternalDragState | null;
   zoom: number;
   scrollX: number;
@@ -278,7 +289,12 @@ export interface TimelineTrackProps {
   onDragLeave: (e: React.DragEvent) => void;
   onResizeStart?: (e: React.PointerEvent, trackId: string) => void;
   isResizeActive?: boolean;
-  renderClip: (clip: TimelineClip, trackId: string, trackBaseHeightOverride?: number) => React.ReactNode;
+  renderClip: (
+    clip: TimelineClip,
+    trackId: string,
+    trackBaseHeightOverride?: number,
+    options?: { passiveVisualsSuppressed?: boolean },
+  ) => React.ReactNode;
   // For keyframe tracks - clipKeyframes map triggers re-render when keyframes change
   clipKeyframes: Map<string, Array<{ id: string; clipId: string; time: number; property: AnimatableProperty; value: number; easing: string }>>;
   renderKeyframeDiamonds: (trackId: string, property: AnimatableProperty) => React.ReactNode;
@@ -365,6 +381,7 @@ export interface TimelineClipProps {
   onPickWhipDragStart: (clipId: string, startX: number, startY: number) => void;
   onPickWhipDragEnd: () => void;
   onSetClipParent: (clipId: string, parentClipId: string | null) => void;
+  passiveVisualsSuppressed?: boolean;
 }
 
 // Props for TimelineKeyframes component

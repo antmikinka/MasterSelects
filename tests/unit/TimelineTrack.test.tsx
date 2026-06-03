@@ -2,6 +2,7 @@ import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { TimelineTrack } from '../../src/components/timeline/TimelineTrack';
 import type { TimelineTrackProps } from '../../src/components/timeline/types';
+import { useMediaStore } from '../../src/stores/mediaStore';
 import type { TimelineClip, TimelineTrack as TimelineTrackType } from '../../src/types';
 
 function createTrack(): TimelineTrackType {
@@ -35,6 +36,8 @@ function createClip(overrides: Partial<TimelineClip> = {}): TimelineClip {
 }
 
 function renderTimelineTrack(overrides: Partial<TimelineTrackProps> = {}) {
+  useMediaStore.setState({ files: [] });
+
   const props: TimelineTrackProps = {
     track: createTrack(),
     clips: [],
@@ -53,6 +56,13 @@ function renderTimelineTrack(overrides: Partial<TimelineTrackProps> = {}) {
     clipDrag: null,
     clipDragPreview: null,
     clipTrim: null,
+    clipFade: null,
+    clipContextMenu: null,
+    audioRegionSelection: null,
+    audioRegionGainPreview: null,
+    audioSpectralRegionSelection: null,
+    videoBakeRegionSelection: null,
+    clipStemSeparationJobs: {},
     externalDrag: null,
     zoom: 10,
     scrollX: 0,
@@ -156,5 +166,358 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
 
     expect(container.querySelector('.timeline-clip-canvas')).toBeTruthy();
     expect(renderClip).not.toHaveBeenCalled();
+  });
+
+  it('mounts the interaction shell behind the legacy canvas overlay for hovered clips', () => {
+    const renderClip = vi.fn((clip: TimelineClip) => (
+      <div className="timeline-clip" data-clip-id={clip.id} />
+    ));
+
+    const { container, row } = renderTimelineTrack({
+      clips: [createClip()],
+      renderClip,
+    });
+
+    fireEvent.mouseMove(row, { clientX: 45, clientY: 24 });
+
+    const overlay = container.querySelector('.timeline-canvas-dom-overlay');
+    const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+    const legacyClip = container.querySelector('.timeline-canvas-dom-overlay .timeline-clip');
+
+    expect(overlay).toBeTruthy();
+    expect(shell).toBeTruthy();
+    expect(shell?.dataset.clipId).toBe('clip-video');
+    expect(shell?.dataset.mountReasons).toBe('hover');
+    expect(shell?.style.pointerEvents).toBe('none');
+    expect(legacyClip).toBeTruthy();
+    expect(renderClip).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'clip-video' }),
+      'track-video',
+      undefined,
+      { passiveVisualsSuppressed: true },
+    );
+  });
+
+  it('does not mount selected-only DOM controls in canvas mode', () => {
+    const renderClip = vi.fn((clip: TimelineClip) => (
+      <div className="timeline-clip" data-clip-id={clip.id} />
+    ));
+
+    const { container } = renderTimelineTrack({
+      clips: [createClip()],
+      selectedClipIds: new Set(['clip-video']),
+      renderClip,
+    });
+
+    expect(container.querySelector('.timeline-clip-canvas')).toBeTruthy();
+    expect(container.querySelector('.clip-interaction-shell')).toBeNull();
+    expect(container.querySelector('.timeline-canvas-dom-overlay')).toBeNull();
+    expect(renderClip).not.toHaveBeenCalled();
+  });
+
+  it('keeps the legacy overlay mounted for an active fade clip until shell parity exists', () => {
+    const renderClip = vi.fn((clip: TimelineClip) => (
+      <div className="timeline-clip" data-clip-id={clip.id} />
+    ));
+
+    const { container } = renderTimelineTrack({
+      clips: [createClip()],
+      clipFade: {
+        clipId: 'clip-video',
+        edge: 'left',
+        startX: 40,
+        currentX: 56,
+        clipDuration: 4,
+        originalFadeDuration: 0.2,
+      },
+      renderClip,
+    });
+
+    const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+
+    expect(shell).toBeTruthy();
+    expect(shell?.dataset.clipId).toBe('clip-video');
+    expect(shell?.dataset.mountReasons).toBe('fade');
+    expect(shell?.dataset.activeSlots).toBe('fade');
+    expect(shell?.style.pointerEvents).toBe('none');
+    expect(container.querySelectorAll('.shell-fade-handle')).toHaveLength(0);
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeTruthy();
+    expect(renderClip).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'clip-video' }),
+      'track-video',
+      undefined,
+      { passiveVisualsSuppressed: true },
+    );
+  });
+
+  it('mounts shell trim handles for the active trim clip and dispatches trim commands', () => {
+    const onTrimStart = vi.fn();
+    const renderClip = vi.fn<TimelineTrackProps['renderClip']>((clip: TimelineClip) => (
+      <div className="timeline-clip" data-clip-id={clip.id}>
+        <div className="trim-handle left" />
+        <div className="trim-handle right" />
+      </div>
+    ));
+
+    const { container } = renderTimelineTrack({
+      clips: [createClip()],
+      clipTrim: {
+        clipId: 'clip-video',
+        edge: 'right',
+        originalStartTime: 2,
+        originalDuration: 4,
+        originalInPoint: 0,
+        originalOutPoint: 4,
+        startX: 80,
+        currentX: 90,
+        altKey: false,
+        snapIndicatorTime: null,
+        isSnapping: false,
+        appliedDelta: 0,
+      },
+      onTrimStart,
+      renderClip,
+    });
+
+    const overlay = container.querySelector<HTMLElement>('.timeline-canvas-dom-overlay');
+    const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+    const shellRightHandle = container.querySelector<HTMLElement>('.shell-trim-handle.right');
+
+    expect(overlay).toBeTruthy();
+    expect(shell?.dataset.mountReasons).toBe('trim');
+    expect(shell?.dataset.activeSlots).toBe('trim');
+    expect(container.querySelectorAll('.shell-trim-handle')).toHaveLength(2);
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
+    expect(renderClip).not.toHaveBeenCalled();
+
+    fireEvent.mouseDown(shellRightHandle as HTMLElement, { button: 0 });
+
+    expect(onTrimStart).toHaveBeenCalledTimes(1);
+    expect(onTrimStart.mock.calls[0][1]).toBe('clip-video');
+    expect(onTrimStart.mock.calls[0][2]).toBe('right');
+  });
+
+  it('mounts a context-menu shell without the legacy overlay body for the open clip menu', () => {
+    const renderClip = vi.fn((clip: TimelineClip) => (
+      <div className="timeline-clip" data-clip-id={clip.id} />
+    ));
+
+    const { container } = renderTimelineTrack({
+      clips: [createClip()],
+      clipContextMenu: {
+        clipId: 'clip-video',
+        x: 96,
+        y: 32,
+      },
+      renderClip,
+    });
+
+    const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+
+    expect(shell).toBeTruthy();
+    expect(shell?.dataset.clipId).toBe('clip-video');
+    expect(shell?.dataset.mountReasons).toBe('context-menu-open');
+    expect(shell?.dataset.activeSlots).toBe('context-menu');
+    expect(shell?.style.pointerEvents).toBe('none');
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
+    expect(renderClip).not.toHaveBeenCalled();
+  });
+
+  it('mounts a drag-only shell without the legacy overlay body for an active clip drag', () => {
+    const renderClip = vi.fn((clip: TimelineClip) => (
+      <div className="timeline-clip" data-clip-id={clip.id} />
+    ));
+
+    const { container } = renderTimelineTrack({
+      clips: [createClip()],
+      isClipDragActive: true,
+      clipDrag: {
+        clipId: 'clip-video',
+        originalStartTime: 2,
+        originalTrackId: 'track-video',
+        grabOffsetX: 20,
+        grabY: 16,
+        currentX: 120,
+        currentTrackId: 'track-video',
+        snappedTime: 3,
+        snapIndicatorTime: null,
+        isSnapping: false,
+        trackChangeGuideTime: null,
+        altKeyPressed: false,
+        forcingOverlap: false,
+        dragStartTime: 100,
+      },
+      renderClip,
+    });
+
+    const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+
+    expect(shell).toBeTruthy();
+    expect(shell?.dataset.clipId).toBe('clip-video');
+    expect(shell?.dataset.mountReasons).toBe('drag');
+    expect(shell?.dataset.activeSlots).toBe('');
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
+    expect(renderClip).not.toHaveBeenCalled();
+  });
+
+  it('keeps a keyframe shell and legacy overlay mounted for selected clip keyframes', () => {
+    const renderClip = vi.fn((clip: TimelineClip) => (
+      <div className="timeline-clip" data-clip-id={clip.id} />
+    ));
+
+    const { container } = renderTimelineTrack({
+      clips: [createClip()],
+      clipKeyframes: new Map([
+        [
+          'clip-video',
+          [
+            {
+              id: 'kf-opacity',
+              clipId: 'clip-video',
+              time: 1,
+              property: 'opacity',
+              value: 0.5,
+              easing: 'linear',
+            },
+          ],
+        ],
+      ]),
+      selectedKeyframeIds: new Set(['kf-opacity']),
+      renderClip,
+    });
+
+    const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+
+    expect(shell).toBeTruthy();
+    expect(shell?.dataset.clipId).toBe('clip-video');
+    expect(shell?.dataset.mountReasons).toBe('selected-keyframes');
+    expect(shell?.dataset.activeSlots).toBe('keyframe');
+    expect(shell?.style.pointerEvents).toBe('none');
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeTruthy();
+  });
+
+  it('keeps an audio-region shell and legacy overlay mounted for an active audio region', () => {
+    const renderClip = vi.fn((clip: TimelineClip) => (
+      <div className="timeline-clip" data-clip-id={clip.id} />
+    ));
+
+    const { container } = renderTimelineTrack({
+      clips: [createClip()],
+      audioRegionSelection: {
+        clipId: 'clip-video',
+        trackId: 'track-video',
+        startTime: 2.5,
+        endTime: 3.5,
+        sourceInPoint: 0.5,
+        sourceOutPoint: 1.5,
+      },
+      renderClip,
+    });
+
+    const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+
+    expect(shell).toBeTruthy();
+    expect(shell?.dataset.mountReasons).toBe('audio-region-active');
+    expect(shell?.dataset.activeSlots).toBe('audio-region');
+    expect(shell?.style.pointerEvents).toBe('none');
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeTruthy();
+  });
+
+  it('keeps a spectral-region shell and legacy overlay mounted for an active spectral selection', () => {
+    const renderClip = vi.fn((clip: TimelineClip) => (
+      <div className="timeline-clip" data-clip-id={clip.id} />
+    ));
+
+    const { container } = renderTimelineTrack({
+      clips: [createClip()],
+      audioSpectralRegionSelection: {
+        clipId: 'clip-video',
+        trackId: 'track-video',
+        startTime: 2.5,
+        endTime: 3.5,
+        sourceInPoint: 0.5,
+        sourceOutPoint: 1.5,
+        frequencyMinHz: 120,
+        frequencyMaxHz: 2400,
+      },
+      renderClip,
+    });
+
+    const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+
+    expect(shell).toBeTruthy();
+    expect(shell?.dataset.mountReasons).toBe('spectral-region-active');
+    expect(shell?.dataset.activeSlots).toBe('spectral-region');
+    expect(shell?.style.pointerEvents).toBe('none');
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeTruthy();
+  });
+
+  it('keeps a video-bake shell and legacy overlay mounted for a clip bake region', () => {
+    const renderClip = vi.fn((clip: TimelineClip) => (
+      <div className="timeline-clip" data-clip-id={clip.id} />
+    ));
+
+    const { container } = renderTimelineTrack({
+      clips: [
+        createClip({
+          videoState: {
+            bakeRegions: [
+              {
+                id: 'bake-region',
+                scope: 'clip',
+                startTime: 2.5,
+                endTime: 3.5,
+                createdAt: 1,
+                status: 'marked',
+                clipId: 'clip-video',
+                trackId: 'track-video',
+                sourceInPoint: 0.5,
+                sourceOutPoint: 1.5,
+              },
+            ],
+          },
+        }),
+      ],
+      renderClip,
+    });
+
+    const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+
+    expect(shell).toBeTruthy();
+    expect(shell?.dataset.mountReasons).toBe('video-bake-active');
+    expect(shell?.dataset.activeSlots).toBe('video-bake');
+    expect(shell?.style.pointerEvents).toBe('none');
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeTruthy();
+  });
+
+  it('keeps a stem shell and legacy overlay mounted for an active stem job', () => {
+    const renderClip = vi.fn((clip: TimelineClip) => (
+      <div className="timeline-clip" data-clip-id={clip.id} />
+    ));
+
+    const { container } = renderTimelineTrack({
+      clips: [createClip()],
+      clipStemSeparationJobs: {
+        'clip-video': {
+          jobId: 'stem-job',
+          clipId: 'clip-video',
+          requestedClipId: 'clip-video',
+          modelId: 'htdemucs',
+          phase: 'separating',
+          progress: 0.5,
+          startedAt: 1,
+          updatedAt: 2,
+        },
+      },
+      renderClip,
+    });
+
+    const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+
+    expect(shell).toBeTruthy();
+    expect(shell?.dataset.mountReasons).toBe('stem-active');
+    expect(shell?.dataset.activeSlots).toBe('stem');
+    expect(shell?.style.pointerEvents).toBe('none');
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeTruthy();
   });
 });

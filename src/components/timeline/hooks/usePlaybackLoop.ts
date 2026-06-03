@@ -5,8 +5,11 @@ import { useTimelineStore } from '../../../stores/timeline';
 import { engine } from '../../../engine/WebGPUEngine';
 import {
   clearInternalPlaybackHold,
+  getPlayheadPosition,
   layerBuilder,
   playheadState,
+  startInternalPosition,
+  updateInternalPosition,
 } from '../../../services/layerBuilder';
 import { findStopMarkerInPlaybackRange } from '../../../services/timeline/stopMarkers';
 import { hasTimelineVisualRenderDemand } from '../../../services/timeline/timelineVisualDemand';
@@ -41,7 +44,17 @@ function syncInternalPlaybackPositionToStore(): void {
     return;
   }
 
-  useTimelineStore.setState({ playheadPosition: playheadState.position });
+  useTimelineStore.setState({
+    playheadPosition: getPlayheadPosition(timelineState.playheadPosition),
+  });
+}
+
+function getVisualPlaybackStateUpdateInterval(clipCount: number, visibleTrackCount: number): number {
+  const complexity = clipCount + visibleTrackCount * 20;
+  if (complexity >= 500) return 125;
+  if (complexity >= 250) return 90;
+  if (complexity >= 120) return 66;
+  return 33;
 }
 
 /**
@@ -72,11 +85,14 @@ export function usePlaybackLoop({ isPlaying }: UsePlaybackLoopProps) {
     const INTERACTIVE_LAYOUT_STATE_UPDATE_INTERVAL = 90;
     const AUDIO_SYNC_INTERVAL = 50;
     const AUDIO_STARTUP_SYNC_INTERVAL = 16;
+    const MAX_PLAYBACK_DELTA_SECONDS = 0.5;
 
-    // Initialize internal position from store and enable high-frequency mode
-    playheadState.position = useTimelineStore.getState().playheadPosition;
-    playheadState.isUsingInternalPosition = true;
-    playheadState.playbackJustStarted = true; // Signal for initial audio sync
+    // Preserve any wall-clock progress already started by timelineStore.play().
+    const initialTimelineState = useTimelineStore.getState();
+    startInternalPosition(
+      getPlayheadPosition(initialTimelineState.playheadPosition),
+      initialTimelineState.playbackSpeed
+    );
 
     const stopPlaybackAt = (position: number) => {
       const timelineStore = useTimelineStore.getState();
@@ -113,6 +129,10 @@ export function usePlaybackLoop({ isPlaying }: UsePlaybackLoopProps) {
           playbackSpeed,
           clipDragPreview,
         } = state;
+        const visibleTrackCount = tracks.reduce((count, track) => {
+          if (track.type === 'video') return track.visible === false ? count : count + 1;
+          return track.muted ? count : count + 1;
+        }, 0);
         const effectiveEnd = op !== null ? op : dur;
         const effectiveStart = ip !== null ? ip : 0;
         const previousPosition = playheadState.position;
@@ -139,7 +159,7 @@ export function usePlaybackLoop({ isPlaying }: UsePlaybackLoopProps) {
           } else {
             // Audio paused or not ready, fall back to system time
             const deltaTime = (currentTime - lastTime) / 1000;
-            const cappedDelta = Math.min(deltaTime, 0.1);
+            const cappedDelta = Math.min(deltaTime, MAX_PLAYBACK_DELTA_SECONDS);
             newPosition = playheadState.position + cappedDelta * playbackSpeed;
           }
         } else if (playheadState.hasMasterAudio && playheadState.masterAudioClock && playbackSpeed === 1) {
@@ -151,13 +171,13 @@ export function usePlaybackLoop({ isPlaying }: UsePlaybackLoopProps) {
               (audioTime - playheadState.masterClipInPoint) / speed;
           } else {
             const deltaTime = (currentTime - lastTime) / 1000;
-            const cappedDelta = Math.min(deltaTime, 0.1);
+            const cappedDelta = Math.min(deltaTime, MAX_PLAYBACK_DELTA_SECONDS);
             newPosition = playheadState.position + cappedDelta * playbackSpeed;
           }
         } else {
           // No audio master or non-standard speed - use system time with playback speed
           const deltaTime = (currentTime - lastTime) / 1000;
-          const cappedDelta = Math.min(deltaTime, 0.1);
+          const cappedDelta = Math.min(deltaTime, MAX_PLAYBACK_DELTA_SECONDS);
           newPosition = playheadState.position + cappedDelta * playbackSpeed;
         }
         lastTime = currentTime;
@@ -231,7 +251,7 @@ export function usePlaybackLoop({ isPlaying }: UsePlaybackLoopProps) {
         }
 
         // Update high-frequency position for render loop to read
-        playheadState.position = newPosition;
+        updateInternalPosition(newPosition);
 
         const hasVisualRenderDemand = hasTimelineVisualRenderDemand({
           clips,
@@ -252,7 +272,10 @@ export function usePlaybackLoop({ isPlaying }: UsePlaybackLoopProps) {
         const stateUpdateInterval = isInteractiveDockLayoutChangeActive()
           ? INTERACTIVE_LAYOUT_STATE_UPDATE_INTERVAL
           : hasVisualRenderDemand
-          ? VISUAL_STATE_UPDATE_INTERVAL
+          ? Math.max(
+              VISUAL_STATE_UPDATE_INTERVAL,
+              getVisualPlaybackStateUpdateInterval(clips.length, visibleTrackCount)
+            )
           : AUDIO_ONLY_STATE_UPDATE_INTERVAL;
         if (currentTime - lastStateUpdate >= stateUpdateInterval) {
           useTimelineStore.setState({ playheadPosition: newPosition });
