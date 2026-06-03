@@ -155,6 +155,27 @@ const createShellRect = (x: number, y: number, width: number, height: number): C
   height: Math.max(0, height),
 });
 
+const LEGACY_SKIP_READY_SHELL_SLOTS = new Set<ClipInteractionShellModuleSlot>([
+  'trim',
+  'fade',
+  'keyframe',
+  'audio-region',
+  'spectral-region',
+  'video-bake',
+  'stem',
+]);
+
+const LEGACY_SKIP_READY_SHELL_REASONS = new Set<ClipInteractionShellMountReason>([
+  'hover',
+  'trim',
+  'fade',
+  'selected-keyframes',
+  'audio-region-active',
+  'spectral-region-active',
+  'video-bake-active',
+  'stem-active',
+]);
+
 const canSkipLegacyClipBody = (
   activeSlots: readonly ClipInteractionShellModuleSlot[],
   mountReasons: readonly ClipInteractionShellMountReason[],
@@ -203,6 +224,10 @@ const canSkipLegacyClipBody = (
     activeSlots[0] === 'spectral-region' &&
     mountReasons.some((reason) => reason === 'spectral-region-active') &&
     mountReasons.every((reason) => reason === 'spectral-region-active' || reason === 'hover');
+  const mixedParityShell =
+    activeSlots.length > 1 &&
+    activeSlots.every((slot) => LEGACY_SKIP_READY_SHELL_SLOTS.has(slot)) &&
+    mountReasons.every((reason) => LEGACY_SKIP_READY_SHELL_REASONS.has(reason));
 
   return trimOnlyShell ||
     contextMenuShell ||
@@ -213,7 +238,8 @@ const canSkipLegacyClipBody = (
     keyframeOnlyShell ||
     audioRegionOnlyShell ||
     videoBakeOnlyShell ||
-    spectralRegionOnlyShell;
+    spectralRegionOnlyShell ||
+    mixedParityShell;
 };
 
 const clampShellRectX = (rect: ClipInteractionShellRect, viewport: ClipInteractionShellRect): ClipInteractionShellRect => {

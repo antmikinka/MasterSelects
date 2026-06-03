@@ -589,7 +589,7 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(onMoveKeyframeGroup.mock.calls[0][1]).toBeCloseTo(2);
   });
 
-  it('keeps the legacy overlay when keyframes are mixed with an active audio region', () => {
+  it('renders mixed keyframe and audio-region shell modules without the legacy overlay body', () => {
     const renderClip = vi.fn((clip: TimelineClip) => (
       <div className="timeline-clip" data-clip-id={clip.id} />
     ));
@@ -628,8 +628,10 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(shell).toBeTruthy();
     expect(shell?.dataset.mountReasons).toBe('selected-keyframes audio-region-active');
     expect(shell?.dataset.activeSlots).toBe('keyframe audio-region');
-    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeTruthy();
-    expect(renderClip).toHaveBeenCalled();
+    expect(container.querySelector('.clip-interaction-shell .keyframe-tick')).toBeTruthy();
+    expect(container.querySelector('.clip-interaction-shell .clip-audio-region-selection')).toBeTruthy();
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
+    expect(renderClip).not.toHaveBeenCalled();
   });
 
   it('renders an audio-region shell without the legacy overlay body for an active audio region', () => {
