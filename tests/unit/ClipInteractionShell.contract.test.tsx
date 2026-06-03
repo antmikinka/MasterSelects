@@ -62,6 +62,15 @@ function createShellProps(overrides: Partial<ClipInteractionShellProps> = {}): C
         state: null,
         activeEdges: ['left'],
         previewDurationSeconds: 0.4,
+        fadeInDuration: 0.4,
+        fadeOutDuration: 0,
+        curveKeyframes: [
+          { id: 'fade-start', time: 0, value: 0, easing: 'linear' },
+          { id: 'fade-end', time: 0.4, value: 1, easing: 'linear' },
+        ],
+        curveKey: 'fade-start:0|fade-end:0.4',
+        clipDuration: 4,
+        isAudioClip: false,
       },
       contextMenu: {
         slot: 'context-menu',
@@ -147,7 +156,7 @@ describe('ClipInteractionShell contract', () => {
     expect(getClipInteractionShellActiveSlots(activeModules)).toEqual(['keyframe', 'audio-region']);
   });
 
-  it('renders a lightweight shell scaffold with built-in fade handles and remaining placeholders', () => {
+  it('renders a lightweight shell scaffold with built-in fade controls and remaining placeholders', () => {
     const { container } = render(<ClipInteractionShell {...createShellProps()} />);
     const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
 
@@ -155,6 +164,7 @@ describe('ClipInteractionShell contract', () => {
     expect(shell?.dataset.clipId).toBe('clip-a');
     expect(shell?.dataset.activeSlots).toBe('fade context-menu tool-preview');
     expect(container.querySelectorAll('.shell-fade-handle')).toHaveLength(2);
+    expect(container.querySelector('[data-shell-fade-curve="true"]')).toBeTruthy();
 
     const slots = Array.from(container.querySelectorAll<HTMLElement>('[data-clip-interaction-slot]'))
       .map((node) => node.dataset.clipInteractionSlot);
@@ -247,6 +257,16 @@ describe('ClipInteractionShell contract', () => {
           enabled: true,
           state: null,
           activeEdges: ['right'],
+          fadeInDuration: 1,
+          fadeOutDuration: 0.5,
+          curveKeyframes: [
+            { id: 'fade-start', time: 0, value: 0, easing: 'linear' },
+            { id: 'fade-mid', time: 1, value: 1, easing: 'linear' },
+            { id: 'fade-end', time: 4, value: 0, easing: 'linear' },
+          ],
+          curveKey: 'fade-start:0|fade-mid:1|fade-end:4',
+          clipDuration: 4,
+          isAudioClip: false,
         },
       },
       commands: { onFadeStart },
@@ -263,6 +283,7 @@ describe('ClipInteractionShell contract', () => {
     expect(left?.style.left).toBe('0px');
     expect(right?.style.right).toBe('0px');
     expect(right?.classList.contains('active')).toBe(true);
+    expect(container.querySelector('.fade-curve-svg')).toBeTruthy();
 
     fireEvent.mouseDown(left as HTMLElement, { button: 0 });
 

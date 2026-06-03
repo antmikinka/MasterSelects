@@ -5,6 +5,7 @@ import type {
   ClipInteractionShellEdge,
   ClipInteractionShellRect,
 } from './types';
+import { FadeCurve } from '../components/FadeCurve';
 
 const FADE_EDGES = ['left', 'right'] as const satisfies readonly ClipInteractionShellEdge[];
 
@@ -19,6 +20,21 @@ export function ClipFadeHandles({ context, commands }: ClipFadeHandlesProps) {
 
   return (
     <>
+      {fade.curveKeyframes.length >= 2 && (
+        <div
+          className={`fade-curve-container ${fade.isAudioClip ? 'audio-automation-curve-container' : ''}`}
+          data-shell-fade-curve="true"
+          data-audio-automation-curve={fade.isAudioClip ? 'volume' : undefined}
+        >
+          <FadeCurve
+            key={fade.curveKey}
+            keyframes={fade.curveKeyframes}
+            clipDuration={fade.clipDuration}
+            width={context.geometry.clip.width}
+            height={context.geometry.clip.height}
+          />
+        </div>
+      )}
       {FADE_EDGES.map((edge) => {
         const rect = context.geometry.fadeHandles[edge];
         if (!rect) return null;

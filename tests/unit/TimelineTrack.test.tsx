@@ -260,7 +260,7 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(renderClip).not.toHaveBeenCalled();
   });
 
-  it('keeps the legacy overlay mounted for an active fade clip until shell parity exists', () => {
+  it('mounts a fade shell without the legacy overlay body for an active fade clip', () => {
     const onFadeStart = vi.fn();
     const renderClip = vi.fn((clip: TimelineClip) => (
       <div className="timeline-clip" data-clip-id={clip.id} />
@@ -268,6 +268,45 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
 
     const { container } = renderTimelineTrack({
       clips: [createClip()],
+      clipKeyframes: new Map([
+        [
+          'clip-video',
+          [
+            {
+              id: 'fade-in-start',
+              clipId: 'clip-video',
+              time: 0,
+              property: 'opacity',
+              value: 0,
+              easing: 'linear',
+            },
+            {
+              id: 'fade-in-end',
+              clipId: 'clip-video',
+              time: 1,
+              property: 'opacity',
+              value: 1,
+              easing: 'linear',
+            },
+            {
+              id: 'fade-out-start',
+              clipId: 'clip-video',
+              time: 3,
+              property: 'opacity',
+              value: 1,
+              easing: 'linear',
+            },
+            {
+              id: 'fade-out-end',
+              clipId: 'clip-video',
+              time: 4,
+              property: 'opacity',
+              value: 0,
+              easing: 'linear',
+            },
+          ],
+        ],
+      ]),
       clipFade: {
         clipId: 'clip-video',
         edge: 'left',
@@ -282,6 +321,7 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
 
     const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
     const leftFadeHandle = container.querySelector<HTMLElement>('.shell-fade-handle.left');
+    const rightFadeHandle = container.querySelector<HTMLElement>('.shell-fade-handle.right');
 
     expect(shell).toBeTruthy();
     expect(shell?.dataset.clipId).toBe('clip-video');
@@ -289,13 +329,11 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(shell?.dataset.activeSlots).toBe('fade');
     expect(shell?.style.pointerEvents).toBe('none');
     expect(container.querySelectorAll('.shell-fade-handle')).toHaveLength(2);
-    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeTruthy();
-    expect(renderClip).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'clip-video' }),
-      'track-video',
-      undefined,
-      { passiveVisualsSuppressed: true },
-    );
+    expect(leftFadeHandle?.style.left).toBe('4px');
+    expect(rightFadeHandle?.style.right).toBe('4px');
+    expect(container.querySelector('.fade-curve-svg')).toBeTruthy();
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
+    expect(renderClip).not.toHaveBeenCalled();
 
     fireEvent.mouseDown(leftFadeHandle as HTMLElement, { button: 0 });
 

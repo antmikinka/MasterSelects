@@ -56,6 +56,7 @@ import {
   getTimelineClipSourceDuration,
   isInfiniteTimelineSourceType,
 } from './utils/clipSourceTiming';
+import { buildFadeCurvePath, type FadeCurveKeyframe } from './utils/fadeCurvePath';
 
 // Browser 2D canvas backing-store limit is ~16384px in Chrome; stay safely under.
 export const MAX_CANVAS_WIDTH_PX = 16000;
@@ -70,6 +71,12 @@ const WAVEFORM_PYRAMID_AUTO_UPGRADE_ZOOM = 250;
 const WAVEFORM_PYRAMID_AUTO_UPGRADE_WIDTH = 16_384;
 const WAVEFORM_GENERATION_DELAY_MS = 300;
 const MAX_RENDERED_WAVEFORM_CHANNELS = 2;
+
+export interface CanvasFadeVisuals {
+  keyframes: readonly FadeCurveKeyframe[];
+  clipDuration: number;
+  isAudioClip: boolean;
+}
 
 export interface CanvasClip {
   id: string;
@@ -87,6 +94,7 @@ export interface CanvasClip {
   waveformProgress?: number;
   file?: File;
   audioState?: ClipAudioState;
+  fade?: CanvasFadeVisuals;
   source?: {
     type?: string | null;
     mediaFileId?: string;
@@ -417,6 +425,41 @@ function drawAudioWaveform(
   });
 
   ctx.restore();
+  ctx.restore();
+}
+
+function drawCanvasFadeCurve(
+  ctx: CanvasRenderingContext2D,
+  fade: CanvasFadeVisuals | undefined,
+  x: number,
+  top: number,
+  w: number,
+  h: number,
+): void {
+  if (!fade || fade.keyframes.length < 2 || typeof Path2D === 'undefined') return;
+  const path = buildFadeCurvePath({
+    keyframes: fade.keyframes,
+    clipDuration: fade.clipDuration,
+    width: w,
+    height: h,
+  });
+  if (!path) return;
+
+  ctx.save();
+  ctx.translate(x, top);
+  ctx.fillStyle = fade.isAudioClip ? 'rgba(51, 197, 255, 0.13)' : 'rgba(0, 0, 0, 0.4)';
+  ctx.fill(new Path2D(path.fillPath));
+  ctx.strokeStyle = fade.isAudioClip ? 'rgba(96, 217, 255, 0.86)' : 'rgba(140, 180, 220, 0.8)';
+  ctx.lineWidth = fade.isAudioClip ? 1.6 : 2;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.stroke(new Path2D(path.curvePath));
+  ctx.fillStyle = fade.isAudioClip ? 'rgba(96, 217, 255, 0.95)' : 'rgba(140, 180, 220, 1)';
+  for (const point of path.points) {
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.restore();
 }
 
@@ -777,6 +820,7 @@ function drawClips(
     }
 
     drawSourceExtensionGhosts(ctx, props, geometry, top, h, renderVisibleLeft, renderVisibleRight, canvasOffsetX);
+    drawCanvasFadeCurve(ctx, clip.fade, x, top, w, h);
 
     // Border.
     ctx.beginPath();
@@ -899,8 +943,9 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
     waveformPyramidsRef.current = waveformPyramids;
   }, [waveformPyramids]);
 
+  const hasFadeVisuals = clips.some((clip) => (clip.fade?.keyframes.length ?? 0) >= 2);
   // Phase 4: optionally render in an OffscreenCanvas worker (off main thread).
-  const workerMode = flags.timelineCanvasWorker && !waveformsEnabled && !clipDrag && !clipDragPreview && !clipTrim;
+  const workerMode = flags.timelineCanvasWorker && !hasFadeVisuals && !waveformsEnabled && !clipDrag && !clipDragPreview && !clipTrim;
   const workerRef = useRef<Worker | null>(null);
   const workerReadyRef = useRef(false);
   const mediaFilesState = useMediaStore((state) => state.files);

@@ -29,6 +29,7 @@ import type {
   ClipTrimState,
   ContextMenuState,
 } from '../types';
+import type { FadeCurveKeyframe } from '../utils/fadeCurvePath';
 
 export const CLIP_INTERACTION_SHELL_MODULE_SLOTS = [
   'trim',
@@ -180,6 +181,12 @@ export interface ClipInteractionShellFadeModuleState extends ClipInteractionShel
   state: ClipFadeState | null;
   activeEdges: readonly ClipInteractionShellEdge[];
   previewDurationSeconds?: number;
+  fadeInDuration: number;
+  fadeOutDuration: number;
+  curveKeyframes: readonly FadeCurveKeyframe[];
+  curveKey: string;
+  clipDuration: number;
+  isAudioClip: boolean;
 }
 
 export interface ClipInteractionShellKeyframeModuleState extends ClipInteractionShellBaseModuleState {

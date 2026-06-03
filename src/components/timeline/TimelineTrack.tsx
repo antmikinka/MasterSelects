@@ -1,6 +1,6 @@
 // TimelineTrack component - Individual track row
 
-import React, { memo, useMemo, useRef, useEffect, useState } from 'react';
+import React, { memo, useCallback, useMemo, useRef, useEffect, useState } from 'react';
 import type { ClipKeyframeTimeGroup, TimelineTrackProps } from './types';
 import type { AnimatableProperty, BezierHandle, ClipMask, Keyframe } from '../../types';
 import { CurveEditor } from './CurveEditor';
@@ -12,7 +12,7 @@ import {
 } from '../../types/vectorAnimation';
 import { useTimelineStore } from '../../stores/timeline';
 import { flags } from '../../engine/featureFlags';
-import { TimelineClipCanvas } from './TimelineClipCanvas';
+import { TimelineClipCanvas, type CanvasFadeVisuals } from './TimelineClipCanvas';
 import {
   ClipInteractionShell,
   getClipInteractionShellActiveSlots,
@@ -25,13 +25,17 @@ import {
 } from './interactionShell';
 import { reportTimelineCanvasDomDiagnostics } from '../../services/timeline/timelineCanvasDiagnostics';
 import { MIN_CLIP_DURATION } from './timelineRenderConstants';
+import { resolveAudioVolumeAutomationCurveKeyframes } from './utils/audioAutomationCurve';
+import type { FadeCurveKeyframe } from './utils/fadeCurvePath';
 
 const TRACK_VIEWPORT_FALLBACK_PX = 1600;
 const TRACK_VIEWPORT_MIN_PX = 1600;
 const TRACK_RENDER_OVERSCAN_PX = 1200;
 const CLIP_SHELL_VERTICAL_INSET_PX = 4;
 const CLIP_SHELL_HANDLE_WIDTH_PX = 8;
+const CLIP_SHELL_FADE_HANDLE_SIZE_PX = 12;
 const EPSILON = 0.0001;
+const FADE_DURATION_VALUE_EPSILON = 0.01;
 
 const isInfiniteTimelineSourceType = (sourceType: string | null | undefined): boolean => (
   sourceType === 'text' ||
@@ -68,6 +72,12 @@ const shouldHide3DOnlyProperties = (clip: KeyframeTrackClip | null | undefined):
   return !clip?.is3D && !usesCameraPropertyModel(clip);
 };
 
+type ClipFadeVisualState = CanvasFadeVisuals & {
+  fadeInDuration: number;
+  fadeOutDuration: number;
+  curveKey: string;
+};
+
 const getCanvasClipSourceDuration = (clip: {
   duration: number;
   inPoint?: number;
@@ -91,6 +101,52 @@ const getTransformPropertyOrder = (clip: KeyframeTrackClip | null | undefined): 
     ? ['camera.fov', 'camera.near', 'camera.far', 'camera.resolutionWidth', 'camera.resolutionHeight', 'opacity', 'position.x', 'position.y', 'position.z', 'rotation.x', 'rotation.y', 'rotation.z']
     : ['opacity', 'position.x', 'position.y', 'position.z', 'scale.all', 'scale.x', 'scale.y', 'scale.z', 'rotation.x', 'rotation.y', 'rotation.z']
 );
+
+const getFadeCurveKey = (keyframes: readonly FadeCurveKeyframe[]): string => (
+  keyframes
+    .map((keyframe) => (
+      `${keyframe.id ?? ''}:${keyframe.time.toFixed(3)}:${keyframe.value}:${keyframe.handleIn?.x ?? ''}:${keyframe.handleIn?.y ?? ''}:${keyframe.handleOut?.x ?? ''}:${keyframe.handleOut?.y ?? ''}`
+    ))
+    .join('|')
+);
+
+const getFadeInDurationFromCurveKeyframes = (keyframes: readonly FadeCurveKeyframe[]): number => {
+  const sorted = [...keyframes].sort((a, b) => a.time - b.time);
+  if (sorted.length < 2) return 0;
+
+  const first = sorted[0];
+  if (Math.abs(first.time) > FADE_DURATION_VALUE_EPSILON || Math.abs(first.value) > FADE_DURATION_VALUE_EPSILON) {
+    return 0;
+  }
+
+  const fadeEnd = sorted.find((keyframe) => keyframe.time > 0 && keyframe.value >= 0.99);
+  return fadeEnd?.time ?? 0;
+};
+
+const getFadeOutDurationFromCurveKeyframes = (
+  keyframes: readonly FadeCurveKeyframe[],
+  clipDuration: number,
+): number => {
+  const sorted = [...keyframes].sort((a, b) => a.time - b.time);
+  if (sorted.length < 2) return 0;
+
+  const last = sorted[sorted.length - 1];
+  if (
+    Math.abs(last.time - clipDuration) > FADE_DURATION_VALUE_EPSILON ||
+    Math.abs(last.value) > FADE_DURATION_VALUE_EPSILON
+  ) {
+    return 0;
+  }
+
+  for (let index = sorted.length - 2; index >= 0; index -= 1) {
+    const keyframe = sorted[index];
+    if (keyframe.value >= 0.99) {
+      return Math.max(0, clipDuration - keyframe.time);
+    }
+  }
+
+  return 0;
+};
 
 const createShellRect = (x: number, y: number, width: number, height: number): ClipInteractionShellRect => ({
   x,
@@ -122,8 +178,13 @@ const canSkipLegacyClipBody = (
     activeSlots[0] === 'stem' &&
     mountReasons.some((reason) => reason === 'stem-active') &&
     mountReasons.every((reason) => reason === 'stem-active' || reason === 'hover');
+  const fadeOnlyShell =
+    activeSlots.length === 1 &&
+    activeSlots[0] === 'fade' &&
+    mountReasons.some((reason) => reason === 'fade') &&
+    mountReasons.every((reason) => reason === 'fade' || reason === 'hover');
 
-  return trimOnlyShell || contextMenuShell || dragOnlyShell || hoverOnlyShell || stemOnlyShell;
+  return trimOnlyShell || contextMenuShell || dragOnlyShell || hoverOnlyShell || stemOnlyShell || fadeOnlyShell;
 };
 
 const clampShellRectX = (rect: ClipInteractionShellRect, viewport: ClipInteractionShellRect): ClipInteractionShellRect => {
@@ -552,6 +613,37 @@ function TimelineTrackComponent({
     clipShellKeyframeStateByClipId,
     clipShellSpecialStateByClipId,
   ]);
+  const getClipFadeVisualState = useCallback((clip: typeof allTrackClips[number]): ClipFadeVisualState => {
+    const clipDuration = Math.max(0.001, clip.duration);
+    const keyframes = (clipKeyframes.get(clip.id) ?? []) as Keyframe[];
+    const isAudioClip = track.type === 'audio';
+    const curveKeyframes: readonly FadeCurveKeyframe[] = isAudioClip
+      ? resolveAudioVolumeAutomationCurveKeyframes({
+        keyframes,
+        legacyEffects: clip.effects,
+        audioEffectStack: clip.audioState?.effectStack,
+        clipDuration,
+      })
+      : keyframes
+        .filter((keyframe) => keyframe.property === 'opacity')
+        .map((keyframe) => ({
+          id: keyframe.id,
+          time: keyframe.time,
+          value: keyframe.value,
+          easing: keyframe.easing,
+          handleIn: keyframe.handleIn,
+          handleOut: keyframe.handleOut,
+        }));
+
+    return {
+      keyframes: curveKeyframes,
+      clipDuration,
+      isAudioClip,
+      fadeInDuration: getFadeInDurationFromCurveKeyframes(curveKeyframes),
+      fadeOutDuration: getFadeOutDurationFromCurveKeyframes(curveKeyframes, clipDuration),
+      curveKey: getFadeCurveKey(curveKeyframes),
+    };
+  }, [clipKeyframes, track.type]);
   const canvasClips = useMemo(() => {
     if (!useCanvasClips) return allTrackClips;
     const nextClips = new Map(allTrackClips.map((clip) => [clip.id, clip]));
@@ -572,8 +664,11 @@ function TimelineTrackComponent({
       }
     }
 
-    return Array.from(nextClips.values());
-  }, [useCanvasClips, clipDrag, clipDragPreview, track.id, allTrackClips, clips]);
+    return Array.from(nextClips.values()).map((clip) => {
+      const fade = getClipFadeVisualState(clip);
+      return fade.keyframes.length >= 2 ? { ...clip, fade } : clip;
+    });
+  }, [useCanvasClips, clipDrag, clipDragPreview, track.id, allTrackClips, clips, getClipFadeVisualState]);
   const canvasContentWidth = useMemo(() => {
     let max = trackContentWidth;
     for (const clip of canvasClips) {
@@ -727,6 +822,16 @@ function TimelineTrackComponent({
     const clipRect = createShellRect(left, top, width, height);
     const viewportRect = createShellRect(scrollX, 0, viewportWidth, baseHeight);
     const handleHeight = height;
+    const fade = getClipFadeVisualState(clip);
+    const fadeInPx = Math.max(0, Math.min(width, timeToPixel(fade.fadeInDuration)));
+    const fadeOutPx = Math.max(0, Math.min(width, timeToPixel(fade.fadeOutDuration)));
+    const fadeHandleOffset = CLIP_SHELL_FADE_HANDLE_SIZE_PX / 2;
+    const leftFadeHandleX = left + (fade.fadeInDuration > 0 ? fadeInPx - fadeHandleOffset : 0);
+    const rightFadeHandleX = left + width - (
+      fade.fadeOutDuration > 0
+        ? fadeOutPx + fadeHandleOffset
+        : CLIP_SHELL_FADE_HANDLE_SIZE_PX
+    );
 
     return {
       clip: clipRect,
@@ -738,8 +843,8 @@ function TimelineTrackComponent({
         right: createShellRect(left + width - CLIP_SHELL_HANDLE_WIDTH_PX / 2, top, CLIP_SHELL_HANDLE_WIDTH_PX, handleHeight),
       },
       fadeHandles: {
-        left: createShellRect(left, top, CLIP_SHELL_HANDLE_WIDTH_PX, CLIP_SHELL_HANDLE_WIDTH_PX),
-        right: createShellRect(left + width - CLIP_SHELL_HANDLE_WIDTH_PX, top, CLIP_SHELL_HANDLE_WIDTH_PX, CLIP_SHELL_HANDLE_WIDTH_PX),
+        left: createShellRect(leftFadeHandleX, top, CLIP_SHELL_FADE_HANDLE_SIZE_PX, CLIP_SHELL_FADE_HANDLE_SIZE_PX),
+        right: createShellRect(rightFadeHandleX, top, CLIP_SHELL_FADE_HANDLE_SIZE_PX, CLIP_SHELL_FADE_HANDLE_SIZE_PX),
       },
       keyframeRows: [],
     };
@@ -749,6 +854,7 @@ function TimelineTrackComponent({
     const keyframeState = clipShellKeyframeStateByClipId.get(clipId);
     const specialState = clipShellSpecialStateByClipId.get(clipId);
     const audioRegionGainActive = audioRegionGainPreview?.clipId === clipId;
+    const fadeVisualState = getClipFadeVisualState(clip);
     const selectedStemKind = clip.audioState?.stemSeparation?.stems
       .find((stem) => stem.id === clip.audioState?.stemSeparation?.soloStemId)
       ?.kind;
@@ -765,6 +871,12 @@ function TimelineTrackComponent({
         slot: 'fade',
         state: clipFade?.clipId === clipId ? clipFade : null,
         activeEdges: clipFade?.clipId === clipId ? [clipFade.edge] : [],
+        fadeInDuration: fadeVisualState.fadeInDuration,
+        fadeOutDuration: fadeVisualState.fadeOutDuration,
+        curveKeyframes: fadeVisualState.keyframes,
+        curveKey: fadeVisualState.curveKey,
+        clipDuration: fadeVisualState.clipDuration,
+        isAudioClip: fadeVisualState.isAudioClip,
       },
       keyframe: {
         enabled: Boolean(keyframeState),

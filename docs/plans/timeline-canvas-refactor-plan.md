@@ -518,7 +518,7 @@ Owner count: 1 agent for audits, then single-owner implementation slices.
 - Delete or delegate obsolete code only after the replacement path has parity tests or a bridge smoke for the affected behavior.
 - Current retirement candidates:
   - Full `TimelineClip` mounting inside `.timeline-canvas-dom-overlay` once shell modules cover active controls.
-    - Done for trim-only, hover-only, context-menu-only, context-menu-plus-hover, drag/multi-drag-only, drag/multi-drag-plus-hover, and stem-only shells; fade/keyframe/audio/spectral/video-bake still need shell parity before deletion.
+    - Done for trim-only, hover-only, context-menu-only, context-menu-plus-hover, drag/multi-drag-only, drag/multi-drag-plus-hover, stem-only, and fade-only shells; keyframe/audio/spectral/video-bake still need shell parity before deletion.
   - CSS hiding hacks under `.timeline-canvas-dom-overlay` after the full overlay is removed.
   - Cache-warmup `useEffect` blocks in `TimelineClip.tsx` after timeline services own thumbnail, waveform, spectrogram, and analysis artifact warmup.
   - Generic `renderClip` callback in `TimelineTrack` after `ClipInteractionShell` owns active controls.
@@ -551,7 +551,7 @@ Owner count: 1 agent for audits, then single-owner implementation slices.
 - Plumb `clipFade` into `TimelineTrack`.
 - Mount shell for hover, drag, trim, fade, open menus, focused keyframes, audio/spectral/video/stem states, and tool previews.
 - Move only proven active controls out of `TimelineClip`.
-  - Done for active trim handles and initial active fade handles. Fade curve and duration-positioned fade-handle parity are still pending before fade can skip the legacy body.
+  - Done for active trim handles and fade controls. Fade now uses shared curve geometry for DOM and canvas, positions shell handles from detected fade durations, draws fade curves in `TimelineClipCanvas`, and skips the legacy body for fade-only shells.
   - Done for stem-only active shells through `ClipStemControls`: active job progress and completed-stem source switcher render in the shell, preserve prewarm/source-switch callbacks, and no longer mount the legacy body in canvas mode.
 - Keep old `TimelineClip` overlay until shell parity tests pass.
 
@@ -621,6 +621,7 @@ Every implementation batch must be checked with targeted tests plus real browser
 - timeline thumbnail visibility after reload before playback
 - scroll/zoom/select-all smoke on a large project
 - targeted TypeScript/lint checks for touched files
+- targeted fade shell/canvas parity tests: `ClipInteractionShell.contract.test.tsx`, `TimelineTrack.test.tsx`, and `fadeCurvePath.test.ts`
 
 Required new or expanded checks:
 
