@@ -111,8 +111,8 @@ const canSkipLegacyClipBody = (
     mountReasons.every((reason) => reason === 'context-menu-open' || reason === 'hover');
   const dragOnlyShell =
     activeSlots.length === 0 &&
-    mountReasons.length > 0 &&
-    mountReasons.every((reason) => reason === 'drag' || reason === 'multi-drag');
+    mountReasons.some((reason) => reason === 'drag' || reason === 'multi-drag') &&
+    mountReasons.every((reason) => reason === 'drag' || reason === 'multi-drag' || reason === 'hover');
 
   return trimOnlyShell || contextMenuShell || dragOnlyShell;
 };

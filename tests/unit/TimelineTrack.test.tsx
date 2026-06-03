@@ -360,6 +360,93 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(renderClip).not.toHaveBeenCalled();
   });
 
+  it('keeps a drag-hover shell without the legacy overlay body', () => {
+    const renderClip = vi.fn((clip: TimelineClip) => (
+      <div className="timeline-clip" data-clip-id={clip.id} />
+    ));
+
+    const { container, row } = renderTimelineTrack({
+      clips: [createClip()],
+      isClipDragActive: true,
+      clipDrag: {
+        clipId: 'clip-video',
+        originalStartTime: 2,
+        originalTrackId: 'track-video',
+        grabOffsetX: 20,
+        grabY: 16,
+        currentX: 120,
+        currentTrackId: 'track-video',
+        snappedTime: 3,
+        snapIndicatorTime: null,
+        isSnapping: false,
+        trackChangeGuideTime: null,
+        altKeyPressed: false,
+        forcingOverlap: false,
+        dragStartTime: 100,
+      },
+      renderClip,
+    });
+
+    fireEvent.mouseMove(row, { clientX: 45, clientY: 24 });
+
+    const shell = container.querySelector<HTMLElement>('.clip-interaction-shell');
+
+    expect(shell).toBeTruthy();
+    expect(shell?.dataset.clipId).toBe('clip-video');
+    expect(shell?.dataset.mountReasons).toBe('hover drag');
+    expect(shell?.dataset.activeSlots).toBe('');
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
+    expect(renderClip).not.toHaveBeenCalled();
+  });
+
+  it('keeps a multi-drag-hover shell without the legacy overlay body', () => {
+    const renderClip = vi.fn((clip: TimelineClip) => (
+      <div className="timeline-clip" data-clip-id={clip.id} />
+    ));
+    const secondaryClip = createClip({
+      id: 'clip-secondary',
+      name: 'Secondary Clip',
+      startTime: 8,
+      duration: 2,
+      inPoint: 0,
+      outPoint: 2,
+      source: { type: 'video', mediaFileId: 'media-secondary', naturalDuration: 2 },
+    });
+
+    const { container, row } = renderTimelineTrack({
+      clips: [createClip(), secondaryClip],
+      isClipDragActive: true,
+      clipDrag: {
+        clipId: 'clip-video',
+        originalStartTime: 2,
+        originalTrackId: 'track-video',
+        grabOffsetX: 20,
+        grabY: 16,
+        currentX: 120,
+        currentTrackId: 'track-video',
+        snappedTime: 3,
+        snapIndicatorTime: null,
+        isSnapping: false,
+        trackChangeGuideTime: null,
+        altKeyPressed: false,
+        forcingOverlap: false,
+        dragStartTime: 100,
+        multiSelectClipIds: ['clip-secondary'],
+      },
+      renderClip,
+    });
+
+    fireEvent.mouseMove(row, { clientX: 105, clientY: 24 });
+
+    const secondaryShell = container.querySelector<HTMLElement>('.clip-interaction-shell[data-clip-id="clip-secondary"]');
+
+    expect(secondaryShell).toBeTruthy();
+    expect(secondaryShell?.dataset.mountReasons).toBe('hover multi-drag');
+    expect(secondaryShell?.dataset.activeSlots).toBe('');
+    expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
+    expect(renderClip).not.toHaveBeenCalled();
+  });
+
   it('keeps a keyframe shell and legacy overlay mounted for selected clip keyframes', () => {
     const renderClip = vi.fn((clip: TimelineClip) => (
       <div className="timeline-clip" data-clip-id={clip.id} />
