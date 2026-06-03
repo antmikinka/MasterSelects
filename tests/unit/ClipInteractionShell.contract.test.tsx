@@ -10,6 +10,7 @@ import {
   type ClipInteractionShellProps,
   type ClipInteractionShellRect,
 } from '../../src/components/timeline/interactionShell';
+import { useTimelineStore } from '../../src/stores/timeline';
 
 const rect = (overrides: Partial<ClipInteractionShellRect> = {}): ClipInteractionShellRect => ({
   x: 0,
@@ -397,10 +398,62 @@ describe('ClipInteractionShell contract', () => {
     expect(shell?.dataset.activeSlots).toBe('audio-region');
     expect(module?.dataset.clipInteractionSlot).toBe('audio-region');
     expect(selection).toBeTruthy();
-    expect(selection?.classList.contains('read-only')).toBe(true);
+    expect(selection?.classList.contains('read-only')).toBe(false);
     expect(selection?.style.left).toBe('40px');
     expect(selection?.style.width).toBe('80px');
     expect(gainValue?.textContent).toBe('-6.0 dB');
+  });
+
+  it('moves active audio regions from the shell selection geometry', () => {
+    const setAudioRegionSelectionSpy = vi.spyOn(
+      useTimelineStore.getState(),
+      'setAudioRegionSelection',
+    );
+    const props = createShellProps({
+      clip: {
+        ...createShellProps().clip,
+        source: { type: 'audio' },
+      },
+      mountState: {
+        clipId: 'clip-a',
+        shouldMount: true,
+        reasons: ['audio-region-active'],
+        hasActiveAudioRegion: true,
+      },
+      activeModules: {
+        audioRegion: {
+          slot: 'audio-region',
+          enabled: true,
+          selection: {
+            clipId: 'clip-a',
+            trackId: 'track-video',
+            startTime: 2,
+            endTime: 4,
+            sourceInPoint: 1,
+            sourceOutPoint: 3,
+          },
+          mode: 'select',
+        },
+      },
+    });
+
+    const { container } = render(<ClipInteractionShell {...props} />);
+    const selection = container.querySelector<HTMLElement>('.clip-audio-region-selection');
+
+    fireEvent.mouseDown(selection as HTMLElement, { button: 0, clientX: 40 });
+    fireEvent.mouseMove(document, { clientX: 80 });
+    fireEvent.mouseUp(document, { clientX: 80 });
+
+    expect(setAudioRegionSelectionSpy).toHaveBeenCalled();
+    expect(setAudioRegionSelectionSpy.mock.calls.at(-1)?.[0]).toMatchObject({
+      clipId: 'clip-a',
+      startTime: 3,
+      endTime: 5,
+      sourceInPoint: 2,
+      sourceOutPoint: 4,
+    });
+
+    setAudioRegionSelectionSpy.mockRestore();
   });
 
   it('renders active stem progress through the shell module', () => {

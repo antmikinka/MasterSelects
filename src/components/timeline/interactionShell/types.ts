@@ -101,10 +101,12 @@ export type ClipInteractionShellClipRef = Readonly<
     | 'duration'
     | 'inPoint'
     | 'outPoint'
+    | 'reversed'
     | 'mediaFileId'
     | 'source'
     | 'linkedClipId'
     | 'linkedGroupId'
+    | 'waveform'
     | 'audioState'
     | 'videoState'
   >
