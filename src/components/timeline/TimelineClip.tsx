@@ -6,10 +6,6 @@ import type { TimelineClipProps } from './types';
 import { useTimelineStore } from '../../stores/timeline';
 import { useMediaStore } from '../../stores/mediaStore';
 import { getTimelineTrackColor, TIMELINE_TRACK_COLOR_HIDDEN } from './trackColor';
-import {
-  isVectorAnimationSourceType,
-  shouldLoopVectorAnimation,
-} from '../../types/vectorAnimation';
 import { ClipAudioEditStackControls } from './components/ClipAudioEditStackControls';
 import { ClipAudioRegionSelectionOverlay } from './components/ClipAudioRegionSelectionOverlay';
 import { ClipSpectralRegionOverlays } from './components/ClipSpectralRegionOverlays';
@@ -73,6 +69,10 @@ import {
   resolveTimelineViewportWidth,
 } from './utils/waveformRenderGeometry';
 import { resolveClipMediaClassification } from './utils/clipMediaClassification';
+import {
+  canLoopExtendTimelineVectorClip,
+  getTimelineClipSourceDuration,
+} from './utils/clipSourceTiming';
 import { resolveSourceExtensionGhosts } from './utils/sourceExtensionGhosts';
 import {
   frequencyHzFromSpectralY,
@@ -126,25 +126,12 @@ const EMPTY_AUDIO_EDIT_STACK = [] as const;
 const EMPTY_WAVEFORM: number[] = [];
 const EMPTY_SPECTRAL_LAYERS = [] as const;
 
-function canLoopExtendVectorClip(clip: TimelineClipProps['clip']): boolean {
-  return isVectorAnimationSourceType(clip.source?.type) &&
-    shouldLoopVectorAnimation(clip.source.vectorAnimationSettings);
-}
-
-function getClipSourceDuration(clip: TimelineClipProps['clip']): number {
-  const naturalDuration = clip.source?.naturalDuration;
-  if (Number.isFinite(naturalDuration) && naturalDuration && naturalDuration > 0) {
-    return naturalDuration;
-  }
-  return Math.max(clip.outPoint, clip.inPoint + clip.duration, clip.duration, 0.1);
-}
-
 function getSlippedSourceWindow(
   clip: TimelineClipProps['clip'],
   sourceDelta: number,
 ): { inPoint: number; outPoint: number } {
   const visibleSourceDuration = clip.outPoint - clip.inPoint;
-  const maxInPoint = Math.max(0, getClipSourceDuration(clip) - visibleSourceDuration);
+  const maxInPoint = Math.max(0, getTimelineClipSourceDuration(clip) - visibleSourceDuration);
   const inPoint = Math.max(0, Math.min(maxInPoint, clip.inPoint + sourceDelta));
   return {
     inPoint,
@@ -635,7 +622,7 @@ function TimelineClipComponent({
     const deltaTime = clipTrim.appliedDelta;
     const sourceType = clip.source?.type;
     const isInfiniteClip = sourceType === 'text' || sourceType === 'image' || sourceType === 'solid' || sourceType === 'camera' || sourceType === 'splat-effector' || sourceType === 'math-scene';
-    const canLoopExtendRight = canLoopExtendVectorClip(clip);
+    const canLoopExtendRight = canLoopExtendTimelineVectorClip(clip);
     const maxDuration = isInfiniteClip
       ? Number.MAX_SAFE_INTEGER
       : (clip.source?.naturalDuration || clip.duration);
@@ -664,7 +651,7 @@ function TimelineClipComponent({
     // Resize this clip live too: a linked clip, or a selected clip following a
     // multi-trim. Each clamps the shared (snapped) delta to its own bounds.
     const deltaTime = clipTrim.appliedDelta;
-    const canLoopExtendRight = canLoopExtendVectorClip(clip);
+    const canLoopExtendRight = canLoopExtendTimelineVectorClip(clip);
     const maxDuration = clip.source?.naturalDuration || clip.duration;
 
     if (clipTrim.edge === 'left') {
@@ -2554,7 +2541,7 @@ function TimelineClipComponent({
     displayDuration,
     displayInPoint,
     displayOutPoint,
-    sourceDuration: getClipSourceDuration(clip),
+    sourceDuration: getTimelineClipSourceDuration(clip),
     scrollX,
     viewportWidth: renderTimelineViewportWidth,
     overscanPx: TIMELINE_RENDER_OVERSCAN_PX,

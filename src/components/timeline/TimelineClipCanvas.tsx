@@ -44,14 +44,17 @@ import {
 import type { ClipDragState, ClipTrimState } from './types';
 import type { ClipAudioState } from '../../types/audio';
 import {
-  isVectorAnimationSourceType,
-  shouldLoopVectorAnimation,
   type VectorAnimationClipSettings,
 } from '../../types/vectorAnimation';
 import {
   getPreferredWaveformPyramidRef,
   hasLegacyWaveformSamples,
 } from '../../utils/audioWaveformPresence';
+import {
+  canLoopExtendTimelineVectorClip,
+  getTimelineClipSourceDuration,
+  isInfiniteTimelineSourceType,
+} from './utils/clipSourceTiming';
 
 // Browser 2D canvas backing-store limit is ~16384px in Chrome; stay safely under.
 export const MAX_CANVAS_WIDTH_PX = 16000;
@@ -157,33 +160,6 @@ function getWaveformPyramidForClip(clip: CanvasClip, waveformPyramids: WaveformP
   const refId = getPreferredWaveformPyramidRef(clip);
   if (!refId) return null;
   return waveformPyramids?.get(refId) ?? getCachedTimelineWaveformArtifact(refId) ?? null;
-}
-
-function isInfiniteSourceType(sourceType: string | null | undefined): boolean {
-  return sourceType === 'text' ||
-    sourceType === 'image' ||
-    sourceType === 'solid' ||
-    sourceType === 'camera' ||
-    sourceType === 'splat-effector' ||
-    sourceType === 'math-scene';
-}
-
-function canLoopExtendRight(clip: CanvasClip): boolean {
-  return isVectorAnimationSourceType(clip.source?.type) &&
-    shouldLoopVectorAnimation(clip.source?.vectorAnimationSettings);
-}
-
-function getClipSourceDuration(clip: CanvasClip): number {
-  const naturalDuration = clip.source?.naturalDuration;
-  if (Number.isFinite(naturalDuration) && naturalDuration && naturalDuration > 0) {
-    return naturalDuration;
-  }
-  return Math.max(
-    clip.outPoint ?? 0,
-    (clip.inPoint ?? 0) + clip.duration,
-    clip.duration,
-    0.1,
-  );
 }
 
 function drawCanvasWaveformCenterLine(
@@ -463,7 +439,7 @@ function resolveClipGeometry(clip: CanvasClip, props: TimelineClipCanvasProps): 
   let outPoint = clip.outPoint ?? inPoint + duration;
   let visible = clip.trackId === trackId;
   let trimEdge: 'left' | 'right' | undefined;
-  const sourceDuration = getClipSourceDuration(clip);
+  const sourceDuration = getTimelineClipSourceDuration(clip);
   const dragPreviewPatch = clipDragPreview?.patches[clip.id];
 
   if (clipDrag?.clipId === clip.id) {
@@ -481,7 +457,7 @@ function resolveClipGeometry(clip: CanvasClip, props: TimelineClipCanvasProps): 
     trimEdge = clipTrim.edge;
     const deltaTime = clipTrim.appliedDelta;
     const sourceType = clip.source?.type;
-    const isInfiniteClip = isInfiniteSourceType(sourceType);
+    const isInfiniteClip = isInfiniteTimelineSourceType(sourceType);
     if (clipTrim.edge === 'left') {
       const maxTrim = clipTrim.originalDuration - 0.1;
       const minTrim = isInfiniteClip
@@ -493,7 +469,7 @@ function resolveClipGeometry(clip: CanvasClip, props: TimelineClipCanvasProps): 
       inPoint = clipTrim.originalInPoint + clampedDelta;
       outPoint = clipTrim.originalOutPoint;
     } else {
-      const maxExtend = isInfiniteClip || canLoopExtendRight(clip)
+      const maxExtend = isInfiniteClip || canLoopExtendTimelineVectorClip(clip)
         ? Number.MAX_SAFE_INTEGER
         : sourceDuration - clipTrim.originalOutPoint;
       const minTrim = -(clipTrim.originalDuration - 0.1);
