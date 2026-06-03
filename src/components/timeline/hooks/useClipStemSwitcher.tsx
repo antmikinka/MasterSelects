@@ -3,7 +3,7 @@ import type { TimelineClip } from '../../../types';
 import type { MediaFile } from '../../../stores/mediaStore/types';
 import type { ClipStemSeparationJobState } from '../../../stores/timeline/types';
 import { formatStemJobPhase, isActiveStemJobPhase } from '../../../stores/timeline/helpers/stemSeparationJobPhases';
-import { EMPTY_STEM_CHOICES } from '../components/ClipStemDisplay';
+import { EMPTY_STEM_CHOICES } from '../constants/clipStemConstants';
 import { ClipStemSwitcher } from '../components/ClipStemSwitcher';
 
 export interface ClipStemSwitcherState {
@@ -22,11 +22,19 @@ export function useClipStemSwitcher(input: {
   setClipSourceToStem: (clipId: string, stemMediaFileId: string) => void;
   prewarmStemSourceMediaFiles: (mediaFileIds: string[]) => void;
 }): ClipStemSwitcherState {
+  const {
+    clip,
+    clips,
+    mediaFiles,
+    clipStemSeparationJob,
+    setClipSourceToStem,
+    prewarmStemSourceMediaFiles,
+  } = input;
   const [stemMenuOpen, setStemMenuOpen] = useState(false);
   const stemMenuCloseTimerRef = useRef<number | null>(null);
-  const activeStemSeparationJob = input.clipStemSeparationJob &&
-    isActiveStemJobPhase(input.clipStemSeparationJob.phase)
-    ? input.clipStemSeparationJob
+  const activeStemSeparationJob = clipStemSeparationJob &&
+    isActiveStemJobPhase(clipStemSeparationJob.phase)
+    ? clipStemSeparationJob
     : null;
   const activeStemProgressPercent = activeStemSeparationJob
     ? Math.round(Math.max(0, Math.min(1, activeStemSeparationJob.progress)) * 100)
@@ -38,14 +46,14 @@ export function useClipStemSwitcher(input: {
     ? `${activeStemStatusLabel}: ${activeStemProgressPercent}%`
     : undefined;
   const isDownloadingStemModel = activeStemSeparationJob?.phase === 'downloading-model';
-  const completedStemChoices = !activeStemSeparationJob && input.clipStemSeparationJob?.phase === 'complete'
-    ? input.clipStemSeparationJob.stems ?? EMPTY_STEM_CHOICES
+  const completedStemChoices = !activeStemSeparationJob && clipStemSeparationJob?.phase === 'complete'
+    ? clipStemSeparationJob.stems ?? EMPTY_STEM_CHOICES
     : EMPTY_STEM_CHOICES;
   const hasCompletedStemChoices = completedStemChoices.length > 0;
-  let stemSourceMediaFileId = input.clipStemSeparationJob?.sourceMediaFileId ?? null;
+  let stemSourceMediaFileId = clipStemSeparationJob?.sourceMediaFileId ?? null;
   if (!stemSourceMediaFileId) {
     for (const stem of completedStemChoices) {
-      const sourceMediaFileId = input.mediaFiles.find(file => file.id === stem.mediaFileId)?.stemInfo?.sourceMediaFileId;
+      const sourceMediaFileId = mediaFiles.find(file => file.id === stem.mediaFileId)?.stemInfo?.sourceMediaFileId;
       if (sourceMediaFileId) {
         stemSourceMediaFileId = sourceMediaFileId;
         break;
@@ -54,11 +62,11 @@ export function useClipStemSwitcher(input: {
   }
   const hasStemSourceChoice = Boolean(
     stemSourceMediaFileId &&
-    input.mediaFiles.some(file => file.id === stemSourceMediaFileId && file.type === 'audio')
+    mediaFiles.some(file => file.id === stemSourceMediaFileId && file.type === 'audio')
   );
-  const stemSourceClip = input.clipStemSeparationJob
-    ? input.clips.find(candidate => candidate.id === input.clipStemSeparationJob?.clipId)
-    : input.clip;
+  const stemSourceClip = clipStemSeparationJob
+    ? clips.find(candidate => candidate.id === clipStemSeparationJob?.clipId)
+    : clip;
   const activeStemMediaFileId = stemSourceClip?.source?.mediaFileId ?? stemSourceClip?.mediaFileId;
 
   const clearStemMenuCloseTimer = useCallback(() => {
@@ -73,11 +81,11 @@ export function useClipStemSwitcher(input: {
     if (stemSourceMediaFileId) {
       mediaFileIds.unshift(stemSourceMediaFileId);
     }
-    input.prewarmStemSourceMediaFiles(mediaFileIds);
+    prewarmStemSourceMediaFiles(mediaFileIds);
   }, [
     completedStemChoices,
     hasCompletedStemChoices,
-    input.prewarmStemSourceMediaFiles,
+    prewarmStemSourceMediaFiles,
     stemSourceMediaFileId,
   ]);
 
@@ -105,8 +113,8 @@ export function useClipStemSwitcher(input: {
   const handleStemChoiceClick = useCallback((stemMediaFileId: string) => (e: React.MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    input.setClipSourceToStem(input.clip.id, stemMediaFileId);
-  }, [input.clip.id, input.setClipSourceToStem]);
+    setClipSourceToStem(clip.id, stemMediaFileId);
+  }, [clip.id, setClipSourceToStem]);
 
   const handleStemSwitcherMouseEnter = useCallback(() => {
     clearStemMenuCloseTimer();

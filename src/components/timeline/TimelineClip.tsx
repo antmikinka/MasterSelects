@@ -22,8 +22,6 @@ import {
   collectAudioEffectInstanceRouteSettings,
   collectLegacyAudioEffectRouteSettings,
 } from '../../services/audio/audioGraphRouteSettings';
-import { resolveAudioWaveformDiagnostics } from './utils/audioWaveformDiagnostics';
-import { resolveAudioVolumeAutomationCurveKeyframes } from './utils/audioAutomationCurve';
 import { resolveClipMediaClassification } from './utils/clipMediaClassification';
 import {
   getSpectralMaxFrequencyHz,
@@ -59,6 +57,7 @@ import { useClipTimelineToolPointer } from './hooks/useClipTimelineToolPointer';
 import { useClipVisualChrome } from './hooks/useClipVisualChrome';
 import { useClipRegionOverlayState } from './hooks/useClipRegionOverlayState';
 import { useClipStoreBindings } from './hooks/useClipStoreBindings';
+import { useClipAudioDisplayDerivedState } from './hooks/useClipAudioDisplayDerivedState';
 
 const EMPTY_AUDIO_EDIT_STACK = [] as const;
 
@@ -326,63 +325,29 @@ function TimelineClipComponent({
     zoom,
   });
 
-  const waveformNaturalDuration = processedWaveformPyramid
-    ? Math.max(0.001, processedWaveformPyramid.duration)
-    : (clip.source?.naturalDuration || clip.duration);
-  const waveformInPoint = processedWaveformPyramid ? 0 : displayInPoint;
-  const waveformOutPoint = processedWaveformPyramid
-    ? Math.max(0.001, processedWaveformPyramid.duration)
-    : displayOutPoint;
-  const spectrogramNaturalDuration = processedSpectrogramTileSet
-    ? Math.max(0.001, processedSpectrogramTileSet.duration)
-    : (clip.source?.naturalDuration || clip.duration);
-  const spectrogramInPoint = processedSpectrogramTileSet ? 0 : displayInPoint;
-  const spectrogramOutPoint = processedSpectrogramTileSet
-    ? Math.max(0.001, processedSpectrogramTileSet.duration)
-    : displayOutPoint;
-  const audioWaveformDiagnostics = useMemo(() => {
-    if (!isAudioClip || !waveformsEnabled) return null;
-    if (!waveformPyramid && (!clip.waveform || clip.waveform.length === 0)) return null;
-
-    return resolveAudioWaveformDiagnostics({
-      waveform: clip.waveform,
-      pyramid: waveformPyramid,
-      inPoint: waveformInPoint,
-      outPoint: waveformOutPoint,
-      naturalDuration: waveformNaturalDuration,
-      gain: waveformVariant === 'processed' ? 1 : waveformDisplayGain,
-    });
-  }, [
-    clip.waveform,
+  const {
+    spectrogramNaturalDuration,
+    spectrogramInPoint,
+    spectrogramOutPoint,
+    audioWaveformDiagnostics,
+    audioVolumeAutomationKeyframes,
+    visibleFadeCurveKeyframes,
+    visibleFadeCurveKey,
+  } = useClipAudioDisplayDerivedState({
+    clip,
+    clipAudioKeyframes,
     isAudioClip,
-    waveformDisplayGain,
-    waveformInPoint,
-    waveformNaturalDuration,
-    waveformOutPoint,
+    waveformsEnabled,
+    processedWaveformPyramid,
     waveformPyramid,
     waveformVariant,
-    waveformsEnabled,
-  ]);
-  const audioVolumeAutomationKeyframes = useMemo(() => {
-    if (!isAudioClip) return [];
-
-    return resolveAudioVolumeAutomationCurveKeyframes({
-      keyframes: clipAudioKeyframes,
-      legacyEffects: clip.effects,
-      audioEffectStack: clip.audioState?.effectStack,
-      clipDuration: displayDuration,
-    });
-  }, [
-    clip.audioState?.effectStack,
-    clip.effects,
-    clipAudioKeyframes,
+    waveformDisplayGain,
+    processedSpectrogramTileSet,
+    displayInPoint,
+    displayOutPoint,
     displayDuration,
-    isAudioClip,
-  ]);
-  const visibleFadeCurveKeyframes = isAudioClip ? audioVolumeAutomationKeyframes : opacityKeyframes;
-  const visibleFadeCurveKey = visibleFadeCurveKeyframes
-    .map(k => `${k.id}:${k.time.toFixed(3)}:${k.value}:${k.handleIn?.x ?? ''}:${k.handleIn?.y ?? ''}:${k.handleOut?.x ?? ''}:${k.handleOut?.y ?? ''}`)
-    .join('|');
+    opacityKeyframes,
+  });
 
   const keyframeTickGroups = keyframeTimeGroups;
   const [audioRegionDrag, setAudioRegionDrag] = useState<AudioRegionDragState | null>(null);

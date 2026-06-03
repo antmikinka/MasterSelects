@@ -11,6 +11,7 @@ import {
   scheduleTimelineProcessedWaveformDerivation,
   scheduleTimelineSpectrogramTileGeneration,
 } from '../../../services/timeline/timelineAudioArtifactGenerationWarmup';
+import type { TimelineSourceWaveformClipRef } from '../../../services/timeline/timelineSourceWaveformWarmup';
 import type { TimelineAudioDisplayMode } from '../../../stores/timeline/types';
 
 const WAVEFORM_PYRAMID_AUTO_UPGRADE_ZOOM = 250;
@@ -56,7 +57,27 @@ export function useClipAudioArtifactWarmups(input: {
 
     if (!shouldUpgrade) return;
 
-    const request = createTimelineSourceWaveformGenerationRequest(clip, audioDisplayMode);
+    const sourceWaveformClip: TimelineSourceWaveformClipRef = {
+      id: clip.id,
+      name: clip.name,
+      mediaFileId: clip.mediaFileId,
+      file: clip.file
+        ? {
+            name: clip.file.name,
+            size: clip.file.size,
+            lastModified: clip.file.lastModified,
+          }
+        : undefined,
+      waveform: clip.waveform,
+      waveformChannels: clip.waveformChannels,
+      waveformGenerating: clip.waveformGenerating,
+      audioState: clip.audioState,
+      source: {
+        type: clip.source?.type,
+        mediaFileId: clip.source?.mediaFileId,
+      },
+    };
+    const request = createTimelineSourceWaveformGenerationRequest(sourceWaveformClip, audioDisplayMode);
     if (!request) return;
 
     return scheduleVisibleTimelineSourceWaveformGeneration([request]);

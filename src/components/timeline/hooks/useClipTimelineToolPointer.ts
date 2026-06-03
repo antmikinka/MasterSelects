@@ -30,74 +30,92 @@ export function useClipTimelineToolPointer(input: {
   applyTimelineEditOperation: ApplyTimelineEditOperation;
   setActiveTimelineTool: (toolId: TimelineToolId) => void;
 }) {
-  const linkedClip = input.clip.linkedClipId
-    ? input.clips.find(candidate => candidate.id === input.clip.linkedClipId)
+  const {
+    clip,
+    track,
+    clips,
+    activeTimelineToolId,
+    timelineToolPreview,
+    canHandleTimelineToolPointer,
+    playheadPosition,
+    snappingEnabled,
+    displayStartTime,
+    displayDuration,
+    width,
+    isBladeToolActive,
+    setTimelineToolPreview,
+    applyTimelineEditOperation,
+    setActiveTimelineTool,
+  } = input;
+
+  const linkedClip = clip.linkedClipId
+    ? clips.find(candidate => candidate.id === clip.linkedClipId)
     : null;
-  const reverseLinkedClip = input.clips.find(candidate => candidate.linkedClipId === input.clip.id);
-  const isDirectlyHovered = input.timelineToolPreview?.clipId === input.clip.id;
-  const isLinkedToHovered = linkedClip && input.timelineToolPreview?.clipId === linkedClip.id;
-  const isReverseLinkedToHovered = reverseLinkedClip && input.timelineToolPreview?.clipId === reverseLinkedClip.id;
-  const shouldShowCutIndicator = input.isBladeToolActive &&
-    input.timelineToolPreview &&
-    isTimelineBladeTool(input.timelineToolPreview.toolId) &&
-    input.timelineToolPreview.plane === 'clip-local' &&
-    !input.timelineToolPreview.blocked &&
+  const reverseLinkedClip = clips.find(candidate => candidate.linkedClipId === clip.id);
+  const isDirectlyHovered = timelineToolPreview?.clipId === clip.id;
+  const isLinkedToHovered = linkedClip && timelineToolPreview?.clipId === linkedClip.id;
+  const isReverseLinkedToHovered = reverseLinkedClip && timelineToolPreview?.clipId === reverseLinkedClip.id;
+  const shouldShowCutIndicator = isBladeToolActive &&
+    timelineToolPreview &&
+    isTimelineBladeTool(timelineToolPreview.toolId) &&
+    timelineToolPreview.plane === 'clip-local' &&
+    !timelineToolPreview.blocked &&
     (isDirectlyHovered || isLinkedToHovered || isReverseLinkedToHovered);
 
   const getClipPointerContext = useCallback((e: ReactMouseEvent) => {
     const rect = e.currentTarget.getBoundingClientRect();
     return {
-      toolId: input.activeTimelineToolId,
-      clip: input.clip,
-      track: input.track,
-      clips: input.clips,
-      playheadPosition: input.playheadPosition,
-      snappingEnabled: input.snappingEnabled,
-      displayStartTime: input.displayStartTime,
-      displayDuration: input.displayDuration,
-      width: input.width,
+      toolId: activeTimelineToolId,
+      clip,
+      track,
+      clips,
+      playheadPosition,
+      snappingEnabled,
+      displayStartTime,
+      displayDuration,
+      width,
       clientX: e.clientX,
       rectLeft: rect.left,
       altKey: e.altKey,
     };
   }, [
-    input.activeTimelineToolId,
-    input.clip,
-    input.clips,
-    input.displayDuration,
-    input.displayStartTime,
-    input.playheadPosition,
-    input.snappingEnabled,
-    input.track,
-    input.width,
+    activeTimelineToolId,
+    clip,
+    clips,
+    displayDuration,
+    displayStartTime,
+    playheadPosition,
+    snappingEnabled,
+    track,
+    width,
   ]);
 
   const handleMouseMove = useCallback((e: ReactMouseEvent) => {
-    if (!input.canHandleTimelineToolPointer) return;
+    if (!canHandleTimelineToolPointer) return;
 
     const result = dispatchTimelineClipPointerMove(getClipPointerContext(e));
     if (!result.handled) {
-      if (input.timelineToolPreview?.clipId === input.clip.id) input.setTimelineToolPreview(null);
+      if (timelineToolPreview?.clipId === clip.id) setTimelineToolPreview(null);
       return;
     }
-    input.setTimelineToolPreview(result.preview ?? null);
+    setTimelineToolPreview(result.preview ?? null);
   }, [
+    canHandleTimelineToolPointer,
+    clip.id,
     getClipPointerContext,
-    input.canHandleTimelineToolPointer,
-    input.clip.id,
-    input.setTimelineToolPreview,
-    input.timelineToolPreview?.clipId,
+    setTimelineToolPreview,
+    timelineToolPreview?.clipId,
   ]);
 
   const handleMouseLeave = useCallback(() => {
-    if (!input.canHandleTimelineToolPointer) return;
+    if (!canHandleTimelineToolPointer) return;
 
-    if (input.timelineToolPreview?.clipId === input.clip.id) input.setTimelineToolPreview(null);
+    if (timelineToolPreview?.clipId === clip.id) setTimelineToolPreview(null);
   }, [
-    input.canHandleTimelineToolPointer,
-    input.clip.id,
-    input.setTimelineToolPreview,
-    input.timelineToolPreview?.clipId,
+    canHandleTimelineToolPointer,
+    clip.id,
+    setTimelineToolPreview,
+    timelineToolPreview?.clipId,
   ]);
 
   const handleClick = useCallback((e: ReactMouseEvent) => {
@@ -107,7 +125,7 @@ export function useClipTimelineToolPointer(input: {
     e.stopPropagation();
 
     if (result.operation) {
-      input.applyTimelineEditOperation(result.operation, {
+      applyTimelineEditOperation(result.operation, {
         source: 'ui',
         historyLabel: result.operation.type === 'select-clips-from-time'
           ? 'Track select'
@@ -116,17 +134,17 @@ export function useClipTimelineToolPointer(input: {
             : 'Blade clip',
       });
     }
-    if (result.nextToolId) input.setActiveTimelineTool(result.nextToolId);
-    input.setTimelineToolPreview(null);
+    if (result.nextToolId) setActiveTimelineTool(result.nextToolId);
+    setTimelineToolPreview(null);
   }, [
+    applyTimelineEditOperation,
     getClipPointerContext,
-    input.applyTimelineEditOperation,
-    input.setActiveTimelineTool,
-    input.setTimelineToolPreview,
+    setActiveTimelineTool,
+    setTimelineToolPreview,
   ]);
 
-  const cutIndicatorX = shouldShowCutIndicator && input.timelineToolPreview?.time !== undefined
-    ? ((input.timelineToolPreview.time - input.displayStartTime) / input.displayDuration) * input.width
+  const cutIndicatorX = shouldShowCutIndicator && timelineToolPreview?.time !== undefined
+    ? ((timelineToolPreview.time - displayStartTime) / displayDuration) * width
     : null;
 
   return {

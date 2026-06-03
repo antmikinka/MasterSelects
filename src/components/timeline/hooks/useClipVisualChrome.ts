@@ -187,11 +187,6 @@ export function useClipVisualChrome(input: {
     timeToPixel: input.timeToPixel,
   }), [
     input.clip,
-    input.clip.duration,
-    input.clip.inPoint,
-    input.clip.outPoint,
-    input.clip.source?.naturalDuration,
-    input.clip.startTime,
     input.clipTrim?.edge,
     input.displayDuration,
     input.displayInPoint,

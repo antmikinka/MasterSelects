@@ -69,20 +69,24 @@ export function useClipRegionOverlayState(input: {
     input.displayStartTime,
   ]);
 
-  const spectralLayers = input.clip.audioState?.spectralLayers ?? [];
-  const spectralImageLayerOverlays = useMemo(() => resolveSpectralImageLayerOverlays({
-    enabled: input.canSelectSpectralRegion || input.audioDisplayMode === 'spectral',
-    layers: spectralLayers,
-    displayStartTime: input.displayStartTime,
-    displayDuration: input.displayDuration,
-    width: input.width,
-    trackBaseHeight: input.trackBaseHeight,
-    maxFrequencyHz: input.spectralMaxFrequencyHz,
-    sourceTimeToDisplayTimelineTime,
-    mediaFilesById: input.spectralImageFilesById,
-  }), [
+  const spectralImageLayerOverlays = useMemo(() => {
+    const spectralLayers = input.clip.audioState?.spectralLayers ?? [];
+
+    return resolveSpectralImageLayerOverlays({
+      enabled: input.canSelectSpectralRegion || input.audioDisplayMode === 'spectral',
+      layers: spectralLayers,
+      displayStartTime: input.displayStartTime,
+      displayDuration: input.displayDuration,
+      width: input.width,
+      trackBaseHeight: input.trackBaseHeight,
+      maxFrequencyHz: input.spectralMaxFrequencyHz,
+      sourceTimeToDisplayTimelineTime,
+      mediaFilesById: input.spectralImageFilesById,
+    });
+  }, [
     input.audioDisplayMode,
     input.canSelectSpectralRegion,
+    input.clip.audioState?.spectralLayers,
     input.displayDuration,
     input.displayStartTime,
     input.spectralImageFilesById,
@@ -90,7 +94,6 @@ export function useClipRegionOverlayState(input: {
     input.trackBaseHeight,
     input.width,
     sourceTimeToDisplayTimelineTime,
-    spectralLayers,
   ]);
 
   const audioEditOperationOverlays = useMemo<AudioEditOperationOverlay[]>(() => {

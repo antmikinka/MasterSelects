@@ -5,10 +5,7 @@ import {
   IconMusic,
   IconWaveSine,
 } from '@tabler/icons-react';
-import type { ClipStemSeparationJobStemChoice } from '../../../stores/timeline/types';
 import type { AudioStemKind } from '../../../types/audio';
-
-export const EMPTY_STEM_CHOICES: ClipStemSeparationJobStemChoice[] = [];
 
 export function StemChoiceIcon({ kind }: { kind: AudioStemKind }) {
   switch (kind) {
