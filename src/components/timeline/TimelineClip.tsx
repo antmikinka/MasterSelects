@@ -58,10 +58,7 @@ import {
   resolveSpectralImageLayerOverlays,
   resolveSpectralRegionOverlay,
 } from './utils/spectralRegionOverlays';
-import type {
-  TimelineAudioRegionSelection,
-  TimelineSpectralRegionEditType,
-} from '../../stores/timeline/types';
+import type { TimelineAudioRegionSelection } from '../../stores/timeline/types';
 import {
   dispatchTimelineClipPointerClick,
   dispatchTimelineClipPointerMove,
@@ -96,6 +93,7 @@ import {
 } from './hooks/useClipRegionInteractions';
 import { useClipKeyframeTickDrag } from './hooks/useClipKeyframeTickDrag';
 import { useClipSpectralImageLayers } from './hooks/useClipSpectralImageLayers';
+import { useClipOverlayActions } from './hooks/useClipOverlayActions';
 
 const TIMELINE_VIEWPORT_FALLBACK_PX = 1600;
 const TIMELINE_VIEWPORT_MIN_PX = 1600;
@@ -754,7 +752,6 @@ function TimelineClipComponent({
   const [audioRegionMoveDrag, setAudioRegionMoveDrag] = useState<AudioRegionMoveDragState | null>(null);
   const [audioRegionResizeDrag, setAudioRegionResizeDrag] = useState<AudioRegionResizeDragState | null>(null);
   const [spectralRegionDrag, setSpectralRegionDrag] = useState<SpectralRegionDragState | null>(null);
-  const [audioBakePending, setAudioBakePending] = useState(false);
 
   const getMatchingAudioRegionOperationIds = useCallback((selection: TimelineAudioRegionSelection): string[] => {
     const start = Math.min(selection.sourceInPoint, selection.sourceOutPoint);
@@ -1255,54 +1252,34 @@ function TimelineClipComponent({
     videoBakeRegionSelection,
     width,
   ]);
-  const handleBakeClipVideoRegion = useCallback((regionId: string) => {
-    void bakeClipVideoBakeRegion(clip.id, regionId);
-  }, [bakeClipVideoBakeRegion, clip.id]);
-  const handleUnbakeClipVideoRegion = useCallback((regionId: string) => {
-    unbakeClipVideoBakeRegion(clip.id, regionId);
-  }, [clip.id, unbakeClipVideoBakeRegion]);
-  const handleRemoveClipVideoRegion = useCallback((regionId: string) => {
-    removeClipVideoBakeRegion(clip.id, regionId);
-  }, [clip.id, removeClipVideoBakeRegion]);
-  const handleAudioEditOperationOverlayActivate = useCallback((overlay: AudioEditOperationOverlay) => {
-    closeAudioRegionContextMenu();
-    setAudioRegionSelection(overlay.selection);
-  }, [closeAudioRegionContextMenu, setAudioRegionSelection]);
-  const handleToggleAudioEditOperation = useCallback((operationId: string, disabled: boolean) => {
-    setClipAudioEditOperationEnabled(clip.id, operationId, disabled);
-  }, [clip.id, setClipAudioEditOperationEnabled]);
-  const handleRemoveAudioEditOperation = useCallback((operationId: string) => {
-    removeClipAudioEditOperation(clip.id, operationId);
-  }, [clip.id, removeClipAudioEditOperation]);
-  const handleApplySpectralRegionEdit = (type: TimelineSpectralRegionEditType) => (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    applySpectralRegionEdit(type);
-  };
-  const handleAudioEditStackMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  }, []);
-  const handleBakeAudioEditStack = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (audioBakePending) return;
-    setAudioBakePending(true);
-    void bakeClipAudioEditStack(clip.id).finally(() => {
-      setAudioBakePending(false);
-    });
-  }, [audioBakePending, bakeClipAudioEditStack, clip.id]);
-  const handleUnbakeAudioEditStack = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (audioBakePending || !canUnbakeAudioEditStack) return;
-    unbakeClipAudioEditStack(clip.id);
-  }, [audioBakePending, canUnbakeAudioEditStack, clip.id, unbakeClipAudioEditStack]);
-  const handleClearAudioEditStack = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    clearClipAudioEditStack(clip.id);
-  }, [clearClipAudioEditStack, clip.id]);
+  const {
+    audioBakePending,
+    handleBakeClipVideoRegion,
+    handleUnbakeClipVideoRegion,
+    handleRemoveClipVideoRegion,
+    handleAudioEditOperationOverlayActivate,
+    handleToggleAudioEditOperation,
+    handleRemoveAudioEditOperation,
+    handleApplySpectralRegionEdit,
+    handleAudioEditStackMouseDown,
+    handleBakeAudioEditStack,
+    handleUnbakeAudioEditStack,
+    handleClearAudioEditStack,
+  } = useClipOverlayActions({
+    clipId: clip.id,
+    canUnbakeAudioEditStack,
+    bakeClipVideoBakeRegion,
+    unbakeClipVideoBakeRegion,
+    removeClipVideoBakeRegion,
+    closeAudioRegionContextMenu,
+    setAudioRegionSelection,
+    setClipAudioEditOperationEnabled,
+    removeClipAudioEditOperation,
+    applySpectralRegionEdit,
+    clearClipAudioEditStack,
+    bakeClipAudioEditStack,
+    unbakeClipAudioEditStack,
+  });
 
   // Track filtering must stay after all hooks so React sees a stable hook order
   // while clips move between tracks during drag and linked edits.
