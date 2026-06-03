@@ -34,13 +34,8 @@ import {
 import { resolveAudioWaveformDiagnostics } from './utils/audioWaveformDiagnostics';
 import { resolveAudioVolumeAutomationCurveKeyframes } from './utils/audioAutomationCurve';
 import { resolveClipLabelHex } from './utils/resolveClipLabelHex';
-import {
-  resolveHorizontalRenderWindow,
-  resolveTimelineViewportWidth,
-} from './utils/waveformRenderGeometry';
 import { resolveClipMediaClassification } from './utils/clipMediaClassification';
 import {
-  canLoopExtendTimelineVectorClip,
   getTimelineClipSourceDuration,
 } from './utils/clipSourceTiming';
 import { resolveSourceExtensionGhosts } from './utils/sourceExtensionGhosts';
@@ -63,7 +58,6 @@ import { getTrimHandleArrowDirections } from './utils/trimHandleDirections';
 import {
   hasLegacyWaveformSamples,
 } from '../../utils/audioWaveformPresence';
-import { useClipThumbnailFilmstripPlan } from './hooks/useClipThumbnailFilmstripPlan';
 import { useClipAudioRegionControls } from './hooks/useClipAudioRegionControls';
 import { useClipStemSwitcher } from './hooks/useClipStemSwitcher';
 import { useClipAnimationState } from './hooks/useClipAnimationState';
@@ -81,27 +75,13 @@ import { useClipOverlayActions } from './hooks/useClipOverlayActions';
 import { useClipAudioArtifactWarmups } from './hooks/useClipAudioArtifactWarmups';
 import { useClipAudioRenderState } from './hooks/useClipAudioRenderState';
 import { useClipAudioAnalysisDisplayState } from './hooks/useClipAudioAnalysisDisplayState';
+import { useClipTimelineRenderGeometry } from './hooks/useClipTimelineRenderGeometry';
 
-const TIMELINE_VIEWPORT_FALLBACK_PX = 1600;
-const TIMELINE_VIEWPORT_MIN_PX = 1600;
 const TIMELINE_RENDER_OVERSCAN_PX = 512;
 const CLIP_RIGHT_STICKY_PADDING_PX = 8;
 const EMPTY_CLIP_KEYFRAMES = [] as const;
 const EMPTY_AUDIO_EDIT_STACK = [] as const;
 const EMPTY_SPECTRAL_LAYERS = [] as const;
-
-function getSlippedSourceWindow(
-  clip: TimelineClipProps['clip'],
-  sourceDelta: number,
-): { inPoint: number; outPoint: number } {
-  const visibleSourceDuration = clip.outPoint - clip.inPoint;
-  const maxInPoint = Math.max(0, getTimelineClipSourceDuration(clip) - visibleSourceDuration);
-  const inPoint = Math.max(0, Math.min(maxInPoint, clip.inPoint + sourceDelta));
-  return {
-    inPoint,
-    outPoint: inPoint + visibleSourceDuration,
-  };
-}
 
 function TimelineClipComponent({
   clip,
@@ -360,135 +340,16 @@ function TimelineClipComponent({
     prewarmStemSourceMediaFiles,
   });
 
-  // Check if this clip is linked to the dragging/trimming clip
-  const draggedClip = clipDrag
-    ? clips.find((c) => c.id === clipDrag.clipId)
-    : null;
-  const trimmedClip = clipTrim
-    ? clips.find((c) => c.id === clipTrim.clipId)
-    : null;
-
-  // Calculate live trim values (including inPoint/outPoint for waveform/thumbnail rendering)
-  let displayStartTime = clip.startTime;
-  let displayDuration = clip.duration;
-  let displayInPoint = clip.inPoint;
-  let displayOutPoint = clip.outPoint;
-
-  if (isTrimming && clipTrim) {
-    // Use the resolved (snapped/frame-quantized) delta so the live resize lands
-    // exactly where the trim will commit.
-    const deltaTime = clipTrim.appliedDelta;
-    const sourceType = clip.source?.type;
-    const isInfiniteClip = sourceType === 'text' || sourceType === 'image' || sourceType === 'solid' || sourceType === 'camera' || sourceType === 'splat-effector' || sourceType === 'math-scene';
-    const canLoopExtendRight = canLoopExtendTimelineVectorClip(clip);
-    const maxDuration = isInfiniteClip
-      ? Number.MAX_SAFE_INTEGER
-      : (clip.source?.naturalDuration || clip.duration);
-
-    if (clipTrim.edge === 'left') {
-      const maxTrim = clipTrim.originalDuration - 0.1;
-      const minTrim = isInfiniteClip
-        ? -clipTrim.originalStartTime
-        : -clipTrim.originalInPoint;
-      const clampedDelta = Math.max(minTrim, Math.min(maxTrim, deltaTime));
-      displayStartTime = clipTrim.originalStartTime + clampedDelta;
-      displayDuration = clipTrim.originalDuration - clampedDelta;
-      // Update inPoint when trimming left edge
-      displayInPoint = clipTrim.originalInPoint + clampedDelta;
-    } else {
-      const maxExtend = canLoopExtendRight
-        ? Number.MAX_SAFE_INTEGER
-        : maxDuration - clipTrim.originalOutPoint;
-      const minTrim = -(clipTrim.originalDuration - 0.1);
-      const clampedDelta = Math.max(minTrim, Math.min(maxExtend, deltaTime));
-      displayDuration = clipTrim.originalDuration + clampedDelta;
-      // Update outPoint when trimming right edge
-      displayOutPoint = clipTrim.originalOutPoint + clampedDelta;
-    }
-  } else if (clipTrim && (isTrimFollower || (isLinkedToTrimming && trimmedClip))) {
-    // Resize this clip live too: a linked clip, or a selected clip following a
-    // multi-trim. Each clamps the shared (snapped) delta to its own bounds.
-    const deltaTime = clipTrim.appliedDelta;
-    const canLoopExtendRight = canLoopExtendTimelineVectorClip(clip);
-    const maxDuration = clip.source?.naturalDuration || clip.duration;
-
-    if (clipTrim.edge === 'left') {
-      const maxTrim = clip.duration - 0.1;
-      const minTrim = -clip.inPoint;
-      const clampedDelta = Math.max(minTrim, Math.min(maxTrim, deltaTime));
-      displayStartTime = clip.startTime + clampedDelta;
-      displayDuration = clip.duration - clampedDelta;
-      displayInPoint = clip.inPoint + clampedDelta;
-    } else {
-      const maxExtend = canLoopExtendRight
-        ? Number.MAX_SAFE_INTEGER
-        : maxDuration - clip.outPoint;
-      const minTrim = -(clip.duration - 0.1);
-      const clampedDelta = Math.max(minTrim, Math.min(maxExtend, deltaTime));
-      displayDuration = clip.duration + clampedDelta;
-      displayOutPoint = clip.outPoint + clampedDelta;
-    }
-  }
-
-  const isSlipPreview =
-    clipDrag?.toolGesture === 'slip' &&
-    clipDrag.sourceTimeDelta !== undefined &&
-    (isDragging || (!clipDrag.altKeyPressed && isLinkedToDragging));
-  if (isSlipPreview) {
-    const sourceWindow = getSlippedSourceWindow(clip, clipDrag.sourceTimeDelta ?? 0);
-    displayInPoint = sourceWindow.inPoint;
-    displayOutPoint = sourceWindow.outPoint;
-  }
-
-  const width = timeToPixel(displayDuration);
-  const isClipPositionDragPreview = !clipDrag?.toolGesture && (
-    isDragging ||
-    isLinkedToDragging ||
-    (
-      clipDrag?.multiSelectClipIds?.includes(clip.id) &&
-      clipDrag.multiSelectTimeDelta !== undefined
-    )
-  );
-
-  // Calculate position - if dragging, use the computed position (with snapping/resistance)
-  let left = timeToPixel(displayStartTime);
-  if (isDragging && clipDrag) {
-    // Always use snappedTime when available - it contains the position with snapping and resistance applied
-    if (clipDrag.snappedTime !== null) {
-      left = timeToPixel(clipDrag.snappedTime);
-    }
-  } else if (isLinkedToDragging && clipDrag && draggedClip) {
-    // Move linked clip in sync - use computed position (snapped + resistance) if available
-    if (clipDrag.snappedTime !== null) {
-      const newDragTime = clipDrag.snappedTime;
-      const timeDelta = newDragTime - draggedClip.startTime;
-      left = timeToPixel(Math.max(0, clip.startTime + timeDelta));
-    }
-  } else if (clipDrag?.multiSelectClipIds?.includes(clip.id) && clipDrag.multiSelectTimeDelta !== undefined) {
-    // This clip is part of multi-select drag (but not the primary dragged clip)
-    left = timeToPixel(Math.max(0, clip.startTime + clipDrag.multiSelectTimeDelta));
-  }
-  const visibleTimelineViewportWidth = timelineViewportWidth > 0
-    ? timelineViewportWidth
-    : TIMELINE_VIEWPORT_FALLBACK_PX;
-  const renderTimelineViewportWidth = resolveTimelineViewportWidth({
-    timelineViewportWidth,
-    fallbackPx: TIMELINE_VIEWPORT_FALLBACK_PX,
-    minPx: TIMELINE_VIEWPORT_MIN_PX,
-  });
-  const staticContentRenderLeft = isClipPositionDragPreview
-    ? timeToPixel(displayStartTime)
-    : left;
-  const waveformRenderWindow = useMemo(() => (
-    resolveHorizontalRenderWindow({
-      scrollX,
-      contentLeft: staticContentRenderLeft,
-      contentWidth: width,
-      viewportWidth: renderTimelineViewportWidth,
-      overscanPx: TIMELINE_RENDER_OVERSCAN_PX,
-    })
-  ), [renderTimelineViewportWidth, scrollX, staticContentRenderLeft, width]);
   const {
+    displayStartTime,
+    displayDuration,
+    displayInPoint,
+    displayOutPoint,
+    width,
+    left,
+    visibleTimelineViewportWidth,
+    renderTimelineViewportWidth,
+    waveformRenderWindow,
     thumbnailRenderWindow,
     showSegmentThumbnails,
     showRegularThumbnails,
@@ -496,18 +357,23 @@ function TimelineClipComponent({
     cachedThumbnails,
     segmentThumbnailPlans,
     legacyThumbnailPlans,
-  } = useClipThumbnailFilmstripPlan({
+  } = useClipTimelineRenderGeometry({
     clip,
-    passiveMediaEnabled,
+    clips,
+    isDragging,
+    isTrimming,
+    isLinkedToDragging,
+    isLinkedToTrimming,
+    isTrimFollower,
+    clipDrag,
+    clipTrim,
+    timelineViewportWidth,
+    scrollX,
     thumbnailsEnabled,
+    passiveMediaEnabled,
     isAudioClip,
     showsStaticClipArtwork,
-    scrollX,
-    contentLeft: staticContentRenderLeft,
-    width,
-    viewportWidth: renderTimelineViewportWidth,
-    displayInPoint,
-    displayOutPoint,
+    timeToPixel,
   });
 
   useClipAudioArtifactWarmups({
