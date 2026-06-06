@@ -1351,32 +1351,20 @@ export async function updateTimelineClips(
         },
       });
     } else if (sourceType === 'image') {
-      // Create image element
-      const img = new Image();
-      img.src = getSharedFileUrl();
-      img.crossOrigin = 'anonymous';
-
-      img.addEventListener('load', () => {
-        timelineStore.updateClip(clip.id, {
-          ...createSourceReplacementClipAudioPatch(clip),
-          file,
-          needsReload: false,
-          isLoading: false,
-          source: {
-            type: 'image',
-            imageElement: img,
-            mediaFileId,
-          },
-        });
-      }, { once: true });
-
-      img.addEventListener('error', () => {
-        log.warn('Failed to load image for clip:', clip.name);
-        timelineStore.updateClip(clip.id, {
-          needsReload: false,
-          isLoading: false,
-        });
-      }, { once: true });
+      const imageUrl = getSharedFileUrl();
+      const naturalDuration = clip.source?.naturalDuration || mediaFile?.duration || clip.duration;
+      timelineStore.updateClip(clip.id, {
+        ...createSourceReplacementClipAudioPatch(clip),
+        file,
+        needsReload: false,
+        isLoading: false,
+        source: {
+          type: 'image',
+          imageUrl,
+          naturalDuration,
+          mediaFileId,
+        },
+      });
     } else if (isVectorAnimationSourceType(sourceType)) {
       try {
         const metadata = sourceType === 'lottie'

@@ -8,19 +8,19 @@ Issue/branch: issue #228 on `issue-228-timeline-canvas-rendering`.
 
 ## Start Here Before Spawning Agents
 
-- The current committed branch tip is `65cf285b` (`Remove timeline canvas clip
-  fallback`), but the actual refactor state described below is still a dirty
-  working tree.
-- Do not clone this branch into a fresh folder for new work unless the current
-  working tree has first been committed or the diff is deliberately copied over.
-  A fresh checkout at `65cf285b` will still contain the old DOM `TimelineClip`
-  files and can make a new agent rebuild or re-delete work that is already done
-  locally.
-- The old DOM clip body retirement is source-clean in this working tree, but the
-  deletions are uncommitted relative to `HEAD`.
-- The last reported full `build`/`lint`/`test` success is from earlier in this
-  refactor batch and is not pinned to a verified current SHA. Treat the current
-  working tree as needing final full gates before a normal commit/push.
+- The current committed branch tip is `0f202a6b` (`Refactor timeline canvas
+  rendering architecture`), matching `origin/issue-228-timeline-canvas-rendering`;
+  the working tree was clean immediately after push.
+- Fresh checkouts of this branch at `0f202a6b` already include the committed
+  canvas refactor and deleted DOM clip body. New workdirs can be created from the
+  branch; continue to avoid reverting unrelated local work if a future tree
+  becomes dirty.
+- The old DOM clip body retirement is committed at `0f202a6b`;
+  `src/components/timeline/TimelineClip.tsx` is absent at `HEAD`.
+- Full gates passed for the content committed as `0f202a6b`: `npm run build`,
+  `npm run lint`, and `npm run test` (`362` test files / `3862` tests). Rerun
+  the relevant targeted checks after new slices and rerun final full gates before
+  merge/release readiness or another normal push.
 - `src/components/timeline/Timeline.tsx` intentionally still imports
   `TimelineClip.css`. The CSS file is now shell/overlay styling, not proof that
   `TimelineClip.tsx` should be restored.
@@ -65,6 +65,13 @@ Issue/branch: issue #228 on `issue-228-timeline-canvas-rendering`.
   implementation-breadth number at about 98%. Do not raise the risk-weighted
   number above 95% until live/default-on worker proof, final visual/parity
   evidence, and final broad gates are done.
+- Latest post-push slice after `0f202a6b`: clip/empty context menu no-op paths
+  no longer close or execute when stale/disabled, and media relink/reload for
+  image clips now writes data-only `source.imageUrl` instead of allocating
+  `new Image()` or storing `source.imageElement`. Focused checks passed:
+  `npm run test -- tests/stores/mediaStore/fileManageSlice.test.ts tests/unit/TimelineContextMenu.test.tsx tests/unit/TimelineEmptyContextMenu.test.tsx tests/unit/clipContextMenu.test.ts tests/unit/timelineEmptyContextMenu.test.ts tests/unit/trackContextMenu.test.ts tests/unit/TrackContextMenu.test.tsx`
+  (`164` tests), touched-file ESLint, and
+  `npx tsc -p tsconfig.app.json --noEmit --pretty false`.
 - The old DOM `TimelineClip.tsx` body has been deleted.
 - Timeline clip rendering is canvas-first, with forced-worker synthetic/fallback
   smokes in place. Focused live real-media worker-positive smokes have passed on
@@ -360,14 +367,28 @@ Issue/branch: issue #228 on `issue-228-timeline-canvas-rendering`.
 - Live smokes require `npm run dev`, Chrome with the app open, and the
   `.ai-bridge-token` bridge from `AGENTS.md`.
 
-## Latest LOC Wasserstand
+## Latest Commit / Worktree State
 
-Latest local LOC snapshot from `npm run swarm:status` at 2026-06-06 09:54 UTC:
+As of `0f202a6b`, the branch matches upstream and the worktree was clean after
+the push. Commit accounting: `334 files changed, 56225 insertions(+), 17356
+deletions(-)`. A fresh `npm run swarm:status` after the push reported `0`
+tracked changes, `0` new untracked files, and `+0/-0` working-tree LOC. Older
+`npm run swarm:status` numbers below are pre-commit working-tree checkpoints,
+not current dirty work.
 
-- 244 tracked changed files
-- 81 new untracked files
-- tracked diff: `+23708/-17054`, net `+6654`
-- new-file LOC: `+30972`
+- Latest post-push focused slice:
+  - `src/components/timeline/TimelineContextMenu.tsx`: disabled/stale thumbnail,
+    delete-gap, transcription, and label-color actions now stay inert instead
+    of closing the menu or executing against missing targets.
+  - `src/components/timeline/TimelineEmptyContextMenu.tsx`: capture-phase
+    outside-contextmenu handling now ignores events inside the menu, matching
+    the safer track-menu containment pattern.
+  - `src/stores/mediaStore/slices/fileManageSlice.ts`: image relink/reload now
+    writes a data-only `{ type: 'image', imageUrl, naturalDuration, mediaFileId }`
+    source and no longer constructs `Image` or stores `source.imageElement`.
+  - Focused checks passed: `npm run test -- tests/stores/mediaStore/fileManageSlice.test.ts tests/unit/TimelineContextMenu.test.tsx tests/unit/TimelineEmptyContextMenu.test.tsx tests/unit/clipContextMenu.test.ts tests/unit/timelineEmptyContextMenu.test.ts tests/unit/trackContextMenu.test.ts tests/unit/TrackContextMenu.test.tsx`
+    (`164` tests), touched-file ESLint, and
+    `npx tsc -p tsconfig.app.json --noEmit --pretty false`.
 - Latest smoke persistence/playhead slice:
   - `src/components/timeline/Timeline.tsx`: live playback playhead uses a
     high-frequency RAF position from the internal playback clock and clamps tiny
@@ -910,10 +931,10 @@ paradox is expected: the tracked tree has removed more old code than it added,
 while the large new-file count is mostly handoff, smoke runner, worker/runtime
 modules, restore helpers, and tests.
 
-## Uncommitted Retired DOM Inventory
+## Retired DOM Inventory Committed In `0f202a6b`
 
-These files are deleted in the working tree but still exist at `HEAD`. Do not
-restore them or rebuild features inside them:
+These files are deleted at `HEAD`. Do not restore them or rebuild features
+inside them:
 
 - `src/components/timeline/TimelineClip.tsx`
 - Old passive clip components under `src/components/timeline/components/`:
@@ -2074,9 +2095,9 @@ Parallel cleanup lane after the restore test is in place:
 
 ## Do Not Redo
 
-- Do not start a fresh checkout/clone from this branch for timeline-canvas work
-  until the current working tree is committed or intentionally copied. `HEAD`
-  still contains the retired DOM clip files.
+- Fresh checkouts of this branch already include the committed timeline-canvas
+  refactor. Do not restore `TimelineClip.tsx` or recreate the full DOM clip
+  body.
 - Do not restore `TimelineClip.tsx`.
 - Do not revive deleted DOM waveform/thumbnail/passive overlay components.
 - Do not create another nested-composition restore helper. Extend

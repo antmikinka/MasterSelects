@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TimelineContextMenu } from '../../src/components/timeline/TimelineContextMenu';
 import { useMediaStore, type MediaFile } from '../../src/stores/mediaStore';
@@ -35,23 +35,28 @@ function createClip(overrides: Partial<TimelineClip>): TimelineClip {
 
 function renderMenu(params: {
   clips: TimelineClip[];
-  mediaFile: MediaFile;
+  mediaFile?: MediaFile | null;
+  contextClipId?: string;
+  selectedClipIds?: Set<string>;
   generateWaveformForClip?: ReturnType<typeof vi.fn>;
   generateSpectrogramForClip?: ReturnType<typeof vi.fn>;
+  deleteGapAtTime?: ReturnType<typeof vi.fn>;
 }) {
-  useMediaStore.setState({ files: [params.mediaFile] });
+  useMediaStore.setState({ files: params.mediaFile ? [params.mediaFile] : [] });
 
   const clipMap = new Map(params.clips.map((clip) => [clip.id, clip]));
   const setContextMenu = vi.fn();
   const generateWaveformForClip = params.generateWaveformForClip ?? vi.fn();
   const generateSpectrogramForClip = params.generateSpectrogramForClip ?? vi.fn();
+  const deleteGapAtTime = params.deleteGapAtTime ?? vi.fn();
+  const contextClipId = params.contextClipId ?? params.clips[0]?.id ?? 'missing-clip';
 
   render(
     <TimelineContextMenu
-      contextMenu={{ x: 12, y: 18, clipId: params.clips[0].id }}
+      contextMenu={{ x: 12, y: 18, clipId: contextClipId }}
       setContextMenu={setContextMenu}
       clipMap={clipMap}
-      selectedClipIds={new Set([params.clips[0].id])}
+      selectedClipIds={params.selectedClipIds ?? new Set([contextClipId])}
       isClipLocked={() => false}
       thumbnailsEnabled
       waveformsEnabled
@@ -61,7 +66,7 @@ function renderMenu(params: {
       removeClip={vi.fn()}
       splitClipAtPlayhead={vi.fn()}
       rippleDeleteSelection={vi.fn()}
-      deleteGapAtTime={vi.fn()}
+      deleteGapAtTime={deleteGapAtTime}
       toggleClipReverse={vi.fn()}
       unlinkGroup={vi.fn()}
       linkClips={vi.fn()}
@@ -85,12 +90,13 @@ function renderMenu(params: {
     />,
   );
 
-  return { setContextMenu, generateWaveformForClip, generateSpectrogramForClip };
+  return { setContextMenu, generateWaveformForClip, generateSpectrogramForClip, deleteGapAtTime };
 }
 
 afterEach(() => {
   cleanup();
   useMediaStore.setState({ files: [] });
+  vi.restoreAllMocks();
 });
 
 describe('TimelineContextMenu regenerate menu', () => {
@@ -230,5 +236,80 @@ describe('TimelineContextMenu regenerate menu', () => {
     expect(screen.queryByText(/WAV Audio Proxy/)).toBeNull();
     expect(screen.queryByText(/Waveform/)).toBeNull();
     expect(screen.queryByText(/Spectral/)).toBeNull();
+  });
+
+  it('keeps a disabled thumbnail regeneration command open when no source URL is available', () => {
+    const videoClip = createClip({ id: 'clip-video' });
+    const { setContextMenu } = renderMenu({
+      clips: [videoClip],
+      mediaFile: {
+        id: 'media-video',
+        name: 'No Source.mp4',
+        type: 'video',
+        parentId: null,
+        createdAt: 1,
+        duration: 10,
+        hasAudio: false,
+      } as MediaFile,
+    });
+
+    fireEvent.click(screen.getByText(/Thumbnails/));
+
+    expect(setContextMenu).not.toHaveBeenCalled();
+  });
+
+  it('does not delete a gap for a stale context-menu clip id', () => {
+    const deleteGapAtTime = vi.fn();
+    const { setContextMenu } = renderMenu({
+      clips: [],
+      mediaFile: null,
+      contextClipId: 'missing-clip',
+      deleteGapAtTime,
+    });
+
+    fireEvent.click(screen.getByText('Delete Gap at Clip Start'));
+
+    expect(deleteGapAtTime).not.toHaveBeenCalled();
+    expect(setContextMenu).not.toHaveBeenCalled();
+  });
+
+  it('keeps a disabled transcription command open while a clip is already transcribing', async () => {
+    const videoClip = createClip({
+      id: 'clip-video',
+      transcriptStatus: 'transcribing',
+      transcriptProgress: 42,
+    });
+    const { setContextMenu } = renderMenu({
+      clips: [videoClip],
+      mediaFile: {
+        id: 'media-video',
+        name: 'Clip.mp4',
+        type: 'video',
+        parentId: null,
+        createdAt: 1,
+        file: new File(['video'], 'Clip.mp4', { type: 'video/mp4' }),
+        url: 'blob:video',
+        duration: 10,
+        hasAudio: false,
+      } as MediaFile,
+    });
+
+    fireEvent.click(screen.getByText(/Transcribing/));
+    await Promise.resolve();
+
+    expect(setContextMenu).not.toHaveBeenCalled();
+  });
+
+  it('keeps label-color swatches inert when no media item target exists', async () => {
+    const videoClip = createClip({ id: 'clip-video', mediaFileId: 'missing-media' });
+    const { setContextMenu } = renderMenu({
+      clips: [videoClip],
+      mediaFile: null,
+    });
+
+    fireEvent.click(screen.getByTitle('Red'));
+    await waitFor(() => {
+      expect(setContextMenu).not.toHaveBeenCalled();
+    });
   });
 });

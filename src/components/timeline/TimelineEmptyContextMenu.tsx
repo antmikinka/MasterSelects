@@ -25,22 +25,26 @@ export function TimelineEmptyContextMenu({
   useEffect(() => {
     if (!menu) return;
 
-    const handleClickOutside = () => onClose();
+    const handlePointerOutside = (event: MouseEvent) => {
+      const target = event.target;
+      if (target instanceof Node && menuRef.current?.contains(target)) return;
+      onClose();
+    };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         onClose();
       }
     };
 
-    document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('contextmenu', handleClickOutside, true);
+    document.addEventListener('mousedown', handlePointerOutside, true);
+    document.addEventListener('contextmenu', handlePointerOutside, true);
     document.addEventListener('keydown', handleKeyDown);
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('contextmenu', handleClickOutside, true);
+      document.removeEventListener('mousedown', handlePointerOutside, true);
+      document.removeEventListener('contextmenu', handlePointerOutside, true);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [menu, onClose]);
+  }, [menu, menuRef, onClose]);
 
   if (!menu) return null;
 

@@ -316,6 +316,7 @@ describe('MediaStore - File Management', () => {
   afterEach(() => {
     blobUrlManager.clear();
     revokeAllMediaObjectUrls();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -1371,6 +1372,60 @@ describe('MediaStore - File Management', () => {
         mediaFileId: 'media-audio-reload',
       });
       expect((updatedClip?.source as { audioElement?: HTMLAudioElement } | undefined)?.audioElement).toBeUndefined();
+    });
+
+    it('updateTimelineClips reloads image clips as data-only sources without image elements', async () => {
+      const replacementFile = new File(['replacement'], 'still.png', { type: 'image/png' });
+      const mediaFile = makeMediaFile({
+        id: 'media-image-reload',
+        type: 'image',
+        name: 'still.png',
+        file: replacementFile,
+        url: undefined,
+        duration: 8,
+      });
+      vi.spyOn(useMediaStore, 'getState').mockReturnValue({
+        files: [mediaFile],
+      } as unknown as ReturnType<typeof useMediaStore.getState>);
+      const imageConstructor = vi.fn();
+      vi.stubGlobal('Image', imageConstructor);
+      const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:http://localhost/reloaded-image');
+      useTimelineStore.setState({
+        clips: [{
+          id: 'clip-image-reload',
+          trackId: 'video-1',
+          name: 'still.png',
+          file: undefined,
+          startTime: 0,
+          duration: 8,
+          inPoint: 0,
+          outPoint: 8,
+          needsReload: true,
+          isLoading: true,
+          source: {
+            type: 'image',
+            mediaFileId: 'media-image-reload',
+          },
+          transform: {},
+          effects: [],
+        } as TimelineClip],
+      });
+
+      await updateTimelineClips('media-image-reload', replacementFile, { invalidateCaches: false });
+
+      const updatedClip = useTimelineStore.getState().clips.find(clip => clip.id === 'clip-image-reload');
+      expect(imageConstructor).not.toHaveBeenCalled();
+      expect(createObjectURL).toHaveBeenCalledTimes(1);
+      expect(updatedClip?.needsReload).toBe(false);
+      expect(updatedClip?.isLoading).toBe(false);
+      expect(updatedClip?.file).toBe(replacementFile);
+      expect(updatedClip?.source).toEqual({
+        type: 'image',
+        imageUrl: 'blob:http://localhost/reloaded-image',
+        naturalDuration: 8,
+        mediaFileId: 'media-image-reload',
+      });
+      expect((updatedClip?.source as { imageElement?: HTMLImageElement } | undefined)?.imageElement).toBeUndefined();
     });
 
     it('reloads vector animation clips without preparing runtime canvases', async () => {

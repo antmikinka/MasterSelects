@@ -336,8 +336,14 @@ export function TimelineContextMenu({
     audibleAudioClip?.audioState?.processedAnalysisRefs?.spectrogramTileSetIds?.[0] ||
     audibleAudioClip?.audioState?.sourceAnalysisRefs?.spectrogramTileSetIds?.[0]
   );
+  const hasThumbnailRegenerationSource = Boolean(mediaFile && (
+    mediaFile.url ||
+    mediaFile.file ||
+    mediaObjectUrlManager.get(mediaFile.id, getPrimaryMediaObjectUrlKey())
+  ));
 
   const { mediaItemId, currentColor } = resolveClipContextMenuLabelTarget(clip, useMediaStore.getState());
+  const canSetLabelColor = Boolean(mediaItemId);
   const clipboardActions = {
     copyClipEffects,
     pasteClipEffects,
@@ -454,9 +460,9 @@ export function TimelineContextMenu({
               )}
               {isVideoMedia && (
                 <div
-                  className={`context-menu-item ${thumbnailStatus === 'generating' ? 'disabled' : ''}`}
+                  className={`context-menu-item ${thumbnailStatus === 'generating' || !hasThumbnailRegenerationSource ? 'disabled' : ''}`}
                   onClick={() => {
-                    if (thumbnailStatus === 'generating') return;
+                    if (thumbnailStatus === 'generating' || !hasThumbnailRegenerationSource) return;
                     handleThumbnailRegeneration();
                   }}
                 >
@@ -640,8 +646,8 @@ export function TimelineContextMenu({
         Ripple Delete
       </div>
       <div
-        className="context-menu-item"
-        onClick={() => runTimelineCommand('delete-gap-at-clip-start', true)}
+        className={`context-menu-item ${!canModifyTargets || !clip ? 'disabled' : ''}`}
+        onClick={() => runTimelineCommand('delete-gap-at-clip-start', canModifyTargets && Boolean(clip))}
       >
         Delete Gap at Clip Start
       </div>
@@ -736,12 +742,12 @@ export function TimelineContextMenu({
           <div
             className={`context-menu-item ${clip?.transcriptStatus === 'transcribing' ? 'disabled' : ''}`}
             onClick={async () => {
-              await executeClipContextMenuTranscription({
+              const handled = await executeClipContextMenuTranscription({
                 clipId: contextMenu.clipId,
                 transcriptStatus: clip?.transcriptStatus,
                 loadTranscriber: () => import('../../services/clipTranscriber'),
               });
-              setContextMenu(null);
+              if (handled) setContextMenu(null);
             }}
           >
             {clip?.transcriptStatus === 'transcribing'
@@ -755,7 +761,7 @@ export function TimelineContextMenu({
 
       {/* Clip color picker — sets the media item's label color (synced between timeline and media panel) */}
       <div className="context-menu-separator" />
-      <div className="context-menu-item has-submenu" onMouseEnter={handleSubmenuHover} onMouseLeave={handleSubmenuLeave}>
+      <div className={`context-menu-item has-submenu ${!canSetLabelColor ? 'disabled' : ''}`} onMouseEnter={handleSubmenuHover} onMouseLeave={handleSubmenuLeave}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span
             className="clip-color-indicator"
@@ -780,12 +786,12 @@ export function TimelineContextMenu({
                 title={c.name}
                 style={{ background: c.key === 'none' ? 'var(--bg-tertiary)' : c.hex }}
                 onClick={() => {
-                  executeClipContextMenuLabelColor({
+                  const handled = executeClipContextMenuLabelColor({
                     mediaItemId,
                     color: c.key,
                     labelStore: useMediaStore.getState(),
                   });
-                  setContextMenu(null);
+                  if (handled) setContextMenu(null);
                 }}
               >
                 {c.key === 'none' && <span className="label-picker-x">&times;</span>}
