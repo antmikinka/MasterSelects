@@ -17,7 +17,7 @@ import { readRiveMetadata } from '../../../services/vectorAnimation/riveMetadata
 import { isVectorAnimationSourceType } from '../../../types/vectorAnimation';
 import { clearAINodeRuntimeCacheForClip } from '../../../services/nodeGraph';
 import { calculateFileHash } from '../helpers/fileHashHelpers';
-import { createThumbnail, handleThumbnailDedup } from '../helpers/thumbnailHelpers';
+import { createManagedThumbnailUrl, createThumbnail, handleThumbnailDedup } from '../helpers/thumbnailHelpers';
 import {
   startMediaFileWaveformGeneration,
 } from '../helpers/mediaWaveformHelpers';
@@ -881,12 +881,12 @@ export const createFileManageSlice: MediaSliceCreator<FileManageActions> = (set,
         if (!thumbnailUrl && sourceFile) {
           const generatedThumbnail = await createThumbnail(sourceFile, mediaFile.type);
           thumbnailUrl = options.force
-            ? generatedThumbnail
-            : await handleThumbnailDedup(mediaFile.fileHash, generatedThumbnail);
+            ? await createManagedThumbnailUrl(mediaFile.id, generatedThumbnail)
+            : await handleThumbnailDedup(mediaFile.fileHash, generatedThumbnail, mediaFile.id);
 
-          if (options.force && generatedThumbnail && mediaFile.fileHash) {
+          if (options.force && thumbnailUrl && mediaFile.fileHash) {
             try {
-              const response = await fetch(generatedThumbnail);
+              const response = await fetch(thumbnailUrl);
               const blob = await response.blob();
               if (blob.size > 0) {
                 await projectDB.saveThumbnail({
@@ -1084,10 +1084,13 @@ export const createFileManageSlice: MediaSliceCreator<FileManageActions> = (set,
     let thumbnailUrl = mediaFile.thumbnailUrl;
 
     if (refreshThumbnail) {
+      const generatedThumbnail = mediaFile.type === 'image' || mediaFile.type === 'video'
+        ? await createThumbnail(mediaFile.file, mediaFile.type)
+        : undefined;
       if (mediaFile.type === 'image') {
-        thumbnailUrl = await createThumbnail(mediaFile.file, 'image');
+        thumbnailUrl = await createManagedThumbnailUrl(id, generatedThumbnail);
       } else if (mediaFile.type === 'video') {
-        thumbnailUrl = await createThumbnail(mediaFile.file, 'video');
+        thumbnailUrl = await createManagedThumbnailUrl(id, generatedThumbnail);
       }
     }
 

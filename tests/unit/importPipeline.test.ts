@@ -145,6 +145,7 @@ describe('processImport', () => {
     expect(mocks.storeFileHandle).toHaveBeenCalledWith('media-1', rawHandle);
     expect(mocks.storeHandle).toHaveBeenCalledWith('media_media-1_project', rawHandle);
     expect(mocks.storeHandle).toHaveBeenCalledWith('media_media-1', rawHandle);
+    expect(mocks.handleThumbnailDedup).toHaveBeenCalledWith('hash-123', undefined, 'media-1');
     expect(revokeObjectURLSpy).not.toHaveBeenCalledWith('blob:original');
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1);
   });

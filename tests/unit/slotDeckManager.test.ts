@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flags } from '../../src/engine/featureFlags';
+import { engine } from '../../src/engine/WebGPUEngine';
 import { useMediaStore } from '../../src/stores/mediaStore';
 import { slotDeckManager } from '../../src/services/slotDeckManager';
 import { mediaRuntimeRegistry } from '../../src/services/mediaRuntime/registry';
@@ -89,6 +90,7 @@ function createComposition(
 describe('slotDeckManager', () => {
   let mediaState: MockMediaState;
   let createElementSpy: ReturnType<typeof vi.spyOn> | null = null;
+  let cleanupVideoSpy: ReturnType<typeof vi.spyOn>;
   const noop = () => undefined;
 
   beforeEach(() => {
@@ -97,6 +99,7 @@ describe('slotDeckManager', () => {
     timelineRuntimeCoordinator.clearResources();
     vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(noop);
     vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(noop);
+    cleanupVideoSpy = vi.spyOn(engine, 'cleanupVideo').mockImplementation(noop);
 
     mediaState = {
       files: [],
@@ -241,7 +244,73 @@ describe('slotDeckManager', () => {
       'runtime:slot-deck:0:clip-1',
       'slot-deck:0:clip-1'
     );
+    expect(cleanupVideoSpy).toHaveBeenCalledWith(createdVideos[0]);
     expect(timelineRuntimeCoordinator.getBridgeStats().policies['slot-deck']?.resources ?? []).toHaveLength(0);
+  });
+
+  it('cleans a pending slot video when the deck is disposed before readiness', () => {
+    const videoClip = {
+      id: 'clip-pending',
+      trackId: 'video-track',
+      name: 'Video Clip',
+      startTime: 0,
+      duration: 5,
+      inPoint: 0,
+      outPoint: 5,
+      sourceType: 'video',
+      mediaFileId: 'media-1',
+      transform: {
+        opacity: 1,
+        blendMode: 'normal',
+        position: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1 },
+        rotation: { x: 0, y: 0, z: 0 },
+      },
+      effects: [],
+    };
+    mediaState.compositions = [
+      createComposition('comp-video-pending', {
+        tracks: [{ id: 'video-track', type: 'video', visible: true }],
+        clips: [videoClip],
+      }),
+    ];
+    mediaState.files = [{ id: 'media-1', url: 'blob:test-video', duration: 5 }];
+    mediaState.slotAssignments = { 'comp-video-pending': 0 };
+
+    const createdVideos: HTMLVideoElement[] = [];
+    const actualCreateElement = document.createElement.bind(document);
+    createElementSpy = vi.spyOn(document, 'createElement').mockImplementation(((tagName: string) => {
+      const element = actualCreateElement(tagName);
+      if (tagName === 'video') {
+        Object.defineProperty(element, 'duration', { configurable: true, value: 5 });
+        createdVideos.push(element as HTMLVideoElement);
+      }
+      return element;
+    }) as typeof document.createElement);
+
+    slotDeckManager.prepareSlot(0, 'comp-video-pending');
+
+    expect(slotDeckManager.getSlotState(0)).toMatchObject({
+      status: 'warming',
+      preparedClipCount: 1,
+      readyClipCount: 0,
+    });
+    expect(timelineRuntimeCoordinator.getBridgeStats().policies['slot-deck'].resources).toHaveLength(2);
+
+    slotDeckManager.disposeSlot(0);
+    createdVideos[0].dispatchEvent(new Event('canplaythrough'));
+
+    expect(mediaState.slotDeckStates[0]).toMatchObject({
+      status: 'disposed',
+      compositionId: null,
+    });
+    expect(cleanupVideoSpy).toHaveBeenCalledTimes(1);
+    expect(cleanupVideoSpy).toHaveBeenCalledWith(createdVideos[0]);
+    expect(timelineRuntimeCoordinator.getBridgeStats().policies['slot-deck']?.resources ?? []).toHaveLength(0);
+    expect(mediaRuntimeRegistry.releaseRuntime).not.toHaveBeenCalledWith(
+      'runtime:slot-deck:0:clip-pending',
+      'slot-deck:0:clip-pending'
+    );
   });
 
   it('cancels pending slot image hydration when the deck is disposed', () => {

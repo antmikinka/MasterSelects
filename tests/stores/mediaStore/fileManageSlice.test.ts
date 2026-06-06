@@ -11,8 +11,13 @@ import type { MediaState, MediaFile, MediaFolder, TextItem, SolidItem, Compositi
 import type { CompositionTimelineData, SerializableClip, TimelineClip } from '../../../src/types';
 
 const thumbnailMocks = vi.hoisted(() => ({
+  createManagedThumbnailUrl: vi.fn(async (_mediaId: string, thumbnailUrl: string | undefined) => thumbnailUrl),
   createThumbnail: vi.fn(async () => 'blob:http://localhost/refreshed-thumb'),
-  handleThumbnailDedup: vi.fn(async (_fileHash: string | undefined, thumbnailUrl: string | undefined) => thumbnailUrl),
+  handleThumbnailDedup: vi.fn(async (
+    _fileHash: string | undefined,
+    thumbnailUrl: string | undefined,
+    _mediaId?: string,
+  ) => thumbnailUrl),
 }));
 
 const fileHashMocks = vi.hoisted(() => ({
@@ -20,6 +25,7 @@ const fileHashMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../src/stores/mediaStore/helpers/thumbnailHelpers', () => ({
+  createManagedThumbnailUrl: thumbnailMocks.createManagedThumbnailUrl,
   createThumbnail: thumbnailMocks.createThumbnail,
   handleThumbnailDedup: thumbnailMocks.handleThumbnailDedup,
 }));
@@ -309,8 +315,14 @@ describe('MediaStore - File Management', () => {
     });
     thumbnailMocks.createThumbnail.mockClear();
     thumbnailMocks.createThumbnail.mockResolvedValue('blob:http://localhost/refreshed-thumb');
+    thumbnailMocks.createManagedThumbnailUrl.mockClear();
+    thumbnailMocks.createManagedThumbnailUrl.mockImplementation(async (_mediaId: string, thumbnailUrl: string | undefined) => thumbnailUrl);
     thumbnailMocks.handleThumbnailDedup.mockClear();
-    thumbnailMocks.handleThumbnailDedup.mockImplementation(async (_fileHash: string | undefined, thumbnailUrl: string | undefined) => thumbnailUrl);
+    thumbnailMocks.handleThumbnailDedup.mockImplementation(async (
+      _fileHash: string | undefined,
+      thumbnailUrl: string | undefined,
+      _mediaId?: string,
+    ) => thumbnailUrl);
     fileHashMocks.calculateFileHash.mockClear();
     fileHashMocks.calculateFileHash.mockResolvedValue('hash-reloaded');
   });
@@ -1214,6 +1226,10 @@ describe('MediaStore - File Management', () => {
       expect(updated.url).toBe('blob:http://localhost/refreshed-file');
       expect(updated.thumbnailUrl).toBe('blob:http://localhost/refreshed-thumb');
       expect(thumbnailMocks.createThumbnail).toHaveBeenCalledWith(file.file, 'image');
+      expect(thumbnailMocks.createManagedThumbnailUrl).toHaveBeenCalledWith(
+        'img-1',
+        'blob:http://localhost/refreshed-thumb'
+      );
       expect(createObjectURL).toHaveBeenCalledTimes(1);
       expect(revokeObjectURL).toHaveBeenCalledWith('blob:http://localhost/original-file');
       expect(revokeObjectURL).toHaveBeenCalledWith('blob:http://localhost/original-thumb');

@@ -83,6 +83,7 @@ function sanitizeError(error: unknown): string {
 class SlotDeckManager {
   private decks = new Map<number, SlotDeckEntry>();
   private pendingImageHydrations = new Map<string, TimelineImageHydrationHandle>();
+  private pendingVideoDisposers = new Map<string, () => void>();
 
   constructor() {
     (globalThis as typeof globalThis & { __slotDeckManager?: SlotDeckManager }).__slotDeckManager = this;
@@ -90,6 +91,26 @@ class SlotDeckManager {
 
   private getDeckOwnerId(slotIndex: number, clipId: string): string {
     return `slot-deck:${slotIndex}:${clipId}`;
+  }
+
+  private cleanupVideoElement(video: HTMLVideoElement): void {
+    video.pause();
+    engine.cleanupVideo(video);
+    video.removeAttribute('src');
+    video.src = '';
+    try {
+      video.load();
+    } catch {
+      // Browser teardown can race media loading; releasing GPU/cache state is the important part.
+    }
+  }
+
+  private disposePendingVideo(ownerId: string): void {
+    const dispose = this.pendingVideoDisposers.get(ownerId);
+    if (!dispose) {
+      return;
+    }
+    dispose();
   }
 
   private buildDeckState(entry: SlotDeckEntry): SlotDeckState {
@@ -231,6 +252,7 @@ class SlotDeckManager {
       const ownerId = this.getDeckOwnerId(entry.slotIndex, clip.id);
       this.pendingImageHydrations.get(ownerId)?.cancel();
       this.pendingImageHydrations.delete(ownerId);
+      this.disposePendingVideo(ownerId);
       releaseReportedClipRuntimeResources('slot-deck', ownerId);
       if (clip.source?.runtimeSourceId && clip.source.runtimeSessionKey) {
         mediaRuntimeRegistry.releaseSession(
@@ -243,9 +265,7 @@ class SlotDeckManager {
         );
       }
       if (clip.source?.videoElement) {
-        clip.source.videoElement.pause();
-        clip.source.videoElement.src = '';
-        clip.source.videoElement.load();
+        this.cleanupVideoElement(clip.source.videoElement);
       }
       if (clip.source?.audioElement) {
         clip.source.audioElement.pause();
@@ -301,6 +321,7 @@ class SlotDeckManager {
       return false;
     }
 
+    this.disposePendingVideo(ownerId);
     const video = document.createElement('video');
     video.src = url;
     video.muted = true;
@@ -308,15 +329,34 @@ class SlotDeckManager {
     video.preload = 'auto';
     video.crossOrigin = 'anonymous';
 
-    video.addEventListener('canplaythrough', () => {
+    let disposed = false;
+    const disposePending = () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      video.removeEventListener('canplaythrough', onCanPlayThrough);
+      video.removeEventListener('error', onError);
+      admission.release();
+      this.cleanupVideoElement(video);
+      if (this.pendingVideoDisposers.get(ownerId) === disposePending) {
+        this.pendingVideoDisposers.delete(ownerId);
+      }
+    };
+    const onCanPlayThrough = () => {
+      if (disposed) {
+        return;
+      }
       if (this.decks.get(entry.slotIndex) !== entry || entry.pendingDispose) {
-        admission.release();
-        video.pause();
-        video.src = '';
-        video.load();
+        disposePending();
         return;
       }
 
+      disposed = true;
+      video.removeEventListener('error', onError);
+      if (this.pendingVideoDisposers.get(ownerId) === disposePending) {
+        this.pendingVideoDisposers.delete(ownerId);
+      }
       clip.source = bindSourceRuntimeForOwner({
         ownerId,
         source: {
@@ -333,13 +373,17 @@ class SlotDeckManager {
       clip.isLoading = false;
       engine.preCacheVideoFrame?.(video);
       this.markClipReady(entry, 'html', { visual: true });
-    }, { once: true });
+    };
 
-    video.addEventListener('error', (event) => {
-      admission.release();
+    const onError = (event: Event) => {
+      disposePending();
       clip.isLoading = false;
       this.markDeckFailure(entry, event);
-    }, { once: true });
+    };
+
+    this.pendingVideoDisposers.set(ownerId, disposePending);
+    video.addEventListener('canplaythrough', onCanPlayThrough, { once: true });
+    video.addEventListener('error', onError, { once: true });
 
     return true;
   }

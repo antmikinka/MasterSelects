@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createClipContextMenuModel,
+  executeClipContextMenuCommand,
   executeClipContextMenuAudioAnalysisRegeneration,
   executeClipContextMenuAudioProxyRegeneration,
   executeClipContextMenuClipboardCommand,
@@ -641,6 +642,109 @@ describe('clip context menu model', () => {
       actions,
     })).toBe(false);
     expect(actions.toggleClipReverse).not.toHaveBeenCalled();
+  });
+
+  it('executes central command descriptors and keeps stale descriptors inert', async () => {
+    const timelineActions = {
+      splitClipAtPlayhead: vi.fn(),
+      rippleDeleteSelection: vi.fn(),
+      deleteGapAtTime: vi.fn(),
+      linkClips: vi.fn(),
+      unlinkClips: vi.fn(),
+      convertSolidToMotionShape: vi.fn(() => 'motion-shape'),
+      setMulticamDialogOpen: vi.fn(),
+      unlinkGroup: vi.fn(),
+      toggleClipReverse: vi.fn(),
+      createSubcompositionFromSelection: vi.fn(),
+      removeClip: vi.fn(),
+    };
+    const clipboardActions = {
+      copyClipEffects: vi.fn(),
+      pasteClipEffects: vi.fn(),
+      copyClipColor: vi.fn(),
+      pasteClipColor: vi.fn(),
+    };
+    const toggleThumbnailsEnabled = vi.fn();
+    const context = {
+      clipId: 'missing-clip',
+      clip: null,
+      clips: [],
+      targetClipIds: [],
+      mediaFile: null,
+      mediaItemId: null,
+      thumbnailCache: {
+        clearSource: vi.fn(async () => undefined),
+        generateForSourceUrl: vi.fn(async () => undefined),
+      },
+      proxyStore: {
+        generateProxy: vi.fn(),
+        cancelProxyGeneration: vi.fn(),
+        generateAudioProxy: vi.fn(),
+      },
+      labelStore: { setLabelColor: vi.fn() },
+      clipboardActions,
+      timelineActions,
+      resolveAudioClipId: vi.fn(() => null),
+      generateWaveformForClip: vi.fn(),
+      generateSpectrogramForClip: vi.fn(),
+      startClipStemSeparation: vi.fn(async () => null),
+      toggleThumbnailsEnabled,
+      toggleWaveformsEnabled: vi.fn(),
+      setAudioDisplayMode: vi.fn(),
+      loadTranscriber: vi.fn(async () => ({ transcribeClip: vi.fn() })),
+      showInExplorer: vi.fn(async () => ({ success: true, message: 'ok' })),
+      notify: vi.fn(),
+      downloadRawFile: vi.fn(),
+    };
+
+    await expect(executeClipContextMenuCommand({
+      kind: 'clipboard',
+      command: 'copy-effects',
+      canExecute: true,
+    }, context)).resolves.toBe(false);
+    await expect(executeClipContextMenuCommand({
+      kind: 'timeline',
+      command: 'delete-gap-at-clip-start',
+      canExecute: true,
+    }, context)).resolves.toBe(false);
+    await expect(executeClipContextMenuCommand({
+      kind: 'timeline',
+      command: 'split-at-playhead',
+      canExecute: true,
+    }, context)).resolves.toBe(false);
+    await expect(executeClipContextMenuCommand({
+      kind: 'timeline',
+      command: 'ripple-delete',
+      canExecute: true,
+    }, context)).resolves.toBe(false);
+    await expect(executeClipContextMenuCommand({
+      kind: 'timeline',
+      command: 'create-subcomposition',
+      canExecute: true,
+    }, context)).resolves.toBe(false);
+    await expect(executeClipContextMenuCommand({
+      kind: 'timeline',
+      command: 'delete-clip',
+      canExecute: true,
+    }, context)).resolves.toBe(false);
+    await expect(executeClipContextMenuCommand({
+      kind: 'clipboard',
+      command: 'paste-effects',
+      canExecute: true,
+    }, context)).resolves.toBe(false);
+    await expect(executeClipContextMenuCommand({
+      kind: 'toggle-thumbnails',
+      canExecute: true,
+    }, context)).resolves.toBe(true);
+
+    expect(clipboardActions.copyClipEffects).not.toHaveBeenCalled();
+    expect(clipboardActions.pasteClipEffects).not.toHaveBeenCalled();
+    expect(timelineActions.splitClipAtPlayhead).not.toHaveBeenCalled();
+    expect(timelineActions.rippleDeleteSelection).not.toHaveBeenCalled();
+    expect(timelineActions.deleteGapAtTime).not.toHaveBeenCalled();
+    expect(timelineActions.createSubcompositionFromSelection).not.toHaveBeenCalled();
+    expect(timelineActions.removeClip).not.toHaveBeenCalled();
+    expect(toggleThumbnailsEnabled).toHaveBeenCalledTimes(1);
   });
 
   it('executes stem separation through an injected starter only when allowed', () => {

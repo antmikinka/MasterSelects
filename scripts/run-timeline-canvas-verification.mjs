@@ -37,7 +37,7 @@ function parseArgs(argv) {
     reloadMaxReadyMs: 8000,
     includePrecise: false,
     includeWorkerSmokes: true,
-    checkWorkerDefaultOn: false,
+    checkWorkerDefaultOn: true,
     skipExport: false,
     skipExportPreviewParity: false,
     skipTorture: false,
@@ -58,7 +58,7 @@ function parseArgs(argv) {
     largeMaxDroppedFrameEstimate: 8,
     largeMaxSlowFrameCount: 4,
     largeMaxFrameDeltaMs: 70,
-    largeMaxWorkerTrackCount: 0,
+    largeMaxWorkerTrackCount: null,
     largeMaxWorkerResourceBytes: 96_000_000,
     largeMaxShellCount: 0,
     workerSyntheticTimeoutMs: 180000,
@@ -121,6 +121,8 @@ function parseArgs(argv) {
     } else if (arg === '--check-worker-default-on') {
       options.checkWorkerDefaultOn = true;
       options.includeWorkerSmokes = true;
+    } else if (arg === '--skip-worker-default-on') {
+      options.checkWorkerDefaultOn = false;
     } else if (arg === '--skip-export') {
       options.skipExport = true;
     } else if (arg === '--skip-export-preview-parity') {
@@ -208,7 +210,8 @@ Options:
   --include-precise            Also run a precise debugExport probe
   --include-worker-smokes      Run forced timeline canvas worker synthetic/live smokes (default)
   --skip-worker-smokes         Skip forced timeline canvas worker synthetic/live smokes
-  --check-worker-default-on    Also run a live worker smoke without forcing timelineCanvasWorker
+  --check-worker-default-on    Run the default-on live worker smoke (default)
+  --skip-worker-default-on     Skip the default-on live worker smoke
   --skip-export                Skip debugExport probes
   --skip-export-preview-parity Skip export-preview fingerprint parity smoke
   --skip-torture               Skip torture fixture even when manifest exists
@@ -225,7 +228,7 @@ Options:
   --large-max-dropped-frames <n> Large-project max estimated dropped frames. Default: 8
   --large-max-slow-frames <n>  Large-project max slow frames. Default: 4
   --large-max-frame-delta-ms <ms> Large-project max frame delta. Default: 70
-  --large-max-worker-tracks <n> Large-project max worker-rendered tracks. Default: 0
+  --large-max-worker-tracks <n> Large-project max worker-rendered tracks. Default: synthetic video track count
   --large-max-worker-resource-bytes <n> Forced worker max resource bytes. Default: 96000000
   --large-max-shells <n>       Large-project max interaction shells after select-all. Default: 0
   --worker-synthetic-timeout-ms <ms> Forced worker 720/8 timeout. Default: 180000
@@ -1490,13 +1493,24 @@ async function main() {
   if (!options.skipExport && !options.skipExportPreviewParity) {
     const useActiveLiveComposition = !options.skipLiveComposition && report.steps.liveCompositionOpen?.success === true;
     console.log(`Running export-preview parity smoke on ${useActiveLiveComposition ? 'live composition' : 'synthetic timeline'}...`);
+    if (useActiveLiveComposition) {
+      report.steps.exportPreviewParityWarmup = assertToolSuccess(
+        'simulateScrub export-preview parity warmup',
+        await postTool('simulateScrub', {
+          pattern: 'custom',
+          points: [2, 10, 14.8, 30, 42],
+          durationMs: 900,
+          resetDiagnostics: true,
+        }, 20000),
+      );
+    }
     report.steps.exportPreviewParity = assertToolSuccess(
       'runTimelineCanvasExportPreviewParitySmoke',
       await postTool('runTimelineCanvasExportPreviewParitySmoke', {
         createSynthetic: !useActiveLiveComposition,
         restoreTimelineAfterRun: true,
         sampleTime: 0.35,
-        sampleTimes: useActiveLiveComposition ? [30, 42, 10, 2, 0.35] : [0.35, 2],
+        sampleTimes: useActiveLiveComposition ? [14.8, 30, 42, 10, 2, 0.35] : [0.35, 2],
         exportDurationSeconds: options.includePrecise ? 0.5 : 0.75,
         width: 320,
         height: 180,
@@ -1613,7 +1627,7 @@ async function main() {
 
     if (!options.skipLiveComposition && report.steps.liveCompositionOpen?.success === true) {
       await refreshTargetTabId('statusBeforeWorkerFallbackLive');
-      console.log('Running forced worker fallback smoke on live composition...');
+      console.log('Running forced worker compatibility smoke on live composition...');
       report.steps.workerFallbackLiveOpen = assertToolSuccess(
         'openComposition worker fallback live',
         await postTool('openComposition', {
@@ -1629,7 +1643,7 @@ async function main() {
         }),
       );
       report.steps.workerFallbackLive = assertToolSuccess(
-        'runTimelineCanvasLargeProjectSmoke worker fallback live',
+        'runTimelineCanvasLargeProjectSmoke worker compatibility live',
         await postTool('runTimelineCanvasLargeProjectSmoke', {
         createSynthetic: false,
         restoreTimelineAfterRun: true,
@@ -1639,11 +1653,11 @@ async function main() {
         frameSampleMs: 500,
         zoomLevels: [72],
         scrollFractions: [0, 0.5, 1],
-        maxWorkerTrackCount: 0,
-        minWorkerFallbackTrackCount: 1,
+        minWorkerTrackCount: 1,
+        minWorkerEligibleTrackCount: 1,
         maxWorkerPendingTrackCount: 0,
         maxWorkerErrorTrackCount: 0,
-        requiredWorkerFallbackReasons: ['source-timing-visuals'],
+        allowedWorkerFallbackReasons: ['source-timing-visuals', 'audio-resource-visuals'],
         maxShellCount: 1000,
         requireTimelineDom: true,
         requireCulling: false,
@@ -1683,7 +1697,6 @@ async function main() {
         scrollFractions: [0, 0.5, 1],
         minWorkerTrackCount: 1,
         minWorkerEligibleTrackCount: 1,
-        maxWorkerFallbackTrackCount: 2,
         allowedWorkerFallbackReasons: ['audio-resource-visuals'],
         maxWorkerPendingTrackCount: 0,
         maxWorkerErrorTrackCount: 0,
@@ -1727,7 +1740,6 @@ async function main() {
           scrollFractions: [0, 0.5, 1],
           minWorkerTrackCount: 1,
           minWorkerEligibleTrackCount: 1,
-          maxWorkerFallbackTrackCount: 2,
           allowedWorkerFallbackReasons: ['audio-resource-visuals'],
           maxWorkerPendingTrackCount: 0,
           maxWorkerErrorTrackCount: 0,
@@ -1738,7 +1750,7 @@ async function main() {
           }, 120000),
         );
       } else {
-        report.summary.workerDefaultLiveSkipped = 'skipped because --check-worker-default-on was not set';
+        report.summary.workerDefaultLiveSkipped = 'skipped because --skip-worker-default-on was set';
       }
     } else {
       report.summary.workerFallbackLiveSkipped = options.skipLiveComposition
@@ -1875,6 +1887,7 @@ async function main() {
 
   if (!options.skipLarge) {
     console.log('Running synthetic large-project scroll/zoom/select-all smoke...');
+    const largeMaxWorkerTrackCount = options.largeMaxWorkerTrackCount ?? options.largeVideoTrackCount;
     report.steps.largeProject = assertToolSuccess(
       'runTimelineCanvasLargeProjectSmoke',
       await postTool('runTimelineCanvasLargeProjectSmoke', {
@@ -1893,10 +1906,10 @@ async function main() {
         maxDroppedFrameEstimate: options.largeMaxDroppedFrameEstimate,
         maxSlowFrameCount: options.largeMaxSlowFrameCount,
         maxFrameDeltaMs: options.largeMaxFrameDeltaMs,
-        maxWorkerTrackCount: options.largeMaxWorkerTrackCount,
+        maxWorkerTrackCount: largeMaxWorkerTrackCount,
         maxWorkerPendingTrackCount: 0,
         maxWorkerErrorTrackCount: 0,
-        maxWorkerResourceBytes: options.largeMaxWorkerTrackCount > 0 ? options.largeMaxWorkerResourceBytes : undefined,
+        maxWorkerResourceBytes: largeMaxWorkerTrackCount > 0 ? options.largeMaxWorkerResourceBytes : undefined,
         maxShellCount: options.largeMaxShellCount,
         requireTimelineDom: true,
         requireCulling: true,

@@ -8,20 +8,21 @@ Issue/branch: issue #228 on `issue-228-timeline-canvas-rendering`.
 
 ## Start Here Before Spawning Agents
 
-- The current committed branch tip is `8841c778` (`Gate timeline runtime cache
-  admissions`), matching `origin/issue-228-timeline-canvas-rendering`.
-- The current working tree has the post-`8841c778` export/menu descriptor slice
-  in progress: `11` tracked changed files, `0` new untracked files,
-  `+382/-123` net `+259` LOC from `npm run swarm:status` at
-  `2026-06-06T12:03:59Z`.
-- Fresh checkouts of this branch at `8841c778` already include the committed
+- The current committed branch tip is `0bec2cd3` (`Gate audio exports and menu
+  commands`), matching `origin/issue-228-timeline-canvas-rendering`.
+- The current working tree has the post-`0bec2cd3` resource-cleanup,
+  thumbnail-ownership, clip-context-menu descriptor, and worker-default-on
+  slices in progress: `19` tracked changed files, `1` new untracked file,
+  `+1050/-371` tracked net `+679` plus `+85` new-file LOC from
+  `npm run swarm:status` at `2026-06-06T13:47:01Z`.
+- Fresh checkouts of this branch at `0bec2cd3` already include the committed
   canvas refactor and deleted DOM clip body. New workdirs can be created from the
   branch; continue to avoid reverting unrelated local work if a future tree
   becomes dirty.
 - The old DOM clip body retirement is committed at `0f202a6b`;
   `src/components/timeline/TimelineClip.tsx` is absent at `HEAD`.
-- Full gates passed for the content committed as `8841c778`: `npm run build`,
-  `npm run lint`, and `npm run test` (`363` test files / `3878` tests). Rerun
+- Full gates passed for the content committed as `0bec2cd3`: `npm run build`,
+  `npm run lint`, and `npm run test` (`363` test files / `3883` tests). Rerun
   the relevant targeted checks after the current uncommitted slice and rerun
   final full gates before merge/release readiness or another normal push.
 - `src/components/timeline/Timeline.tsx` intentionally still imports
@@ -61,9 +62,11 @@ Issue/branch: issue #228 on `issue-228-timeline-canvas-rendering`.
     deleted-clip runtime cleanup, active audio-proxy/stem-preview element
     admission, stale-target no-legacy-fallback parity for keyframe tick and
     curve-editor drags, smoke-run persistence guards, and the playback playhead
-    visual backtrack fix are also now covered. The remaining open work is
-    side-effecting context-menu handler cleanup/final parity sweep, default-on
-    worker decision work, torture-media coverage, and final broad verification.
+    visual backtrack fix are also now covered. Clip context-menu
+    side-effecting handlers now route through a central descriptor executor, and
+    `timelineCanvasWorker` is product-default on. The remaining open work is
+    fresh live/default-on worker proof, torture-media coverage when a local
+    manifest is present, and final broad verification.
 - Use about 95% when asked "how far are we in the plan?" Keep the separate
   implementation-breadth number at about 98%. Do not raise the risk-weighted
   number above 95% until live/default-on worker proof, final visual/parity
@@ -96,7 +99,8 @@ Issue/branch: issue #228 on `issue-228-timeline-canvas-rendering`.
   `npx tsc -p tsconfig.app.json --noEmit --pretty false`, and final full
   `npm run build`, `npm run lint`, and `npm run test` (`363` files / `3878`
   tests).
-- Current post-`8841c778` export/menu descriptor slice: composition mixdown
+- Latest committed post-`8841c778` export/menu descriptor slice at `0bec2cd3`:
+  composition mixdown
   writeback during export now checks export `source-buffer` admission before
   mutating timeline state, audio-only export creates/reports/releases an export
   run id so `AudioExportPipeline` admission is active outside video exports, and
@@ -107,21 +111,77 @@ Issue/branch: issue #228 on `issue-228-timeline-canvas-rendering`.
   (`15` tests), `npx tsc -p tsconfig.app.json --noEmit --pretty false`, and
   `npm run test -- tests/unit/audioExportPipeline.test.ts tests/unit/compositionAudioMixdownCache.test.ts tests/unit/exportRuntimeReporting.test.ts`
   (`33` tests).
+- Post-`0bec2cd3` hidden-video cleanup slice: background-layer and
+  slot-deck video hydrators now register owner-scoped pending video disposers,
+  route stale `canplaythrough`, `error`, and pre-ready dispose through
+  `engine.cleanupVideo(video)`, remove stale listeners, and call
+  `engine.cleanupVideo(video)` for bound video teardown after successful warmup.
+  Focused checks passed:
+  `npm run test -- tests/unit/layerPlaybackManagerWarmDeck.test.ts tests/unit/slotDeckManager.test.ts`
+  (`12` tests), touched-file ESLint for the two managers and tests, and
+  `npx tsc -p tsconfig.app.json --noEmit --pretty false`. Current LOC
+  watermark from `npm run swarm:status` at `2026-06-06T12:17:33Z`: `6` tracked
+  changed files, `0` new untracked files, tracked `+301/-45` net `+256`.
+- Current post-`0bec2cd3` thumbnail ownership slice: legacy media-panel
+  thumbnail helper output now converts raw generated/reused thumbnail blob URLs
+  into media-owned thumbnail URLs via `createThumbnailMediaObjectUrl(...)` before
+  writing `MediaFile.thumbnailUrl`. `processImport(...)`, `ensureFileThumbnail`,
+  and `refreshFileUrls(...)` now pass/consume the media id for managed thumbnail
+  ownership, and `mediaThumbnailOwnership.test.ts` covers temporary blob URL
+  revocation plus manager tracking. Focused checks passed:
+  `npm run test -- tests/unit/mediaThumbnailOwnership.test.ts tests/unit/importPipeline.test.ts tests/stores/mediaStore/fileManageSlice.test.ts tests/unit/projectMediaPersistence.test.ts`
+  (`163` tests), touched-file ESLint for thumbnail/import/media-store files plus
+  the current hidden-video files, and
+  `npx tsc -p tsconfig.app.json --noEmit --pretty false`. Current LOC
+  watermark from `npm run swarm:status` at `2026-06-06T12:22:22Z`: `12`
+  tracked changed files, `1` new untracked file, tracked `+370/-60` net `+310`,
+  plus `+85` new-file LOC.
+- Current post-`0bec2cd3` clip-menu/worker-default slice: `TimelineContextMenu`
+  now dispatches `ClipContextMenuCommandDescriptor` values through
+  `executeClipContextMenuCommand(...)` for Show in Explorer, proxy generation,
+  thumbnail regeneration, audio proxy/analysis regeneration, display toggles,
+  clipboard, timeline mutations, stem separation, transcription, and label
+  colors. The executor rejects stale descriptors with missing clips or empty
+  targets before store callbacks can run. `src/engine/featureFlags.ts` now ships
+  `timelineCanvasWorker: true`, and `scripts/run-timeline-canvas-verification.mjs`
+  runs the unforced default-on live worker smoke by default unless
+  `--skip-worker-default-on` is explicit. Current LOC watermark from
+  `npm run swarm:status` at `2026-06-06T13:47:01Z`: `19` tracked changed files,
+  `1` new untracked file, tracked `+1050/-371` net `+679`, plus `+85` new-file
+  LOC. Focused checks already run before the final-only-test instruction:
+  `npx tsc -p tsconfig.app.json --noEmit --pretty false` and
+  `npm run test -- tests/unit/clipContextMenu.test.ts tests/unit/TimelineContextMenu.test.tsx`
+  (`34` tests).
 - Remaining agent-confirmed runtime/menu work after the current slice:
-  thumbnail blob URL reporting and legacy media thumbnail helpers,
-  background/slot bound and pending hidden-video disposer cleanup, Clip context
-  menu pure command descriptors plus final parity tests, worker default-on/live
-  proof, torture-media coverage, and final broad gates.
+  live/default-on worker proof, torture-media coverage if a local manifest is
+  prepared, and final broad gates. A local ignored
+  `fixtures/torture-media/manifest.local.json` has been regenerated as an
+  MP4-only local fixture from `public/masterselects_github.mp4`, so the default
+  verification runner should include Torture on this machine until the ignored
+  fixture files are removed.
+- Final browser verification checkpoint: full bridge verification passed in
+  `fixtures/timeline-canvas-reports/run-20260606-134318Z/report.json` after the
+  runner was hardened for the worker-default-on target. The run created a real
+  MP4 live fixture with `150` video clips and `150` audio clips, then passed
+  live composition verification, export-preview parity, forced worker prewarm,
+  synthetic worker, thumbnail worker, live worker compatibility, live worker
+  positive, unforced default-on live worker, Torture, synthetic large-project,
+  thumbnail-before-playback reload, scrub/playback/path, playhead smoothness,
+  Blade, and marquee checks. Fast export produced `1141079` bytes and the
+  summary had no verification failures. The local ignored Torture manifest was
+  regenerated as MP4-only for this proof so the FAST/MP4Box export gate tests
+  rendering instead of failing on WebM container parsing. After this checkpoint,
+  remaining pre-push work is only the final broad `npm run build`,
+  `npm run lint`, and `npm run test` chain for the exact working tree.
 - The old DOM `TimelineClip.tsx` body has been deleted.
 - Timeline clip rendering is canvas-first, with forced-worker synthetic/fallback
   smokes in place. Focused live real-media worker-positive smokes have passed on
   the restored 3-video fixture path and historically on the user's
   `Random 100 Video Clips` comp before it was later observed empty. A focused
-  runner proof now passes the 720/8 forced-worker synthetic path, but the
-  default-on decision is still pending.
-- `timelineCanvasWorker` is still product-default `false`; worker mode is proved
-  by forced smokes, not shipped as the normal user path. Default-on should wait
-  for `workerPositiveLive` to pass in `scripts/run-timeline-canvas-verification.mjs`.
+  runner proof now passes the 720/8 forced-worker synthetic path.
+- `timelineCanvasWorker` is now product-default `true`. Treat this as
+  code-complete but not release-proven until the final browser verification
+  passes `workerPositiveLive` plus the unforced default-on live worker smoke.
 - The observed 40% project-load pause appears resolved from the user's latest
   experience after restore-boundary work. It is still not fully proven for every
   media type until fresh live reload smokes cover the 40%-to-58% window on the
@@ -360,9 +420,9 @@ Issue/branch: issue #228 on `issue-228-timeline-canvas-rendering`.
   `mixdownGenerating` when lazy composition-audio mixdown returns `null`, so a
   failed/missing composition mixdown no longer leaves the canvas badge/state
   stuck indefinitely.
-- Phase 6: worker protocol/resources/diagnostics exist and forced-worker
-  synthetic smokes now pass on the current working tree, but
-  `timelineCanvasWorker` remains default `false`. A real-media
+- Phase 6: worker protocol/resources/diagnostics exist, forced-worker
+  synthetic smokes pass on historical runner proof, and `timelineCanvasWorker`
+  is now default `true`. A real-media
   `workerPositiveLive` runner step now opens the configured worker-positive target, warms cached
   thumbnail bitmaps, and requires at least one worker track with no
   fallback/pending/error tracks. A focused browser bridge proof passed on
@@ -373,8 +433,8 @@ Issue/branch: issue #228 on `issue-228-timeline-canvas-rendering`.
   runner proof `fixtures/timeline-canvas-reports/run-20260606-070042Z/report.json`
   also passed the worker prewarm, `720` clip / `8` track forced-worker synthetic
   proof, and worker-thumbnail synthetic proof with no verification failures.
-  Default-on still needs full live `workerPositiveLive`, visual parity/torture
-  coverage, and final broad gates.
+  Default-on still needs fresh full live `workerPositiveLive`, unforced
+  default-on live proof, visual parity/torture coverage, and final broad gates.
 - Handoff/plan status should reflect these blockers. Do not let a new agent
   treat historical full checks or the deleted DOM body as final readiness.
 
@@ -1019,7 +1079,7 @@ timeline hooks. Do not recreate a full DOM clip body.
 | 0 - Contracts and diagnostics | Done | Core render contracts and diagnostics are in place. |
 | 1 - Shell as only DOM clip layer | Done | `TimelineClip.tsx` is deleted; canvas/shell is the live clip path. |
 | 2 - Cache boundary and module extraction | Mostly done | Warmups, cache invalidation, relink/source identity, and artifact reads are extracted. Source-fingerprint equivalence and hash-collision hardening remain. |
-| 3 - Interaction operations and geometry parity | Partial | Typed move, overlap trim, keyboard delete/blend, transition apply/remove/update, transition preview/drop-clear, generic keyframe transaction operations, fade transaction execution through `useClipFade`, selected clip-bar keyframe tick-drag transactions, expanded curve-editor keyframe/Bezier drags, stale typed-target no-fallback behavior, and Mask/Text path-keyframe compatibility routing are executable and covered. Remaining work: side-effecting context-menu handler cleanup and final shell/canvas parity sweep. |
+| 3 - Interaction operations and geometry parity | Mostly done | Typed move, overlap trim, keyboard delete/blend, transition apply/remove/update, transition preview/drop-clear, generic keyframe transaction operations, fade transaction execution through `useClipFade`, selected clip-bar keyframe tick-drag transactions, expanded curve-editor keyframe/Bezier drags, stale typed-target no-fallback behavior, Mask/Text path-keyframe compatibility routing, and clip context-menu descriptor execution are executable and covered by focused tests. Remaining work is final shell/canvas parity proof in the broad browser gate. |
 | 4 - Retire full TimelineClip overlay | Done | Full DOM body and old passive overlay components/tests are retired. |
 | 5 - Runtime and persistence boundary | Partial | Runtime coordinator reporting/adapters are implemented; full allocator ownership is not. Admission gates now exist for thumbnail DB-load jobs, thumbnail generation jobs, detached thumbnail generation video/canvas resources, decoded thumbnail bitmaps, primary lazy video/audio elements, interactive lazy image elements, interactive scrub WebCodecs providers, legacy WebCodecs helper providers, Vector runtime canvases, video-bake proxy videos, legacy JPEG proxy-frame cache resources, decoded AudioBuffer cache resources, proxy VideoFrame cache resources, shared image hydrator resources for composition/background/slot paths, background/slot/composition video/audio runtime resources, RAM preview run-job/image/video-provider/CPU-cache/GPU-cache resources, export run/output/preview/image/precise-video/audio resources, export runtime bindings, FAST sequential WebCodecs providers, and parallel decoder/frame-buffer resources. Video/audio/nested-video/composition-audio/top-level-image/nested-image restore is data-only. AddComp linked composition-audio clips are now data-only placeholders, split paths no longer clone media runtime objects (`videoElement`, `audioElement`, WebCodecs providers, native decoders), FFmpeg frame rendering forwards its run id into export preparation, audio edit bake/unbake keeps restored/baked sources data-only, and stem source switching keeps clip sources data-only. Playback/export composition-audio mixdown-on-demand is implemented through the shared cache. Direct browser video/audio add, timeline video/audio paste, media relink/reload video/audio, download completion video/audio, and direct/paste/reload Vector user actions are data-only. 3D user-action URL ownership now prefers media-owned URLs. Image/model/vector/gaussian/avatar restore source construction is consolidated. Project-load/relink sequence frame URLs, durable primary `MediaFile.url` paths, and file-backed lazy video/audio element URLs are now media-scoped/manager-owned. Interactive lazy image preview, export image hydration, RAM/composition image hydration, background/slot image hydration, and `useLayerSync` data-only image support are implemented; broader allocator ownership remains for remaining stray runtime callers and final live/torture verification. |
 | 6 - Worker and large-project hardening | Mostly done | Worker protocol, resources, diagnostics, forced smokes, and the real-media worker-positive runner hook are in place. Default-on waits for a fresh live `workerPositiveLive` pass and torture-media coverage. |
@@ -1599,7 +1659,8 @@ audits. Consensus findings:
 - Phase 5 is the main over-credit risk: coordinator work is reporting/adapters,
   while allocator/runtime-hydrator ownership remains open. The first
   playback/export composition-audio mixdown-on-demand helper is already built.
-- Worker proof is real, but `timelineCanvasWorker` remains default-off.
+- Worker proof is real, and `timelineCanvasWorker` is now default-on; final
+  live proof still has to pass the unforced default path.
 - `LayerBuilderService.buildLayersFromStore(...)` is the active timeline runtime
   driver and delegates element creation to `hydrateTimelineMediaWindow(...)`.
   It should remain the main video/audio runtime path.
@@ -1707,7 +1768,8 @@ Local duplicate-function scan:
 - No duplicate exported name was found between untracked new `.ts`/`.tsx` files
   and the rest of `src`/`tests`.
 - No second full passive DOM clip renderer was found. The active split is:
-  product-default main-thread canvas renderer plus default-off worker renderer.
+  default-on worker renderer for eligible rows plus the main-thread canvas
+  fallback path.
 - Therefore, do not use a raw duplicate-name count as a completion metric. The
   98% estimate is not supported by the current code audit; use the current
   top-of-file progress numbers instead of this older audit's lower range.
@@ -1731,9 +1793,8 @@ Consensus:
   renderer. The old DOM passive clip components, hooks, helper files, and their
   stale tests are deleted or unreferenced in the current working tree.
 - There is no second active full DOM clip body. `TimelineClipCanvas.tsx` is the
-  product-default renderer. `timelineClipCanvas.worker.ts` is the default-off
-  worker proof path and must not be deleted while `timelineCanvasWorker` remains
-  false.
+  canvas/fallback renderer, and `timelineClipCanvas.worker.ts` is the default-on
+  eligible-row worker renderer. Both paths are required.
 - At the time of that older audit, the real active duplication was nested restore:
   the removed `serializationUtils.ts:loadNestedCompositionClips(...)` builder,
   `projectLoad.ts:reloadNestedCompositionClips(...)`, and the old
@@ -1758,8 +1819,9 @@ Consensus:
   and from `mediaFile.url` in both `LayerBuilderService` and
   `ExportLayerBuilder`.
 - Main-thread canvas drawing and worker drawing intentionally duplicate some
-  visual work for now. Known drift example: `LOD_LABEL_PX` is `14` in
-  `TimelineClipCanvas.tsx` and `24` in `timelineClipCanvas.worker.ts`.
+  visual work for now. Their LOD thresholds now share
+  `timelineRenderConstants.ts`; remaining drift risk is duplicated drawing logic,
+  not separate label constants.
 - `renderModel/` is a useful contract/test/history scaffold, but the live
   renderer still uses `TimelineClipCanvas.tsx` and
   `timelineClipCanvasWorkerModel.ts`. Do not call the refactor complete until
@@ -1854,9 +1916,9 @@ High-confidence findings:
 - Worker wire types are now centralized in
   `utils/timelineClipCanvasWorkerContract.ts`; remaining worker/main-thread
   drift risk is drawing logic/constants, not duplicate message/resource unions.
-- Main-thread canvas drawing and worker drawing intentionally coexist, but their
-  visual constants and drawing logic can still drift. Known drift: main canvas
-  `LOD_LABEL_PX` is `14`, worker label threshold is `24`.
+- Main-thread canvas drawing and worker drawing intentionally coexist. Their
+  shared LOD constants now live in `timelineRenderConstants.ts`, but the
+  duplicated drawing logic can still drift.
 - Spectrogram color mapping is duplicated between `utils/spectrogramCanvas.ts`
   and `workers/timelineClipCanvas.worker.ts`; worker output uses a simpler LUT.
 - Audio-clip detection is repeated across shell controls, main canvas, and
@@ -1895,10 +1957,10 @@ High-confidence findings:
   `clipSlice.removeClip(...)` and the operation-kernel delete path each contain
   resource teardown logic. Do not delete either path blindly; extract shared
   cleanup or route `removeClip` through `delete-clips` first.
-- Main-thread canvas drawing and worker drawing are intentionally duplicated
-  while `flags.timelineCanvasWorker` is default `false`. Do not delete the
-  main-thread `TimelineClipCanvas` draw path because it is the product-default
-  renderer. Do not delete the worker path because it is the Phase 6 proof path.
+- Main-thread canvas drawing and worker drawing intentionally co-exist. Do not
+  delete the main-thread `TimelineClipCanvas` draw path because it is the
+  fallback for unsupported rows/browsers. Do not delete the worker path because
+  it is now the default path for eligible rows.
 - `thumbnailCacheService` and `thumbnailBitmapCache` are not duplicates:
   service/DB/generation state versus decoded `ImageBitmap` GPU-upload lifecycle.
 - The `timeline*Warmup` modules share a shape but target different artifacts.
@@ -1922,8 +1984,8 @@ Dangerous-to-delete list:
   history, layer playback, and tests.
 - Legacy `removeClip`, `moveClip`, `trimClip`, `splitClip` until all live
   callers are migrated and parity-tested.
-- Main-thread canvas draw functions while `timelineCanvasWorker` remains
-  default-off.
+- Main-thread canvas draw functions; they are still the fallback for
+  unsupported rows and browsers even with `timelineCanvasWorker` default-on.
 - `TimelineClip.css` import in `Timeline.tsx`; it is now shell/overlay CSS.
 
 ## Reuse, Do Not Recreate
@@ -2045,9 +2107,12 @@ Use these existing modules instead of building parallel helpers:
   compatibility APIs now route path writes/removals through the kernel.
   Stale-target keyframe tick and curve-editor drag parity is covered; remaining
   keyframe work is final shell/canvas parity sweep, not another write path.
-- Side-effecting context-menu handlers still need extraction after the pure command-model pass.
-- Worker default-on is still blocked on executing and passing the new
-  real-media `workerPositiveLive` runner step plus final broad gates.
+- Clip, track, and empty context-menu command descriptor extraction is in place;
+  remaining menu work is final parity/regression proof only if the next browser
+  run exposes a mismatch.
+- Worker default-on is code-complete but still blocked on executing and passing
+  fresh live `workerPositiveLive`, unforced `workerDefaultLive`, and final broad
+  gates before release readiness.
 - Final broad build/lint/test plus live reload/playback/export verification still needed.
 - Optional: add detailed sub-progress instrumentation for the 40%-to-58% project-load window if the pause returns.
 
@@ -2128,7 +2193,7 @@ Parallel cleanup lane after the restore test is in place:
 
 1. Consolidate audio-clip detection, source-timing, and active-target helpers.
 2. Decide whether worker and main-thread canvas should share spectrogram/color
-   utilities before turning `timelineCanvasWorker` on by default.
+   utilities before treating default-on `timelineCanvasWorker` as release-proven.
 3. Keep `timelineClipCanvasWorkerContract.ts` as the single worker wire type
    surface; do not recreate local worker/message/resource unions in the model,
    worker, or React owner.

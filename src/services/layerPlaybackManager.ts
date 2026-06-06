@@ -70,9 +70,30 @@ interface LayerPlaybackInfo {
 
 class LayerPlaybackManager {
   private pendingImageHydrations = new Map<string, TimelineImageHydrationHandle>();
+  private pendingVideoDisposers = new Map<string, () => void>();
 
   private getRuntimeOwnerId(layerIndex: number, clipId: string): string {
     return `background:${layerIndex}:${clipId}`;
+  }
+
+  private cleanupVideoElement(video: HTMLVideoElement): void {
+    video.pause();
+    engine.cleanupVideo(video);
+    video.removeAttribute('src');
+    video.src = '';
+    try {
+      video.load();
+    } catch {
+      // Browser teardown can race media loading; releasing GPU/cache state is the important part.
+    }
+  }
+
+  private disposePendingVideo(ownerId: string): void {
+    const dispose = this.pendingVideoDisposers.get(ownerId);
+    if (!dispose) {
+      return;
+    }
+    dispose();
   }
 
   // Layer index (0=A, 1=B, 2=C, 3=D) → loaded composition state
@@ -243,11 +264,10 @@ class LayerPlaybackManager {
       const ownerId = this.getRuntimeOwnerId(layerIndex, clip.id);
       this.pendingImageHydrations.get(ownerId)?.cancel();
       this.pendingImageHydrations.delete(ownerId);
+      this.disposePendingVideo(ownerId);
       releaseReportedClipRuntimeResources('background', ownerId);
       if (clip.source?.videoElement) {
-        clip.source.videoElement.pause();
-        clip.source.videoElement.src = '';
-        clip.source.videoElement.load();
+        this.cleanupVideoElement(clip.source.videoElement);
       }
       if (clip.source?.audioElement) {
         clip.source.audioElement.pause();
@@ -795,6 +815,7 @@ class LayerPlaybackManager {
       return;
     }
 
+    this.disposePendingVideo(ownerId);
     const video = document.createElement('video');
     video.src = url;
     video.muted = true; // Background layers muted by default
@@ -802,13 +823,32 @@ class LayerPlaybackManager {
     video.preload = 'auto';
     video.crossOrigin = 'anonymous';
 
-    video.addEventListener('canplaythrough', () => {
-      if (this.layerStates.get(layerIndex)?.clips.includes(clip) !== true) {
-        admission.release();
-        video.pause();
-        video.src = '';
-        video.load();
+    let disposed = false;
+    const disposePending = () => {
+      if (disposed) {
         return;
+      }
+      disposed = true;
+      video.removeEventListener('canplaythrough', onCanPlayThrough);
+      video.removeEventListener('error', onError);
+      admission.release();
+      this.cleanupVideoElement(video);
+      if (this.pendingVideoDisposers.get(ownerId) === disposePending) {
+        this.pendingVideoDisposers.delete(ownerId);
+      }
+    };
+    const onCanPlayThrough = () => {
+      if (disposed) {
+        return;
+      }
+      if (this.layerStates.get(layerIndex)?.clips.includes(clip) !== true) {
+        disposePending();
+        return;
+      }
+      disposed = true;
+      video.removeEventListener('error', onError);
+      if (this.pendingVideoDisposers.get(ownerId) === disposePending) {
+        this.pendingVideoDisposers.delete(ownerId);
       }
       clip.source = bindSourceRuntimeForOwner({
         ownerId,
@@ -827,13 +867,17 @@ class LayerPlaybackManager {
       log.debug(`Video loaded for background clip ${clip.name} on layer ${layerIndex}`);
       // Pre-cache frame via createImageBitmap for immediate scrubbing without play()
       engine.preCacheVideoFrame(video);
-    }, { once: true });
+    };
 
-    video.addEventListener('error', () => {
-      admission.release();
+    const onError = () => {
+      disposePending();
       clip.isLoading = false;
       log.warn(`Failed to load video for background clip ${clip.name}`);
-    }, { once: true });
+    };
+
+    this.pendingVideoDisposers.set(ownerId, disposePending);
+    video.addEventListener('canplaythrough', onCanPlayThrough, { once: true });
+    video.addEventListener('error', onError, { once: true });
   }
 
   private loadAudioForClip(clip: TimelineClip, layerIndex: number, url: string, mediaFileId: string): void {

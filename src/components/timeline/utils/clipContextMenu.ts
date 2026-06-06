@@ -87,6 +87,7 @@ export interface ClipContextMenuLabelTarget {
 }
 
 export type ClipContextMenuAudioAnalysisKind = 'waveform' | 'spectral';
+export type ClipContextMenuAudioDisplayMode = 'compact' | 'detailed' | 'spectral';
 
 export type ClipContextMenuAudioAnalysisGenerator = (
   clipId: string,
@@ -104,6 +105,72 @@ export interface ClipContextMenuClipboardActions {
   copyClipColor: (clipId: string) => void;
   pasteClipColor: (targetClipIds?: string[]) => void;
 }
+
+export type ClipContextMenuCommandDescriptor =
+  | {
+      kind: 'show-in-explorer';
+      explorerType: 'raw' | 'proxy';
+      canExecute: boolean;
+    }
+  | {
+      kind: 'proxy-generation';
+      action: 'start' | 'stop';
+      options?: { force?: boolean };
+      canExecute: boolean;
+    }
+  | {
+      kind: 'regenerate-thumbnails';
+      canExecute: boolean;
+    }
+  | {
+      kind: 'audio-proxy-regeneration';
+      force: boolean;
+      canExecute: boolean;
+    }
+  | {
+      kind: 'audio-analysis-regeneration';
+      analysisKind: ClipContextMenuAudioAnalysisKind;
+      force?: boolean;
+      canExecute: boolean;
+    }
+  | {
+      kind: 'toggle-thumbnails';
+      canExecute: boolean;
+    }
+  | {
+      kind: 'toggle-waveforms';
+      canExecute: boolean;
+    }
+  | {
+      kind: 'set-audio-display-mode';
+      mode: ClipContextMenuAudioDisplayMode;
+      canExecute: boolean;
+    }
+  | {
+      kind: 'clipboard';
+      command: ClipContextMenuClipboardCommand;
+      canExecute: boolean;
+    }
+  | {
+      kind: 'timeline';
+      command: ClipContextMenuTimelineCommand;
+      canExecute: boolean;
+    }
+  | {
+      kind: 'stem-separation';
+      force: boolean;
+      canExecute: boolean;
+    }
+  | {
+      kind: 'transcription';
+      transcriptStatus?: string | null;
+      canExecute: boolean;
+    }
+  | {
+      kind: 'label-color';
+      color: LabelColor;
+      canExecute: boolean;
+    };
 
 export type ClipContextMenuClipboardCommand =
   | 'copy-effects'
@@ -136,6 +203,35 @@ export interface ClipContextMenuTimelineActions {
   toggleClipReverse: (clipId: string) => void;
   createSubcompositionFromSelection: (clipId: string) => void;
   removeClip: (clipId: string) => void;
+}
+
+export interface ClipContextMenuCommandExecutionContext {
+  clipId: string | null | undefined;
+  clip: ClipContextMenuClipLike | null | undefined;
+  clips: readonly ClipContextMenuClipLike[];
+  targetClipIds: readonly string[];
+  mediaFile: ClipContextMenuMediaFileLike | null | undefined;
+  mediaItemId: string | null | undefined;
+  thumbnailCache: ClipContextMenuThumbnailCacheLike;
+  getManagedPrimarySourceUrl?: (mediaFileId: string) => string | undefined;
+  createPrimarySourceUrl?: (mediaFileId: string, file: File | Blob) => string;
+  proxyStore: ClipContextMenuProxyStoreLike;
+  labelStore: ClipContextMenuLabelStoreLike;
+  clipboardActions: ClipContextMenuClipboardActions;
+  timelineActions: ClipContextMenuTimelineActions;
+  resolveAudioClipId: ClipContextMenuAudioClipIdResolver;
+  generateWaveformForClip: ClipContextMenuAudioAnalysisGenerator;
+  generateSpectrogramForClip: ClipContextMenuAudioAnalysisGenerator;
+  startClipStemSeparation: ClipContextMenuStemSeparationStarter;
+  toggleThumbnailsEnabled: () => void;
+  toggleWaveformsEnabled: () => void;
+  setAudioDisplayMode: (mode: ClipContextMenuAudioDisplayMode) => void;
+  loadTranscriber: ClipContextMenuTranscribeLoader;
+  showInExplorer: ClipContextMenuShowInExplorerHandler;
+  notify: (message: string) => void;
+  downloadRawFile: (file: File | Blob, name: string) => void;
+  logDebug?: (message: string, value?: unknown) => void;
+  logWarning?: (message: string, value?: unknown) => void;
 }
 
 export type ClipContextMenuStemSeparationStarter = (
@@ -577,4 +673,138 @@ export function executeClipContextMenuStemSeparation(input: {
   if (!input.clipId || !input.canExecute) return false;
   void input.startClipStemSeparation(input.clipId, { force: input.force });
   return true;
+}
+
+export async function executeClipContextMenuCommand(
+  command: ClipContextMenuCommandDescriptor,
+  context: ClipContextMenuCommandExecutionContext,
+): Promise<boolean> {
+  if (!command.canExecute) {
+    return false;
+  }
+
+  switch (command.kind) {
+    case 'show-in-explorer':
+      return executeClipContextMenuShowInExplorer({
+        type: command.explorerType,
+        mediaFile: context.mediaFile,
+        showInExplorer: context.showInExplorer,
+        notify: context.notify,
+        downloadRawFile: context.downloadRawFile,
+        logDebug: context.logDebug,
+      });
+    case 'proxy-generation':
+      return executeClipContextMenuProxyGeneration({
+        mediaFile: context.mediaFile,
+        proxyStore: context.proxyStore,
+        action: command.action,
+        options: command.options,
+      });
+    case 'regenerate-thumbnails': {
+      if (!context.mediaFile) {
+        return false;
+      }
+      const result = await regenerateClipContextMenuThumbnails({
+        mediaFile: context.mediaFile,
+        clips: context.clips,
+        thumbnailCache: context.thumbnailCache,
+        getManagedPrimarySourceUrl: context.getManagedPrimarySourceUrl,
+        createPrimarySourceUrl: context.createPrimarySourceUrl,
+      });
+      if (!result.success) {
+        context.logWarning?.('No source URL available for thumbnail regeneration', {
+          mediaFileId: context.mediaFile.id,
+          name: context.mediaFile.name,
+          reason: result.reason,
+        });
+      }
+      return result.success;
+    }
+    case 'audio-proxy-regeneration':
+      return executeClipContextMenuAudioProxyRegeneration({
+        mediaFile: context.mediaFile,
+        proxyStore: context.proxyStore,
+        force: command.force,
+      });
+    case 'audio-analysis-regeneration':
+      return executeClipContextMenuAudioAnalysisRegeneration({
+        clipId: context.clipId,
+        clips: context.clips,
+        kind: command.analysisKind,
+        resolveAudioClipId: context.resolveAudioClipId,
+        generateWaveformForClip: context.generateWaveformForClip,
+        generateSpectrogramForClip: context.generateSpectrogramForClip,
+        force: command.force,
+      });
+    case 'toggle-thumbnails':
+      context.toggleThumbnailsEnabled();
+      return true;
+    case 'toggle-waveforms':
+      context.toggleWaveformsEnabled();
+      return true;
+    case 'set-audio-display-mode':
+      context.setAudioDisplayMode(command.mode);
+      return true;
+    case 'clipboard':
+      if ((command.command === 'copy-effects' || command.command === 'copy-color') && !context.clip) {
+        return false;
+      }
+      if ((command.command === 'paste-effects' || command.command === 'paste-color') && context.targetClipIds.length === 0) {
+        return false;
+      }
+      return executeClipContextMenuClipboardCommand({
+        command: command.command,
+        clipId: context.clipId,
+        targetClipIds: context.targetClipIds,
+        canExecute: command.canExecute,
+        actions: context.clipboardActions,
+      });
+    case 'timeline':
+      if (context.targetClipIds.length === 0) {
+        return false;
+      }
+      if ([
+        'delete-gap-at-clip-start',
+        'convert-solid-to-motion-shape',
+        'unlink-multicam-group',
+        'toggle-reverse',
+        'create-subcomposition',
+        'delete-clip',
+      ].includes(command.command) && !context.clip) {
+        return false;
+      }
+      if (command.command === 'open-multicam-dialog' && context.targetClipIds.length < 2) {
+        return false;
+      }
+      if (command.command === 'link-clips' && context.targetClipIds.length < 2) {
+        return false;
+      }
+      return executeClipContextMenuTimelineCommand({
+        command: command.command,
+        clip: context.clip,
+        clipId: context.clipId,
+        targetClipIds: context.targetClipIds,
+        canExecute: command.canExecute,
+        actions: context.timelineActions,
+      });
+    case 'stem-separation':
+      return executeClipContextMenuStemSeparation({
+        clipId: context.clipId,
+        canExecute: command.canExecute,
+        force: command.force,
+        startClipStemSeparation: context.startClipStemSeparation,
+      });
+    case 'transcription':
+      return executeClipContextMenuTranscription({
+        clipId: context.clipId,
+        transcriptStatus: command.transcriptStatus,
+        loadTranscriber: context.loadTranscriber,
+      });
+    case 'label-color':
+      return executeClipContextMenuLabelColor({
+        mediaItemId: context.mediaItemId,
+        color: command.color,
+        labelStore: context.labelStore,
+      });
+  }
 }

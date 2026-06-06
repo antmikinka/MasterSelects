@@ -41,6 +41,12 @@ function renderMenu(params: {
   generateWaveformForClip?: ReturnType<typeof vi.fn>;
   generateSpectrogramForClip?: ReturnType<typeof vi.fn>;
   deleteGapAtTime?: ReturnType<typeof vi.fn>;
+  removeClip?: ReturnType<typeof vi.fn>;
+  splitClipAtPlayhead?: ReturnType<typeof vi.fn>;
+  rippleDeleteSelection?: ReturnType<typeof vi.fn>;
+  createSubcompositionFromSelection?: ReturnType<typeof vi.fn>;
+  copyClipEffects?: ReturnType<typeof vi.fn>;
+  copyClipColor?: ReturnType<typeof vi.fn>;
 }) {
   useMediaStore.setState({ files: params.mediaFile ? [params.mediaFile] : [] });
 
@@ -49,6 +55,12 @@ function renderMenu(params: {
   const generateWaveformForClip = params.generateWaveformForClip ?? vi.fn();
   const generateSpectrogramForClip = params.generateSpectrogramForClip ?? vi.fn();
   const deleteGapAtTime = params.deleteGapAtTime ?? vi.fn();
+  const removeClip = params.removeClip ?? vi.fn();
+  const splitClipAtPlayhead = params.splitClipAtPlayhead ?? vi.fn();
+  const rippleDeleteSelection = params.rippleDeleteSelection ?? vi.fn();
+  const createSubcompositionFromSelection = params.createSubcompositionFromSelection ?? vi.fn();
+  const copyClipEffects = params.copyClipEffects ?? vi.fn();
+  const copyClipColor = params.copyClipColor ?? vi.fn();
   const contextClipId = params.contextClipId ?? params.clips[0]?.id ?? 'missing-clip';
 
   render(
@@ -63,9 +75,9 @@ function renderMenu(params: {
       audioDisplayMode="compact"
       clipStemSeparationJobs={{}}
       selectClip={vi.fn()}
-      removeClip={vi.fn()}
-      splitClipAtPlayhead={vi.fn()}
-      rippleDeleteSelection={vi.fn()}
+      removeClip={removeClip}
+      splitClipAtPlayhead={splitClipAtPlayhead}
+      rippleDeleteSelection={rippleDeleteSelection}
       deleteGapAtTime={deleteGapAtTime}
       toggleClipReverse={vi.fn()}
       unlinkGroup={vi.fn()}
@@ -78,11 +90,11 @@ function renderMenu(params: {
       toggleWaveformsEnabled={vi.fn()}
       setAudioDisplayMode={vi.fn()}
       convertSolidToMotionShape={vi.fn()}
-      createSubcompositionFromSelection={vi.fn()}
-      copyClipEffects={vi.fn()}
+      createSubcompositionFromSelection={createSubcompositionFromSelection}
+      copyClipEffects={copyClipEffects}
       pasteClipEffects={vi.fn()}
       hasClipboardEffects={() => false}
-      copyClipColor={vi.fn()}
+      copyClipColor={copyClipColor}
       pasteClipColor={vi.fn()}
       hasClipboardColor={() => false}
       setMulticamDialogOpen={vi.fn()}
@@ -90,7 +102,18 @@ function renderMenu(params: {
     />,
   );
 
-  return { setContextMenu, generateWaveformForClip, generateSpectrogramForClip, deleteGapAtTime };
+  return {
+    setContextMenu,
+    generateWaveformForClip,
+    generateSpectrogramForClip,
+    deleteGapAtTime,
+    removeClip,
+    splitClipAtPlayhead,
+    rippleDeleteSelection,
+    createSubcompositionFromSelection,
+    copyClipEffects,
+    copyClipColor,
+  };
 }
 
 afterEach(() => {
@@ -270,6 +293,43 @@ describe('TimelineContextMenu regenerate menu', () => {
     fireEvent.click(screen.getByText('Delete Gap at Clip Start'));
 
     expect(deleteGapAtTime).not.toHaveBeenCalled();
+    expect(setContextMenu).not.toHaveBeenCalled();
+  });
+
+  it('keeps stale clip mutation commands inert and open', async () => {
+    const removeClip = vi.fn();
+    const splitClipAtPlayhead = vi.fn();
+    const rippleDeleteSelection = vi.fn();
+    const createSubcompositionFromSelection = vi.fn();
+    const copyClipEffects = vi.fn();
+    const copyClipColor = vi.fn();
+    const { setContextMenu } = renderMenu({
+      clips: [],
+      mediaFile: null,
+      contextClipId: 'missing-clip',
+      removeClip,
+      splitClipAtPlayhead,
+      rippleDeleteSelection,
+      createSubcompositionFromSelection,
+      copyClipEffects,
+      copyClipColor,
+    });
+
+    fireEvent.click(screen.getByText('Copy Effects'));
+    fireEvent.click(screen.getByText('Copy Color'));
+    fireEvent.click(screen.getByText('Split at Playhead (C)'));
+    fireEvent.click(screen.getByText('Ripple Delete'));
+    fireEvent.click(screen.getByText('Create Subcomposition'));
+    fireEvent.click(screen.getByText('Delete Clip From Timeline'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(copyClipEffects).not.toHaveBeenCalled();
+    expect(copyClipColor).not.toHaveBeenCalled();
+    expect(splitClipAtPlayhead).not.toHaveBeenCalled();
+    expect(rippleDeleteSelection).not.toHaveBeenCalled();
+    expect(createSubcompositionFromSelection).not.toHaveBeenCalled();
+    expect(removeClip).not.toHaveBeenCalled();
     expect(setContextMenu).not.toHaveBeenCalled();
   });
 

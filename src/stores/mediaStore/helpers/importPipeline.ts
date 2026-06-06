@@ -94,7 +94,7 @@ export async function processImport(params: ImportParams): Promise<ImportResult>
   const fileHash = await calculateFileHash(file);
 
   // Handle thumbnail deduplication (unified - was 3x duplicate)
-  const thumbnailUrl = await handleThumbnailDedup(fileHash, rawThumbnail);
+  const thumbnailUrl = await handleThumbnailDedup(fileHash, rawThumbnail, id);
 
   // Check for existing proxy (unified - was 3x duplicate)
   const proxyInfo = await checkExistingProxy(

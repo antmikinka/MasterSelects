@@ -173,8 +173,13 @@ vi.mock('../../src/stores/mediaStore/helpers/mediaInfoHelpers', () => ({
 }));
 
 vi.mock('../../src/stores/mediaStore/helpers/thumbnailHelpers', () => ({
+  createManagedThumbnailUrl: vi.fn(async (_mediaId: string, thumbnailUrl: string | undefined) => thumbnailUrl),
   createThumbnail: vi.fn(async () => undefined),
-  handleThumbnailDedup: vi.fn(async (_fileHash: string | undefined, thumbnailUrl: string | undefined) => thumbnailUrl),
+  handleThumbnailDedup: vi.fn(async (
+    _fileHash: string | undefined,
+    thumbnailUrl: string | undefined,
+    _mediaId?: string,
+  ) => thumbnailUrl),
 }));
 
 vi.mock('../../src/engine/WebGPUEngine', () => ({
