@@ -3,6 +3,7 @@ import type {
   TimelineClipCanvasWorkerCompositionVisualsResource,
   TimelineClipCanvasWorkerDrawMessage,
   TimelineClipCanvasWorkerFadeVisualsResource,
+  TimelineClipCanvasWorkerMidiPreviewResource,
   TimelineClipCanvasWorkerPassiveDecorationsResource,
   TimelineClipCanvasWorkerSpectrogramResource,
   TimelineClipCanvasWorkerThumbnailStripResource,
@@ -24,6 +25,7 @@ export type {
   TimelineClipCanvasWorkerFadeVisualsResource,
   TimelineClipCanvasWorkerIncomingMessage,
   TimelineClipCanvasWorkerInitMessage,
+  TimelineClipCanvasWorkerMidiPreviewResource,
   TimelineClipCanvasWorkerOutgoingMessage,
   TimelineClipCanvasWorkerPassiveBadge,
   TimelineClipCanvasWorkerPassiveDecorationsResource,
@@ -63,6 +65,14 @@ export interface TimelineClipCanvasWorkerSourceClip {
   waveformGenerating?: boolean;
   waveformProgress?: number;
   audioState?: TimelineClipCanvasAudioClipInput['audioState'];
+  midiData?: {
+    notes?: readonly {
+      pitch: number;
+      start: number;
+      duration: number;
+      velocity?: number;
+    }[];
+  };
   fade?: {
     keyframes?: readonly unknown[];
   } | null;
@@ -139,6 +149,7 @@ export interface TimelineClipCanvasWorkerPreparedClipResources {
   passiveDecorations?: TimelineClipCanvasWorkerPassiveDecorationsResource;
   waveform?: TimelineClipCanvasWorkerPreparedWaveformResource;
   spectrogram?: TimelineClipCanvasWorkerPreparedSpectrogramResource;
+  midiPreview?: TimelineClipCanvasWorkerMidiPreviewResource;
   compositionVisuals?: TimelineClipCanvasWorkerPreparedCompositionVisualsResource;
   trimVisuals?: TimelineClipCanvasWorkerTrimVisualsResource;
   fadeVisuals?: TimelineClipCanvasWorkerPreparedFadeVisualsResource;
@@ -216,6 +227,11 @@ function isWorkerAudioClip(clip: TimelineClipCanvasWorkerSourceClip): boolean {
   return isTimelineClipCanvasAudioClip(clip);
 }
 
+function hasMidiPreviewVisuals(clip: TimelineClipCanvasWorkerSourceClip): boolean {
+  return (clip.source?.type === 'midi' || clip.trackType === 'midi') &&
+    (clip.midiData?.notes?.length ?? 0) > 0;
+}
+
 function hasPreparedThumbnailVisuals(
   clip: TimelineClipCanvasWorkerSourceClip,
   input: TimelineClipCanvasWorkerEligibilityInput,
@@ -268,6 +284,17 @@ function clonePreparedSpectrogramResource(
       : Float32Array.from(spectrogram.values),
     rasterWidth: spectrogram.rasterWidth,
     rasterHeight: spectrogram.rasterHeight,
+  };
+}
+
+function clonePreparedMidiPreviewResource(
+  midiPreview: TimelineClipCanvasWorkerMidiPreviewResource,
+): TimelineClipCanvasWorkerMidiPreviewResource {
+  return {
+    kind: 'midi-preview',
+    bars: new Float32Array(midiPreview.bars),
+    barCount: midiPreview.barCount,
+    mode: midiPreview.mode,
   };
 }
 
@@ -395,6 +422,9 @@ export function getTimelineClipCanvasWorkerEligibility(
     if (input.waveformsEnabled && input.audioDisplayMode === 'spectral' && isWorkerAudioClip(clip) && !preparedResources?.spectrogram) {
       addReason(reasons, 'spectrogram-resource-missing');
     }
+    if (hasMidiPreviewVisuals(clip) && !preparedResources?.midiPreview) {
+      addReason(reasons, 'midi-preview');
+    }
     if ((clip.fade?.keyframes?.length ?? 0) >= 2 && !preparedResources?.fadeVisuals) {
       addReason(reasons, 'fade-visuals');
     }
@@ -457,11 +487,17 @@ export function buildTimelineClipCanvasWorkerDrawMessage(
     const spectrogram = preparedResources?.spectrogram
       ? clonePreparedSpectrogramResource(preparedResources.spectrogram)
       : undefined;
+    const midiPreview = preparedResources?.midiPreview
+      ? clonePreparedMidiPreviewResource(preparedResources.midiPreview)
+      : undefined;
     if (waveform) {
       transferables.push(waveform.columns.buffer);
     }
     if (spectrogram) {
       transferables.push(spectrogram.values.buffer);
+    }
+    if (midiPreview) {
+      transferables.push(midiPreview.bars.buffer);
     }
     if (compositionVisuals?.nestedBoundaries) {
       transferables.push(compositionVisuals.nestedBoundaries.buffer);
@@ -508,6 +544,7 @@ export function buildTimelineClipCanvasWorkerDrawMessage(
     if (passiveDecorations) workerClip.passiveDecorations = passiveDecorations;
     if (waveform) workerClip.waveform = waveform;
     if (spectrogram) workerClip.spectrogram = spectrogram;
+    if (midiPreview) workerClip.midiPreview = midiPreview;
     workerClips.push(workerClip);
   }
 

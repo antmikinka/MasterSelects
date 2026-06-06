@@ -9,6 +9,7 @@ import type { ClipStemSeparationJobState, GenerateClipAudioAnalysisOptions, Time
 import type { ContextMenuState } from './types';
 import { useContextMenuPosition } from '../../hooks/useContextMenuPosition';
 import { useMediaStore } from '../../stores/mediaStore';
+import { useTimelineStore } from '../../stores/timeline';
 import { projectFileService } from '../../services/projectFileService';
 import { thumbnailCacheService } from '../../services/thumbnailCacheService';
 import { Logger } from '../../services/logger';
@@ -167,6 +168,7 @@ export function TimelineContextMenu({
   const {
     isVideo,
     isAudio,
+    isMidi,
     isSolid,
     targetClipIds,
     hasClipLinkTarget,
@@ -284,6 +286,20 @@ export function TimelineContextMenu({
       }}
       onClick={(e) => e.stopPropagation()}
     >
+      {isMidi && clip && (
+        <>
+          <div
+            className="context-menu-item"
+            onClick={() => {
+              useTimelineStore.getState().setClipRenameId(clip.id);
+              setContextMenu(null);
+            }}
+          >
+            Rename
+          </div>
+          <div className="context-menu-separator" />
+        </>
+      )}
       {isVideo && (
         <div className="context-menu-item has-submenu" onMouseEnter={handleSubmenuHover} onMouseLeave={handleSubmenuLeave}>
           <span>Show in Explorer</span>

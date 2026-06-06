@@ -1,5 +1,12 @@
 [
   {
+    "date": "2026-06-01",
+    "type": "new",
+    "title": "MasterSelects 2.1.1",
+    "description": "Multiple preview panels: the per-tab \"+\" menu now spawns a second, fully independent Preview side-by-side instead of just focusing the open one — each instance keeps its own composition/layer selector and render target, so you can watch different comps or layers at once. Preview is listed first in the menu. The old +/- buttons inside the preview toolbar were removed since adding (and closing) previews is now handled by the dock tab bar.",
+    "section": "Release"
+  },
+  {
     "date": "2026-05-31",
     "type": "improve",
     "title": "MasterSelects 2.1.0",

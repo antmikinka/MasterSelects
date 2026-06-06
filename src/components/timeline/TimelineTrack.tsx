@@ -37,6 +37,8 @@ import {
   dispatchTimelineClipPointerMove,
   isTimelinePointerTool,
 } from './tools/pointer/timelineToolPointerDispatcher';
+import { isInfiniteTimelineSourceType } from './utils/clipSourceTiming';
+import { isAudioSectionTrack } from './utils/trackSection';
 
 const TRACK_VIEWPORT_FALLBACK_PX = 1600;
 const TRACK_RENDER_OVERSCAN_PX = 1200;
@@ -48,15 +50,6 @@ const FADE_DURATION_VALUE_EPSILON = 0.01;
 const log = Logger.create('TimelineTrack');
 
 type KeyframeTickMovePhase = 'begin' | 'update' | 'commit';
-
-const isInfiniteTimelineSourceType = (sourceType: string | null | undefined): boolean => (
-  sourceType === 'text' ||
-  sourceType === 'image' ||
-  sourceType === 'solid' ||
-  sourceType === 'camera' ||
-  sourceType === 'splat-effector' ||
-  sourceType === 'math-scene'
-);
 
 type KeyframeTrackClip = {
   id: string;
@@ -198,6 +191,74 @@ const getClipShellKeyframeGroups = (
 
   return [...groups.values()].sort((a, b) => a.time - b.time);
 };
+
+function TimelineCanvasClipRenameInput({
+  clip,
+  geometry,
+}: {
+  clip: { id: string; name: string };
+  geometry: ClipInteractionShellGeometry;
+}) {
+  const renameMidiClip = useTimelineStore((state) => state.renameMidiClip);
+  const setClipRenameId = useTimelineStore((state) => state.setClipRenameId);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const cancelledRef = useRef(false);
+  const [value, setValue] = useState(clip.name);
+
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+  }, []);
+
+  const commit = useCallback(() => {
+    if (cancelledRef.current) return;
+    const nextName = value.trim();
+    if (nextName && nextName !== clip.name) {
+      renameMidiClip(clip.id, nextName);
+    }
+    setClipRenameId(null);
+  }, [clip.id, clip.name, renameMidiClip, setClipRenameId, value]);
+
+  const cancel = useCallback(() => {
+    cancelledRef.current = true;
+    setClipRenameId(null);
+  }, [setClipRenameId]);
+
+  const visibleWidth = Math.max(0, geometry.visibleClip.width);
+  const width = Math.max(24, Math.min(220, Math.max(0, visibleWidth - 12), Math.max(0, geometry.clip.width - 12)));
+  const height = Math.max(14, Math.min(20, geometry.clip.height - 8));
+
+  return (
+    <input
+      ref={inputRef}
+      className="timeline-canvas-clip-name-input"
+      value={value}
+      style={{
+        left: geometry.visibleClip.x + 6,
+        top: geometry.clip.y + 4,
+        width,
+        height,
+      }}
+      onChange={(event) => setValue(event.currentTarget.value)}
+      onBlur={commit}
+      onMouseDown={(event) => event.stopPropagation()}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          commit();
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          cancel();
+        }
+      }}
+    />
+  );
+}
 
 // Render keyframe tracks for timeline area (right column) - flat list without folder structure
 function TrackPropertyTracks({
@@ -752,6 +813,7 @@ function TimelineTrackComponent({
   }, [clips, track.id]);
   const clipFadeClipId = clipFade?.clipId ?? null;
   const clipRowRef = useRef<HTMLDivElement>(null);
+  const clipRenameId = useTimelineStore((state) => state.clipRenameId);
   const [measuredViewportWidth, setMeasuredViewportWidth] = useState(TRACK_VIEWPORT_FALLBACK_PX);
   const keyframeTickTransactionRef = useRef<{
     transactionId: string;
@@ -924,6 +986,7 @@ function TimelineTrackComponent({
     if (clipTrim?.clipId) ids.add(clipTrim.clipId);
     if (clipFadeClipId && trackClipIds.has(clipFadeClipId)) ids.add(clipFadeClipId);
     if (clipContextMenuClipId && trackClipIds.has(clipContextMenuClipId)) ids.add(clipContextMenuClipId);
+    if (clipRenameId && trackClipIds.has(clipRenameId)) ids.add(clipRenameId);
     trackClips.forEach((clip) => {
       if (clipShellKeyframeStateByClipId.has(clip.id)) ids.add(clip.id);
       if (clipShellSpecialStateByClipId.has(clip.id)) ids.add(clip.id);
@@ -935,6 +998,7 @@ function TimelineTrackComponent({
     clipTrim,
     clipFadeClipId,
     clipContextMenuClipId,
+    clipRenameId,
     trackClipIds,
     trackClips,
     clipShellKeyframeStateByClipId,
@@ -1050,6 +1114,12 @@ function TimelineTrackComponent({
   const domControlClips = useMemo(
     () => canvasClips.filter((clip) => domControlClipIds.has(clip.id)),
     [canvasClips, domControlClipIds],
+  );
+  const renamingClip = useMemo(
+    () => clipRenameId
+      ? canvasClips.find((clip) => clip.id === clipRenameId && clip.trackId === track.id && clip.source?.type === 'midi')
+      : undefined,
+    [canvasClips, clipRenameId, track.id],
   );
   useEffect(() => {
     return () => {
@@ -1471,7 +1541,7 @@ function TimelineTrackComponent({
     height: dynamicHeight,
     ...(trackColor ? { '--track-color': trackColor } : {}),
   } as React.CSSProperties & { '--track-color'?: string };
-  const isMutedTrack = track.type === 'audio' && (track.audioState?.muted ?? track.muted) === true;
+  const isMutedTrack = isAudioSectionTrack(track) && (track.audioState?.muted ?? track.muted) === true;
   const isHiddenTrack = track.type === 'video' && track.visible === false;
   const renderExternalPreview = (
     className: string,
@@ -1620,6 +1690,12 @@ function TimelineTrackComponent({
             </div>
           );
         })}
+        {renamingClip && (
+          <TimelineCanvasClipRenameInput
+            clip={renamingClip}
+            geometry={getClipShellGeometry(renamingClip)}
+          />
+        )}
         {/* External file drag preview - video clip */}
         {externalDrag && externalDrag.trackId === track.id && renderExternalPreview(
           'timeline-clip-preview',

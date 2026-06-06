@@ -56,6 +56,13 @@ export interface TimelineClipCanvasWorkerSpectrogramResource {
   rasterHeight: number;
 }
 
+export interface TimelineClipCanvasWorkerMidiPreviewResource {
+  kind: 'midi-preview';
+  bars: Float32Array;
+  barCount: number;
+  mode: 'notes' | 'density';
+}
+
 export interface TimelineClipCanvasWorkerSourceExtensionGhostResource {
   edge: 'left' | 'right';
   x: number;
@@ -98,6 +105,7 @@ export interface TimelineClipCanvasWorkerClip {
   passiveDecorations?: TimelineClipCanvasWorkerPassiveDecorationsResource;
   waveform?: TimelineClipCanvasWorkerWaveformResource;
   spectrogram?: TimelineClipCanvasWorkerSpectrogramResource;
+  midiPreview?: TimelineClipCanvasWorkerMidiPreviewResource;
 }
 
 export interface TimelineClipCanvasWorkerInitMessage {

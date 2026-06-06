@@ -72,6 +72,7 @@ import type { ClipDragState, ClipTrimState } from './types';
 import type { ClipAudioState } from '../../types/audio';
 import type { AnalysisStatus, ClipAnalysis, ClipSegment, TranscriptStatus, TranscriptWord } from '../../types';
 import type { TimelineSpectrogramTileSet } from '../../services/audio/timelineSpectrogramCache';
+import type { MidiClipData } from '../../types/midiClip';
 import {
   type VectorAnimationClipSettings,
 } from '../../types/vectorAnimation';
@@ -109,6 +110,14 @@ const WAVEFORM_PYRAMID_AUTO_UPGRADE_WIDTH = 16_384;
 const WAVEFORM_GENERATION_DELAY_MS = 300;
 const SPECTROGRAM_ARTIFACT_RETRY_MS = 2000;
 const MAX_RENDERED_WAVEFORM_CHANNELS = 2;
+const MIDI_PREVIEW_DIRECT_NOTE_LIMIT = 4000;
+const MIDI_PREVIEW_MAX_AGGREGATED_BARS = 20000;
+const MIDI_PREVIEW_MAX_X_BUCKETS = 2048;
+const MIDI_PREVIEW_MIN_BAR_WIDTH = 1.5;
+const MIDI_PREVIEW_MIN_BAR_HEIGHT = 1.5;
+const MIDI_PREVIEW_MAX_BAR_HEIGHT = 4;
+const MIDI_PREVIEW_PITCH_PADDING = 1;
+const MIDI_PREVIEW_VERTICAL_INSET = 3;
 
 export interface CanvasFadeVisuals {
   keyframes: readonly FadeCurveKeyframe[];
@@ -152,6 +161,7 @@ export interface CanvasClip {
   waveformProgress?: number;
   file?: File;
   audioState?: ClipAudioState;
+  midiData?: MidiClipData;
   fade?: CanvasFadeVisuals;
   source?: {
     type?: string | null;
@@ -250,6 +260,11 @@ interface MediaFileCanvasStatus {
 
 function isCanvasAudioClip(clip: CanvasClip): boolean {
   return isTimelineClipCanvasAudioClip(clip);
+}
+
+function clampUnit(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
 }
 
 function getWaveformPyramidForClip(clip: CanvasClip, waveformPyramids: WaveformPyramidMap | undefined): TimelineWaveformPyramid | null {
@@ -591,6 +606,218 @@ function createWorkerPreparedWaveformResource(
   };
 }
 
+type WorkerPreparedMidiPreviewResource = NonNullable<TimelineClipCanvasWorkerPreparedClipResources['midiPreview']>;
+
+function isCanvasMidiClip(clip: CanvasClip): boolean {
+  return clip.source?.type === 'midi' || clip.trackType === 'midi';
+}
+
+function createCanvasMidiPreviewResource(
+  clip: CanvasClip,
+  clipWidth: number,
+  bodyHeight: number,
+  visibleStartRatio = 0,
+  visibleEndRatio = 1,
+): WorkerPreparedMidiPreviewResource | undefined {
+  const notes = clip.midiData?.notes;
+  if (!isCanvasMidiClip(clip) || !notes || notes.length === 0 || clipWidth < 2 || bodyHeight < 6) {
+    return undefined;
+  }
+
+  const sourceIn = clip.inPoint ?? 0;
+  const sourceOut = Math.max(sourceIn + 0.001, clip.outPoint ?? sourceIn + clip.duration);
+  const sourceSpan = Math.max(0.001, sourceOut - sourceIn);
+  const startRatio = clampUnit(visibleStartRatio);
+  const endRatio = Math.max(startRatio, clampUnit(visibleEndRatio));
+  const visibleSourceStart = sourceIn + sourceSpan * startRatio;
+  const visibleSourceEnd = sourceIn + sourceSpan * endRatio;
+  const usableHeight = Math.max(1, bodyHeight - MIDI_PREVIEW_VERTICAL_INSET * 2);
+
+  let visibleCount = 0;
+  let minPitch = Infinity;
+  let maxPitch = -Infinity;
+
+  for (const note of notes) {
+    const pitch = note.pitch;
+    const start = note.start;
+    const duration = Math.max(0.001, note.duration);
+    const end = start + duration;
+    if (
+      !Number.isFinite(pitch) ||
+      !Number.isFinite(start) ||
+      !Number.isFinite(duration) ||
+      end <= sourceIn ||
+      start >= sourceOut ||
+      end <= visibleSourceStart ||
+      start >= visibleSourceEnd
+    ) {
+      continue;
+    }
+    visibleCount += 1;
+    minPitch = Math.min(minPitch, pitch);
+    maxPitch = Math.max(maxPitch, pitch);
+  }
+
+  if (visibleCount === 0 || !Number.isFinite(minPitch) || !Number.isFinite(maxPitch)) {
+    return undefined;
+  }
+
+  const pitchMin = minPitch - MIDI_PREVIEW_PITCH_PADDING;
+  const pitchMax = maxPitch + MIDI_PREVIEW_PITCH_PADDING;
+  const pitchSpan = Math.max(1, pitchMax - pitchMin);
+
+  const xForSourceTime = (sourceTime: number) => (
+    ((sourceTime - sourceIn) / sourceSpan) * clipWidth
+  );
+  const yForPitch = (pitch: number, barHeight: number) => {
+    const norm = clampUnit((pitch - pitchMin) / pitchSpan);
+    return Math.max(
+      0,
+      Math.min(
+        bodyHeight - barHeight,
+        MIDI_PREVIEW_VERTICAL_INSET + (1 - norm) * usableHeight - barHeight / 2,
+      ),
+    );
+  };
+
+  if (visibleCount <= MIDI_PREVIEW_DIRECT_NOTE_LIMIT) {
+    const barHeight = Math.min(
+      MIDI_PREVIEW_MAX_BAR_HEIGHT,
+      Math.max(MIDI_PREVIEW_MIN_BAR_HEIGHT, usableHeight / pitchSpan),
+    );
+    const bars = new Float32Array(visibleCount * 5);
+    let barCount = 0;
+
+    for (const note of notes) {
+      const start = note.start;
+      const duration = Math.max(0.001, note.duration);
+      const end = start + duration;
+      if (
+        !Number.isFinite(note.pitch) ||
+        !Number.isFinite(start) ||
+        !Number.isFinite(duration) ||
+        end <= sourceIn ||
+        start >= sourceOut ||
+        end <= visibleSourceStart ||
+        start >= visibleSourceEnd
+      ) {
+        continue;
+      }
+
+      const noteStartX = Math.max(0, xForSourceTime(Math.max(start, sourceIn)));
+      const noteEndX = Math.min(clipWidth, xForSourceTime(Math.min(end, sourceOut)));
+      const rawWidth = Math.max(0.001, noteEndX - noteStartX);
+      const drawWidth = rawWidth > MIDI_PREVIEW_MIN_BAR_WIDTH + 1
+        ? Math.max(MIDI_PREVIEW_MIN_BAR_WIDTH, rawWidth - 1)
+        : Math.max(MIDI_PREVIEW_MIN_BAR_WIDTH, rawWidth);
+      const offset = barCount * 5;
+      bars[offset] = noteStartX;
+      bars[offset + 1] = yForPitch(note.pitch, barHeight);
+      bars[offset + 2] = drawWidth;
+      bars[offset + 3] = barHeight;
+      bars[offset + 4] = 0.45 + clampUnit(note.velocity ?? 0.8) * 0.45;
+      barCount += 1;
+    }
+
+    return {
+      kind: 'midi-preview',
+      bars,
+      barCount,
+      mode: 'notes',
+    };
+  }
+
+  const visibleClipStartX = startRatio * clipWidth;
+  const visibleClipEndX = Math.max(visibleClipStartX + 1, endRatio * clipWidth);
+  const visibleClipWidth = Math.max(1, visibleClipEndX - visibleClipStartX);
+  const basePitchBucketCount = Math.max(4, Math.min(64, Math.floor(usableHeight / 1.5)));
+  const cappedXBucketCount = Math.max(
+    1,
+    Math.min(MIDI_PREVIEW_MAX_X_BUCKETS, Math.ceil(visibleClipWidth / 2)),
+  );
+  const xBucketCount = Math.max(
+    1,
+    Math.min(cappedXBucketCount, Math.floor(MIDI_PREVIEW_MAX_AGGREGATED_BARS / basePitchBucketCount)),
+  );
+  const pitchBucketCount = Math.max(
+    1,
+    Math.min(basePitchBucketCount, Math.floor(MIDI_PREVIEW_MAX_AGGREGATED_BARS / xBucketCount)),
+  );
+  const bucketWidth = visibleClipWidth / xBucketCount;
+  const bucketHeight = usableHeight / pitchBucketCount;
+  const buckets = new Float32Array(xBucketCount * pitchBucketCount);
+
+  for (const note of notes) {
+    const start = note.start;
+    const duration = Math.max(0.001, note.duration);
+    const end = start + duration;
+    if (
+      !Number.isFinite(note.pitch) ||
+      !Number.isFinite(start) ||
+      !Number.isFinite(duration) ||
+      end <= sourceIn ||
+      start >= sourceOut ||
+      end <= visibleSourceStart ||
+      start >= visibleSourceEnd
+    ) {
+      continue;
+    }
+
+    const startX = Math.max(visibleClipStartX, xForSourceTime(Math.max(start, sourceIn, visibleSourceStart)));
+    const endX = Math.min(visibleClipEndX, xForSourceTime(Math.min(end, sourceOut, visibleSourceEnd)));
+    const startBucket = Math.max(
+      0,
+      Math.min(xBucketCount - 1, Math.floor((startX - visibleClipStartX) / bucketWidth)),
+    );
+    const endBucket = Math.max(
+      startBucket,
+      Math.min(xBucketCount - 1, Math.floor((Math.max(startX + 0.001, endX) - visibleClipStartX) / bucketWidth)),
+    );
+    const pitchBucket = Math.max(
+      0,
+      Math.min(
+        pitchBucketCount - 1,
+        Math.floor(clampUnit((note.pitch - pitchMin) / pitchSpan) * pitchBucketCount),
+      ),
+    );
+    const alpha = 0.22 + clampUnit(note.velocity ?? 0.8) * 0.38;
+
+    for (let xBucket = startBucket; xBucket <= endBucket; xBucket += 1) {
+      const index = xBucket * pitchBucketCount + pitchBucket;
+      buckets[index] = Math.min(1, buckets[index] + alpha);
+    }
+  }
+
+  let barCount = 0;
+  for (let index = 0; index < buckets.length; index += 1) {
+    if (buckets[index] > 0) barCount += 1;
+  }
+  if (barCount === 0) return undefined;
+
+  const bars = new Float32Array(barCount * 5);
+  let barIndex = 0;
+  for (let xBucket = 0; xBucket < xBucketCount; xBucket += 1) {
+    for (let pitchBucket = 0; pitchBucket < pitchBucketCount; pitchBucket += 1) {
+      const alpha = buckets[xBucket * pitchBucketCount + pitchBucket];
+      if (alpha <= 0) continue;
+      const offset = barIndex * 5;
+      bars[offset] = visibleClipStartX + xBucket * bucketWidth;
+      bars[offset + 1] = MIDI_PREVIEW_VERTICAL_INSET + (pitchBucketCount - 1 - pitchBucket) * bucketHeight;
+      bars[offset + 2] = Math.max(1, bucketWidth);
+      bars[offset + 3] = Math.max(1, bucketHeight - 0.4);
+      bars[offset + 4] = Math.min(0.92, 0.28 + alpha * 0.58);
+      barIndex += 1;
+    }
+  }
+
+  return {
+    kind: 'midi-preview',
+    bars,
+    barCount,
+    mode: 'density',
+  };
+}
+
 function createWorkerPreparedSpectrogramResource(
   clip: CanvasClip,
   spectrogramTileSets: SpectrogramTileSetMap | undefined,
@@ -851,6 +1078,19 @@ function createWorkerPreparedResourcesByClipId(
       1,
       timeToPixel(resourceClip.startTime + resourceClip.duration) - timeToPixel(resourceClip.startTime),
     );
+    const absoluteX = timeToPixel(resourceClip.startTime);
+    const absoluteRight = absoluteX + clipWidth;
+    const visibleAbsLeft = Math.max(absoluteX, canvasOffsetX, scrollX - CANVAS_RENDER_OVERSCAN_PX);
+    const visibleAbsRight = Math.min(absoluteRight, canvasOffsetX + cssWidth, scrollX + viewportWidth + CANVAS_RENDER_OVERSCAN_PX);
+    const visibleStartRatio = Math.max(0, Math.min(1, (visibleAbsLeft - absoluteX) / clipWidth));
+    const visibleEndRatio = Math.max(visibleStartRatio, Math.min(1, (visibleAbsRight - absoluteX) / clipWidth));
+    const midiPreview = createCanvasMidiPreviewResource(
+      resourceClip,
+      clipWidth,
+      Math.max(1, height - 2),
+      visibleStartRatio,
+      visibleEndRatio,
+    );
     const compositionVisuals = createWorkerPreparedCompositionVisualsResource(
       resourceClip,
       clipWidth,
@@ -877,8 +1117,8 @@ function createWorkerPreparedResourcesByClipId(
       ),
       height,
     );
-    if (waveform || spectrogram || passiveDecorations || compositionVisuals || trimVisuals || fadeVisuals) {
-      resourcesByClipId.set(clip.id, { waveform, spectrogram, passiveDecorations, compositionVisuals, trimVisuals, fadeVisuals });
+    if (waveform || spectrogram || midiPreview || passiveDecorations || compositionVisuals || trimVisuals || fadeVisuals) {
+      resourcesByClipId.set(clip.id, { waveform, spectrogram, midiPreview, passiveDecorations, compositionVisuals, trimVisuals, fadeVisuals });
     }
   });
   return resourcesByClipId.size > 0 ? resourcesByClipId : undefined;
@@ -1676,6 +1916,38 @@ function drawCanvasMixdownWaveform(
   );
 }
 
+function drawCanvasMidiPreviewResource(
+  ctx: CanvasRenderingContext2D,
+  midiPreview: WorkerPreparedMidiPreviewResource | undefined,
+  x: number,
+  top: number,
+  w: number,
+  h: number,
+): void {
+  if (!midiPreview || midiPreview.barCount <= 0 || midiPreview.bars.length < midiPreview.barCount * 5) {
+    return;
+  }
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(x, top, w, h, Math.min(4, h / 4));
+  ctx.clip();
+  ctx.fillStyle = midiPreview.mode === 'density'
+    ? 'rgba(198, 218, 255, 1)'
+    : 'rgba(210, 226, 255, 1)';
+  for (let index = 0; index < midiPreview.barCount; index += 1) {
+    const offset = index * 5;
+    const barX = midiPreview.bars[offset] ?? 0;
+    const barY = midiPreview.bars[offset + 1] ?? 0;
+    const barW = midiPreview.bars[offset + 2] ?? 0;
+    const barH = midiPreview.bars[offset + 3] ?? 0;
+    if (barW <= 0 || barH <= 0) continue;
+    ctx.globalAlpha = Math.max(0.08, Math.min(1, midiPreview.bars[offset + 4] ?? 0.7));
+    ctx.fillRect(x + barX, top + barY, barW, barH);
+  }
+  ctx.restore();
+}
+
 function drawCanvasCompositionDecorations(
   ctx: CanvasRenderingContext2D,
   clip: CanvasClip,
@@ -2353,6 +2625,8 @@ function drawClips(
     const badges = collectCanvasClipBadges(clip, mediaStatus);
     const top = 1;
     const h = height - 2;
+    const visibleStartRatio = Math.max(0, Math.min(1, (visibleAbsLeft - absoluteX) / Math.max(1, absoluteW)));
+    const visibleEndRatio = Math.max(visibleStartRatio, Math.min(1, (visibleAbsRight - absoluteX) / Math.max(1, absoluteW)));
 
     // Rounded clip body fill.
     ctx.beginPath();
@@ -2360,11 +2634,18 @@ function drawClips(
     ctx.fillStyle = selected ? fillSelected : fill;
     ctx.fill();
 
+    drawCanvasMidiPreviewResource(
+      ctx,
+      createCanvasMidiPreviewResource(clip, w, h, visibleStartRatio, visibleEndRatio),
+      x,
+      top,
+      w,
+      h,
+    );
+
     if (waveformsEnabled && isCanvasAudioClip(clip)) {
       diagnostics.waveformClipCount += 1;
       const waveformPyramid = getWaveformPyramidForClip(clip, waveformPyramids);
-      const visibleStartRatio = Math.max(0, Math.min(1, (visibleAbsLeft - absoluteX) / Math.max(1, absoluteW)));
-      const visibleEndRatio = Math.max(visibleStartRatio, Math.min(1, (visibleAbsRight - absoluteX) / Math.max(1, absoluteW)));
       const sourceSpan = Math.max(0.001, geometry.outPoint - geometry.inPoint);
       const visibleAudioClip = {
         ...clip,
@@ -2430,8 +2711,6 @@ function drawClips(
     const mediaFileId = (visibleW >= LOD_THUMB_PX && inThumbWindow && !hasCompositionSegments) ? clipShowsThumbnails(clip) : null;
     if (mediaFileId) {
       diagnostics.thumbnailClipCount += 1;
-      const visibleStartRatio = Math.max(0, Math.min(1, (visibleAbsLeft - absoluteX) / Math.max(1, absoluteW)));
-      const visibleEndRatio = Math.max(visibleStartRatio, Math.min(1, (visibleAbsRight - absoluteX) / Math.max(1, absoluteW)));
       const sourceSpan = Math.max(0.001, geometry.outPoint - geometry.inPoint);
       const visibleClip = {
         ...clip,

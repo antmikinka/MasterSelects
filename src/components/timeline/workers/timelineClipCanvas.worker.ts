@@ -14,6 +14,7 @@ import type {
   TimelineClipCanvasWorkerDrawMessage as DrawMessage,
   TimelineClipCanvasWorkerDrawnMessage as DrawnMessage,
   TimelineClipCanvasWorkerIncomingMessage as IncomingMessage,
+  TimelineClipCanvasWorkerMidiPreviewResource as WorkerMidiPreviewResource,
   TimelineClipCanvasWorkerOutgoingMessage as OutgoingMessage,
   TimelineClipCanvasWorkerPassiveBadge as WorkerPassiveBadge,
   TimelineClipCanvasWorkerProgressBar as WorkerProgressBar,
@@ -237,6 +238,41 @@ function drawClipWaveform(
   } else {
     drawWaveformCenterLine(context, w, h, 0.18);
   }
+  context.restore();
+}
+
+function drawWorkerMidiPreview(
+  context: OffscreenCanvasRenderingContext2D,
+  midiPreview: WorkerMidiPreviewResource | undefined,
+  x: number,
+  top: number,
+  width: number,
+  height: number,
+): void {
+  if (!midiPreview || midiPreview.barCount <= 0 || midiPreview.bars.length < midiPreview.barCount * 5) {
+    return;
+  }
+
+  const bodyHeight = Math.max(1, height - 2);
+  context.save();
+  context.beginPath();
+  context.roundRect(x, top, width, bodyHeight, Math.min(4, bodyHeight / 4));
+  context.clip();
+  context.fillStyle = midiPreview.mode === 'density'
+    ? 'rgba(198, 218, 255, 1)'
+    : 'rgba(210, 226, 255, 1)';
+
+  for (let index = 0; index < midiPreview.barCount; index += 1) {
+    const offset = index * 5;
+    const barX = midiPreview.bars[offset] ?? 0;
+    const barY = midiPreview.bars[offset + 1] ?? 0;
+    const barW = midiPreview.bars[offset + 2] ?? 0;
+    const barH = midiPreview.bars[offset + 3] ?? 0;
+    if (barW <= 0 || barH <= 0) continue;
+    context.globalAlpha = Math.max(0.08, Math.min(1, midiPreview.bars[offset + 4] ?? 0.7));
+    context.fillRect(x + barX, top + barY, barW, barH);
+  }
+
   context.restore();
 }
 
@@ -708,6 +744,7 @@ function estimateWorkerClipResourceBytes(clip: WorkerPlainClip): number {
     (clip.fadeVisuals?.curves.byteLength ?? 0) +
     (clip.fadeVisuals?.points.byteLength ?? 0) +
     (clip.waveform?.columns.byteLength ?? 0) +
+    (clip.midiPreview?.bars.byteLength ?? 0) +
     (clip.spectrogram?.values.byteLength ?? 0);
 }
 
@@ -753,6 +790,7 @@ function draw(msg: DrawMessage): DrawnMessage {
       thumbnailClipCount += 1;
       thumbnailDrawCount += drawClipThumbnailStrip(ctx, clip, top);
     }
+    drawWorkerMidiPreview(ctx, clip.midiPreview, x, top, w, height);
     drawClipSpectrogram(ctx, clip, top, height);
     drawClipWaveform(ctx, clip, top, height);
     const compositionThumbnailDraws = drawWorkerCompositionDecorations(ctx, clip, top, height);

@@ -23,7 +23,8 @@ export function isInfiniteTimelineSourceType(sourceType: string | null | undefin
     sourceType === 'solid' ||
     sourceType === 'camera' ||
     sourceType === 'splat-effector' ||
-    sourceType === 'math-scene';
+    sourceType === 'math-scene' ||
+    sourceType === 'midi';
 }
 
 export function canLoopExtendTimelineVectorClip(clip: Pick<TimelineClipSourceTimingLike, 'source'>): boolean {

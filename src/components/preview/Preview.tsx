@@ -543,10 +543,8 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
     compositions: s.compositions,
     activeCompositionId: s.activeCompositionId,
   })));
-  const { addPreviewPanel, updatePanelData, closePanelById } = useDockStore(useShallow(s => ({
-    addPreviewPanel: s.addPreviewPanel,
+  const { updatePanelData } = useDockStore(useShallow(s => ({
     updatePanelData: s.updatePanelData,
-    closePanelById: s.closePanelById,
   })));
   const { previewQuality, setPreviewQuality } = useSettingsStore(useShallow(s => ({
     previewQuality: s.previewQuality,
@@ -2564,9 +2562,6 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
         dropdownStyle={dropdownStyle}
         compositions={compositions}
         setPanelSource={setPanelSource}
-        panelId={panelId}
-        addPreviewPanel={addPreviewPanel}
-        closePanelById={closePanelById}
       />
 
       {/* Source monitor overlay - shown on top when active */}

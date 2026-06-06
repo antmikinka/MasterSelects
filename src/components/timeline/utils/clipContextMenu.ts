@@ -252,6 +252,7 @@ export interface CreateClipContextMenuModelInput {
 export interface ClipContextMenuModel {
   isVideo: boolean;
   isAudio: boolean;
+  isMidi: boolean;
   isSolid: boolean;
   targetClipIds: string[];
   clipLinkAffectedIds: string[];
@@ -382,6 +383,7 @@ export function createClipContextMenuModel(input: CreateClipContextMenuModelInpu
   const sourceType = input.clip?.source?.type;
   const isVideo = sourceType === 'video';
   const isAudio = sourceType === 'audio';
+  const isMidi = sourceType === 'midi';
   const isSolid = sourceType === 'solid';
   const targetClipIds = getClipContextMenuTargetClipIds(input.clipId, input.selectedClipIds)
     .filter((clipId) => input.clipMap.has(clipId));
@@ -414,6 +416,7 @@ export function createClipContextMenuModel(input: CreateClipContextMenuModelInpu
   return {
     isVideo,
     isAudio,
+    isMidi,
     isSolid,
     targetClipIds,
     clipLinkAffectedIds,

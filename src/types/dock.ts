@@ -19,6 +19,11 @@ export const WIP_PANEL_TYPES: PanelType[] = ['multicam', 'transitions'];
 // Deprecated panel types stay in the union only so persisted layouts can be migrated away.
 export const DEPRECATED_PANEL_TYPES: PanelType[] = ['ai-video', 'youtube', 'download'];
 
+// Panel types that may exist more than once at the same time. These spawn a fresh,
+// independent instance (unique id) from the tab-bar "+" instead of focusing the
+// existing one. Timeline is intentionally excluded (single instance).
+export const MULTI_INSTANCE_PANEL_TYPES: PanelType[] = ['preview'];
+
 // AI panel types for View menu grouping
 export const AI_PANEL_TYPES: PanelType[] = ['ai-chat', 'ai-segment', 'scene-description'];
 
