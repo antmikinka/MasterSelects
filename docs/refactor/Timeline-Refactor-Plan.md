@@ -1,5 +1,11 @@
 # Timeline.tsx Refactoring Plan
 
+> Historical document. Do not use this as the active plan for new timeline
+> work. It targets an older `Timeline.tsx` shape and stale line counts. New
+> timeline-system refactor work should use
+> `docs/refactor/Timeline-System-Refactor-Plan.md` and
+> `docs/refactor/Timeline-System-Refactor-Handoff.md`.
+
 > **Target Audience:** AI Agent performing the refactor
 > **Source File:** `src/components/timeline/Timeline.tsx` (2109 LOC)
 > **Goal:** Split into focused modules, remove duplicates, target ~900 LOC main file

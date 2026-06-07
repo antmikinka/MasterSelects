@@ -113,7 +113,6 @@ When taking over a GitHub issue, always use this flow:
 3. Create a new Git branch for the issue and link it to the issue on GitHub.
 4. Clone that branch into a new separate folder, then work from that folder so other agents can stay in their own working directories.
 5. Implement the issue in that branch folder.
-5.5 test and repeat till it works
 6. Commit and push to the issue branch at the agent's discretion when the work is coherent and locally checked.
 7. When the user says that everything works, merge the issue branch to `master` without waiting for GitHub checks.
 8. After the merge, comment on the issue with the result.
@@ -124,7 +123,7 @@ This issue workflow is an explicit exception to the general "do not push indepen
 
 During ongoing work, test deliberately: choose relevant unit/smoke tests, build, or lint according to risk and change scope. The full suite is not required after every small intermediate change and should not be run routinely because of time/token cost.
 
-Before every normal push, all checks are mandatory:
+Before every normal commit, all checks are mandatory:
 
 ```bash
 npm run build
@@ -288,200 +287,6 @@ The watcher writes local reports to `.codex-usage/`, which stays local and is gi
 
 ---
 
-## 6A. Timeline Refactor Agent Execution Protocol
-
-This section applies when working on the timeline system refactor described in:
-
-- `docs/refactor/timeline-system-agent-plans/cross-team-final-synthesis.md`
-- `docs/refactor/Timeline-System-Refactor-Plan.md`
-- `docs/refactor/Timeline-System-Refactor-Handoff.md`
-
-The refactor goal is the clean long-term architecture, not compatibility
-preservation and not a minimum-risk patch. Risk and churn are acceptable when
-they move toward the agreed architecture.
-
-### Required Read Before Editing
-
-Before editing timeline refactor code, every main agent and spawned agent must
-read:
-
-1. `docs/refactor/timeline-system-agent-plans/cross-team-final-synthesis.md`
-2. `docs/refactor/Timeline-System-Refactor-Handoff.md`
-3. The current lane/gate/debt files if they already exist:
-   - `src/timeline/architecture/gateRegistry*`
-   - `src/timeline/architecture/laneWriteManifest*`
-   - `src/timeline/architecture/adapterDebtLedger*`
-   - `src/timeline/architecture/exitCriteriaCoverage*`
-   - `src/timeline/architecture/testMigrationLedger*`
-   - `src/timeline/architecture/retiredPathLedger*`
-
-If those architecture registry files do not exist yet, the first implementation
-packet is to create them and the `P1_ARCHITECTURE_REGISTRY_COHERENT` test before
-large code movement.
-
-The first packet is not complete with registry shape alone. Before broad
-timeline implementation starts, the P1 suite must also include and pass:
-
-- `P1_KERNEL_IMPORT_BOUNDARY`
-- `P1_LOC_BUDGET_ENFORCED`
-- `P1_SCHEMA_RUNTIME_FREE_BOUNDARY`
-- `P1_VISUAL_DEMAND_NAME_ISOLATED`
-- `P1_HIGH_CONFLICT_OWNERSHIP_COMPLETE`
-- `P1_TEST_AND_RETIRED_PATH_CLASSIFICATION`
-
-### Parallel Agent Rules
-
-Parallel agents are encouraged only when write sets are disjoint.
-
-- One owner per high-conflict file at a time:
-  - `src/components/timeline/Timeline.tsx`
-  - `src/components/timeline/TimelineTrack.tsx`
-  - `src/components/timeline/TimelineClipCanvas.tsx`
-  - `src/components/timeline/types.ts`
-  - `src/components/timeline/hooks/useExternalDrop.ts`
-  - `src/stores/timeline/clipSlice.ts`
-  - `src/stores/timeline/keyframeSlice.ts`
-  - `src/stores/timeline/editOperations/**`
-  - `src/stores/timeline/trackSlice.ts`
-  - `src/stores/timeline/helpers/blobUrlManager.ts`
-  - `src/services/layerBuilder/VideoSyncManager.ts`
-  - `src/services/layerBuilder/AudioTrackSyncManager.ts`
-- A spawned agent must state its lane, intended write set, forbidden files, and
-  expected gate/test output in its initial response or handoff note.
-- A verifier lane may touch tests, docs, and diagnostics only unless explicitly
-  assigned implementation files.
-- If two lanes need the same high-conflict file, sequence them. Do not resolve by
-  racing edits.
-- Ownership transfers happen through the lane manifest once it exists; before
-  that, record them in `Timeline-System-Refactor-Handoff.md`.
-
-### No-God-Object Rule
-
-Do not create a new large central object while removing the old ones.
-
-Timeline refactor files should follow these targets unless a gate explicitly
-allows an exception:
-
-- React host components: target <= 400 LOC; root shell <= 700 LOC.
-- Pure builders/planners: target <= 250 LOC per file.
-- Paint modules: target <= 200 LOC per facet/painter file.
-- Contributor/registry modules: target <= 300 LOC per source/capability module.
-- Coherence envelopes such as `buildTimelineFrame`: composition-only, target
-  <= 80 LOC, no per-clip feature logic.
-- No broad `helpers.ts`, `utils.ts`, `viewModel`, or stateful
-  `timelineCommandBus` dumping grounds.
-- No source-kind switches outside registered contributors/capabilities.
-
-When a file must exceed a target temporarily, record it in the adapter/debt
-ledger or handoff with owner, delete/split gate, and focused checks.
-
-### Retired/Unused Code Rule
-
-During the timeline refactor, old unused code is a removal target. Do not leave
-legacy render, runtime, restore, callback, geometry, or compatibility paths as
-quiet fallback code after the new path owns the behavior.
-
-Classify every retired path touched by the refactor as one of:
-
-- `delete now`: remove it in the current slice.
-- `delete at gate`: keep temporarily with owner, write set, introduced phase,
-  delete gate, and replacement coverage.
-- `move to importer`: old-project compatibility only, isolated at the load
-  boundary.
-- `keep`: still part of the target architecture, with a named reason.
-
-This applies to `CanvasClip` adapters, passive render helpers, duplicated
-worker/main painter logic, scattered manual geometry mapping, direct callback
-plumbing superseded by command planners, runtime-bearing restore/source
-compatibility in editor paths, stale refactor docs, and orphan tests that only
-assert deleted compatibility behavior.
-
-### Timeline Test Migration Rule
-
-Tests move with behavior, not retired filenames. For each affected old test,
-classify it as:
-
-- `port`: same user-visible behavior rewritten against new contracts/hosts.
-- `replace`: old implementation assertion replaced by a gate, parity, or
-  integration test for the new architecture.
-- `split`: test contains both target behavior and rejected legacy internals;
-  port/replace target behavior and delete legacy assertions at the owning gate.
-- `delete`: test only protects removed compatibility, fallback, adapter, or
-  legacy internals.
-- `keep`: still valid target behavior and not coupled to retired internals.
-
-Do not preserve tests that force the new architecture to keep rejected legacy
-paths. Do not delete user-visible behavior coverage until it is ported or
-replaced by a focused gate/parity test.
-
-### Check Budget For Timeline Refactor
-
-During timeline refactor implementation, do not run broad checks just to be
-safe. Run the narrowest checks that prove the gate or changed code.
-
-Use this order:
-
-1. Gate-specific tests named in the current phase.
-2. Unit tests for touched builders, contracts, hosts, stores, or services.
-3. Touched-file ESLint only when moving or changing lint-sensitive React/TS.
-4. `npx tsc -p tsconfig.app.json --noEmit --pretty false` only when changing
-   public TS contracts, module boundaries, imports, or cross-lane types.
-5. Browser/AI-bridge smokes only when changing rendering, worker handoff,
-   hit-testing, playback, export, or project-load behavior.
-6. Full `npm run build`, `npm run lint`, and `npm run test` only before normal
-   commit, push, merge, release, final commit readiness, or when the user
-   explicitly asks for them.
-
-Do not repeat a broad check chain when it already passed on the exact same HEAD
-after the latest changes. Reuse the result and say so.
-
-If a higher-priority instruction requires broader checks, follow it, but record
-why the broader check was run. Otherwise this section is the repo-specific rule
-that prevents repetitive build/test cycles during the refactor.
-
-### Handoff Requirements
-
-At the end of any timeline refactor slice, update
-`docs/refactor/Timeline-System-Refactor-Handoff.md` with:
-
-- one-line progress marker in the form
-  `Progress: <lane> <percent>% | Gate: <gate> | Status: <blocked/active/done>`
-- lane name and owner
-- files changed
-- gates satisfied, still active, or retired
-- exact checks run and their result
-- checks deliberately skipped and why
-- adapter debt added or removed
-- retired paths deleted, moved, kept, or left as debt
-- tests ported, replaced, deleted, kept, or split
-- high-conflict file ownership changes
-- next recommended slice
-
-For spawned agents, the final response must include the same information in
-short form, starting with the progress marker. If the agent only did research,
-it must say which files it read and which decision it supports or challenges.
-
-Keep handoff entries concise. Prefer compact bullets over explanation. Do not
-paste full logs; cite the command and summarize the result. During longer
-timeline-refactor runs, report the current progress marker to the user
-regularly so the user can tell which lane/gate is moving without reading the
-handoff file.
-
-### Clean Rebuild Rule
-
-Do not preserve legacy runtime/render paths inside the new timeline pipeline.
-Old project support, if kept, belongs to a separate one-way importer at the load
-boundary and must not leak into `src/timeline/**`, canvas hosts, worker draw
-code, runtime allocation, or editor interaction.
-
-Canvas cleanup is not the end of the timeline refactor. Runtime and store
-cleanup must be tracked through later gates such as
-`P4_RUNTIME_PROVIDER_DEMAND_ADOPTED`,
-`P4_TIMELINE_STATE_RUNTIME_HANDLES_REMOVED`, and
-`P4_IMPORTER_LEGACY_QUARANTINE`.
-
----
-
 ## 7. Quick Reference
 
 ```bash
@@ -618,7 +423,15 @@ Logger.dump(50)
 Logger.summary()
 ```
 
+### Common Problems
 
+| Problem | Check |
+|---|---|
+| Black canvas | Check `readyState >= 2` |
+| Device mismatch | HMR broken, reload page |
+| Linux at 15fps | Check Vulkan flag |
+| WebCodecs error | Expect fallback to HTMLVideoElement |
+| Black after refresh | Cold-start / restore path, hard reload if needed |
 
 ### Playback Debugging
 

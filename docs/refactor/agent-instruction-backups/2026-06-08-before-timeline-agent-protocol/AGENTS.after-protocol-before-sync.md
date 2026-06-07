@@ -312,22 +312,10 @@ read:
    - `src/timeline/architecture/laneWriteManifest*`
    - `src/timeline/architecture/adapterDebtLedger*`
    - `src/timeline/architecture/exitCriteriaCoverage*`
-   - `src/timeline/architecture/testMigrationLedger*`
-   - `src/timeline/architecture/retiredPathLedger*`
 
 If those architecture registry files do not exist yet, the first implementation
 packet is to create them and the `P1_ARCHITECTURE_REGISTRY_COHERENT` test before
 large code movement.
-
-The first packet is not complete with registry shape alone. Before broad
-timeline implementation starts, the P1 suite must also include and pass:
-
-- `P1_KERNEL_IMPORT_BOUNDARY`
-- `P1_LOC_BUDGET_ENFORCED`
-- `P1_SCHEMA_RUNTIME_FREE_BOUNDARY`
-- `P1_VISUAL_DEMAND_NAME_ISOLATED`
-- `P1_HIGH_CONFLICT_OWNERSHIP_COMPLETE`
-- `P1_TEST_AND_RETIRED_PATH_CLASSIFICATION`
 
 ### Parallel Agent Rules
 
@@ -342,8 +330,6 @@ Parallel agents are encouraged only when write sets are disjoint.
   - `src/stores/timeline/clipSlice.ts`
   - `src/stores/timeline/keyframeSlice.ts`
   - `src/stores/timeline/editOperations/**`
-  - `src/stores/timeline/trackSlice.ts`
-  - `src/stores/timeline/helpers/blobUrlManager.ts`
   - `src/services/layerBuilder/VideoSyncManager.ts`
   - `src/services/layerBuilder/AudioTrackSyncManager.ts`
 - A spawned agent must state its lane, intended write set, forbidden files, and
@@ -354,65 +340,6 @@ Parallel agents are encouraged only when write sets are disjoint.
   racing edits.
 - Ownership transfers happen through the lane manifest once it exists; before
   that, record them in `Timeline-System-Refactor-Handoff.md`.
-
-### No-God-Object Rule
-
-Do not create a new large central object while removing the old ones.
-
-Timeline refactor files should follow these targets unless a gate explicitly
-allows an exception:
-
-- React host components: target <= 400 LOC; root shell <= 700 LOC.
-- Pure builders/planners: target <= 250 LOC per file.
-- Paint modules: target <= 200 LOC per facet/painter file.
-- Contributor/registry modules: target <= 300 LOC per source/capability module.
-- Coherence envelopes such as `buildTimelineFrame`: composition-only, target
-  <= 80 LOC, no per-clip feature logic.
-- No broad `helpers.ts`, `utils.ts`, `viewModel`, or stateful
-  `timelineCommandBus` dumping grounds.
-- No source-kind switches outside registered contributors/capabilities.
-
-When a file must exceed a target temporarily, record it in the adapter/debt
-ledger or handoff with owner, delete/split gate, and focused checks.
-
-### Retired/Unused Code Rule
-
-During the timeline refactor, old unused code is a removal target. Do not leave
-legacy render, runtime, restore, callback, geometry, or compatibility paths as
-quiet fallback code after the new path owns the behavior.
-
-Classify every retired path touched by the refactor as one of:
-
-- `delete now`: remove it in the current slice.
-- `delete at gate`: keep temporarily with owner, write set, introduced phase,
-  delete gate, and replacement coverage.
-- `move to importer`: old-project compatibility only, isolated at the load
-  boundary.
-- `keep`: still part of the target architecture, with a named reason.
-
-This applies to `CanvasClip` adapters, passive render helpers, duplicated
-worker/main painter logic, scattered manual geometry mapping, direct callback
-plumbing superseded by command planners, runtime-bearing restore/source
-compatibility in editor paths, stale refactor docs, and orphan tests that only
-assert deleted compatibility behavior.
-
-### Timeline Test Migration Rule
-
-Tests move with behavior, not retired filenames. For each affected old test,
-classify it as:
-
-- `port`: same user-visible behavior rewritten against new contracts/hosts.
-- `replace`: old implementation assertion replaced by a gate, parity, or
-  integration test for the new architecture.
-- `split`: test contains both target behavior and rejected legacy internals;
-  port/replace target behavior and delete legacy assertions at the owning gate.
-- `delete`: test only protects removed compatibility, fallback, adapter, or
-  legacy internals.
-- `keep`: still valid target behavior and not coupled to retired internals.
-
-Do not preserve tests that force the new architecture to keep rejected legacy
-paths. Do not delete user-visible behavior coverage until it is ported or
-replaced by a focused gate/parity test.
 
 ### Check Budget For Timeline Refactor
 
@@ -444,28 +371,18 @@ that prevents repetitive build/test cycles during the refactor.
 At the end of any timeline refactor slice, update
 `docs/refactor/Timeline-System-Refactor-Handoff.md` with:
 
-- one-line progress marker in the form
-  `Progress: <lane> <percent>% | Gate: <gate> | Status: <blocked/active/done>`
 - lane name and owner
 - files changed
 - gates satisfied, still active, or retired
 - exact checks run and their result
 - checks deliberately skipped and why
 - adapter debt added or removed
-- retired paths deleted, moved, kept, or left as debt
-- tests ported, replaced, deleted, kept, or split
 - high-conflict file ownership changes
 - next recommended slice
 
 For spawned agents, the final response must include the same information in
-short form, starting with the progress marker. If the agent only did research,
-it must say which files it read and which decision it supports or challenges.
-
-Keep handoff entries concise. Prefer compact bullets over explanation. Do not
-paste full logs; cite the command and summarize the result. During longer
-timeline-refactor runs, report the current progress marker to the user
-regularly so the user can tell which lane/gate is moving without reading the
-handoff file.
+short form. If the agent only did research, it must say which files it read and
+which decision it supports or challenges.
 
 ### Clean Rebuild Rule
 
@@ -473,12 +390,6 @@ Do not preserve legacy runtime/render paths inside the new timeline pipeline.
 Old project support, if kept, belongs to a separate one-way importer at the load
 boundary and must not leak into `src/timeline/**`, canvas hosts, worker draw
 code, runtime allocation, or editor interaction.
-
-Canvas cleanup is not the end of the timeline refactor. Runtime and store
-cleanup must be tracked through later gates such as
-`P4_RUNTIME_PROVIDER_DEMAND_ADOPTED`,
-`P4_TIMELINE_STATE_RUNTIME_HANDLES_REMOVED`, and
-`P4_IMPORTER_LEGACY_QUARANTINE`.
 
 ---
 
