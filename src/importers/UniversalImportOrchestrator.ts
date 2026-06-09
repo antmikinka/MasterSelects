@@ -6,6 +6,7 @@ import {
   builtinBinaryFallbackImporter,
   BUILTIN_BINARY_FALLBACK_IMPORTER_ID,
   builtinCsvImporter,
+  builtinJsonImporter,
 } from './providers';
 import type {
   BuiltinSignalImportProvider,
@@ -55,6 +56,7 @@ export class UniversalImportOrchestrator {
 
     [
       builtinCsvImporter,
+      builtinJsonImporter,
       builtinBinaryFallbackImporter,
       ...(options.providers ?? []),
     ].forEach((provider) => this.registerBuiltinProvider(provider));
@@ -172,12 +174,26 @@ export class UniversalImportOrchestrator {
       now: this.now,
       absolutePath: options.absolutePath,
     });
+    const actualProviderId = result.asset.source.providerId;
+    const actualProvider = actualProviderId ? this.providers.get(actualProviderId) : undefined;
+    const actualManifest = actualProviderId ? this.registry.get(actualProviderId) : undefined;
+    const resolvedProvider = actualProvider && actualManifest ? actualProvider : provider;
+    const resolvedManifest = actualProvider && actualManifest ? actualManifest : plan.provider;
+    const resolvedPolicyDecision = resolvedProvider === provider
+      ? policyDecision
+      : this.registry.checkProviderCapabilities(
+        resolvedManifest.id,
+        resolvedProvider.requiredCapabilities,
+      );
+    if (!resolvedPolicyDecision.allowed) {
+      throw new Error(resolvedPolicyDecision.reason);
+    }
 
     return {
       route: 'signal',
-      provider: plan.provider,
-      requiredCapabilities: provider.requiredCapabilities,
-      policyDecision,
+      provider: resolvedManifest,
+      requiredCapabilities: resolvedProvider.requiredCapabilities,
+      policyDecision: resolvedPolicyDecision,
       asset: result.asset,
       artifactPayloads: result.artifactPayloads,
       diagnostics: result.diagnostics,

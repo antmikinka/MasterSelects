@@ -95,6 +95,9 @@ function titleForKind(kind: SignalKind | undefined): string {
 
 function getPrimaryRef(item: SignalAssetItem): SignalRef | undefined {
   const refs = item.asset.refs;
+  const jsonSummaryRef = refs.find((ref) => ref.kind === 'metadata' && isJsonSummaryMetadata(ref.metadata ?? {}));
+  if (jsonSummaryRef) return jsonSummaryRef;
+
   for (const kind of PRIMARY_KIND_ORDER) {
     const match = refs.find((ref) => ref.kind === kind);
     if (match) return match;
@@ -143,6 +146,22 @@ function formatPreviewRows(value: unknown): string[] {
   }).filter(Boolean);
 }
 
+function isJsonSummaryMetadata(metadata: SignalMetadata): boolean {
+  return metadata.summaryFormat === 'masterselects.json-summary' ||
+    (metadata.format === 'json' || metadata.format === 'jsonl');
+}
+
+function formatHistogram(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const labels = ['object', 'array', 'string', 'number', 'boolean', 'null']
+    .map((key) => {
+      const count = value[key];
+      return typeof count === 'number' && count > 0 ? `${key}:${count}` : undefined;
+    })
+    .filter((entry): entry is string => Boolean(entry));
+  return labels.length > 0 ? labels.join(' | ') : undefined;
+}
+
 function buildTableLines(metadata: SignalMetadata): string[] {
   const rowCount = typeof metadata.rowCount === 'number' ? metadata.rowCount : undefined;
   const columnCount = typeof metadata.columnCount === 'number' ? metadata.columnCount : undefined;
@@ -167,16 +186,43 @@ function buildTableLines(metadata: SignalMetadata): string[] {
   return lines;
 }
 
+function buildJsonLines(metadata: SignalMetadata): string[] {
+  const format = displayValue(metadata.format).toUpperCase() || 'JSON';
+  const topLevelType = displayValue(metadata.topLevelType).trim();
+  const keyCount = typeof metadata.keyCount === 'number' ? metadata.keyCount : undefined;
+  const arrayLength = typeof metadata.arrayLength === 'number' ? metadata.arrayLength : undefined;
+  const depth = typeof metadata.depth === 'number' ? metadata.depth : undefined;
+  const histogram = formatHistogram(metadata.valueTypeHistogram);
+  const preview = displayValue(metadata.preview).trim();
+  const diagnostics = getArrayOfStrings(metadata.diagnostics);
+  const lines: string[] = [];
+
+  lines.push(topLevelType ? `${format} ${topLevelType}` : format);
+  if (keyCount !== undefined) lines.push(`${keyCount} top-level keys`);
+  if (arrayLength !== undefined) lines.push(`${arrayLength} ${metadata.format === 'jsonl' ? 'records' : 'items'}`);
+  if (depth !== undefined) lines.push(`Depth ${depth}`);
+  if (histogram) lines.push(truncateLine(histogram));
+  if (preview) lines.push(`Preview ${truncateLine(preview)}`);
+  diagnostics.slice(0, 2).forEach((diagnostic) => lines.push(truncateLine(diagnostic)));
+  return lines;
+}
+
 function buildBinaryLines(item: SignalAssetItem, metadata: SignalMetadata): string[] {
   const lines: string[] = [];
   const mimeType = displayValue(metadata.mimeType || item.asset.source.mimeType).trim();
+  const sniffedMimeType = displayValue(metadata.sniffedMimeType).trim();
+  const signature = displayValue(metadata.signature).trim();
   const byteLength = typeof metadata.byteLength === 'number' ? metadata.byteLength : item.fileSize;
   const formattedSize = formatBytes(byteLength);
   const headerHex = displayValue(metadata.headerHex).trim();
+  const headerAscii = displayValue(metadata.headerAscii).trim();
 
-  if (mimeType) lines.push(mimeType);
-  if (formattedSize) lines.push(formattedSize);
-  if (headerHex) lines.push(`Header ${truncateLine(headerHex)}`);
+  if (mimeType) lines.push(`MIME ${mimeType}`);
+  if (sniffedMimeType && sniffedMimeType !== mimeType) lines.push(`Sniffed ${sniffedMimeType}`);
+  if (signature) lines.push(`Signature ${signature}`);
+  if (formattedSize) lines.push(`Size ${formattedSize}`);
+  if (headerHex) lines.push(`Hex ${truncateLine(headerHex)}`);
+  if (headerAscii) lines.push(`ASCII ${truncateLine(headerAscii)}`);
   return lines;
 }
 
@@ -190,6 +236,9 @@ function buildMetadataLines(metadata: SignalMetadata): string[] {
 function buildBodyLines(item: SignalAssetItem, ref: SignalRef | undefined, metadata: SignalMetadata): string[] {
   if (ref?.kind === 'table') {
     return buildTableLines(metadata);
+  }
+  if (isJsonSummaryMetadata(metadata)) {
+    return buildJsonLines(metadata);
   }
   if (ref?.kind === 'binary') {
     return buildBinaryLines(item, metadata);

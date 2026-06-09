@@ -554,6 +554,21 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
   chat, ElevenLabs, generation-flow, prompt/Suno, and reference/Seedance
   controller hooks; preflights 139/141/143). Per-packet detail lives in the
   checklist. `FlashBoardComposer.tsx` is 951 LOC.
+- Wave 1 foundation/type slice completed:
+  `P1-TYPES-BARREL-ROLE-SPLIT-145`; `src/types/index.ts` is now a 550-line
+  compatibility facade over 11 role modules.
+- Wave 1 signal scout completed:
+  `P1B-SIGNAL-INTEGRATION-SCOUT-146`; follow-up gaps are timeline drop,
+  media-biased pickers, JSON provider, and mobile signal handling.
+- Wave 1 MediaPanel slice completed:
+  `P4-MEDIA-PANEL-RESUME-SPLIT-147`; classic-list planning moved to
+  `classicListPlanning.ts`, reducing `MediaPanel.tsx` to 4396 raw lines.
+- Wave 1 JSON signal provider completed:
+  `P1B-SIGNAL-JSON-PROVIDER-148`; JSON/JSONL import is concrete signal support,
+  invalid JSON falls through to enriched binary diagnostics.
+- Wave 1 import surface completed:
+  `P1B-SIGNAL-IMPORT-SURFACE-149`; desktop pickers and Media Panel import
+  surfaces accept any file while preserving the universal import route.
 
 ## High-Conflict Ownership Snapshot
 
@@ -574,22 +589,23 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 
 ## Active Packet
 
-None. `P4-FLASHBOARD-ACTIVE-REFERENCE-CONTROLLER-HOOK-SPLIT-144` is completed
-and was closed by orchestrator verification on 2026-06-09 (tsc clean, focused
-FlashBoard tests 5 files/16 tests green, dependency scan clean, diff-check and
-AGENTS/CLAUDE parity passed); its spec is collapsed per the active-queue rule.
+None. Wave 1 of goal-driven execution (`P1-TYPES-BARREL-ROLE-SPLIT-145`,
+`P1B-SIGNAL-INTEGRATION-SCOUT-146`, `P4-MEDIA-PANEL-RESUME-SPLIT-147`,
+`P1B-SIGNAL-JSON-PROVIDER-148`, `P1B-SIGNAL-IMPORT-SURFACE-149`) is completed
+and orchestrator-verified. The orchestrator is authoring the next wave:
+timeline-drop integration (`P1B-SIGNAL-TIMELINE-FILE-DROP`, protected-path
+packet authored by orchestrator), type-barrel thinning
+(`P1-TYPES-BARREL-THIN`), and the next MediaPanel split continuation.
 
 ## Queued Packets
 
-No future source packet is currently queued. The orchestrator is defining the
-FlashBoard lane closure packet next: a runtime smoke gate through the AI
-bridge (Composer opens, a generation request is submitted, an active
-generation record reaches the queue) as the exit condition for the P4
-FlashBoard Composer lane. No further Composer source split should be queued
-before that gate exists.
+No worker-owned source packet is currently queued. The orchestrator is
+authoring the next wave: timeline file-drop integration
+(`P1B-SIGNAL-TIMELINE-FILE-DROP`, protected path), type-barrel thinning
+continuation (`P1-TYPES-BARREL-THIN`), and the next MediaPanel split. The
+FlashBoard lane smoke gate remains deferred until the AI bridge is available.
 
 ## Immediate Next Step
 
-Orchestrator decision pending: define and execute the FlashBoard lane closure
-packet (runtime smoke gate), then re-point execution at foundation lanes
-(type-barrel split, Universal Signal integration) and Media Panel resumption.
+Orchestrator dispatches the next wave; FlashBoard lane smoke gate remains
+deferred until the AI bridge is available.

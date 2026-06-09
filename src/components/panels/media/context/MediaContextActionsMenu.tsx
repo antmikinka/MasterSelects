@@ -149,6 +149,7 @@ export function MediaContextActionsMenu({
           <MediaAddItemsMenu
             variant="context"
             onClose={onClose}
+            onImport={onImport}
             onNewComposition={onNewComposition}
             onNewFolder={onNewFolder}
             onNewText={onNewText}

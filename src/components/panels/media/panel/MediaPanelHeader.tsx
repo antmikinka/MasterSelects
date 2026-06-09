@@ -3,7 +3,7 @@ import { MediaPanelSearch } from './MediaPanelSearch';
 import { MediaViewModeControls } from './MediaViewModeControls';
 import type { MediaPanelViewMode } from './types';
 
-type MediaPanelAddItemHandlers = Omit<MediaAddItemsMenuProps, 'variant' | 'onClose'>;
+type MediaPanelAddItemHandlers = Omit<MediaAddItemsMenuProps, 'variant' | 'onClose' | 'onImport'>;
 
 export interface MediaPanelHeaderProps extends MediaPanelAddItemHandlers {
   query: string;
@@ -88,6 +88,7 @@ export function MediaPanelHeader({
               <MediaAddItemsMenu
                 variant="dropdown"
                 onClose={() => onAddDropdownOpenChange(false)}
+                onImport={onImport}
                 onNewComposition={onNewComposition}
                 onNewFolder={onNewFolder}
                 onNewText={onNewText}

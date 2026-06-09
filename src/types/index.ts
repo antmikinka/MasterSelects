@@ -2,44 +2,142 @@
 
 import type {
   VectorAnimationClipSettings,
-  VectorAnimationDataBindingPropertyPath,
-  VectorAnimationInputProperty,
-  VectorAnimationProvider,
-  VectorAnimationStateProperty,
 } from './vectorAnimation';
 import type { ColorCorrectionState, RuntimeColorGrade } from './colorCorrection';
-import type { MotionLayerDefinition, MotionProperty } from './motionDesign';
+import type { MotionLayerDefinition } from './motionDesign';
 import type { ClipNodeGraph } from './nodeGraph';
 import type {
-  AudioEffectParamValue,
   ClipAudioAnalysisJobState,
   ClipAudioState,
   MasterAudioState,
   TrackAudioState,
 } from './audio';
+import type { BlendMode } from './blendMode';
+import type {
+  AnalysisStatus,
+  ClipAnalysis,
+  ClipSegment,
+  ClipVideoState,
+  SceneDescriptionStatus,
+  SceneSegment,
+  TranscriptStatus,
+  TranscriptWord,
+  VideoBakeRegion,
+} from './clipMetadata';
+import type { Effect } from './effects';
+import type { Keyframe } from './keyframes';
+import type { MathSceneDefinition } from './mathScene';
+import type { ClipMask } from './masks';
+import type { Text3DProperties, TextClipProperties } from './text';
+import type { TimelineSourceType } from './timelineSource';
+import type { ClipTransform, TimelineTransition } from './timelineCore';
 
 export * from './audio';
 export * from './colorCorrection';
 export * from './motionDesign';
 export * from './nodeGraph';
-
-export type TimelineSourceType =
-  | 'video'
-  | 'audio'
-  | 'image'
-  | 'text'
-  | 'solid'
-  | 'model'
-  | 'camera'
-  | 'gaussian-avatar'
-  | 'gaussian-splat'
-  | 'splat-effector'
-  | 'math-scene'
-  | 'motion-shape'
-  | 'motion-null'
-  | 'motion-adjustment'
-  | 'midi'
-  | VectorAnimationProvider;
+export type {
+  AnimatableProperty,
+  BezierHandle,
+  CameraProperty,
+  CameraPropertyName,
+  ColorProperty,
+  EasingType,
+  EffectProperty,
+  MaskNumericProperty,
+  MaskNumericPropertyName,
+  MaskPathProperty,
+  MaskProperty,
+  NodeGraphParamProperty,
+  RotationInterpolationMode,
+  TextBoundsNumericProperty,
+  TextBoundsNumericPropertyName,
+  TextBoundsPathProperty,
+  TextBoundsProperty,
+  TransformProperty,
+} from './animationProperties';
+export {
+  createEffectProperty,
+  createMaskNumericProperty,
+  createMaskPathProperty,
+  createNodeGraphParamProperty,
+  createTextBoundsNumericProperty,
+  createTextBoundsPathProperty,
+  isCameraProperty,
+  isColorProperty,
+  isEffectProperty,
+  isMaskNumericProperty,
+  isMaskPathProperty,
+  isNodeGraphParamProperty,
+  isTextBoundsNumericProperty,
+  isTextBoundsPathProperty,
+  parseCameraProperty,
+  parseEffectProperty,
+  parseMaskProperty,
+  parseNodeGraphParamProperty,
+  parseTextBoundsProperty,
+} from './animationProperties';
+export type { BlendMode } from './blendMode';
+export type {
+  AnalysisStatus,
+  ClipAnalysis,
+  ClipSegment,
+  ClipVideoState,
+  FrameAnalysisData,
+  SceneDescriptionStatus,
+  SceneSegment,
+  TranscriptStatus,
+  TranscriptWord,
+  VideoBakeRegion,
+  VideoBakeRegionScope,
+  VideoBakeRegionStatus,
+} from './clipMetadata';
+export type { Effect, EffectType } from './effects';
+export { isAudioEffect } from './effects';
+export type { EngineStats } from './engineStats';
+export type { Keyframe } from './keyframes';
+export type {
+  MathBaseObject,
+  MathFunctionObject,
+  MathLabelObject,
+  MathObject,
+  MathObjectAnimation,
+  MathParameter,
+  MathParameterAnimation,
+  MathPointObject,
+  MathSceneDefinition,
+  MathSceneStyle,
+  MathSceneViewport,
+  MathTangentObject,
+} from './mathScene';
+export type {
+  ClipMask,
+  MaskMode,
+  MaskPathKeyframeValue,
+  MaskVertex,
+  MaskVertexHandleMode,
+  TextBoundsPath,
+} from './masks';
+export type {
+  RenderDestinationType,
+  RenderSource,
+  RenderSourceActiveComp,
+  RenderSourceComposition,
+  RenderSourceLayer,
+  RenderSourceProgram,
+  RenderSourceSlot,
+  RenderSourceType,
+  RenderTarget,
+} from './renderTarget';
+export type { Text3DProperties, TextClipProperties } from './text';
+export type { TimelineSourceType } from './timelineSource';
+export type { ClipTransform, TimelineTransition } from './timelineCore';
+export type {
+  VectorAnimationClipSettings,
+  VectorAnimationInputProperty,
+  VectorAnimationMetadata,
+  VectorAnimationProvider,
+} from './vectorAnimation';
 
 export type ModelSequencePlaybackMode = 'clamp' | 'loop';
 
@@ -115,52 +213,6 @@ export interface Layer {
   maskClipId?: string;  // Clip ID for looking up mask texture (consistent across systems)
 }
 
-export type BlendMode =
-  // Normal
-  | 'normal'
-  | 'dissolve'
-  | 'dancing-dissolve'
-  // Darken
-  | 'darken'
-  | 'multiply'
-  | 'color-burn'
-  | 'classic-color-burn'
-  | 'linear-burn'
-  | 'darker-color'
-  // Lighten
-  | 'add'
-  | 'lighten'
-  | 'screen'
-  | 'color-dodge'
-  | 'classic-color-dodge'
-  | 'linear-dodge'
-  | 'lighter-color'
-  // Contrast
-  | 'overlay'
-  | 'soft-light'
-  | 'hard-light'
-  | 'linear-light'
-  | 'vivid-light'
-  | 'pin-light'
-  | 'hard-mix'
-  // Inversion
-  | 'difference'
-  | 'classic-difference'
-  | 'exclusion'
-  | 'subtract'
-  | 'divide'
-  // Component
-  | 'hue'
-  | 'saturation'
-  | 'color'
-  | 'luminosity'
-  // Stencil
-  | 'stencil-alpha'
-  | 'stencil-luma'
-  | 'silhouette-alpha'
-  | 'silhouette-luma'
-  | 'alpha-add';
-
 export interface LayerSource {
   type: 'video' | 'image' | 'camera' | 'color' | 'text' | 'solid' | 'model' | 'gaussian-avatar' | 'gaussian-splat' | 'motion';
   modelUrl?: string;  // Blob URL to 3D model file (OBJ/glTF/GLB)
@@ -224,248 +276,6 @@ export interface NestedCompositionData {
   sceneTracks?: TimelineTrack[];
 }
 
-// Text clip typography properties
-export interface TextClipProperties {
-  // Content
-  text: string;
-
-  // Typography
-  fontFamily: string;           // e.g., 'Roboto', 'Open Sans'
-  fontSize: number;             // in pixels
-  fontWeight: number;           // 100-900
-  fontStyle: 'normal' | 'italic';
-
-  // Color
-  color: string;                // hex or rgba
-
-  // Alignment
-  textAlign: 'left' | 'center' | 'right';
-  verticalAlign: 'top' | 'middle' | 'bottom';
-
-  // Spacing
-  lineHeight: number;           // multiplier (1.2 = 120%)
-  letterSpacing: number;        // pixels
-
-  // Area text box (paragraph text)
-  boxEnabled?: boolean;          // When true, wraps and clips text inside the box
-  boxX?: number;                 // Box origin in text canvas pixels
-  boxY?: number;
-  boxWidth?: number;
-  boxHeight?: number;
-  textBounds?: TextBoundsPath;    // AE-style editable paragraph bounds/path
-
-  // Stroke (outline)
-  strokeEnabled: boolean;
-  strokeColor: string;
-  strokeWidth: number;          // pixels
-
-  // Shadow
-  shadowEnabled: boolean;
-  shadowColor: string;
-  shadowOffsetX: number;        // pixels
-  shadowOffsetY: number;
-  shadowBlur: number;           // pixels
-
-  // Text on Path (bezier curve)
-  pathEnabled: boolean;
-  pathPoints: { x: number; y: number; handleIn: { x: number; y: number }; handleOut: { x: number; y: number } }[];
-}
-
-export interface Text3DProperties {
-  text: string;
-  fontFamily: 'helvetiker' | 'optimer' | 'gentilis';
-  fontWeight: 'regular' | 'bold';
-  size: number;
-  depth: number;
-  color: string;
-  letterSpacing: number;
-  lineHeight: number;
-  textAlign: 'left' | 'center' | 'right';
-  curveSegments: number;
-  bevelEnabled: boolean;
-  bevelThickness: number;
-  bevelSize: number;
-  bevelSegments: number;
-}
-
-// Math Scene clip support
-export interface MathSceneViewport {
-  xMin: number;
-  xMax: number;
-  yMin: number;
-  yMax: number;
-  showGrid: boolean;
-  showAxes: boolean;
-}
-
-export interface MathSceneStyle {
-  backgroundColor: string;
-  axisColor: string;
-  gridColor: string;
-  labelColor: string;
-}
-
-export interface MathParameterAnimation {
-  enabled: boolean;
-  from: number;
-  to: number;
-  startTime: number;
-  endTime: number;
-  easing: EasingType;
-}
-
-export interface MathParameter {
-  id: string;
-  name: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  animation?: MathParameterAnimation;
-}
-
-export interface MathObjectAnimation {
-  reveal?: {
-    enabled: boolean;
-    startTime: number;
-    endTime: number;
-  };
-}
-
-export interface MathBaseObject {
-  id: string;
-  name: string;
-  visible: boolean;
-  opacity: number;
-  animation?: MathObjectAnimation;
-}
-
-export interface MathFunctionObject extends MathBaseObject {
-  type: 'function';
-  expression: string;
-  domain?: [number, number];
-  samples: number;
-  stroke: string;
-  strokeWidth: number;
-}
-
-export interface MathPointObject extends MathBaseObject {
-  type: 'point';
-  xExpression: string;
-  yExpression: string;
-  radius: number;
-  fill: string;
-  stroke: string;
-  labelVisible: boolean;
-}
-
-export interface MathTangentObject extends MathBaseObject {
-  type: 'tangent';
-  functionId: string;
-  atExpression: string;
-  length: number;
-  stroke: string;
-  strokeWidth: number;
-}
-
-export interface MathLabelObject extends MathBaseObject {
-  type: 'label';
-  text: string;
-  xExpression: string;
-  yExpression: string;
-  fontSize: number;
-  color: string;
-}
-
-export type MathObject =
-  | MathFunctionObject
-  | MathPointObject
-  | MathTangentObject
-  | MathLabelObject;
-
-export interface MathSceneDefinition {
-  version: 1;
-  viewport: MathSceneViewport;
-  style: MathSceneStyle;
-  parameters: MathParameter[];
-  objects: MathObject[];
-}
-
-export interface Effect {
-  id: string;
-  name: string;
-  type: EffectType;
-  enabled: boolean;
-  params: Record<string, AudioEffectParamValue>;
-}
-
-export type EffectType =
-  | 'hue-shift'
-  | 'saturation'
-  | 'brightness'
-  | 'contrast'
-  | 'blur'
-  | 'pixelate'
-  | 'kaleidoscope'
-  | 'mirror'
-  | 'invert'
-  | 'rgb-split'
-  | 'levels'
-  | 'acuarela'
-  | 'rom1'
-  | 'voxel-relief'
-  // Audio effects
-  | 'audio-eq'
-  | 'audio-volume'
-  | 'audio-pan'
-  | 'audio-normalize'
-  | 'audio-parametric-eq'
-  | 'audio-high-pass'
-  | 'audio-low-pass'
-  | 'audio-hum-notch'
-  | 'audio-de-click'
-  | 'audio-noise-reduction'
-  | 'audio-spectral-gate'
-  | 'audio-compressor'
-  | 'audio-de-esser'
-  | 'audio-limiter'
-  | 'audio-noise-gate'
-  | 'audio-expander'
-  | 'audio-delay'
-  | 'audio-reverb'
-  | 'audio-saturation'
-  | 'audio-polarity-invert'
-  | 'audio-mono-sum'
-  | 'audio-channel-swap'
-  | 'audio-stereo-split';
-
-// Helper to check if an effect type is an audio effect
-export function isAudioEffect(type: EffectType): boolean {
-  return type === 'audio-eq' ||
-    type === 'audio-volume' ||
-    type === 'audio-pan' ||
-    type === 'audio-normalize' ||
-    type === 'audio-parametric-eq' ||
-    type === 'audio-high-pass' ||
-    type === 'audio-low-pass' ||
-    type === 'audio-hum-notch' ||
-    type === 'audio-de-click' ||
-    type === 'audio-noise-reduction' ||
-    type === 'audio-spectral-gate' ||
-    type === 'audio-compressor' ||
-    type === 'audio-de-esser' ||
-    type === 'audio-limiter' ||
-    type === 'audio-noise-gate' ||
-    type === 'audio-expander' ||
-    type === 'audio-delay' ||
-    type === 'audio-reverb' ||
-    type === 'audio-saturation' ||
-    type === 'audio-polarity-invert' ||
-    type === 'audio-mono-sum' ||
-    type === 'audio-channel-swap' ||
-    type === 'audio-stereo-split';
-}
-
 export interface Project {
   id: string;
   name: string;
@@ -482,229 +292,7 @@ export interface MIDIMapping {
   max: number;
 }
 
-export interface EngineStats {
-  fps: number;
-  frameTime: number;
-  gpuMemory: number;
-  // Detailed timing (ms)
-  timing: {
-    rafGap: number;        // Time between rAF callbacks (should be ~16.67ms for 60fps)
-    importTexture: number; // Time to import video textures
-    renderPass: number;    // Time for GPU render passes
-    submit: number;        // Time for GPU queue submit
-    total: number;         // Total render time
-  };
-  // Frame drop stats
-  drops: {
-    count: number;         // Total dropped frames this session
-    lastSecond: number;    // Drops in last second
-    reason: 'none' | 'slow_raf' | 'slow_render' | 'slow_import';
-  };
-  // Current frame info
-  layerCount: number;
-  targetFps: number;
-  // Decoder info
-  decoder: 'WebCodecs' | 'HTMLVideo(VF)' | 'HTMLVideo' | 'HTMLVideo(cached)' | 'HTMLVideo(paused-cache)' | 'HTMLVideo(seeking-cache)' | 'HTMLVideo(scrub-cache)' | 'NativeHelper' | 'ParallelDecode' | 'none';
-  // WebCodecs debug info (only in full mode)
-  webCodecsInfo?: {
-    codec: string;
-    hwAccel: string;
-    decodeQueueSize: number;
-    samplesLoaded: number;
-    sampleIndex: number;
-  };
-  // Audio status
-  audio: {
-    playing: number;       // Number of audio elements currently playing
-    drift: number;         // Max audio drift from expected time in ms
-    status: 'sync' | 'drift' | 'silent' | 'error';
-  };
-  // Playback pipeline debug snapshot
-  playback?: {
-    windowMs: number;
-    pipeline: 'webcodecs' | 'vf' | 'html' | 'native' | 'parallel' | 'none';
-    status: 'ok' | 'warn' | 'bad';
-    frameEvents: number;
-    cadenceFps: number;
-    avgFrameGapMs: number;
-    p95FrameGapMs: number;
-    maxFrameGapMs: number;
-    previewFrames: number;
-    previewUpdates: number;
-    previewRenderFps: number;
-    previewUpdateFps: number;
-    avgPreviewRenderGapMs: number;
-    p95PreviewRenderGapMs: number;
-    maxPreviewRenderGapMs: number;
-    avgPreviewUpdateGapMs: number;
-    p95PreviewUpdateGapMs: number;
-    maxPreviewUpdateGapMs: number;
-    stalePreviewFrames: number;
-    stalePreviewWhileTargetMoved: number;
-    previewFreezeEvents: number;
-    previewFreezeFrames: number;
-    longestPreviewFreezeFrames: number;
-    longestPreviewFreezeMs: number;
-    avgPreviewDriftMs: number;
-    maxPreviewDriftMs: number;
-    stalls: number;
-    seeks: number;
-    advanceSeeks: number;
-    driftCorrections: number;
-    readyStateDrops: number;
-    queuePressureEvents: number;
-    healthAnomalies: number;
-    activeVideos: number;
-    playingVideos: number;
-    seekingVideos: number;
-    warmingUpVideos: number;
-    coldVideos: number;
-    worstReadyState: number;
-    lastAnomalyType?: string;
-    avgDecodeLatencyMs?: number;
-    avgSeekLatencyMs?: number;
-    avgQueueDepth?: number;
-    maxQueueDepth?: number;
-    avgAudioDriftMs?: number;
-    decoderResets?: number;
-    pendingSeekResolves?: number;
-    avgPendingSeekMs?: number;
-    maxPendingSeekMs?: number;
-    collectorHolds?: number;
-    collectorDrops?: number;
-    lastPreviewFreezePath?: string;
-    lastPreviewFreezeClipId?: string;
-    lastPreviewFreezeDurationMs?: number;
-    previewPathCounts?: Record<string, number>;
-    scrubPathCounts?: Record<string, number>;
-  };
-  // Render dispatcher debug snapshot, including non-video visual cadence.
-  renderDispatcher?: {
-    splatSequence?: {
-      targetSceneKey?: string;
-      renderedSceneKey?: string;
-      mode: 'target' | 'held' | 'missing';
-      visualFrameChangesLastSecond: number;
-      backgroundLoads: number;
-    };
-  };
-  // Main-thread frame phase breakdown
-  mainThread?: {
-    windowMs: number;
-    samples: number;
-    liveSamples: number;
-    cachedSamples: number;
-    skippedSamples: number;
-    avgTotalMs: number;
-    p95TotalMs: number;
-    maxTotalMs: number;
-    avgStatsMs: number;
-    avgBuildMs: number;
-    avgRenderMs: number;
-    avgSyncVideoMs: number;
-    avgSyncAudioMs: number;
-    avgCacheMs: number;
-    maxBuildMs: number;
-    maxRenderMs: number;
-    maxSyncVideoMs: number;
-    maxSyncAudioMs: number;
-    maxCacheMs: number;
-  };
-  // Idle mode - engine pauses rendering when nothing changes
-  isIdle: boolean;
-}
-
 // Timeline types
-
-// Transition stored on a clip (referencing transition module types)
-export interface TimelineTransition {
-  id: string;
-  type: string;  // TransitionType from transitions module
-  duration: number;  // seconds
-  linkedClipId: string;  // ID of the other clip in the transition
-}
-
-export interface ClipTransform {
-  opacity: number;          // 0-1
-  blendMode: BlendMode;
-  position: { x: number; y: number; z: number };
-  scale: { all?: number; x: number; y: number; z?: number };
-  rotation: { x: number; y: number; z: number };  // degrees
-}
-
-// Transcript word/chunk for speech-to-text
-export interface TranscriptWord {
-  id: string;
-  text: string;
-  start: number;        // Start time in seconds (relative to clip source)
-  end: number;          // End time in seconds (relative to clip source)
-  confidence?: number;  // 0-1 confidence score
-  speaker?: string;     // Speaker label if diarization available
-}
-
-// Scene description types for AI video analysis
-export type SceneDescriptionStatus = 'none' | 'describing' | 'ready' | 'error';
-
-export interface SceneSegment {
-  id: string;
-  text: string;
-  start: number;        // Start time in seconds (relative to clip source)
-  end: number;          // End time in seconds (relative to clip source)
-}
-
-// Transcript status
-export type TranscriptStatus = 'none' | 'transcribing' | 'ready' | 'error';
-
-// Analysis types for focus/motion/face detection
-export type AnalysisStatus = 'none' | 'analyzing' | 'ready' | 'error';
-
-export interface FrameAnalysisData {
-  timestamp: number;      // Time in seconds (relative to clip source)
-  motion: number;         // 0-1 overall motion score (legacy, kept for compatibility)
-  globalMotion: number;   // 0-1 camera/scene motion (whole frame changes uniformly)
-  localMotion: number;    // 0-1 object motion (localized changes within frame)
-  focus: number;          // 0-1 focus/sharpness score
-  brightness: number;     // 0-1 brightness/luminance score
-  faceCount: number;      // Number of faces detected
-  isSceneCut?: boolean;   // True if this frame is likely a scene cut
-}
-
-export interface ClipAnalysis {
-  frames: FrameAnalysisData[];
-  sampleInterval: number; // Milliseconds between samples
-}
-
-/** Segment-based thumbnails for nested composition clips */
-export interface ClipSegment {
-  clipId: string;       // ID of the source clip in the nested composition
-  clipName: string;     // Name for debugging
-  startNorm: number;    // Normalized start position (0-1)
-  endNorm: number;      // Normalized end position (0-1)
-  thumbnails: string[]; // Thumbnails from this clip's content
-}
-
-export type VideoBakeRegionScope = 'composition' | 'clip';
-export type VideoBakeRegionStatus = 'marked' | 'baking' | 'baked' | 'error';
-
-export interface VideoBakeRegion {
-  id: string;
-  scope: VideoBakeRegionScope;
-  startTime: number;
-  endTime: number;
-  createdAt: number;
-  status?: VideoBakeRegionStatus;
-  progress?: number;
-  bakedAt?: number;
-  error?: string;
-  clipId?: string;
-  trackId?: string;
-  sourceInPoint?: number;
-  sourceOutPoint?: number;
-}
-
-export interface ClipVideoState {
-  bakeRegions?: VideoBakeRegion[];
-}
 
 export interface TimelineClipDataSource {
   type: TimelineSourceType;
@@ -959,235 +547,3 @@ export interface CompositionTimelineData {
   videoBakeRegions?: VideoBakeRegion[];
   masterAudioState?: MasterAudioState;
 }
-
-// Keyframe animation types
-export type EasingType = 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'bezier';
-export type RotationInterpolationMode = 'shortest' | 'continuous';
-
-// Bezier control handle for custom curves
-export interface BezierHandle {
-  x: number;  // Time offset from keyframe (seconds, negative for in-handle)
-  y: number;  // Value offset from keyframe value
-}
-
-// Transform properties that can be animated
-export type TransformProperty =
-  | 'opacity'
-  | 'speed'
-  | 'position.x' | 'position.y' | 'position.z'
-  | 'scale.all' | 'scale.x' | 'scale.y' | 'scale.z'
-  | 'rotation.x' | 'rotation.y' | 'rotation.z';
-
-export type CameraPropertyName = 'fov' | 'near' | 'far' | 'resolutionWidth' | 'resolutionHeight';
-export type CameraProperty = `camera.${CameraPropertyName}`;
-
-// Effect property format: effect.{effectId}.{paramPath}
-// Example: effect.effect_123456.shift, effect.eq1.eq.audible.bands.band1k.gainDb
-export type EffectProperty = `effect.${string}.${string}`;
-
-// AI/custom node exposed parameter format: node.{nodeId}.{paramName}
-export type NodeGraphParamProperty = `node.${string}.${string}`;
-
-// Color correction property format: color.{versionId}.{nodeId}.{paramName}
-export type ColorProperty = `color.${string}.${string}.${string}`;
-
-// Mask property formats:
-// - mask.{maskId}.path stores the whole bezier path as one keyframe value
-// - mask.{maskId}.position.x/y and edge values remain numeric keyframes
-export type MaskPathProperty = `mask.${string}.path`;
-export type MaskNumericPropertyName = 'position.x' | 'position.y' | 'feather' | 'featherQuality';
-export type MaskNumericProperty = `mask.${string}.${MaskNumericPropertyName}`;
-export type MaskProperty = MaskPathProperty | MaskNumericProperty;
-
-// Text boundary property formats:
-// - textBounds.path stores the paragraph bounds bezier path as one keyframe value
-// - textBounds.position.x/y offset the whole text bounds path
-export type TextBoundsPathProperty = 'textBounds.path';
-export type TextBoundsNumericPropertyName = 'position.x' | 'position.y';
-export type TextBoundsNumericProperty = `textBounds.${TextBoundsNumericPropertyName}`;
-export type TextBoundsProperty = TextBoundsPathProperty | TextBoundsNumericProperty;
-
-// Combined animatable property type
-export type AnimatableProperty = TransformProperty | CameraProperty | EffectProperty | NodeGraphParamProperty | ColorProperty | MaskProperty | TextBoundsProperty | VectorAnimationInputProperty | VectorAnimationStateProperty | VectorAnimationDataBindingPropertyPath | MotionProperty;
-
-export function isCameraProperty(property: string): property is CameraProperty {
-  return /^camera\.(fov|near|far|resolutionWidth|resolutionHeight)$/.test(property);
-}
-
-export function parseCameraProperty(property: string): CameraPropertyName | null {
-  return isCameraProperty(property) ? property.slice('camera.'.length) as CameraPropertyName : null;
-}
-
-// Helper to check if a property is an effect property
-export function isEffectProperty(property: string): property is EffectProperty {
-  return property.startsWith('effect.');
-}
-
-// Helper to parse effect property into parts. paramName preserves the full nested
-// path after the effect id for compatibility with older callers.
-export function parseEffectProperty(property: EffectProperty): { effectId: string; paramName: string; paramPath: string[] } | null {
-  const parts = property.split('.');
-  if (parts.length >= 3 && parts[0] === 'effect') {
-    return { effectId: parts[1], paramName: parts.slice(2).join('.'), paramPath: parts.slice(2) };
-  }
-  return null;
-}
-
-// Helper to create effect property string
-export function createEffectProperty(effectId: string, paramName: string): EffectProperty {
-  return `effect.${effectId}.${paramName}` as EffectProperty;
-}
-
-export function isNodeGraphParamProperty(property: string): property is NodeGraphParamProperty {
-  return property.startsWith('node.');
-}
-
-export function parseNodeGraphParamProperty(property: string): { nodeId: string; paramName: string } | null {
-  const match = /^node\.([^.]+)\.(.+)$/.exec(property);
-  if (match) {
-    return { nodeId: match[1], paramName: match[2] };
-  }
-  return null;
-}
-
-export function createNodeGraphParamProperty(nodeId: string, paramName: string): NodeGraphParamProperty {
-  return `node.${nodeId}.${paramName}` as NodeGraphParamProperty;
-}
-
-export function isColorProperty(property: string): property is ColorProperty {
-  return property.startsWith('color.');
-}
-
-export function createMaskPathProperty(maskId: string): MaskPathProperty {
-  return `mask.${maskId}.path` as MaskPathProperty;
-}
-
-export function createMaskNumericProperty(maskId: string, property: MaskNumericPropertyName): MaskNumericProperty {
-  return `mask.${maskId}.${property}` as MaskNumericProperty;
-}
-
-export function isMaskPathProperty(property: string): property is MaskPathProperty {
-  return /^mask\.[^.]+\.path$/.test(property);
-}
-
-export function isMaskNumericProperty(property: string): property is MaskNumericProperty {
-  return /^mask\.[^.]+\.(position\.(x|y)|feather|featherQuality)$/.test(property);
-}
-
-export function parseMaskProperty(property: string): { maskId: string; property: 'path' | MaskNumericPropertyName } | null {
-  const match = /^mask\.([^.]+)\.(.+)$/.exec(property);
-  if (!match) return null;
-
-  const [, maskId, maskProperty] = match;
-  if (
-    maskProperty === 'path' ||
-    maskProperty === 'position.x' ||
-    maskProperty === 'position.y' ||
-    maskProperty === 'feather' ||
-    maskProperty === 'featherQuality'
-  ) {
-    return { maskId, property: maskProperty };
-  }
-  return null;
-}
-
-export function createTextBoundsPathProperty(): TextBoundsPathProperty {
-  return 'textBounds.path';
-}
-
-export function createTextBoundsNumericProperty(property: TextBoundsNumericPropertyName): TextBoundsNumericProperty {
-  return `textBounds.${property}` as TextBoundsNumericProperty;
-}
-
-export function isTextBoundsPathProperty(property: string): property is TextBoundsPathProperty {
-  return property === 'textBounds.path';
-}
-
-export function isTextBoundsNumericProperty(property: string): property is TextBoundsNumericProperty {
-  return /^textBounds\.position\.(x|y)$/.test(property);
-}
-
-export function parseTextBoundsProperty(property: string): 'path' | TextBoundsNumericPropertyName | null {
-  if (property === 'textBounds.path') return 'path';
-  if (property === 'textBounds.position.x') return 'position.x';
-  if (property === 'textBounds.position.y') return 'position.y';
-  return null;
-}
-
-// Mask types for After Effects-style clip masking
-export type MaskVertexHandleMode = 'none' | 'mirrored' | 'split';
-
-export interface MaskVertex {
-  id: string;
-  x: number;              // Position relative to clip (0-1 normalized)
-  y: number;
-  handleIn: { x: number; y: number };   // Bezier control handle (relative to vertex)
-  handleOut: { x: number; y: number };  // Bezier control handle (relative to vertex)
-  handleMode?: MaskVertexHandleMode;     // Corner, linked bezier handles, or split handles
-}
-
-export type MaskMode = 'add' | 'subtract' | 'intersect';
-
-export interface ClipMask {
-  id: string;
-  name: string;
-  vertices: MaskVertex[];
-  closed: boolean;        // Is the path closed
-  opacity: number;        // 0-1
-  feather: number;        // Blur amount in pixels
-  featherQuality: number; // 0=low (fast), 1=medium, 2=high (smooth)
-  inverted: boolean;
-  mode: MaskMode;
-  expanded: boolean;      // UI state - expanded in properties panel
-  position: { x: number; y: number };  // Offset in normalized coords (0-1)
-  enabled: boolean;       // Whether the mask affects rendering
-  visible: boolean;       // Toggle outline visibility
-  outlineColor?: string;  // Preview overlay stroke color
-}
-
-export interface TextBoundsPath {
-  id: string;
-  vertices: MaskVertex[];
-  closed: boolean;
-  position: { x: number; y: number };  // Offset in normalized text-canvas coords
-  visible?: boolean;
-  outlineColor?: string;
-}
-
-export interface MaskPathKeyframeValue {
-  vertices: MaskVertex[];
-  closed: boolean;
-}
-
-export interface Keyframe {
-  id: string;
-  clipId: string;
-  time: number;           // Time relative to clip start (seconds)
-  property: AnimatableProperty;
-  value: number;
-  pathValue?: MaskPathKeyframeValue; // Used by mask.{id}.path keyframes
-  easing: EasingType;     // Easing for interpolation TO the next keyframe
-  rotationInterpolation?: RotationInterpolationMode; // Rotation path for the segment TO the next keyframe
-  handleIn?: BezierHandle;   // Bezier control point for curve entering this keyframe
-  handleOut?: BezierHandle;  // Bezier control point for curve leaving this keyframe
-}
-
-// Re-export RenderTarget types
-export type {
-  RenderSourceType,
-  RenderSourceActiveComp,
-  RenderSourceComposition,
-  RenderSourceLayer,
-  RenderSourceSlot,
-  RenderSourceProgram,
-  RenderSource,
-  RenderDestinationType,
-  RenderTarget,
-} from './renderTarget';
-
-export type {
-  VectorAnimationClipSettings,
-  VectorAnimationInputProperty,
-  VectorAnimationMetadata,
-  VectorAnimationProvider,
-} from './vectorAnimation';

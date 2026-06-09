@@ -12,9 +12,31 @@ interface FileSystemHandlePermissionDescriptor {
 }
 
 type FilePickerWindow = Window & typeof globalThis & {
-  showOpenFilePicker: (options?: object) => Promise<FileSystemFileHandle[]>;
+  showOpenFilePicker: (options?: FilePickerOptions) => Promise<FileSystemFileHandle[]>;
   showDirectoryPicker: (options?: object) => Promise<FileSystemDirectoryHandle>;
 };
+
+interface FilePickerType {
+  description: string;
+  accept: Record<string, string[]>;
+}
+
+interface FilePickerOptions {
+  multiple?: boolean;
+  types?: FilePickerType[];
+  excludeAcceptAllOption?: boolean;
+}
+
+const DEFAULT_FILE_PICKER_TYPES: FilePickerType[] = [
+  {
+    description: 'Media Files',
+    accept: {
+      'video/*': ['.mp4', '.webm', '.mov', '.avi', '.mkv'],
+      'audio/*': ['.mp3', '.wav', '.ogg', '.aac', '.m4a'],
+      'image/*': ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'],
+    },
+  },
+];
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
@@ -82,10 +104,7 @@ export async function initFileSystemService(): Promise<void> {
 // Pick files using File System Access API
 export async function pickFiles(options?: {
   multiple?: boolean;
-  types?: Array<{
-    description: string;
-    accept: Record<string, string[]>;
-  }>;
+  types?: FilePickerType[];
 }): Promise<Array<{ file: File; handle: FileSystemFileHandle }> | null> {
   if (!isFileSystemAccessSupported()) {
     return null;
@@ -94,16 +113,9 @@ export async function pickFiles(options?: {
   try {
     const handles = await (window as FilePickerWindow).showOpenFilePicker({
       multiple: options?.multiple ?? true,
-      types: options?.types ?? [
-        {
-          description: 'Media Files',
-          accept: {
-            'video/*': ['.mp4', '.webm', '.mov', '.avi', '.mkv'],
-            'audio/*': ['.mp3', '.wav', '.ogg', '.aac', '.m4a'],
-            'image/*': ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'],
-          },
-        },
-      ],
+      types: options?.types ?? DEFAULT_FILE_PICKER_TYPES,
+      // Keeps the media filter first while exposing the browser-native "All files" option.
+      excludeAcceptAllOption: false,
     });
 
     const results: Array<{ file: File; handle: FileSystemFileHandle }> = [];

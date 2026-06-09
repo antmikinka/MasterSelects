@@ -3,11 +3,10 @@
 import React, { useCallback, useMemo, useRef, useState, useEffect, useLayoutEffect } from 'react';
 import './MediaPanel.css';
 import { Logger } from '../../services/logger';
-import { LABEL_COLORS } from './media/labelColors';
 import { CompositionSettingsDialog } from './media/CompositionSettingsDialog';
 import { SolidSettingsDialog } from './media/SolidSettingsDialog';
 import { LabelColorPicker } from './media/LabelColorPicker';
-import { getItemImportProgress, getItemWaveformProgress, isImportedMediaFileItem } from './media/itemTypeGuards';
+import { isImportedMediaFileItem } from './media/itemTypeGuards';
 import { collectDroppedMediaFiles, planDroppedMediaImports } from './media/dropImport';
 import { getMediaContextActionState } from './media/context/contextActionState';
 import { getMediaContextSelectedItemState } from './media/context/contextSelectedItemState';
@@ -22,9 +21,23 @@ import { MediaGridItem } from './media/grid/MediaGridItem';
 import { MediaFloatingFeedbackPortal } from './media/panel/MediaFloatingFeedbackPortal';
 import { MediaGenerationTrayMount } from './media/panel/MediaGenerationTrayMount';
 import { MediaClassicListChrome } from './media/list/MediaClassicListChrome';
-import { MEDIA_CLASSIC_COLUMN_LABELS } from './media/list/MediaClassicColumnHeaders';
 import { MediaClassicListRow } from './media/list/MediaClassicListRow';
-import type { MediaClassicColumnId, MediaClassicDynamicColumnWidths, MediaClassicListRowData } from './media/list/types';
+import {
+  MEDIA_CLASSIC_ROW_HEIGHT as CLASSIC_ROW_HEIGHT,
+  buildClassicMediaRows,
+  formatMediaPanelBitrate as formatBitrate,
+  formatMediaPanelFileSize as formatFileSize,
+  getClassicMediaColumnWidths,
+  getClassicVisibleRange,
+  getGaussianSplatDetailLines,
+  getGaussianSplatResolutionLabel,
+  getMediaFileCodecLabel,
+  getMediaFileContainerLabel,
+  loadMediaClassicColumnOrder,
+  saveMediaClassicColumnOrder,
+  sortClassicMediaItems,
+} from './media/list/classicListPlanning';
+import type { MediaClassicColumnId } from './media/list/types';
 import type { MediaPanelContextMenu } from './media/context/types';
 import { MediaDropOverlay } from './media/panel/MediaDropOverlay';
 import { MediaPanelHeader } from './media/panel/MediaPanelHeader';
@@ -149,14 +162,6 @@ import {
 // Column definitions
 type ColumnId = MediaClassicColumnId;
 
-const CLASSIC_ROW_HEIGHT = 20;
-const CLASSIC_OVERSCAN_ROWS = 12;
-const MEDIA_STATUS_BADGE_COLUMN_MIN_WIDTH = 58;
-const MEDIA_STATUS_BADGE_COLUMN_MAX_WIDTH = 220;
-const MEDIA_STATUS_BADGE_COLUMN_PADDING_X = 12;
-const MEDIA_STATUS_BADGE_GAP = 4;
-const MEDIA_COLUMN_TEXT_PADDING_X = 16;
-const MEDIA_COLUMN_TEXT_CHAR_WIDTH = 6.2;
 const EMPTY_TEXT_ITEMS: TextItem[] = [];
 const EMPTY_SOLID_ITEMS: SolidItem[] = [];
 const EMPTY_MESH_ITEMS: MeshItem[] = [];
@@ -166,40 +171,11 @@ const EMPTY_MATH_SCENE_ITEMS: MathSceneItem[] = [];
 const EMPTY_MOTION_SHAPE_ITEMS: MotionShapeItem[] = [];
 const EMPTY_SIGNAL_ASSETS: SignalAssetItem[] = [];
 
-type ClassicListRow = MediaClassicListRowData;
-
-const DEFAULT_COLUMN_ORDER: ColumnId[] = ['name', 'badges', 'label', 'duration', 'resolution', 'fps', 'container', 'codec', 'audio', 'bitrate', 'size'];
-const STORAGE_KEY = 'media-panel-column-order';
 const VIEW_MODE_STORAGE_KEY = 'media-panel-view-mode';
 const MEDIA_PANEL_PROJECT_UI_LOADED_EVENT = 'media-panel-project-ui-loaded';
 const MEDIA_PANEL_VIEW_TRANSITION_MS = 500;
 const MEDIA_PANEL_REVEAL_PULSE_MS = 1200;
 const MEDIA_PANEL_REVEAL_REQUEST_MAX_AGE_MS = 10000;
-
-const DYNAMIC_MEDIA_COLUMN_IDS: Exclude<ColumnId, 'name'>[] = [
-  'badges',
-  'label',
-  'duration',
-  'resolution',
-  'fps',
-  'container',
-  'codec',
-  'audio',
-  'bitrate',
-  'size',
-];
-
-const MEDIA_COLUMN_WIDTH_LIMITS: Record<Exclude<ColumnId, 'name' | 'badges'>, { min: number; max: number }> = {
-  label: { min: 24, max: 30 },
-  duration: { min: 42, max: 100 },
-  resolution: { min: 58, max: 140 },
-  fps: { min: 36, max: 72 },
-  container: { min: 48, max: 120 },
-  codec: { min: 44, max: 128 },
-  audio: { min: 42, max: 72 },
-  bitrate: { min: 52, max: 110 },
-  size: { min: 48, max: 96 },
-};
 
 interface MediaPanelTransitionBox {
   left: number;
@@ -230,39 +206,6 @@ interface ActiveMediaPanelViewTransition {
   timeoutId: number;
 }
 
-// Load column order from localStorage
-function loadColumnOrder(): ColumnId[] {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored) as ColumnId[];
-      // If all default columns are present and no extras, use saved order
-      if (parsed.length === DEFAULT_COLUMN_ORDER.length &&
-          DEFAULT_COLUMN_ORDER.every(col => parsed.includes(col))) {
-        return parsed;
-      }
-      // If saved order is missing new columns, add them
-      const missingColumns = DEFAULT_COLUMN_ORDER.filter(col => !parsed.includes(col));
-      if (missingColumns.length > 0) {
-        // Filter out any invalid columns and add missing ones
-        const validColumns = parsed.filter(col => DEFAULT_COLUMN_ORDER.includes(col));
-        missingColumns.forEach((columnId) => {
-          if (columnId === 'badges') {
-            const nameIndex = validColumns.indexOf('name');
-            validColumns.splice(nameIndex >= 0 ? nameIndex + 1 : 0, 0, columnId);
-            return;
-          }
-          validColumns.push(columnId);
-        });
-        return validColumns;
-      }
-    }
-  } catch {
-    // Ignore errors
-  }
-  return DEFAULT_COLUMN_ORDER;
-}
-
 function loadMediaPanelViewMode(): MediaPanelViewMode {
   const stored = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
   if (stored === 'board') return 'board';
@@ -278,137 +221,6 @@ function getProjectItemIconType(item: ProjectItem | undefined): string | undefin
       : 'mesh';
   }
   return item.type;
-}
-
-function clampMediaStatusBadgeColumnWidth(width: number): number {
-  return Math.max(
-    MEDIA_STATUS_BADGE_COLUMN_MIN_WIDTH,
-    Math.min(MEDIA_STATUS_BADGE_COLUMN_MAX_WIDTH, Math.ceil(width)),
-  );
-}
-function getMediaStatusBadgeWidths(item: ProjectItem): number[] {
-  const mediaFile = isImportedMediaFileItem(item) ? item : null;
-  const importProgress = getItemImportProgress(item);
-  const waveformProgress = getItemWaveformProgress(item);
-  const widths: number[] = [];
-
-  if (importProgress !== null) {
-    widths.push(Math.max(30, String(importProgress).length * 6 + 18));
-  }
-  if (importProgress === null && (waveformProgress !== null || Boolean(mediaFile?.waveform?.length || mediaFile?.audioAnalysisRefs?.waveformPyramidId))) {
-    widths.push(waveformProgress !== null ? 44 : 20);
-  }
-  if (mediaFile?.audioProxyStatus === 'ready') widths.push(20);
-  if (mediaFile?.audioProxyStatus === 'error') widths.push(28);
-  if (mediaFile?.audioProxyStatus === 'generating') widths.push(46);
-  if (
-    mediaFile?.proxyStatus === 'ready' &&
-    isProxyFrameCountComplete(
-      mediaFile.proxyFrameCount,
-      mediaFile.duration,
-      mediaFile.proxyFps ?? mediaFile.fps,
-    )
-  ) widths.push(20);
-  if (mediaFile?.proxyStatus === 'error') widths.push(28);
-  if (mediaFile?.proxyStatus === 'generating') widths.push(46);
-  if (mediaFile?.transcriptStatus === 'ready') widths.push(20);
-  if (mediaFile?.analysisStatus === 'ready') widths.push(20);
-
-  return widths;
-}
-
-function getMediaStatusBadgeColumnWidth(items: ProjectItem[]): number {
-  const maxContentWidth = items.reduce((maxWidth, item) => {
-    const widths = getMediaStatusBadgeWidths(item);
-    if (widths.length === 0) return maxWidth;
-    const contentWidth = widths.reduce((sum, width) => sum + width, 0) +
-      Math.max(0, widths.length - 1) * MEDIA_STATUS_BADGE_GAP +
-      MEDIA_STATUS_BADGE_COLUMN_PADDING_X;
-    return Math.max(maxWidth, contentWidth);
-  }, 0);
-
-  return clampMediaStatusBadgeColumnWidth(maxContentWidth);
-}
-
-function formatMediaPanelFileSize(bytes?: number): string {
-  if (!bytes) return '–';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-function formatMediaPanelBitrate(bps?: number): string {
-  if (!bps) return '–';
-  if (bps < 1000) return `${bps} bps`;
-  if (bps < 1000 * 1000) return `${(bps / 1000).toFixed(0)} kbps`;
-  return `${(bps / (1000 * 1000)).toFixed(1)} Mbps`;
-}
-
-function getClassicMediaColumnText(item: ProjectItem, colId: Exclude<ColumnId, 'name' | 'badges'>): string {
-  const mediaFile = isImportedMediaFileItem(item) ? item : null;
-  switch (colId) {
-    case 'label':
-      return '●';
-    case 'duration': {
-      const importProgress = getItemImportProgress(item);
-      return importProgress !== null
-        ? `Import ${importProgress}%`
-        : ('duration' in item && item.duration ? formatDuration(item.duration) : '–');
-    }
-    case 'resolution':
-      return getGaussianSplatResolutionLabel(item) ??
-        ('width' in item && 'height' in item && item.width && item.height ? `${item.width}×${item.height}` : '–');
-    case 'fps':
-      return mediaFile?.fps
-        ? `${mediaFile.fps}`
-        : ('type' in item && item.type === 'composition' ? `${(item as Composition).frameRate}` : '–');
-    case 'container':
-      return getMediaFileContainerLabel(mediaFile) || '–';
-    case 'codec':
-      return getMediaFileCodecLabel(mediaFile) || '–';
-    case 'audio':
-      return mediaFile?.type === 'audio' ? 'Yes' :
-        mediaFile?.type === 'image' ? '–' :
-        mediaFile?.hasAudio === true ? 'Yes' :
-        mediaFile?.hasAudio === false ? 'No' : '–';
-    case 'bitrate':
-      return formatMediaPanelBitrate(mediaFile?.bitrate);
-    case 'size':
-      return mediaFile
-        ? formatMediaPanelFileSize(mediaFile.fileSize)
-        : (isSignalAssetItem(item) ? formatMediaPanelFileSize(item.fileSize) : '–');
-    default:
-      return '';
-  }
-}
-
-function estimateClassicMediaColumnWidth(text: string): number {
-  const weightedLength = Array.from(text).reduce((sum, char) => {
-    if (char === '–' || char === '●') return sum + 1.4;
-    if (char === ' ' || char === '.' || char === ':' || char === '/') return sum + 0.55;
-    if (/[MW@#%]/.test(char)) return sum + 1.2;
-    if (/[ilI1|]/.test(char)) return sum + 0.55;
-    return sum + 1;
-  }, 0);
-  return weightedLength * MEDIA_COLUMN_TEXT_CHAR_WIDTH + MEDIA_COLUMN_TEXT_PADDING_X;
-}
-
-function getClassicMediaColumnWidths(items: ProjectItem[]): MediaClassicDynamicColumnWidths {
-  return DYNAMIC_MEDIA_COLUMN_IDS.reduce((widths, colId) => {
-    if (colId === 'badges') {
-      widths.badges = getMediaStatusBadgeColumnWidth(items);
-      return widths;
-    }
-
-    const limits = MEDIA_COLUMN_WIDTH_LIMITS[colId];
-    const headerWidth = estimateClassicMediaColumnWidth(MEDIA_CLASSIC_COLUMN_LABELS[colId]);
-    const contentWidth = items.reduce((maxWidth, item) => (
-      Math.max(maxWidth, estimateClassicMediaColumnWidth(getClassicMediaColumnText(item, colId)))
-    ), headerWidth);
-    widths[colId] = Math.max(limits.min, Math.min(limits.max, Math.ceil(contentWidth)));
-    return widths;
-  }, {} as Record<Exclude<ColumnId, 'name'>, number>);
 }
 
 async function regenerateTimelineSourceThumbnails(mediaFile: MediaFile): Promise<void> {
@@ -512,14 +324,6 @@ function isSignalAssetItem(item: ProjectItem): item is SignalAssetItem {
   return 'type' in item && item.type === 'signal';
 }
 
-function formatCompactCount(value: number | undefined): string | null {
-  if (!value || !Number.isFinite(value) || value <= 0) return null;
-  if (value < 1000) return String(Math.round(value));
-  if (value < 1_000_000) return `${(value / 1000).toFixed(value < 10_000 ? 1 : 0)}K`;
-  if (value < 1_000_000_000) return `${(value / 1_000_000).toFixed(value < 10_000_000 ? 1 : 0)}M`;
-  return `${(value / 1_000_000_000).toFixed(1)}B`;
-}
-
 interface MediaSearchToken {
   value: string;
   glob?: RegExp;
@@ -597,85 +401,6 @@ function projectItemMatchesMediaSearch(item: ProjectItem, tokens: MediaSearchTok
     }
     return searchableText.includes(token.value);
   });
-}
-
-function getGaussianSplatFrameCount(mediaFile: MediaFile): number | undefined {
-  return mediaFile.splatFrameCount ?? mediaFile.gaussianSplatSequence?.frameCount;
-}
-
-function getGaussianSplatTotalCount(mediaFile: MediaFile): number | undefined {
-  return mediaFile.totalSplatCount ?? mediaFile.gaussianSplatSequence?.totalSplatCount ?? mediaFile.splatCount;
-}
-
-function getGaussianSplatFirstFrameCount(mediaFile: MediaFile): number | undefined {
-  return mediaFile.splatCount ?? mediaFile.gaussianSplatSequence?.frames[0]?.splatCount;
-}
-
-function getGaussianSplatResolutionLabel(item: ProjectItem): string | null {
-  if (!isImportedMediaFileItem(item) || item.type !== 'gaussian-splat') return null;
-
-  const frameCount = getGaussianSplatFrameCount(item);
-  const totalCount = getGaussianSplatTotalCount(item);
-  const firstFrameCount = getGaussianSplatFirstFrameCount(item);
-  const totalLabel = formatCompactCount(totalCount);
-  const firstFrameLabel = formatCompactCount(firstFrameCount);
-
-  if (frameCount && frameCount > 1) {
-    return totalLabel ? `${frameCount}f / ${totalLabel} splats` : `${frameCount}f`;
-  }
-
-  return firstFrameLabel ? `${firstFrameLabel} splats` : null;
-}
-
-function getGaussianSplatDetailLines(mediaFile: MediaFile): string[] {
-  if (mediaFile.type !== 'gaussian-splat') return [];
-
-  const frameCount = getGaussianSplatFrameCount(mediaFile);
-  const totalCount = getGaussianSplatTotalCount(mediaFile);
-  const firstFrameCount = getGaussianSplatFirstFrameCount(mediaFile);
-  const minCount = mediaFile.gaussianSplatSequence?.minSplatCount;
-  const maxCount = mediaFile.gaussianSplatSequence?.maxSplatCount;
-  const lines: string[] = [];
-
-  if (frameCount && frameCount > 1) {
-    lines.push(`${frameCount} frames`);
-    const totalLabel = formatCompactCount(totalCount);
-    if (totalLabel) lines.push(`${totalLabel} splats total`);
-    const minLabel = formatCompactCount(minCount);
-    const maxLabel = formatCompactCount(maxCount);
-    if (minLabel && maxLabel && minLabel !== maxLabel) {
-      lines.push(`${minLabel}-${maxLabel} splats/frame`);
-    }
-  } else {
-    const firstFrameLabel = formatCompactCount(firstFrameCount);
-    if (firstFrameLabel) lines.push(`${firstFrameLabel} splats`);
-  }
-
-  return lines;
-}
-
-function getMediaFileContainerLabel(mediaFile: MediaFile | null): string | undefined {
-  if (!mediaFile) return undefined;
-  if (mediaFile.container) return mediaFile.container;
-  if (mediaFile.type === 'gaussian-splat' && mediaFile.gaussianSplatSequence?.container) {
-    const frameCount = getGaussianSplatFrameCount(mediaFile);
-    return frameCount && frameCount > 1
-      ? `${mediaFile.gaussianSplatSequence.container} Seq`
-      : mediaFile.gaussianSplatSequence.container;
-  }
-  return undefined;
-}
-
-function getMediaFileCodecLabel(mediaFile: MediaFile | null): string | undefined {
-  if (!mediaFile) return undefined;
-  if (mediaFile.codec) return mediaFile.codec;
-  if (mediaFile.type === 'gaussian-splat') {
-    const frameCount = getGaussianSplatFrameCount(mediaFile);
-    return frameCount && frameCount > 1
-      ? 'Splat Seq'
-      : 'Splat';
-  }
-  return undefined;
 }
 
 interface MediaDeleteConfirmationRequest {
@@ -891,7 +616,7 @@ export function MediaPanel() {
   const suppressMediaBoardContextMenuTimerRef = useRef<number | null>(null);
 
   // Column order state
-  const [columnOrder, setColumnOrder] = useState<ColumnId[]>(loadColumnOrder);
+  const [columnOrder, setColumnOrder] = useState<ColumnId[]>(loadMediaClassicColumnOrder);
   const [draggingColumn, setDraggingColumn] = useState<ColumnId | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<ColumnId | null>(null);
 
@@ -901,7 +626,7 @@ export function MediaPanel() {
 
   // Save column order to localStorage
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(columnOrder));
+    saveMediaClassicColumnOrder(columnOrder);
   }, [columnOrder]);
 
   useEffect(() => {
@@ -1365,65 +1090,9 @@ export function MediaPanel() {
     }
   }, [sortColumn, sortDirection]);
 
-  // Sort items comparator
-  const getSortValue = useCallback((item: ProjectItem, colId: ColumnId): string | number => {
-    const mediaFile = isImportedMediaFileItem(item) ? item : null;
-    switch (colId) {
-      case 'name': return item.name.toLowerCase();
-      case 'badges': {
-        if (!mediaFile) return 0;
-        return [
-          getItemImportProgress(item) !== null,
-          getItemWaveformProgress(item) !== null || Boolean(mediaFile.waveform?.length || mediaFile.audioAnalysisRefs?.waveformPyramidId),
-          mediaFile.proxyStatus === 'ready' || mediaFile.proxyStatus === 'generating' || mediaFile.proxyStatus === 'error',
-          mediaFile.audioProxyStatus === 'ready' || mediaFile.audioProxyStatus === 'generating' || mediaFile.audioProxyStatus === 'error',
-          mediaFile.transcriptStatus === 'ready',
-          mediaFile.analysisStatus === 'ready',
-        ].filter(Boolean).length;
-      }
-      case 'label': {
-        const labelColor = 'labelColor' in item ? (item as MediaFile).labelColor : undefined;
-        const idx = LABEL_COLORS.findIndex(c => c.key === (labelColor || 'none'));
-        return idx >= 0 ? idx : 999;
-      }
-      case 'duration': return 'duration' in item && item.duration ? item.duration : 0;
-      case 'resolution':
-        if (mediaFile?.type === 'gaussian-splat') {
-          return getGaussianSplatTotalCount(mediaFile) ?? getGaussianSplatFirstFrameCount(mediaFile) ?? 0;
-        }
-        return 'width' in item && 'height' in item && item.width && item.height ? item.width * item.height : 0;
-      case 'fps': return mediaFile?.fps || ('type' in item && item.type === 'composition' ? (item as Composition).frameRate : 0);
-      case 'container': return getMediaFileContainerLabel(mediaFile)?.toLowerCase() || '';
-      case 'codec': return getMediaFileCodecLabel(mediaFile)?.toLowerCase() || '';
-      case 'audio': return mediaFile?.hasAudio ? 1 : 0;
-      case 'bitrate': return mediaFile?.bitrate || 0;
-      case 'size': return mediaFile?.fileSize || (isSignalAssetItem(item) ? item.fileSize ?? 0 : 0);
-      default: return 0;
-    }
-  }, []);
-
   const sortItems = useCallback((items: ProjectItem[]): ProjectItem[] => {
-    if (!sortColumn) return items;
-    // Separate folders from other items - folders stay at top
-    const folderItems = items.filter(i => 'isExpanded' in i);
-    const nonFolderItems = items.filter(i => !('isExpanded' in i));
-
-    const compare = (a: ProjectItem, b: ProjectItem): number => {
-      const va = getSortValue(a, sortColumn);
-      const vb = getSortValue(b, sortColumn);
-      let result: number;
-      if (typeof va === 'string' && typeof vb === 'string') {
-        result = va.localeCompare(vb);
-      } else {
-        result = (va as number) - (vb as number);
-      }
-      return sortDirection === 'desc' ? -result : result;
-    };
-
-    folderItems.sort(compare);
-    nonFolderItems.sort(compare);
-    return [...folderItems, ...nonFolderItems];
-  }, [sortColumn, sortDirection, getSortValue]);
+    return sortClassicMediaItems(items, sortColumn, sortDirection);
+  }, [sortColumn, sortDirection]);
 
   const handleClassicListScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
     const target = event.currentTarget;
@@ -2303,22 +1972,6 @@ export function MediaPanel() {
     setInternalDragId(null);
   }, [selectedIds, moveToFolder, handleExternalDropImport]);
 
-  // Format file size
-  const formatFileSize = (bytes?: number): string => {
-    if (!bytes) return '–';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-  };
-
-  const formatBitrate = (bps?: number): string => {
-    if (!bps) return '–';
-    if (bps < 1000) return `${bps} bps`;
-    if (bps < 1000 * 1000) return `${(bps / 1000).toFixed(0)} kbps`;
-    return `${(bps / (1000 * 1000)).toFixed(1)} Mbps`;
-  };
-
   // Name column width state (resizable)
   const [nameColumnWidth, setNameColumnWidth] = useState(() => {
     const stored = localStorage.getItem('media-panel-name-width');
@@ -2328,7 +1981,7 @@ export function MediaPanel() {
 
   useEffect(() => {
     const handleProjectUiLoaded = () => {
-      setColumnOrder(loadColumnOrder());
+      setColumnOrder(loadMediaClassicColumnOrder());
       setViewMode(loadMediaPanelViewMode());
       setMediaBoardViewport(loadMediaBoardViewport());
       setMediaBoardOrder(loadMediaBoardOrder());
@@ -2571,37 +2224,22 @@ export function MediaPanel() {
   );
 
   const classicExpandedFolderIdSet = useMemo(() => new Set(expandedFolderIds), [expandedFolderIds]);
-  const classicRows = useMemo<ClassicListRow[]>(() => {
-    const rows: ClassicListRow[] = [];
-    const appendRows = (items: ProjectItem[], depth: number) => {
-      for (const item of sortItems(items)) {
-        rows.push({ item, depth });
-        if ('isExpanded' in item && (classicExpandedFolderIdSet.has(item.id) || isMediaSearchActive)) {
-          appendRows(getItemsForParent(item.id), depth + 1);
-        }
-      }
-    };
-
-    appendRows(getItemsForParent(null), 0);
-    return rows;
-  }, [
-    sortItems,
+  const classicRows = useMemo(() => buildClassicMediaRows({
     getItemsForParent,
-    classicExpandedFolderIdSet,
-    isMediaSearchActive,
-  ]);
+    expandedFolderIds: classicExpandedFolderIdSet,
+    forceExpandFolders: isMediaSearchActive,
+    sortItems,
+  }), [sortItems, getItemsForParent, classicExpandedFolderIdSet, isMediaSearchActive]);
   const dynamicMediaColumnWidths = useMemo(
     () => getClassicMediaColumnWidths(classicRows.map((row) => row.item)),
     [classicRows],
   );
 
-  const classicVisibleRange = useMemo(() => {
-    const height = Math.max(classicListViewport.height, CLASSIC_ROW_HEIGHT);
-    const start = Math.max(0, Math.floor(classicListViewport.scrollTop / CLASSIC_ROW_HEIGHT) - CLASSIC_OVERSCAN_ROWS);
-    const visibleCount = Math.ceil(height / CLASSIC_ROW_HEIGHT) + CLASSIC_OVERSCAN_ROWS * 2;
-    const end = Math.min(classicRows.length, start + visibleCount);
-    return { start, end };
-  }, [classicListViewport.height, classicListViewport.scrollTop, classicRows.length]);
+  const classicVisibleRange = useMemo(() => getClassicVisibleRange({
+    viewportHeight: classicListViewport.height,
+    scrollTop: classicListViewport.scrollTop,
+    rowCount: classicRows.length,
+  }), [classicListViewport.height, classicListViewport.scrollTop, classicRows.length]);
 
   const classicVisibleRows = useMemo(
     () => classicRows.slice(classicVisibleRange.start, classicVisibleRange.end),
@@ -4465,7 +4103,6 @@ export function MediaPanel() {
         ref={fileInputRef}
         type="file"
         multiple
-        accept="video/*,audio/*,image/*,.obj,.gltf,.glb,.ply,.compressed.ply,.splat,.ksplat,.spz,.sog,.lcc,.zip"
         style={{ display: 'none' }}
         onChange={handleFileChange}
       />

@@ -8,6 +8,7 @@ type MediaAddItemsMenuVariant = 'dropdown' | 'context';
 export interface MediaAddItemsMenuProps {
   variant: MediaAddItemsMenuVariant;
   onClose: () => void;
+  onImport: () => void;
   onNewComposition: () => void;
   onNewFolder: () => void;
   onNewText: () => void;
@@ -30,6 +31,7 @@ function titleCase(value: string): string {
 export function MediaAddItemsMenu({
   variant,
   onClose,
+  onImport,
   onNewComposition,
   onNewFolder,
   onNewText,
@@ -62,6 +64,10 @@ export function MediaAddItemsMenu({
       <div className={itemClass} onClick={() => run(onNewFolder)}>
         <span className={iconClass}><span className="media-folder-icon">&#128193;</span></span>
         <span>Folder</span>
+      </div>
+      <div className={itemClass} onClick={() => run(onImport)}>
+        <span className={iconClass}><FileTypeIcon /></span>
+        <span>Import files...</span>
       </div>
       <div className={separatorClass} />
       <div className={itemClass} onClick={() => run(onNewText)}>

@@ -13,6 +13,8 @@ export function normalizeMimeType(mimeType: string | undefined, fallback = DEFAU
 export function guessMimeType(file: File, fallback = DEFAULT_BINARY_MIME): string {
   const extension = getFileExtension(file.name);
   if (extension === 'csv') return normalizeMimeType(file.type, 'text/csv');
+  if (extension === 'json') return normalizeMimeType(file.type, 'application/json');
+  if (extension === 'jsonl') return normalizeMimeType(file.type, 'application/x-ndjson');
   return normalizeMimeType(file.type, fallback);
 }
 

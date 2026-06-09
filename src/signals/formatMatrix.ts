@@ -155,7 +155,7 @@ export const SIGNAL_FORMAT_FAMILY_MATRIX = [
       unsupportedPolicy: 'never-unsupported',
       binaryFallbackAllowed: true,
       binaryFallbackIsFinalRendererSupport: false,
-      note: 'CSV has a built-in table importer; JSON uses the same signal route contract until a parser is added.',
+      note: 'CSV and JSON have built-in signal importers; malformed JSON still falls back to binary preservation.',
     },
     fixtureTargets: [
       {
@@ -165,7 +165,7 @@ export const SIGNAL_FORMAT_FAMILY_MATRIX = [
       },
       {
         path: 'tests/unit/importers/jsonSignalImport.test.ts',
-        status: 'planned',
+        status: 'existing',
         purpose: 'JSON route fixture',
       },
     ],

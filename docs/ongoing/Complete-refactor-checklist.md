@@ -18,10 +18,11 @@ orchestrator or worker-agent execution run starts.
 - Handoff templates: prepared for execution only
 - Source implementation: current bounded source packet has explicit write set,
   forbidden files, and gates
-- Current bounded packet: none;
-  `P4-FLASHBOARD-ACTIVE-REFERENCE-CONTROLLER-HOOK-SPLIT-144` is completed and
-  an orchestrator decision is pending on FlashBoard lane closure (runtime
-  smoke gate) before any further Composer split.
+- Current bounded packet: none; wave 1 of goal-driven execution (packets
+  145-149) completed and orchestrator-verified; next wave = timeline file-drop
+  integration (protected-path packet authored by orchestrator), type-barrel
+  thinning continuation, next MediaPanel slice, FlashBoard smoke gate when the
+  dev bridge is available.
 - Completed source/tooling packet: `P0-REG-001`; focused registry checks passed.
 - Completed bounded packet: `P0-BASELINE-REFRESH-001`, read-only plus docs.
 - Completed bounded packet: `P1-CONTRACT-001`, contracts and focused boundary
@@ -1853,9 +1854,38 @@ orchestrator or worker-agent execution run starts.
   relocated `seedanceReferenceRules` import match the packet contract),
   `git diff --check` passed with only LF/CRLF warnings, and
   `fc.exe /b AGENTS.md CLAUDE.md` passed.
-- Next eligible packet: orchestrator decision pending; define the FlashBoard
-  lane closure packet (runtime smoke gate through the AI bridge) before any
-  further Composer source split.
+- Completed bounded packet:
+  `P1-TYPES-BARREL-ROLE-SPLIT-145`; split `src/types/index.ts` into 11 role modules: timeline source, blend modes, timeline core, clip metadata, text, math scene, effects, engine stats, animation properties, masks, and keyframes.
+  `index.ts` is now a compatibility re-export facade and dropped from 1194 to 550 raw lines.
+  Runtime-handle-bearing compat types deliberately stay in `index.ts` so guard classification remains stable.
+  Importer migration stays deferred.
+  Orchestrator-verified: npx tsc -b clean; 11 test files / 29 tests green (guard + mediaPanel + new importer/surface tests).
+- Completed bounded packet:
+  `P1B-SIGNAL-INTEGRATION-SCOUT-146`; read-only scout mapped universal import end-to-end.
+  CSV and binary files already route from Media Panel import to timeline text-fallback render.
+  Real gaps are direct timeline file drop being filtered out, media-biased pickers, missing JSON provider, and mobile ignoring signal assets.
+  Proposed follow-up packets cover import surfaces, timeline drop, and JSON support.
+  Orchestrator-verified: npx tsc -b clean; 11 test files / 29 tests green (guard + mediaPanel + new importer/surface tests).
+- Completed bounded packet:
+  `P4-MEDIA-PANEL-RESUME-SPLIT-147`; extracted classic-list derived-state planners into `src/components/panels/media/list/classicListPlanning.ts`.
+  The new 392-line planner owns column-order persistence, badge/width planning, metadata labels, sort values, row flattening, and virtual range calculation.
+  `MediaPanel.tsx` dropped from 4758 to 4396 raw lines.
+  Orchestrator-verified: npx tsc -b clean; 11 test files / 29 tests green (guard + mediaPanel + new importer/surface tests).
+- Completed bounded packet:
+  `P1B-SIGNAL-JSON-PROVIDER-148`; added JSON signal import support through `src/importers/json.ts` and `providers/jsonImporter.ts`.
+  Provider priority is CSV 100, JSON 95, binary fallback -1000; `.json` and `.jsonl` assets include type, key/record counts, depth, histogram, preview, and parse mode.
+  Invalid JSON delegates to binary fallback; fallback diagnostics add byte size, MIME, sniffed signature, and hex/ascii preview surfaced by `signalTextRendererAdapter`.
+  JSON format-matrix status moved planned -> existing; summaries above 1 MiB are sampled estimates.
+  Orchestrator-verified: npx tsc -b clean; 11 test files / 29 tests green (guard + mediaPanel + new importer/surface tests).
+- Completed bounded packet:
+  `P1B-SIGNAL-IMPORT-SURFACE-149`; desktop import surfaces now accept any file while keeping Media Files first and `excludeAcceptAllOption: false` in the file-system picker.
+  The Media Panel hidden input accept restriction is removed, and `MediaAddItemsMenu` wires "Import files..." through existing `onImport`.
+  `MediaPanelHeader` and `MediaContextActionsMenu` pass the command through; routing stays unchanged through `importFilesWithPicker` / `importFiles` to the universal orchestrator.
+  Orchestrator-verified: npx tsc -b clean; 11 test files / 29 tests green (guard + mediaPanel + new importer/surface tests).
+- Next eligible packet: orchestrator dispatches next wave: timeline file-drop
+  integration (protected-path packet authored by orchestrator), type-barrel
+  thinning continuation, next MediaPanel slice, and FlashBoard smoke gate when
+  the dev bridge is available.
 - Product source refactors remain blocked outside approved packet write sets.
 
 ## Document Map
