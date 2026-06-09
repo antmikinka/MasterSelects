@@ -17,7 +17,6 @@ import type { NestedCompRenderer } from './NestedCompRenderer';
 import type { PerformanceStats } from '../stats/PerformanceStats';
 import type { RenderLoop } from './RenderLoop';
 import { useRenderTargetStore } from '../../stores/renderTargetStore';
-import { useSliceStore } from '../../stores/sliceStore';
 import { useTimelineStore } from '../../stores/timeline';
 import { reportRenderTime } from '../../services/performanceMonitor';
 import { Logger } from '../../services/logger';
@@ -52,6 +51,8 @@ import {
 } from '../scene/runtime/SharedSplatRuntimeUtils';
 import type { MotionRenderer } from '../motion/MotionRenderer';
 import { getMotionRenderSize } from '../motion/MotionTypes';
+import { RenderOutputRouterAdapter } from './RenderOutputRouterAdapter';
+import type { RenderOutputRouter } from './contracts';
 
 const log = Logger.create('RenderDispatcher');
 const GAUSSIAN_PLAYBACK_SORT_FREQUENCY = 6;
@@ -217,6 +218,7 @@ export class RenderDispatcher {
   lastRenderHadContent = false;
   lastRenderDebugSnapshot: RenderDispatcherDebugSnapshot | null = null;
   private deps: RenderDeps;
+  private outputRouter: RenderOutputRouter;
   private renderTimeOverride: number | null = null;
   private lastPreviewSignature = '';
   private lastPreviewTargetTimeMs?: number;
@@ -241,8 +243,24 @@ export class RenderDispatcher {
   private lastRenderedSplatSequenceSceneKey: string | null = null;
   private splatSequenceVisualFrameChanges: number[] = [];
 
-  constructor(deps: RenderDeps) {
+  constructor(deps: RenderDeps, outputRouter?: RenderOutputRouter) {
     this.deps = deps;
+    this.outputRouter = outputRouter ?? new RenderOutputRouterAdapter({
+      canvasTargets: {
+        registerTargetCanvas: () => null,
+        unregisterTargetCanvas: (targetId) => {
+          deps.targetCanvases.delete(targetId);
+        },
+        getTargetContext: (targetId) => deps.targetCanvases.get(targetId)?.context ?? null,
+      },
+      getPreviewContext: () => this.deps.previewContext,
+      getOutputPipeline: () => this.deps.outputPipeline,
+      getSlicePipeline: () => this.deps.slicePipeline,
+      getResolution: () => this.deps.renderTargetManager?.getResolution() ?? null,
+      shouldSkipPreviewOutput: () => this.deps.exportCanvasManager.shouldSkipPreviewOutput(),
+      getExportCanvasContext: () => this.deps.exportCanvasManager.getExportCanvasContext(),
+      isExporting: () => this.deps.exportCanvasManager.getIsExporting(),
+    });
     // Legacy gaussian-avatar code stays on disk for migration/reference only.
     void this.processGaussianLayers;
     // Legacy per-layer native splat bridge stays on disk for migration/reference only.
@@ -1040,54 +1058,32 @@ export class RenderDispatcher {
     const renderTime = performance.now() - t2;
 
     // Output
-    d.outputPipeline!.updateResolution(width, height);
-
     const skipCanvas = d.exportCanvasManager.shouldSkipPreviewOutput();
+    const outputSnapshot = !skipCanvas ? this.outputRouter.captureSnapshot() : undefined;
+    const activeTargetIds = outputSnapshot?.activeCompositionTargetIds ?? [];
+    const exportCtx = d.exportCanvasManager.getExportCanvasContext();
+    const exportTarget = d.exportCanvasManager.getIsExporting() && exportCtx
+      ? {
+        context: exportCtx,
+        mode: d.exportCanvasManager.isStackedAlpha() ? 'stackedAlpha' as const : 'normal' as const,
+      }
+      : undefined;
+
+    this.outputRouter.routeCompositeFrame({
+      commandEncoder,
+      sourceView: result.finalView,
+      sampler: d.sampler,
+      snapshot: outputSnapshot,
+      targetIds: outputSnapshot?.activeCompositionTargetIds,
+      exportTarget,
+    });
+
     if (!skipCanvas) {
-      // Output to main preview canvas (legacy — no grid)
       if (d.previewContext) {
-        const mainBindGroup = d.outputPipeline!.createOutputBindGroup(d.sampler, result.finalView, 'normal');
-        d.outputPipeline!.renderToCanvas(commandEncoder, d.previewContext, mainBindGroup);
         this.recordMainPreviewFrame('composite', layerData);
-      }
-      // Output to all activeComp render targets (from unified store)
-      const activeTargets = useRenderTargetStore.getState().getActiveCompTargets();
-      const sliceState = useSliceStore.getState();
-      const sliceConfigs = sliceState.configs;
-      for (const target of activeTargets) {
-        const ctx = d.targetCanvases.get(target.id)?.context;
-        if (!ctx) continue;
-
-        // For the OM preview canvas, use the previewed target's slices (if in output mode)
-        let sliceLookupId = target.id;
-        if (target.id === '__om_preview__' && sliceState.previewingTargetId) {
-          if (sliceState.activeTab === 'output') {
-            sliceLookupId = sliceState.previewingTargetId;
-          }
-        }
-
-        const config = sliceConfigs.get(sliceLookupId);
-        const enabledSlices = config?.slices.filter((s) => s.enabled) ?? [];
-
-        if (enabledSlices.length > 0 && d.slicePipeline) {
-          d.slicePipeline.buildVertexBuffer(enabledSlices);
-          d.slicePipeline.renderSlicedOutput(commandEncoder, ctx, result.finalView, d.sampler!);
-        } else {
-          const targetBindGroup = d.outputPipeline!.createOutputBindGroup(d.sampler, result.finalView, target.showTransparencyGrid ? 'grid' : 'normal');
-          d.outputPipeline!.renderToCanvas(commandEncoder, ctx, targetBindGroup);
-        }
-      }
-      if (!d.previewContext && activeTargets.length > 0) {
+      } else if (activeTargetIds.length > 0) {
         this.recordMainPreviewFrame('target-composite', layerData);
       }
-    }
-
-    // Render to export canvas for zero-copy VideoFrame creation (never show grid)
-    const exportCtx = d.exportCanvasManager.getExportCanvasContext();
-    if (d.exportCanvasManager.getIsExporting() && exportCtx) {
-      const exportMode = d.exportCanvasManager.isStackedAlpha() ? 'stackedAlpha' as const : 'normal' as const;
-      const exportBindGroup = d.outputPipeline!.createOutputBindGroup(d.sampler, result.finalView, exportMode);
-      d.outputPipeline!.renderToCanvas(commandEncoder, exportCtx, exportBindGroup);
     }
 
     // Batch submit all command buffers in single call
@@ -1954,57 +1950,20 @@ export class RenderDispatcher {
         }],
       });
       clearPass.end();
-
-      const { width, height } = d.renderTargetManager!.getResolution();
-      d.outputPipeline.updateResolution(width, height);
-
-      // Render through output pipeline to main preview (no grid) + all activeComp targets
-      if (d.previewContext) {
-        const mainBindGroup = d.outputPipeline.createOutputBindGroup(d.sampler, pingView, 'normal');
-        d.outputPipeline.renderToCanvas(commandEncoder, d.previewContext, mainBindGroup);
-        this.recordMainPreviewFrame('empty');
-      }
-      const activeTargets = useRenderTargetStore.getState().getActiveCompTargets();
-      for (const target of activeTargets) {
-        const ctx = d.targetCanvases.get(target.id)?.context;
-        if (!ctx) continue;
-        const targetBindGroup = d.outputPipeline.createOutputBindGroup(d.sampler, pingView, target.showTransparencyGrid ? 'grid' : 'normal');
-        d.outputPipeline.renderToCanvas(commandEncoder, ctx, targetBindGroup);
-      }
-    } else {
-      // Fallback: direct clear
-      if (d.previewContext) {
-        try {
-          const pass = commandEncoder.beginRenderPass({
-            colorAttachments: [{
-              view: d.previewContext.getCurrentTexture().createView(),
-              clearValue: { r: 0, g: 0, b: 0, a: 1 },
-              loadOp: 'clear',
-              storeOp: 'store',
-            }],
-          });
-          pass.end();
-        } catch {
-          // Canvas context lost - skip
-        }
-      }
     }
-    // Also clear export canvas when exporting (needed for empty frames at export boundaries)
-    const emptyExportCtx = d.exportCanvasManager.getExportCanvasContext();
-    if (d.exportCanvasManager.getIsExporting() && emptyExportCtx) {
-      try {
-        const pass = commandEncoder.beginRenderPass({
-          colorAttachments: [{
-            view: emptyExportCtx.getCurrentTexture().createView(),
-            clearValue: { r: 0, g: 0, b: 0, a: 1 },
-            loadOp: 'clear',
-            storeOp: 'store',
-          }],
-        });
-        pass.end();
-      } catch {
-        // Export canvas context lost - skip
-      }
+
+    const outputSnapshot = pingView && d.outputPipeline && d.sampler
+      ? this.outputRouter.captureSnapshot()
+      : undefined;
+    this.outputRouter.routeEmptyFrame({
+      commandEncoder,
+      sourceView: pingView ?? undefined,
+      sampler: d.sampler ?? undefined,
+      snapshot: outputSnapshot,
+      targetIds: outputSnapshot?.activeCompositionTargetIds,
+    });
+    if (pingView && d.outputPipeline && d.sampler && d.previewContext) {
+      this.recordMainPreviewFrame('empty');
     }
     device.queue.submit([commandEncoder.finish()]);
   }
@@ -2439,17 +2398,18 @@ export class RenderDispatcher {
     const gpuCached = scrubbingCache.getGpuCachedFrame(time);
     if (gpuCached) {
       const commandEncoder = device.createCommandEncoder();
-      d.outputPipeline.renderToCanvas(commandEncoder, d.previewContext, gpuCached.bindGroup);
+      const outputSnapshot = this.outputRouter.captureSnapshot();
+      this.outputRouter.routeCachedFrame({
+        commandEncoder,
+        bindGroup: gpuCached.bindGroup,
+        time,
+        snapshot: outputSnapshot,
+        targetIds: outputSnapshot.activeCompositionTargetIds,
+      });
       this.recordMainPreviewFrame('ram-gpu-cache', undefined, {
         targetTimeMs: Math.round(time * 1000),
         displayedTimeMs: Math.round(time * 1000),
       });
-      // Output to all activeComp targets
-      const activeTargets = useRenderTargetStore.getState().getActiveCompTargets();
-      for (const target of activeTargets) {
-        const ctx = d.targetCanvases.get(target.id)?.context;
-        if (ctx) d.outputPipeline.renderToCanvas(commandEncoder, ctx, gpuCached.bindGroup);
-      }
       device.queue.submit([commandEncoder.finish()]);
       return true;
     }
@@ -2521,17 +2481,18 @@ export class RenderDispatcher {
       createdTexture = null;
 
       const commandEncoder = device.createCommandEncoder();
-      d.outputPipeline.renderToCanvas(commandEncoder, d.previewContext, bindGroup);
+      const outputSnapshot = this.outputRouter.captureSnapshot();
+      this.outputRouter.routeCachedFrame({
+        commandEncoder,
+        bindGroup,
+        time,
+        snapshot: outputSnapshot,
+        targetIds: outputSnapshot.activeCompositionTargetIds,
+      });
       this.recordMainPreviewFrame('ram-cpu-cache', undefined, {
         targetTimeMs: Math.round(time * 1000),
         displayedTimeMs: Math.round(time * 1000),
       });
-      // Output to all activeComp targets
-      const cachedActiveTargets = useRenderTargetStore.getState().getActiveCompTargets();
-      for (const target of cachedActiveTargets) {
-        const ctx = d.targetCanvases.get(target.id)?.context;
-        if (ctx) d.outputPipeline.renderToCanvas(commandEncoder, ctx, bindGroup);
-      }
       device.queue.submit([commandEncoder.finish()]);
       return true;
     } catch (e) {

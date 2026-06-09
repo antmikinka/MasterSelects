@@ -5,7 +5,7 @@ import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import { Logger } from '../../services/logger';
 import { flashBoardMediaBridge } from '../../services/flashboard/FlashBoardMediaBridge';
-import type { Keyframe } from '../../types';
+import type { Keyframe } from '../../types/keyframes';
 import type {
   HistoryEventType,
   HistoryListEntry,

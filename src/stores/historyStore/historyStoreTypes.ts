@@ -1,10 +1,7 @@
-import type {
-  Keyframe,
-  Layer,
-  MasterAudioState,
-  TimelineClip,
-  TimelineTrack,
-} from '../../types';
+import type { MasterAudioState } from '../../types/audio';
+import type { Keyframe } from '../../types/keyframes';
+import type { Layer } from '../../types/layers';
+import type { TimelineClip, TimelineTrack } from '../../types/timeline';
 import type {
   Composition,
   MathSceneItem,

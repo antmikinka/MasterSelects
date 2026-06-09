@@ -31,6 +31,7 @@ import { RenderLoop } from './render/RenderLoop';
 import { LayerCollector } from './render/LayerCollector';
 import { Compositor } from './render/Compositor';
 import { NestedCompRenderer } from './render/NestedCompRenderer';
+import { RenderOutputRouterAdapter } from './render/RenderOutputRouterAdapter';
 import { RenderDispatcher, type RenderDeps, type RenderDispatcherDebugSnapshot } from './render/RenderDispatcher';
 import { MotionRenderer } from './motion/MotionRenderer';
 import type { ScrubbingCacheStats } from './texture/ScrubbingCache';
@@ -220,7 +221,21 @@ export class WebGPUEngine {
       performanceStats: { get: () => this.performanceStats },
       renderLoop: { get: () => this.renderLoop },
     });
-    this.renderDispatcher = new RenderDispatcher(renderDeps);
+    const renderOutputRouter = new RenderOutputRouterAdapter({
+      canvasTargets: {
+        registerTargetCanvas: (targetId, canvas) => this.registerTargetCanvas(targetId, canvas),
+        unregisterTargetCanvas: (targetId) => this.unregisterTargetCanvas(targetId),
+        getTargetContext: (targetId) => this.getTargetContext(targetId),
+      },
+      getPreviewContext: () => this.previewContext,
+      getOutputPipeline: () => this.outputPipeline,
+      getSlicePipeline: () => this.slicePipeline,
+      getResolution: () => this.renderTargetManager?.getResolution() ?? null,
+      shouldSkipPreviewOutput: () => this.exportCanvasManager.shouldSkipPreviewOutput(),
+      getExportCanvasContext: () => this.exportCanvasManager.getExportCanvasContext(),
+      isExporting: () => this.exportCanvasManager.getIsExporting(),
+    });
+    this.renderDispatcher = new RenderDispatcher(renderDeps, renderOutputRouter);
   }
 
   // === DEVICE RECOVERY ===

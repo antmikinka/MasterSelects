@@ -5,14 +5,14 @@ import type {
   RenderTimelineTrackSnapshot,
 } from '../../engine/render/contracts';
 import type { MediaFile } from '../../stores/mediaStore';
-import { compileRuntimeColorGrade } from '../../types';
+import { compileRuntimeColorGrade } from '../../types/colorCorrection';
+import type { Keyframe } from '../../types/keyframes';
 import type {
-  Keyframe,
   SerializableClip,
   TimelineClip,
   TimelineClipDataSource,
   TimelineTrack,
-} from '../../types';
+} from '../../types/timeline';
 
 export function cloneData<T>(value: T | undefined): T | undefined {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value)) as T;

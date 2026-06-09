@@ -4,7 +4,7 @@ import type {
   MasterAudioState,
   MediaFileAudioAnalysisRefs,
   TrackAudioState,
-} from '../../types';
+} from '../../types/audio';
 import type { Composition, MediaFile } from '../mediaStore/types';
 import type { StateSnapshot } from './historyStoreTypes';
 

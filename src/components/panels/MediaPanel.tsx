@@ -28,7 +28,6 @@ import { MediaDropOverlay } from './media/panel/MediaDropOverlay';
 import { MediaPanelHeader } from './media/panel/MediaPanelHeader';
 import { MediaNoMediaEmptyState } from './media/panel/MediaNoMediaEmptyState';
 import { MediaNoSearchResultsEmptyState } from './media/panel/MediaNoSearchResultsEmptyState';
-import type { MediaPanelViewMode } from './media/panel/types';
 import { useMediaPanelAddImportCommands } from './media/panel/useMediaPanelAddImportCommands';
 import { useMediaPanelContextMenuState } from './media/panel/useMediaPanelContextMenuState';
 import { useMediaPanelDragDropMarquee, type MediaPanelMarquee } from './media/panel/useMediaPanelDragDropMarquee';
@@ -37,8 +36,9 @@ import { useMediaPanelProjectItems } from './media/panel/useMediaPanelProjectIte
 import { useMediaPanelRelinkStatus } from './media/panel/useMediaPanelRelinkStatus';
 import { getMediaDeleteImpact, useMediaPanelRenameDeleteCommands } from './media/panel/useMediaPanelRenameDeleteCommands';
 import { useMediaPanelSelectionCommands } from './media/panel/useMediaPanelSelectionCommands';
+import { useMediaPanelShellState, loadMediaPanelViewMode } from './media/panel/useMediaPanelShellState';
+import { useMediaPanelSourceReveal } from './media/panel/useMediaPanelSourceReveal';
 import { useMediaPanelSourceMonitorBadges } from './media/panel/useMediaPanelSourceMonitorBadges';
-import { useMediaPanelViewTransition } from './media/panel/useMediaPanelViewTransition';
 import { MediaBoardAnnotationLayer } from './media/board/MediaBoardAnnotationLayer';
 import { MediaBoardView } from './media/board/MediaBoardView';
 import { useMediaBoardAnnotationCommands } from './media/board/useMediaBoardAnnotationCommands';
@@ -121,7 +121,6 @@ import type {
   CameraItem,
   Composition,
   MathSceneItem,
-  MediaFolder,
   MeshItem,
   MotionShapeItem,
   ProjectItem,
@@ -133,12 +132,6 @@ import type {
 import { useTimelineStore } from '../../stores/timeline';
 import { RelinkDialog } from '../common/RelinkDialog';
 import { mediaNeedsRelink } from '../../services/project/relinkMedia';
-import {
-  getLastMediaSourceRevealRequest,
-  isMediaSourceRevealEvent,
-  MEDIA_SOURCE_REVEAL_EVENT,
-  type MediaSourceRevealRequest,
-} from '../../services/mediaSourceReveal';
 import {
   clearExternalDragPayload,
   createExternalDragPayloadForProjectItem,
@@ -155,17 +148,7 @@ const EMPTY_MATH_SCENE_ITEMS: MathSceneItem[] = [];
 const EMPTY_MOTION_SHAPE_ITEMS: MotionShapeItem[] = [];
 const EMPTY_SIGNAL_ASSETS: SignalAssetItem[] = [];
 
-const VIEW_MODE_STORAGE_KEY = 'media-panel-view-mode';
 const MEDIA_PANEL_PROJECT_UI_LOADED_EVENT = 'media-panel-project-ui-loaded';
-const MEDIA_PANEL_REVEAL_PULSE_MS = 1200;
-const MEDIA_PANEL_REVEAL_REQUEST_MAX_AGE_MS = 10000;
-
-function loadMediaPanelViewMode(): MediaPanelViewMode {
-  const stored = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
-  if (stored === 'board') return 'board';
-  if (stored === 'icons' || stored === 'grid') return 'icons';
-  return 'classic';
-}
 
 function getProjectItemIconType(item: ProjectItem | undefined): string | undefined {
   if (!item || !('type' in item)) return undefined;
@@ -175,28 +158,6 @@ function getProjectItemIconType(item: ProjectItem | undefined): string | undefin
       : 'mesh';
   }
   return item.type;
-}
-
-function getAncestorFolderIds(item: ProjectItem, folders: MediaFolder[]): string[] {
-  const ancestors: string[] = [];
-  const seen = new Set<string>();
-  let parentId = item.parentId ?? null;
-
-  while (parentId && !seen.has(parentId)) {
-    seen.add(parentId);
-    ancestors.push(parentId);
-    parentId = folders.find((folder) => folder.id === parentId)?.parentId ?? null;
-  }
-
-  return ancestors;
-}
-
-function getMediaPanelAnimatedTarget(root: HTMLElement | null, itemId: string): HTMLElement | null {
-  if (!root || typeof CSS === 'undefined' || typeof CSS.escape !== 'function') {
-    return null;
-  }
-
-  return root.querySelector<HTMLElement>(`[data-media-panel-anim-id="${CSS.escape(itemId)}"]`);
 }
 
 export function MediaPanel() {
@@ -295,8 +256,6 @@ export function MediaPanel() {
   const boardAutoPanFrameRef = useRef<number | null>(null);
   const boardOverviewRedrawFrameRef = useRef<number | null>(null);
   const boardOverviewImageCacheRef = useRef(new Map<string, { src: string; image: HTMLImageElement; status: 'loading' | 'loaded' | 'error' }>());
-  const lastHandledRevealRequestIdRef = useRef(0);
-  const mediaRevealPulseTimerRef = useRef<number | null>(null);
   const {
     contextMenu,
     setContextMenu,
@@ -309,17 +268,24 @@ export function MediaPanel() {
   const [marquee, setMarquee] = useState<MediaPanelMarquee | null>(null);
   const [settingsDialog, setSettingsDialog] = useState<{ compositionId: string; width: number; height: number; frameRate: number; duration: number } | null>(null);
   const [solidSettingsDialog, setSolidSettingsDialog] = useState<MediaContextSolidSettingsDialogState | null>(null);
-  const [addDropdownOpen, setAddDropdownOpen] = useState(false);
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
   const [internalDragId, setInternalDragId] = useState<string | null>(null);
   const [isExternalDragOver, setIsExternalDragOver] = useState(false);
   const [labelPickerItemId, setLabelPickerItemId] = useState<string | null>(null);
   const [labelPickerPos, setLabelPickerPos] = useState<{ x: number; y: number } | null>(null);
-  const [viewMode, setViewMode] = useState<MediaPanelViewMode>(loadMediaPanelViewMode);
-  const [isGenerativeTrayExpanded, setGenerativeTrayExpanded] = useState(false);
-  const [mediaSearchQuery, setMediaSearchQuery] = useState('');
-  // Grid view: current open folder (null = root)
-  const [gridFolderId, setGridFolderId] = useState<string | null>(null);
+  const {
+    addDropdownOpen,
+    setAddDropdownOpen,
+    viewMode,
+    setViewMode,
+    handleViewModeChange,
+    isGenerativeTrayExpanded,
+    setGenerativeTrayExpanded,
+    mediaSearchQuery,
+    setMediaSearchQuery,
+    gridFolderId,
+    setGridFolderId,
+  } = useMediaPanelShellState({ mediaPanelContentRef });
   const {
     classicListViewport,
     isClassicListVerticalScrolling,
@@ -390,12 +356,6 @@ export function MediaPanel() {
     removeMotionShapeItem,
     closeContextMenu,
   });
-  const handleViewModeChange = useMediaPanelViewTransition({
-    mediaPanelContentRef,
-    viewMode,
-    setViewMode,
-    setGridFolderId,
-  });
   const [mediaBoardViewport, setMediaBoardViewport] = useState<MediaBoardViewport>(loadMediaBoardViewport);
   const mediaBoardViewportRef = useRef<MediaBoardViewport>(mediaBoardViewport);
   const boardWheelCommitTimerRef = useRef<number | null>(null);
@@ -409,7 +369,6 @@ export function MediaPanel() {
   const [mediaBoardOverviewImageVersion, setMediaBoardOverviewImageVersion] = useState(0);
   const [mediaBoardMarquee, setMediaBoardMarquee] = useState<MediaBoardMarquee | null>(null);
   const [mediaBoardInsertionPreview, setMediaBoardInsertionPreview] = useState<MediaBoardInsertionPreview | null>(null);
-  const [pendingMediaReveal, setPendingMediaReveal] = useState<MediaSourceRevealRequest | null>(null);
   const {
     createMediaBoardAnnotation,
     mediaBoardAnnotations,
@@ -420,10 +379,6 @@ export function MediaPanel() {
   } = useMediaBoardAnnotationState();
   const suppressMediaBoardContextMenuRef = useRef(false);
   const suppressMediaBoardContextMenuTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    localStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode);
-  }, [viewMode]);
 
   useEffect(() => {
     mediaBoardViewportRef.current = mediaBoardViewport;
@@ -491,24 +446,7 @@ export function MediaPanel() {
     if (suppressMediaBoardContextMenuTimerRef.current !== null) {
       window.clearTimeout(suppressMediaBoardContextMenuTimerRef.current);
     }
-    if (mediaRevealPulseTimerRef.current !== null) {
-      window.clearTimeout(mediaRevealPulseTimerRef.current);
-      mediaRevealPulseTimerRef.current = null;
-    }
   }, []);
-
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    if (!addDropdownOpen) return;
-    const handleClickOutside = () => setAddDropdownOpen(false);
-    const timer = setTimeout(() => {
-      document.addEventListener('click', handleClickOutside);
-    }, 0);
-    return () => {
-      clearTimeout(timer);
-      document.removeEventListener('click', handleClickOutside);
-    };
-  }, [addDropdownOpen]);
 
   const clearMediaBoardInsertionPreview = useCallback(() => {
     setMediaBoardInsertionPreview(null);
@@ -916,6 +854,23 @@ export function MediaPanel() {
     return new Map(mediaBoardLayout.placements.map((placement) => [placement.item.id, placement]));
   }, [mediaBoardLayout.placements]);
 
+  useMediaPanelSourceReveal({
+    allProjectItemsById,
+    boardCanvasRef,
+    classicRows,
+    folders,
+    gridFolderId,
+    mediaBoardPlacementsById,
+    mediaBoardViewport,
+    mediaPanelContentRef,
+    scrollClassicListRowIntoView,
+    setGridFolderId,
+    setMediaBoardViewport,
+    setMediaSearchQuery,
+    setSelection,
+    viewMode,
+  });
+
   const mediaBoardVisibleRect = useMemo(() => getMediaBoardVisibleRect(
     mediaBoardViewport,
     mediaBoardCanvasSize,
@@ -1041,162 +996,6 @@ export function MediaPanel() {
     return bestId;
   }, [mediaBoardViewport.zoom, mediaBoardVisibleRect, mediaSearchVisibleItemIds, visibleMediaBoardPlacements]);
   const isMediaBoardDeepZoomActive = viewMode === 'board' && mediaBoardViewport.zoom >= MEDIA_BOARD_ORIGINAL_FOCUS_ZOOM;
-
-  const pulseMediaPanelRevealTarget = useCallback((itemId: string, scrollIntoView: boolean): boolean => {
-    const target = getMediaPanelAnimatedTarget(mediaPanelContentRef.current, itemId);
-    if (!target) {
-      return false;
-    }
-
-    if (scrollIntoView) {
-      target.scrollIntoView({ block: 'center', inline: 'nearest' });
-    }
-
-    target.classList.remove('media-panel-reveal-pulse');
-    void target.offsetWidth;
-    target.classList.add('media-panel-reveal-pulse');
-
-    if (mediaRevealPulseTimerRef.current !== null) {
-      window.clearTimeout(mediaRevealPulseTimerRef.current);
-    }
-    mediaRevealPulseTimerRef.current = window.setTimeout(() => {
-      target.classList.remove('media-panel-reveal-pulse');
-      mediaRevealPulseTimerRef.current = null;
-    }, MEDIA_PANEL_REVEAL_PULSE_MS);
-
-    return true;
-  }, []);
-
-  const prepareMediaSourceReveal = useCallback((request: MediaSourceRevealRequest) => {
-    if (request.requestId <= lastHandledRevealRequestIdRef.current) {
-      return;
-    }
-
-    const item = allProjectItemsById.get(request.mediaFileId);
-    if (!item) {
-      return;
-    }
-
-    lastHandledRevealRequestIdRef.current = request.requestId;
-    setSelection([request.mediaFileId]);
-    setMediaSearchQuery('');
-
-    const ancestorFolderIds = getAncestorFolderIds(item, folders);
-    if (viewMode === 'classic' && ancestorFolderIds.length > 0) {
-      useMediaStore.setState((state) => ({
-        expandedFolderIds: [...new Set([...state.expandedFolderIds, ...ancestorFolderIds])],
-      }));
-    } else if (viewMode === 'icons') {
-      setGridFolderId(item.parentId ?? null);
-    }
-
-    setPendingMediaReveal(request);
-  }, [allProjectItemsById, folders, setSelection, viewMode]);
-
-  useEffect(() => {
-    const handleMediaSourceReveal = (event: Event) => {
-      if (!isMediaSourceRevealEvent(event)) {
-        return;
-      }
-      prepareMediaSourceReveal(event.detail);
-    };
-
-    window.addEventListener(MEDIA_SOURCE_REVEAL_EVENT, handleMediaSourceReveal);
-
-    const lastRequest = getLastMediaSourceRevealRequest();
-    if (
-      lastRequest
-      && Date.now() - lastRequest.createdAt <= MEDIA_PANEL_REVEAL_REQUEST_MAX_AGE_MS
-    ) {
-      prepareMediaSourceReveal(lastRequest);
-    }
-
-    return () => window.removeEventListener(MEDIA_SOURCE_REVEAL_EVENT, handleMediaSourceReveal);
-  }, [prepareMediaSourceReveal]);
-
-  useLayoutEffect(() => {
-    if (!pendingMediaReveal) {
-      return;
-    }
-
-    const item = allProjectItemsById.get(pendingMediaReveal.mediaFileId);
-    if (!item) {
-      setPendingMediaReveal(null);
-      return;
-    }
-
-    if (viewMode === 'classic') {
-      const rowIndex = classicRows.findIndex((row) => row.item.id === pendingMediaReveal.mediaFileId);
-      if (!scrollClassicListRowIntoView(rowIndex)) {
-        return;
-      }
-    } else if (viewMode === 'icons') {
-      if ((item.parentId ?? null) !== gridFolderId) {
-        return;
-      }
-    } else if (viewMode === 'board') {
-      const placement = mediaBoardPlacementsById.get(pendingMediaReveal.mediaFileId);
-      const canvas = boardCanvasRef.current;
-      if (!placement || !canvas) {
-        return;
-      }
-
-      const zoom = Math.max(MEDIA_BOARD_PAN_ZOOM_MIN, Math.min(MEDIA_BOARD_PAN_ZOOM_MAX, mediaBoardViewport.zoom || 1));
-      const centerX = placement.layout.x + (placement.layout.width / 2);
-      const centerY = placement.layout.y + (placement.layout.height / 2);
-      const nextViewport = {
-        zoom,
-        panX: (canvas.clientWidth / 2) - (centerX * zoom),
-        panY: (canvas.clientHeight / 2) - (centerY * zoom),
-      };
-
-      if (
-        Math.abs(mediaBoardViewport.panX - nextViewport.panX) > 1
-        || Math.abs(mediaBoardViewport.panY - nextViewport.panY) > 1
-        || Math.abs(mediaBoardViewport.zoom - nextViewport.zoom) > 0.0001
-      ) {
-        setMediaBoardViewport(nextViewport);
-      }
-    }
-
-    let secondFrameId: number | null = null;
-    let retryTimerId: number | null = null;
-    const frameId = window.requestAnimationFrame(() => {
-      secondFrameId = window.requestAnimationFrame(() => {
-        const pulsed = pulseMediaPanelRevealTarget(pendingMediaReveal.mediaFileId, viewMode !== 'board');
-        if (pulsed) {
-          setPendingMediaReveal(null);
-          return;
-        }
-
-        retryTimerId = window.setTimeout(() => {
-          if (pulseMediaPanelRevealTarget(pendingMediaReveal.mediaFileId, viewMode !== 'board')) {
-            setPendingMediaReveal(null);
-          }
-        }, 120);
-      });
-    });
-
-    return () => {
-      window.cancelAnimationFrame(frameId);
-      if (secondFrameId !== null) {
-        window.cancelAnimationFrame(secondFrameId);
-      }
-      if (retryTimerId !== null) {
-        window.clearTimeout(retryTimerId);
-      }
-    };
-  }, [
-    allProjectItemsById,
-    classicRows,
-    gridFolderId,
-    mediaBoardPlacementsById,
-    mediaBoardViewport,
-    pendingMediaReveal,
-    pulseMediaPanelRevealTarget,
-    scrollClassicListRowIntoView,
-    viewMode,
-  ]);
 
   const getMediaBoardPlacementAtPoint = useCallback((point: { x: number; y: number }) => {
     for (let index = mediaBoardLayout.placements.length - 1; index >= 0; index -= 1) {

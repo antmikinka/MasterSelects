@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Composition, MediaFile } from '../../src/stores/mediaStore';
 import type { RenderTarget } from '../../src/types/renderTarget';
 import type { OutputSlice } from '../../src/types/outputSlice';
-import type { ClipTransform, TimelineClip, TimelineTrack } from '../../src/types';
+import type { ClipTransform } from '../../src/types/timelineCore';
+import type { TimelineClip, TimelineTrack } from '../../src/types/timeline';
 
 type FixtureStores = Record<'media' | 'timeline' | 'engine' | 'renderTarget' | 'slice', Record<string, unknown>>;
 

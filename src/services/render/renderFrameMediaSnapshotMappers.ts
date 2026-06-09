@@ -5,7 +5,7 @@ import type {
   RenderMediaFileSnapshot,
 } from '../../engine/render/contracts';
 import type { Composition, MediaFile, SlotClipSettings } from '../../stores/mediaStore';
-import type { CompositionTimelineData } from '../../types';
+import type { CompositionTimelineData } from '../../types/timeline';
 import { cloneData, mapSerializableClip, mapTrack } from './renderFrameTimelineSnapshotMappers';
 
 function mapAssetRef(mediaFileId: string | undefined, file: MediaFile | undefined): RenderMediaAssetRef | undefined {
