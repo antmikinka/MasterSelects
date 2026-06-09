@@ -18,11 +18,10 @@ orchestrator or worker-agent execution run starts.
 - Handoff templates: prepared for execution only
 - Source implementation: current bounded source packet has explicit write set,
   forbidden files, and gates
-- Current bounded packet: none; wave 1 of goal-driven execution (packets
-  145-149) completed and orchestrator-verified; next wave = timeline file-drop
-  integration (protected-path packet authored by orchestrator), type-barrel
-  thinning continuation, next MediaPanel slice, FlashBoard smoke gate when the
-  dev bridge is available.
+- Current bounded packet: none; wave 2 (packets 151-153) completed and
+  orchestrator-verified; next wave = Phase 1A media-source data/runtime
+  contract packet, MediaPanel continuation, and runtime smokes (FlashBoard gate
+  + signal end-to-end) once the dev bridge is up.
 - Completed source/tooling packet: `P0-REG-001`; focused registry checks passed.
 - Completed bounded packet: `P0-BASELINE-REFRESH-001`, read-only plus docs.
 - Completed bounded packet: `P1-CONTRACT-001`, contracts and focused boundary
@@ -1882,10 +1881,35 @@ orchestrator or worker-agent execution run starts.
   The Media Panel hidden input accept restriction is removed, and `MediaAddItemsMenu` wires "Import files..." through existing `onImport`.
   `MediaPanelHeader` and `MediaContextActionsMenu` pass the command through; routing stays unchanged through `importFilesWithPicker` / `importFiles` to the universal orchestrator.
   Orchestrator-verified: npx tsc -b clean; 11 test files / 29 tests green (guard + mediaPanel + new importer/surface tests).
-- Next eligible packet: orchestrator dispatches next wave: timeline file-drop
-  integration (protected-path packet authored by orchestrator), type-barrel
-  thinning continuation, next MediaPanel slice, and FlashBoard smoke gate when
-  the dev bridge is available.
+- Completed bounded packet:
+  `P1B-SIGNAL-TIMELINE-FILE-DROP-151`; direct timeline drops of CSV/JSON/unknown-binary now import through the universal route and place via `addSignalAssetClip` at the drop position.
+  Known media path stayed unchanged, asserted by the extended timeline drop placement test.
+  `timelineExternalDropMediaResolver.ts` gained signal-aware `resolveTimelineDropImportResult`; `timelineExternalDropFilePlacement.ts` gained a signal placement helper routing only `unknown` classifications.
+  `useExternalDrop.ts` received minimal pass-through wiring only; the existing `addSignalAssetClip` callback moved earlier and passed into placement actions.
+  Protected-path grant was honored, and the full hook diff was reviewed by the orchestrator.
+  Unknown/signal drops on audio tracks are skipped, matching panel-drag behavior; tests extended `tests/unit/timelineExternalDropFilePlacement.test.ts` to 5 tests including 2 signal cases and a known-media regression assertion.
+  Orchestrator-verified: npx tsc -b clean; 10 test files / 32 tests green (timeline drop, mediaPanel, guard, importer suites).
+- Completed bounded packet:
+  `P4-MEDIA-PANEL-SPLIT-152`; extracted the search/filter derived-state cluster into `src/components/panels/media/panel/useMediaPanelProjectItems.ts`.
+  The new 312-raw-line hook owns token parsing, project item aggregation, visible search ancestry, parent lookup, classic-list row derivation, and grid search/breadcrumb planning.
+  `MediaPanel.tsx` reduced accordingly from about 4396 to about 4170 raw lines; worker reported 3924 to 3780 non-blank lines.
+  Zero store or FlashBoard hits were introduced in the new file.
+  Orchestrator-verified: npx tsc -b clean; 10 test files / 32 tests green (timeline drop, mediaPanel, guard, importer suites).
+- Completed bounded packet:
+  `P1B-SIGNAL-MOBILE-SURFACE-153`; mobile reaches signal parity in `MobileMediaPanel.tsx` only.
+  The import picker accepts any file, the mobile list shows `signalAssets` with an S-badge and kind/provider metadata, and tap placement works through existing `placeSignalAssetOnTimeline`.
+  Placement targets the first video track; no store changes were made and eslint was clean.
+  Known limitation: signal placement requires an existing video track and does not create one.
+  Orchestrator-verified: npx tsc -b clean; 10 test files / 32 tests green (timeline drop, mediaPanel, guard, importer suites).
+- Incident note:
+  During wave 2, `src/services/aiTools/handlers/torture.ts` and `fixtures/torture-media/README.md` disappeared from the worktree outside any packet write set.
+  Worker session logs show all workers only observed the deletion and correctly reported the broken import instead of fixing it.
+  The orchestrator restored both files from HEAD.
+  Integrity rule added: workers never delete/revert outside write set; orchestrator checks git status before dispatch and commit.
+  Orchestrator-verified: npx tsc -b clean; 10 test files / 32 tests green (timeline drop, mediaPanel, guard, importer suites).
+- Next eligible packet: Phase 1A media-source data/runtime contract packet,
+  MediaPanel continuation, and runtime smokes (FlashBoard gate + signal
+  end-to-end) once the dev bridge is up.
 - Product source refactors remain blocked outside approved packet write sets.
 
 ## Document Map

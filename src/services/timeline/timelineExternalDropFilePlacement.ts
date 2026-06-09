@@ -1,8 +1,10 @@
-import type { MediaFile } from '../../stores/mediaStore';
+import type { MediaFile, SignalAssetItem } from '../../stores/mediaStore';
 import type { AddClipOptions } from '../../stores/timeline/types';
 import { classifyMediaType } from '../../stores/timeline/helpers/mediaTypeHelpers';
+import { createSignalTimelineAdapterPlan } from '../../runtime/renderers/signalTimelineRendererAdapter';
 import {
   getTimelineDropMediaTypeOverride,
+  resolveTimelineDropImportResult,
   resolveTimelineDropMediaFile,
   setTimelineDroppedFilePath,
 } from './timelineExternalDropMediaResolver';
@@ -26,6 +28,11 @@ export interface TimelineExternalDropFilePlacementActions {
     mediaTypeOverride?: string,
     options?: AddClipOptions,
   ) => Promise<string | undefined> | string | undefined | void;
+  addSignalAssetClip: (
+    trackId: string,
+    signalAsset: SignalAssetItem,
+    startTime: number,
+  ) => Promise<string | null | undefined> | string | null | undefined;
 }
 
 export interface PlaceTimelineExternalDropFilesParams {
@@ -95,6 +102,81 @@ async function addTimelineExternalDropMediaClip(params: {
   return { startTime, endTime: startTime + (resolvedDuration ?? 5) };
 }
 
+async function addTimelineExternalDropSignalClip(params: {
+  actions: TimelineExternalDropFilePlacementActions;
+  desiredStartTime: number;
+  duration?: number;
+  file: File;
+  filePath?: string;
+  handle?: FileSystemFileHandle;
+  resolveStartTime?: (desiredStartTime: number, duration?: number) => number;
+  trackId: string;
+}): Promise<TimelineExternalDropClipPlacement | null> {
+  const {
+    actions,
+    desiredStartTime,
+    duration,
+    file,
+    filePath,
+    handle,
+    resolveStartTime,
+    trackId,
+  } = params;
+
+  const importResult = await resolveTimelineDropImportResult({
+    file,
+    handle,
+    absolutePath: filePath,
+    waitForMediaPlaceholder: false,
+  });
+
+  if (!importResult) {
+    log.warn('Could not import timeline drop file before creating signal clip', {
+      name: file.name,
+      filePath,
+    });
+    return null;
+  }
+
+  if (importResult.kind === 'media-file') {
+    const mediaFile = importResult.mediaFile;
+    const timelineFile = mediaFile.file ?? file;
+    setTimelineDroppedFilePath(timelineFile, mediaFile.absolutePath ?? filePath);
+    const resolvedDuration = mediaFile.duration ?? duration ?? 5;
+    const startTime = resolveStartTime
+      ? resolveStartTime(desiredStartTime, resolvedDuration)
+      : desiredStartTime;
+
+    actions.addClip(
+      trackId,
+      timelineFile,
+      startTime,
+      resolvedDuration,
+      mediaFile.id,
+      getTimelineDropMediaTypeOverride(mediaFile),
+    );
+
+    return { startTime, endTime: startTime + resolvedDuration };
+  }
+
+  const signalAsset = importResult.signalAsset;
+  const plan = createSignalTimelineAdapterPlan(signalAsset);
+  const startTime = resolveStartTime
+    ? resolveStartTime(desiredStartTime, plan.duration)
+    : desiredStartTime;
+  const clipId = await actions.addSignalAssetClip(trackId, signalAsset, startTime);
+
+  if (!clipId) {
+    log.warn('Could not place timeline drop signal asset', {
+      signalAssetId: signalAsset.id,
+      name: signalAsset.name,
+    });
+    return null;
+  }
+
+  return { startTime, endTime: startTime + plan.duration };
+}
+
 export async function placeTimelineExternalDropFiles(
   params: PlaceTimelineExternalDropFilesParams,
 ): Promise<boolean> {
@@ -119,7 +201,29 @@ export async function placeTimelineExternalDropFiles(
     setTimelineDroppedFilePath(file, absolutePath ?? filePath);
 
     const typeOverride = await classifyMediaType(file);
-    if (typeOverride === 'unknown') continue;
+    if (typeOverride === 'unknown') {
+      if (!trackIsVideo) {
+        log.debug('Skipping signal file dropped on a non-video track', { name: file.name });
+        continue;
+      }
+
+      const placement = await addTimelineExternalDropSignalClip({
+        actions,
+        trackId,
+        file,
+        desiredStartTime: cursorTime,
+        duration: fallbackDuration,
+        filePath: absolutePath ?? filePath,
+        handle,
+        resolveStartTime,
+      });
+
+      if (placement) {
+        placedAny = true;
+        cursorTime = placement.endTime;
+      }
+      continue;
+    }
 
     const fileIsAudio = typeOverride === 'audio';
     if (fileIsAudio && trackIsVideo) {

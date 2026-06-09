@@ -569,6 +569,18 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 - Wave 1 import surface completed:
   `P1B-SIGNAL-IMPORT-SURFACE-149`; desktop pickers and Media Panel import
   surfaces accept any file while preserving the universal import route.
+- Wave 2 timeline file-drop integration completed:
+  `P1B-SIGNAL-TIMELINE-FILE-DROP-151`; CSV/JSON/unknown-binary direct timeline
+  drops now route through universal signal import and place via
+  `addSignalAssetClip`, while known-media placement stays unchanged.
+- Wave 2 MediaPanel continuation completed:
+  `P4-MEDIA-PANEL-SPLIT-152`; search/filter project-item derived state moved to
+  `useMediaPanelProjectItems.ts`, reducing `MediaPanel.tsx` and adding no store
+  or FlashBoard coupling.
+- Wave 2 mobile signal surface completed:
+  `P1B-SIGNAL-MOBILE-SURFACE-153`; mobile import/list/tap placement now handles
+  signal assets through `MobileMediaPanel.tsx` only, with existing-video-track
+  placement as the known limitation.
 
 ## High-Conflict Ownership Snapshot
 
@@ -589,23 +601,19 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 
 ## Active Packet
 
-None. Wave 1 of goal-driven execution (`P1-TYPES-BARREL-ROLE-SPLIT-145`,
-`P1B-SIGNAL-INTEGRATION-SCOUT-146`, `P4-MEDIA-PANEL-RESUME-SPLIT-147`,
-`P1B-SIGNAL-JSON-PROVIDER-148`, `P1B-SIGNAL-IMPORT-SURFACE-149`) is completed
-and orchestrator-verified. The orchestrator is authoring the next wave:
-timeline-drop integration (`P1B-SIGNAL-TIMELINE-FILE-DROP`, protected-path
-packet authored by orchestrator), type-barrel thinning
-(`P1-TYPES-BARREL-THIN`), and the next MediaPanel split continuation.
+None. Wave 2 (`P1B-SIGNAL-TIMELINE-FILE-DROP-151`,
+`P4-MEDIA-PANEL-SPLIT-152`, `P1B-SIGNAL-MOBILE-SURFACE-153`) is completed and
+orchestrator-verified. The orchestrator is authoring wave 3: P1A contract
+packet, MediaPanel slice, and runtime smokes.
 
 ## Queued Packets
 
 No worker-owned source packet is currently queued. The orchestrator is
-authoring the next wave: timeline file-drop integration
-(`P1B-SIGNAL-TIMELINE-FILE-DROP`, protected path), type-barrel thinning
-continuation (`P1-TYPES-BARREL-THIN`), and the next MediaPanel split. The
-FlashBoard lane smoke gate remains deferred until the AI bridge is available.
+authoring wave 3: Phase 1A media-source data/runtime contract packet,
+MediaPanel continuation, and runtime smokes (FlashBoard gate + signal
+end-to-end) once the dev bridge is up.
 
 ## Immediate Next Step
 
-Orchestrator dispatches the next wave; FlashBoard lane smoke gate remains
-deferred until the AI bridge is available.
+Orchestrator authors and dispatches wave 3: P1A contract packet, MediaPanel
+slice, and runtime smokes once the dev bridge is up.

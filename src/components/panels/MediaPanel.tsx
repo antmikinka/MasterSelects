@@ -24,11 +24,8 @@ import { MediaClassicListChrome } from './media/list/MediaClassicListChrome';
 import { MediaClassicListRow } from './media/list/MediaClassicListRow';
 import {
   MEDIA_CLASSIC_ROW_HEIGHT as CLASSIC_ROW_HEIGHT,
-  buildClassicMediaRows,
   formatMediaPanelBitrate as formatBitrate,
   formatMediaPanelFileSize as formatFileSize,
-  getClassicMediaColumnWidths,
-  getClassicVisibleRange,
   getGaussianSplatDetailLines,
   getGaussianSplatResolutionLabel,
   getMediaFileCodecLabel,
@@ -44,6 +41,7 @@ import { MediaPanelHeader } from './media/panel/MediaPanelHeader';
 import { MediaNoMediaEmptyState } from './media/panel/MediaNoMediaEmptyState';
 import { MediaNoSearchResultsEmptyState } from './media/panel/MediaNoSearchResultsEmptyState';
 import type { MediaPanelViewMode } from './media/panel/types';
+import { useMediaPanelProjectItems } from './media/panel/useMediaPanelProjectItems';
 import { MediaBoardAnnotationLayer } from './media/board/MediaBoardAnnotationLayer';
 import { MediaBoardView } from './media/board/MediaBoardView';
 import { useMediaBoardAnnotationCommands } from './media/board/useMediaBoardAnnotationCommands';
@@ -322,85 +320,6 @@ function getMediaPanelAnimatedTarget(root: HTMLElement | null, itemId: string): 
 
 function isSignalAssetItem(item: ProjectItem): item is SignalAssetItem {
   return 'type' in item && item.type === 'signal';
-}
-
-interface MediaSearchToken {
-  value: string;
-  glob?: RegExp;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
-}
-
-function globToRegExp(pattern: string): RegExp {
-  let source = '^';
-  for (const char of pattern) {
-    if (char === '*') {
-      source += '.*';
-    } else if (char === '?') {
-      source += '.';
-    } else {
-      source += escapeRegExp(char);
-    }
-  }
-  source += '$';
-  return new RegExp(source, 'i');
-}
-
-function createMediaSearchTokens(query: string): MediaSearchToken[] {
-  return query
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((token) => ({
-      value: token.toLowerCase(),
-      glob: /[*?]/.test(token) ? globToRegExp(token) : undefined,
-    }));
-}
-
-function getProjectItemSearchValues(item: ProjectItem): string[] {
-  const values = [item.name, 'isExpanded' in item ? 'folder' : ''];
-  if ('type' in item) {
-    values.push(item.type);
-  }
-
-  if (isImportedMediaFileItem(item)) {
-    values.push(
-      item.file?.name ?? '',
-      item.file?.type ?? '',
-      item.codec ?? '',
-      item.audioCodec ?? '',
-      item.container ?? '',
-      item.filePath ?? '',
-      item.absolutePath ?? '',
-      item.projectPath ?? '',
-    );
-  } else if (isSignalAssetItem(item)) {
-    values.push(
-      item.asset.source.fileName ?? '',
-      item.asset.source.mimeType ?? '',
-      item.asset.source.extension ?? '',
-      item.providerId ?? '',
-      ...item.signalKinds,
-    );
-  }
-
-  return values.filter(Boolean);
-}
-
-function projectItemMatchesMediaSearch(item: ProjectItem, tokens: MediaSearchToken[]): boolean {
-  if (tokens.length === 0) return true;
-
-  const values = getProjectItemSearchValues(item);
-  const searchableText = values.join(' ').toLowerCase();
-
-  return tokens.every((token) => {
-    if (token.glob) {
-      return values.some((value) => token.glob!.test(value));
-    }
-    return searchableText.includes(token.value);
-  });
 }
 
 interface MediaDeleteConfirmationRequest {
@@ -2146,108 +2065,39 @@ export function MediaPanel() {
     );
   };
 
-  const allProjectItems = useMemo<ProjectItem[]>(() => ([
-    ...files,
-    ...compositions,
-    ...folders,
-    ...textItems,
-    ...solidItems,
-    ...meshItems,
-    ...cameraItems,
-    ...splatEffectorItems,
-    ...mathSceneItems,
-    ...motionShapeItems,
-    ...signalAssets,
-  ]), [files, compositions, folders, textItems, solidItems, meshItems, cameraItems, splatEffectorItems, mathSceneItems, motionShapeItems, signalAssets]);
-
-  const projectListItems = useMemo<ProjectItem[]>(() => ([
-    ...folders,
-    ...compositions,
-    ...textItems,
-    ...solidItems,
-    ...meshItems,
-    ...cameraItems,
-    ...splatEffectorItems,
-    ...mathSceneItems,
-    ...motionShapeItems,
-    ...signalAssets,
-    ...files,
-  ]), [folders, compositions, textItems, solidItems, meshItems, cameraItems, splatEffectorItems, mathSceneItems, motionShapeItems, signalAssets, files]);
-
-  const allProjectItemsById = useMemo(() => new Map(allProjectItems.map((item) => [item.id, item])), [allProjectItems]);
-  const totalItems = allProjectItems.length;
-  const mediaSearchTokens = useMemo(() => createMediaSearchTokens(mediaSearchQuery), [mediaSearchQuery]);
-  const isMediaSearchActive = mediaSearchTokens.length > 0;
-  const mediaSearchDirectMatches = useMemo(() => (
-    isMediaSearchActive
-      ? projectListItems.filter((item) => projectItemMatchesMediaSearch(item, mediaSearchTokens))
-      : projectListItems
-  ), [isMediaSearchActive, mediaSearchTokens, projectListItems]);
-  const mediaSearchDirectMatchIds = useMemo(() => new Set(mediaSearchDirectMatches.map((item) => item.id)), [mediaSearchDirectMatches]);
-  const mediaSearchVisibleItemIds = useMemo(() => {
-    if (!isMediaSearchActive) return null;
-
-    const visibleIds = new Set(mediaSearchDirectMatchIds);
-    mediaSearchDirectMatches.forEach((item) => {
-      let parentId = item.parentId ?? null;
-      while (parentId) {
-        visibleIds.add(parentId);
-        parentId = allProjectItemsById.get(parentId)?.parentId ?? null;
-      }
-    });
-    return visibleIds;
-  }, [allProjectItemsById, isMediaSearchActive, mediaSearchDirectMatchIds, mediaSearchDirectMatches]);
-  const mediaSearchResultCount = isMediaSearchActive ? mediaSearchDirectMatches.length : totalItems;
-
-  const projectItemsByParentId = useMemo(() => {
-    const itemsByParentId = new Map<string | null, ProjectItem[]>();
-    const append = (item: ProjectItem) => {
-      if (mediaSearchVisibleItemIds && !mediaSearchVisibleItemIds.has(item.id)) return;
-
-      const parentId = item.parentId ?? null;
-      const items = itemsByParentId.get(parentId);
-      if (items) {
-        items.push(item);
-      } else {
-        itemsByParentId.set(parentId, [item]);
-      }
-    };
-
-    projectListItems.forEach(append);
-
-    return itemsByParentId;
-  }, [mediaSearchVisibleItemIds, projectListItems]);
-
-  const getItemsForParent = useCallback(
-    (parentId: string | null) => projectItemsByParentId.get(parentId) ?? [],
-    [projectItemsByParentId],
-  );
-
-  const classicExpandedFolderIdSet = useMemo(() => new Set(expandedFolderIds), [expandedFolderIds]);
-  const classicRows = useMemo(() => buildClassicMediaRows({
+  const {
+    allProjectItems,
+    allProjectItemsById,
+    totalItems,
+    isMediaSearchActive,
+    mediaSearchVisibleItemIds,
+    mediaSearchResultCount,
     getItemsForParent,
-    expandedFolderIds: classicExpandedFolderIdSet,
-    forceExpandFolders: isMediaSearchActive,
+    classicRows,
+    dynamicMediaColumnWidths,
+    classicVisibleRows,
+    classicTopSpacerHeight,
+    classicBottomSpacerHeight,
+    gridItems,
+    gridBreadcrumb,
+  } = useMediaPanelProjectItems({
+    files,
+    compositions,
+    folders,
+    textItems,
+    solidItems,
+    meshItems,
+    cameraItems,
+    splatEffectorItems,
+    mathSceneItems,
+    motionShapeItems,
+    signalAssets,
+    expandedFolderIds,
+    mediaSearchQuery,
+    gridFolderId,
+    classicListViewport,
     sortItems,
-  }), [sortItems, getItemsForParent, classicExpandedFolderIdSet, isMediaSearchActive]);
-  const dynamicMediaColumnWidths = useMemo(
-    () => getClassicMediaColumnWidths(classicRows.map((row) => row.item)),
-    [classicRows],
-  );
-
-  const classicVisibleRange = useMemo(() => getClassicVisibleRange({
-    viewportHeight: classicListViewport.height,
-    scrollTop: classicListViewport.scrollTop,
-    rowCount: classicRows.length,
-  }), [classicListViewport.height, classicListViewport.scrollTop, classicRows.length]);
-
-  const classicVisibleRows = useMemo(
-    () => classicRows.slice(classicVisibleRange.start, classicVisibleRange.end),
-    [classicRows, classicVisibleRange.end, classicVisibleRange.start],
-  );
-
-  const classicTopSpacerHeight = classicVisibleRange.start * CLASSIC_ROW_HEIGHT;
-  const classicBottomSpacerHeight = Math.max(0, (classicRows.length - classicVisibleRange.end) * CLASSIC_ROW_HEIGHT);
+  });
 
   const mediaBoardItems = allProjectItems;
 
@@ -4034,23 +3884,6 @@ export function MediaPanel() {
       />
     </MediaBoardView>
   );
-  // Grid view: items for current folder, or flattened matches while searching.
-  const gridItems = isMediaSearchActive
-    ? sortItems(mediaSearchDirectMatches)
-    : sortItems(getItemsForParent(gridFolderId));
-  const gridBreadcrumb: Array<{ id: string | null; name: string }> = [];
-  if (!isMediaSearchActive && gridFolderId) {
-    // Build path from root to current folder
-    const path: Array<{ id: string; name: string }> = [];
-    let current = folders.find(f => f.id === gridFolderId);
-    while (current) {
-      path.unshift({ id: current.id, name: current.name });
-      current = current.parentId ? folders.find(f => f.id === current!.parentId) : undefined;
-    }
-    gridBreadcrumb.push({ id: null, name: '/' });
-    gridBreadcrumb.push(...path);
-  }
-
   // Check if any files need relinking (lost permission after refresh).
   // Native-helper projects can be linked by project/absolute paths without
   // eagerly materializing browser File objects for every media item.

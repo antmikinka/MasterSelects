@@ -1,6 +1,9 @@
-import type { MediaFile } from '../../stores/mediaStore';
+import type { MediaFile, SignalAssetItem } from '../../stores/mediaStore';
 import type { FileImportResult } from '../../stores/mediaStore/types';
-import { isMediaFileImportResult } from '../../stores/mediaStore/helpers/importResult';
+import {
+  isMediaFileImportResult,
+  isSignalAssetImportResult,
+} from '../../stores/mediaStore/helpers/importResult';
 import { useMediaStore } from '../../stores/mediaStore';
 import { NativeHelperClient } from '../nativeHelper/NativeHelperClient';
 import { createPrimaryMediaObjectUrl } from '../project/mediaObjectUrlManager';
@@ -89,20 +92,33 @@ async function waitForTimelineDropImportPlaceholder(
   return null;
 }
 
-function firstMediaImportResult(result: FileImportResult | FileImportResult[]): MediaFile | null {
+export type TimelineDropImportResult =
+  | { kind: 'media-file'; mediaFile: MediaFile }
+  | { kind: 'signal-asset'; signalAsset: SignalAssetItem };
+
+function firstTimelineDropImportResult(
+  result: FileImportResult | FileImportResult[],
+): TimelineDropImportResult | null {
   const results = Array.isArray(result) ? result : [result];
-  return results.find(isMediaFileImportResult) ?? null;
+  const mediaFile = results.find(isMediaFileImportResult);
+  if (mediaFile) {
+    return { kind: 'media-file', mediaFile };
+  }
+
+  const signalAsset = results.find(isSignalAssetImportResult);
+  return signalAsset ? { kind: 'signal-asset', signalAsset } : null;
 }
 
-export async function resolveTimelineDropMediaFile(params: {
+export async function resolveTimelineDropImportResult(params: {
   file: File;
   handle?: FileSystemFileHandle;
   absolutePath?: string;
-}): Promise<MediaFile | null> {
-  const { file, handle, absolutePath } = params;
+  waitForMediaPlaceholder?: boolean;
+}): Promise<TimelineDropImportResult | null> {
+  const { file, handle, absolutePath, waitForMediaPlaceholder = true } = params;
   const existing = findMatchingMediaFile(file);
   if (existing) {
-    return existing;
+    return { kind: 'media-file', mediaFile: existing };
   }
 
   const mediaStore = useMediaStore.getState();
@@ -112,7 +128,9 @@ export async function resolveTimelineDropMediaFile(params: {
     : mediaStore.importFile(file);
   void importPromise.catch(() => undefined);
 
-  const placeholder = await waitForTimelineDropImportPlaceholder(file, excludedIds);
+  const placeholder = waitForMediaPlaceholder
+    ? await waitForTimelineDropImportPlaceholder(file, excludedIds)
+    : null;
   if (placeholder) {
     void importPromise.catch((error) => {
       log.warn('Timeline drop media import failed after placeholder creation', {
@@ -120,15 +138,24 @@ export async function resolveTimelineDropMediaFile(params: {
         error,
       });
     });
-    return placeholder;
+    return { kind: 'media-file', mediaFile: placeholder };
   }
 
   try {
-    return firstMediaImportResult(await importPromise);
+    return firstTimelineDropImportResult(await importPromise);
   } catch (error) {
     log.warn('Timeline drop media import failed', { name: file.name, error });
     return null;
   }
+}
+
+export async function resolveTimelineDropMediaFile(params: {
+  file: File;
+  handle?: FileSystemFileHandle;
+  absolutePath?: string;
+}): Promise<MediaFile | null> {
+  const result = await resolveTimelineDropImportResult(params);
+  return result?.kind === 'media-file' ? result.mediaFile : null;
 }
 
 export async function resolveMediaFileForTimelineDrop(mediaFile: MediaFile): Promise<File | null> {

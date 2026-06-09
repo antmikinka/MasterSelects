@@ -183,6 +183,20 @@ export function useExternalDrop({
     return true;
   }, [clearExternalDragState, isExporting]);
 
+  const addSignalAssetClip = useCallback(async (
+    trackId: string,
+    signalAsset: SignalAssetItem,
+    startTime: number,
+  ) => {
+    const result = await placeSignalAssetOnTimeline(signalAsset, trackId, startTime, {
+      addClip,
+      addTextClip,
+      updateTextProperties,
+      updateClip,
+    });
+    return result.clipId;
+  }, [addClip, addTextClip, updateClip, updateTextProperties]);
+
   // Place one or more externally dropped files onto a track sequentially, going
   // through the same media-store import path the media panel uses (#194).
   // `resolveStartTime` lets the caller snap/avoid overlaps; without it the raw
@@ -199,7 +213,7 @@ export function useExternalDrop({
     const { dataTransfer, trackId, trackIsVideo, baseStartTime, fallbackDuration, filePath, resolveStartTime } = params;
     const records = await collectDroppedMediaFiles(dataTransfer);
     return placeTimelineExternalDropFiles({
-      actions: { addClip },
+      actions: { addClip, addSignalAssetClip },
       records,
       trackId,
       trackIsVideo,
@@ -208,7 +222,7 @@ export function useExternalDrop({
       filePath,
       resolveStartTime,
     });
-  }, [addClip]);
+  }, [addClip, addSignalAssetClip]);
 
   const updateVideoNewTrackGesture = useCallback((clientY: number, isAudio: boolean) => {
     const rect = timelineRef.current?.getBoundingClientRect();
@@ -281,20 +295,6 @@ export function useExternalDrop({
     getDropPlacementTrackIds,
     prepareTimelinePlacementRange,
   ]);
-
-  const addSignalAssetClip = useCallback(async (
-    trackId: string,
-    signalAsset: SignalAssetItem,
-    startTime: number,
-  ) => {
-    const result = await placeSignalAssetOnTimeline(signalAsset, trackId, startTime, {
-      addClip,
-      addTextClip,
-      updateTextProperties,
-      updateClip,
-    });
-    return result.clipId;
-  }, [addClip, addTextClip, updateClip, updateTextProperties]);
 
   const buildTrackPreviewState = useCallback((params: {
     trackId: string;
