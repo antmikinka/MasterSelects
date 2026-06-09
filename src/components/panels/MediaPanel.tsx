@@ -40,8 +40,11 @@ import { MediaPanelHeader } from './media/panel/MediaPanelHeader';
 import { MediaNoMediaEmptyState } from './media/panel/MediaNoMediaEmptyState';
 import { MediaNoSearchResultsEmptyState } from './media/panel/MediaNoSearchResultsEmptyState';
 import type { MediaPanelViewMode } from './media/panel/types';
+import { useMediaPanelAddImportCommands } from './media/panel/useMediaPanelAddImportCommands';
 import { useMediaPanelDragDropMarquee, type MediaPanelMarquee } from './media/panel/useMediaPanelDragDropMarquee';
 import { useMediaPanelProjectItems } from './media/panel/useMediaPanelProjectItems';
+import { getMediaDeleteImpact, useMediaPanelRenameDeleteCommands } from './media/panel/useMediaPanelRenameDeleteCommands';
+import { useMediaPanelViewTransition } from './media/panel/useMediaPanelViewTransition';
 import { MediaBoardAnnotationLayer } from './media/board/MediaBoardAnnotationLayer';
 import { MediaBoardView } from './media/board/MediaBoardView';
 import { useMediaBoardAnnotationCommands } from './media/board/useMediaBoardAnnotationCommands';
@@ -137,7 +140,6 @@ import type {
   SplatEffectorItem,
   TextItem,
 } from '../../stores/mediaStore';
-import type { MediaFileUsageSummary } from '../../stores/mediaStore/slices/fileManageSlice';
 import { useTimelineStore } from '../../stores/timeline';
 import { useDockStore } from '../../stores/dockStore';
 import { useContextMenuPosition } from '../../hooks/useContextMenuPosition';
@@ -170,38 +172,8 @@ const EMPTY_SIGNAL_ASSETS: SignalAssetItem[] = [];
 
 const VIEW_MODE_STORAGE_KEY = 'media-panel-view-mode';
 const MEDIA_PANEL_PROJECT_UI_LOADED_EVENT = 'media-panel-project-ui-loaded';
-const MEDIA_PANEL_VIEW_TRANSITION_MS = 500;
 const MEDIA_PANEL_REVEAL_PULSE_MS = 1200;
 const MEDIA_PANEL_REVEAL_REQUEST_MAX_AGE_MS = 10000;
-
-interface MediaPanelTransitionBox {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
-interface MediaPanelTransitionCapture {
-  box: MediaPanelTransitionBox;
-  clone: HTMLElement;
-  baseWidth: number;
-  baseHeight: number;
-  scaleX: number;
-  scaleY: number;
-}
-
-interface PendingMediaPanelViewTransition {
-  captures: Map<string, MediaPanelTransitionCapture>;
-  overlay: HTMLDivElement;
-  panelBox: MediaPanelTransitionBox;
-}
-
-interface ActiveMediaPanelViewTransition {
-  animations: Animation[];
-  hiddenTargets: HTMLElement[];
-  overlay: HTMLDivElement;
-  timeoutId: number;
-}
 
 function loadMediaPanelViewMode(): MediaPanelViewMode {
   const stored = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
@@ -321,48 +293,6 @@ function isSignalAssetItem(item: ProjectItem): item is SignalAssetItem {
   return 'type' in item && item.type === 'signal';
 }
 
-interface MediaDeleteConfirmationRequest {
-  selectedIds: string[];
-  fileIds: string[];
-  mediaFiles: MediaFile[];
-  usages: MediaFileUsageSummary[];
-}
-
-function getMediaDeleteImpact(
-  mediaFiles: MediaFile[],
-  usages: MediaFileUsageSummary[],
-): { clipCount: number; compositionCount: number; fileLabel: string } {
-  const clipCount = usages.reduce((total, usage) => total + usage.clipCount, 0);
-  const compositionCount = new Set(usages.flatMap(usage => usage.compositions.map(composition => composition.compositionId))).size;
-  const fileLabel = mediaFiles.length === 1
-    ? `"${mediaFiles[0].name}"`
-    : `${mediaFiles.length} media files`;
-
-  return { clipCount, compositionCount, fileLabel };
-}
-
-function rectToTransitionBox(rect: DOMRect): MediaPanelTransitionBox {
-  return {
-    left: rect.left,
-    top: rect.top,
-    width: rect.width,
-    height: rect.height,
-  };
-}
-
-function boxesIntersect(a: MediaPanelTransitionBox, b: MediaPanelTransitionBox): boolean {
-  return (
-    a.left < b.left + b.width
-    && a.left + a.width > b.left
-    && a.top < b.top + b.height
-    && a.top + a.height > b.top
-  );
-}
-
-function prefersReducedMotion(): boolean {
-  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-}
-
 export function MediaPanel() {
   // Reactive data - subscribe to specific values only
   const files = useMediaStore(state => state.files);
@@ -473,8 +403,6 @@ export function MediaPanel() {
   const boardAutoPanFrameRef = useRef<number | null>(null);
   const boardOverviewRedrawFrameRef = useRef<number | null>(null);
   const boardOverviewImageCacheRef = useRef(new Map<string, { src: string; image: HTMLImageElement; status: 'loading' | 'loaded' | 'error' }>());
-  const pendingViewTransitionRef = useRef<PendingMediaPanelViewTransition | null>(null);
-  const activeViewTransitionRef = useRef<ActiveMediaPanelViewTransition | null>(null);
   const lastHandledRevealRequestIdRef = useRef(0);
   const mediaRevealPulseTimerRef = useRef<number | null>(null);
   const classicListScrollTopRef = useRef(0);
@@ -482,18 +410,16 @@ export function MediaPanel() {
   const classicListScrollSnapTimerRef = useRef<number | null>(null);
   const classicListHorizontalSnapTimerRef = useRef<number | null>(null);
   const classicListScrollSettledTimerRef = useRef<number | null>(null);
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState('');
-  const renameTimerRef = useRef<number | null>(null);
   const [contextMenu, setContextMenu] = useState<MediaPanelContextMenu | null>(null);
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
 
   // Marquee selection state
   const [marquee, setMarquee] = useState<MediaPanelMarquee | null>(null);
   const { menuRef: contextMenuRef, adjustedPosition: contextMenuPosition } = useContextMenuPosition(contextMenu);
   const [settingsDialog, setSettingsDialog] = useState<{ compositionId: string; width: number; height: number; frameRate: number; duration: number } | null>(null);
   const [solidSettingsDialog, setSolidSettingsDialog] = useState<MediaContextSolidSettingsDialogState | null>(null);
-  const [deleteConfirmation, setDeleteConfirmation] = useState<MediaDeleteConfirmationRequest | null>(null);
-  const [deleteConfirmationBusy, setDeleteConfirmationBusy] = useState(false);
   const [addDropdownOpen, setAddDropdownOpen] = useState(false);
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
   const [internalDragId, setInternalDragId] = useState<string | null>(null);
@@ -508,6 +434,57 @@ export function MediaPanel() {
   const [mediaSearchQuery, setMediaSearchQuery] = useState('');
   // Grid view: current open folder (null = root)
   const [gridFolderId, setGridFolderId] = useState<string | null>(null);
+  const {
+    renamingId,
+    renameValue,
+    renameTimerRef,
+    setRenamingId,
+    setRenameValue,
+    startRename,
+    finishRename,
+    handleNameClick,
+    handleDelete,
+    deleteConfirmation,
+    setDeleteConfirmation,
+    deleteConfirmationBusy,
+    confirmMediaDelete,
+  } = useMediaPanelRenameDeleteCommands({
+    selectedIds,
+    files,
+    folders,
+    compositions,
+    textItems,
+    solidItems,
+    meshItems,
+    cameraItems,
+    splatEffectorItems,
+    mathSceneItems,
+    motionShapeItems,
+    signalAssets,
+    renameFile,
+    renameSignalAsset,
+    renameFolder,
+    updateComposition,
+    getMediaFileUsages,
+    deleteMediaFilesEverywhere,
+    removeSignalAsset,
+    removeComposition,
+    removeFolder,
+    removeTextItem,
+    removeSolidItem,
+    removeMeshItem,
+    removeCameraItem,
+    removeSplatEffectorItem,
+    removeMathSceneItem,
+    removeMotionShapeItem,
+    closeContextMenu,
+  });
+  const handleViewModeChange = useMediaPanelViewTransition({
+    mediaPanelContentRef,
+    viewMode,
+    setViewMode,
+    setGridFolderId,
+  });
   const [mediaBoardViewport, setMediaBoardViewport] = useState<MediaBoardViewport>(loadMediaBoardViewport);
   const mediaBoardViewportRef = useRef<MediaBoardViewport>(mediaBoardViewport);
   const boardWheelCommitTimerRef = useRef<number | null>(null);
@@ -665,289 +642,6 @@ export function MediaPanel() {
       classicListScrollSettledTimerRef.current = null;
     }
   }, []);
-
-  const cleanupActiveMediaPanelViewTransition = useCallback(() => {
-    const active = activeViewTransitionRef.current;
-    if (!active) return;
-
-    activeViewTransitionRef.current = null;
-    window.clearTimeout(active.timeoutId);
-    active.animations.forEach((animation) => animation.cancel());
-    active.hiddenTargets.forEach((target) => {
-      target.classList.remove('media-panel-view-transition-hidden');
-    });
-    active.overlay.remove();
-  }, []);
-
-  const cleanupPendingMediaPanelViewTransition = useCallback(() => {
-    const pending = pendingViewTransitionRef.current;
-    if (!pending) return;
-
-    pendingViewTransitionRef.current = null;
-    pending.overlay.remove();
-  }, []);
-
-  const prepareMediaPanelViewTransition = useCallback(() => {
-    cleanupActiveMediaPanelViewTransition();
-    cleanupPendingMediaPanelViewTransition();
-
-    if (prefersReducedMotion()) return;
-
-    const content = mediaPanelContentRef.current;
-    if (!content) return;
-
-    const panelBox = rectToTransitionBox(content.getBoundingClientRect());
-    if (panelBox.width < 1 || panelBox.height < 1) return;
-
-    const overlay = document.createElement('div');
-    overlay.className = 'media-panel-view-transition-layer';
-    overlay.style.left = `${panelBox.left}px`;
-    overlay.style.top = `${panelBox.top}px`;
-    overlay.style.width = `${panelBox.width}px`;
-    overlay.style.height = `${panelBox.height}px`;
-
-    const captures = new Map<string, MediaPanelTransitionCapture>();
-    const nodes = content.querySelectorAll<HTMLElement>('[data-media-panel-anim-id]');
-    nodes.forEach((node) => {
-      const id = node.dataset.mediaPanelAnimId;
-      if (!id || node.matches(':focus-within')) return;
-
-      const box = rectToTransitionBox(node.getBoundingClientRect());
-      if (box.width < 1 || box.height < 1 || !boxesIntersect(box, panelBox)) return;
-
-      const clone = node.cloneNode(true) as HTMLElement;
-      const baseWidth = node.offsetWidth || box.width;
-      const baseHeight = node.offsetHeight || box.height;
-      const scaleX = box.width / Math.max(baseWidth, 1);
-      const scaleY = box.height / Math.max(baseHeight, 1);
-      clone.classList.add('media-panel-view-transition-clone');
-      clone.setAttribute('aria-hidden', 'true');
-      clone.setAttribute('draggable', 'false');
-      clone.querySelectorAll<HTMLElement>('[draggable]').forEach((draggableChild) => {
-        draggableChild.setAttribute('draggable', 'false');
-      });
-      clone.style.left = `${box.left - panelBox.left}px`;
-      clone.style.top = `${box.top - panelBox.top}px`;
-      clone.style.width = `${baseWidth}px`;
-      clone.style.height = `${baseHeight}px`;
-      clone.style.transform = `scale(${scaleX}, ${scaleY})`;
-
-      captures.set(id, { box, clone, baseWidth, baseHeight, scaleX, scaleY });
-      overlay.appendChild(clone);
-    });
-
-    if (captures.size === 0) {
-      overlay.remove();
-      return;
-    }
-
-    document.body.appendChild(overlay);
-    pendingViewTransitionRef.current = { captures, overlay, panelBox };
-  }, [cleanupActiveMediaPanelViewTransition, cleanupPendingMediaPanelViewTransition]);
-
-  useLayoutEffect(() => {
-    const pending = pendingViewTransitionRef.current;
-    if (!pending) return;
-
-    pendingViewTransitionRef.current = null;
-
-    const content = mediaPanelContentRef.current;
-    if (!content || prefersReducedMotion()) {
-      pending.overlay.remove();
-      return;
-    }
-
-    const nextPanelBox = rectToTransitionBox(content.getBoundingClientRect());
-    const hiddenTargets: HTMLElement[] = [];
-    const animations: Animation[] = [];
-
-    const animateCloneOut = ({ clone, scaleX, scaleY }: MediaPanelTransitionCapture) => {
-      animations.push(clone.animate(
-        [
-          { opacity: 1, transform: `scale(${scaleX}, ${scaleY}) translate3d(0, 0, 0)` },
-          { opacity: 0, transform: `scale(${scaleX}, ${scaleY}) translate3d(0, -4px, 0)` },
-        ],
-        {
-          duration: 180,
-          easing: 'ease-out',
-          fill: 'forwards',
-        }
-      ));
-    };
-
-    pending.captures.forEach((capture, id) => {
-      const { box, clone, baseWidth, baseHeight, scaleX, scaleY } = capture;
-      const target = content.querySelector<HTMLElement>(`[data-media-panel-anim-id="${CSS.escape(id)}"]`);
-      if (!target) {
-        animateCloneOut(capture);
-        return;
-      }
-
-      const targetBox = rectToTransitionBox(target.getBoundingClientRect());
-      if (targetBox.width < 1 || targetBox.height < 1 || !boxesIntersect(targetBox, nextPanelBox)) {
-        animateCloneOut(capture);
-        return;
-      }
-
-      const sourceLeft = box.left - pending.panelBox.left;
-      const sourceTop = box.top - pending.panelBox.top;
-      const targetLeft = targetBox.left - pending.panelBox.left;
-      const targetTop = targetBox.top - pending.panelBox.top;
-      const targetBaseWidth = target.offsetWidth || targetBox.width;
-      const targetBaseHeight = target.offsetHeight || targetBox.height;
-      const targetScaleX = targetBox.width / Math.max(targetBaseWidth, 1);
-      const targetScaleY = targetBox.height / Math.max(targetBaseHeight, 1);
-      const targetInitialWidth = box.width / Math.max(targetScaleX, 0.001);
-      const targetInitialHeight = box.height / Math.max(targetScaleY, 0.001);
-      const targetScaleTransform = `scale(${targetScaleX}, ${targetScaleY})`;
-
-      const targetClone = target.cloneNode(true) as HTMLElement;
-      targetClone.classList.add('media-panel-view-transition-clone', 'media-panel-view-transition-target-clone');
-      targetClone.setAttribute('aria-hidden', 'true');
-      targetClone.setAttribute('draggable', 'false');
-      targetClone.querySelectorAll<HTMLElement>('[draggable]').forEach((draggableChild) => {
-        draggableChild.setAttribute('draggable', 'false');
-      });
-      targetClone.style.left = `${sourceLeft}px`;
-      targetClone.style.top = `${sourceTop}px`;
-      targetClone.style.width = `${targetInitialWidth}px`;
-      targetClone.style.height = `${targetInitialHeight}px`;
-      targetClone.style.opacity = '0';
-      targetClone.style.transform = targetScaleTransform;
-      pending.overlay.appendChild(targetClone);
-
-      target.classList.add('media-panel-view-transition-hidden');
-      hiddenTargets.push(target);
-
-      animations.push(clone.animate(
-        [
-          {
-            left: `${sourceLeft}px`,
-            top: `${sourceTop}px`,
-            width: `${baseWidth}px`,
-            height: `${baseHeight}px`,
-            transform: `scale(${scaleX}, ${scaleY})`,
-            opacity: 1,
-          },
-          {
-            left: `${targetLeft}px`,
-            top: `${targetTop}px`,
-            width: `${targetBaseWidth}px`,
-            height: `${targetBaseHeight}px`,
-            transform: targetScaleTransform,
-            opacity: 0,
-          },
-        ],
-        {
-          duration: 260,
-          easing: 'cubic-bezier(0.4, 0, 0.2, 1)',
-          fill: 'forwards',
-        }
-      ));
-      animations.push(targetClone.animate(
-        [
-          {
-            left: `${sourceLeft}px`,
-            top: `${sourceTop}px`,
-            width: `${targetInitialWidth}px`,
-            height: `${targetInitialHeight}px`,
-            transform: targetScaleTransform,
-            opacity: 0,
-            offset: 0,
-          },
-          {
-            left: `${sourceLeft + ((targetLeft - sourceLeft) * 0.35)}px`,
-            top: `${sourceTop + ((targetTop - sourceTop) * 0.35)}px`,
-            width: `${targetInitialWidth + ((targetBaseWidth - targetInitialWidth) * 0.35)}px`,
-            height: `${targetInitialHeight + ((targetBaseHeight - targetInitialHeight) * 0.35)}px`,
-            transform: targetScaleTransform,
-            opacity: 0,
-            offset: 0.18,
-          },
-          {
-            left: `${targetLeft}px`,
-            top: `${targetTop}px`,
-            width: `${targetBaseWidth}px`,
-            height: `${targetBaseHeight}px`,
-            transform: targetScaleTransform,
-            opacity: 1,
-            offset: 1,
-          },
-        ],
-        {
-          duration: MEDIA_PANEL_VIEW_TRANSITION_MS,
-          easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
-          fill: 'forwards',
-        }
-      ));
-    });
-
-    content.querySelectorAll<HTMLElement>('[data-media-panel-anim-id]').forEach((target) => {
-      const id = target.dataset.mediaPanelAnimId;
-      if (!id || pending.captures.has(id)) return;
-
-      const targetBox = rectToTransitionBox(target.getBoundingClientRect());
-      if (targetBox.width < 1 || targetBox.height < 1 || !boxesIntersect(targetBox, nextPanelBox)) return;
-
-      animations.push(target.animate(
-        [
-          { opacity: 0 },
-          { opacity: 1 },
-        ],
-        {
-          duration: 180,
-          delay: 160,
-          easing: 'ease-out',
-        }
-      ));
-    });
-
-    let finished = false;
-    const finish = () => {
-      if (finished) return;
-      finished = true;
-
-      const active = activeViewTransitionRef.current;
-      if (active?.overlay === pending.overlay) {
-        activeViewTransitionRef.current = null;
-      }
-      window.clearTimeout(timeoutId);
-      hiddenTargets.forEach((target) => {
-        target.classList.remove('media-panel-view-transition-hidden');
-      });
-      pending.overlay.remove();
-    };
-
-    const timeoutId = window.setTimeout(finish, MEDIA_PANEL_VIEW_TRANSITION_MS + 100);
-    activeViewTransitionRef.current = {
-      animations,
-      hiddenTargets,
-      overlay: pending.overlay,
-      timeoutId,
-    };
-
-    if (animations.length === 0) {
-      finish();
-      return;
-    }
-
-    void Promise.allSettled(animations.map((animation) => animation.finished)).then(finish);
-  });
-
-  useEffect(() => () => {
-    cleanupActiveMediaPanelViewTransition();
-    cleanupPendingMediaPanelViewTransition();
-  }, [cleanupActiveMediaPanelViewTransition, cleanupPendingMediaPanelViewTransition]);
-
-  const handleViewModeChange = useCallback((nextViewMode: MediaPanelViewMode) => {
-    if (nextViewMode === viewMode) return;
-
-    prepareMediaPanelViewTransition();
-    setViewMode(nextViewMode);
-    if (nextViewMode !== 'icons') {
-      setGridFolderId(null);
-    }
-  }, [prepareMediaPanelViewTransition, viewMode]);
 
   // Column drag handlers
   const handleColumnDragStart = useCallback((e: React.DragEvent, columnId: ColumnId) => {
@@ -1119,24 +813,6 @@ export function MediaPanel() {
     };
   }, [addDropdownOpen]);
 
-  // Handle file import - prefer File System Access API for better file path access
-  const handleImport = useCallback(async () => {
-    if (fileSystemSupported) {
-      // Use File System Access API - gives us file handles with path info
-      await importFilesWithPicker();
-    } else {
-      // Fallback to traditional file input
-      fileInputRef.current?.click();
-    }
-  }, [fileSystemSupported, importFilesWithPicker]);
-
-  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      await importFiles(e.target.files);
-      e.target.value = ''; // Reset input
-    }
-  }, [importFiles]);
-
   const clearMediaBoardInsertionPreview = useCallback(() => {
     setMediaBoardInsertionPreview(null);
   }, []);
@@ -1256,10 +932,6 @@ export function MediaPanel() {
     return true;
   }, []);
 
-  const closeContextMenu = useCallback(() => {
-    setContextMenu(null);
-  }, []);
-
   const mediaContextExplorerHandlers = useMediaContextExplorerHandlers({
     showInExplorer,
     pickProxyFolder,
@@ -1313,50 +985,6 @@ export function MediaPanel() {
     closeContextMenu();
   }, [closeContextMenu, generateMediaSpectrogram]);
 
-  // Rename handling
-  const startRename = useCallback((id: string, currentName: string) => {
-    setRenamingId(id);
-    setRenameValue(currentName);
-    closeContextMenu();
-  }, [closeContextMenu]);
-
-  const finishRename = useCallback(() => {
-    if (!renamingId || !renameValue.trim()) {
-      setRenamingId(null);
-      return;
-    }
-
-    const file = files.find(f => f.id === renamingId);
-    const folder = folders.find(f => f.id === renamingId);
-    const composition = compositions.find(c => c.id === renamingId);
-    const signalAsset = signalAssets.find(item => item.id === renamingId);
-
-    if (file) {
-      renameFile(renamingId, renameValue.trim());
-    } else if (signalAsset) {
-      renameSignalAsset(renamingId, renameValue.trim());
-    } else if (folder) {
-      renameFolder(renamingId, renameValue.trim());
-    } else if (composition) {
-      updateComposition(renamingId, { name: renameValue.trim() });
-    }
-
-    setRenamingId(null);
-  }, [renamingId, renameValue, files, folders, compositions, signalAssets, renameFile, renameSignalAsset, renameFolder, updateComposition]);
-
-  // Handle click on item name to start rename (delayed so drag can cancel it)
-  const handleNameClick = useCallback((e: React.MouseEvent, id: string, currentName: string) => {
-    // Only start rename if item is already selected (double-click on name effect)
-    if (selectedIds.includes(id)) {
-      e.stopPropagation();
-      if (renameTimerRef.current) clearTimeout(renameTimerRef.current);
-      renameTimerRef.current = window.setTimeout(() => {
-        renameTimerRef.current = null;
-        startRename(id, currentName);
-      }, 300);
-    }
-  }, [selectedIds, startRename]);
-
   // Handle badge click — select clip using this media file, open properties panel with target tab
   const handleBadgeClick = useCallback((mediaFileId: string, tab: 'transcript' | 'analysis') => {
     const timelineState = useTimelineStore.getState();
@@ -1374,91 +1002,51 @@ export function MediaPanel() {
     });
   }, []);
 
-  const deleteSelectedItems = useCallback(async (idsToDelete: string[], fileIdsToDelete: string[]) => {
-    if (fileIdsToDelete.length > 0) {
-      const result = await deleteMediaFilesEverywhere(fileIdsToDelete);
-      if (result.artifactFailures.length > 0) {
-        log.warn('Some media artifacts could not be deleted', result.artifactFailures);
-      }
-    }
-
-    idsToDelete.forEach(id => {
-      if (fileIdsToDelete.includes(id)) return;
-      if (compositions.find(c => c.id === id)) removeComposition(id);
-      else if (folders.find(f => f.id === id)) removeFolder(id);
-      else if (textItems.find(t => t.id === id)) removeTextItem(id);
-      else if (solidItems.find(s => s.id === id)) removeSolidItem(id);
-      else if (meshItems.find(m => m.id === id)) removeMeshItem(id);
-      else if (cameraItems.find(c => c.id === id)) removeCameraItem(id);
-      else if (splatEffectorItems.find(e => e.id === id)) removeSplatEffectorItem(id);
-      else if (mathSceneItems.find(m => m.id === id)) removeMathSceneItem(id);
-      else if (motionShapeItems.find(m => m.id === id)) removeMotionShapeItem(id);
-      else if (signalAssets.find(item => item.id === id)) removeSignalAsset(id);
-    });
-    closeContextMenu();
-  }, [compositions, folders, textItems, solidItems, meshItems, cameraItems, splatEffectorItems, mathSceneItems, motionShapeItems, signalAssets, deleteMediaFilesEverywhere, removeSignalAsset, removeComposition, removeFolder, removeTextItem, removeSolidItem, removeMeshItem, removeCameraItem, removeSplatEffectorItem, removeMathSceneItem, removeMotionShapeItem, closeContextMenu]);
-
-  // Delete selected items
-  const handleDelete = useCallback(async () => {
-    const selectedFileIds = selectedIds.filter(id => files.some(file => file.id === id));
-    const selectedFiles = files.filter(file => selectedFileIds.includes(file.id));
-
-    if (selectedFiles.length > 0) {
-      const usages = getMediaFileUsages(selectedFileIds);
-      const hasProjectArtifacts = selectedFiles.some(file =>
-        Boolean(
-          file.projectPath ||
-          file.fileHash ||
-          file.audioAnalysisRefs ||
-          file.proxyStatus ||
-          file.audioProxyStatus ||
-          file.hasProxyAudio ||
-          file.proxyFrameCount ||
-          file.thumbnailUrl ||
-          file.transcriptStatus ||
-          file.analysisStatus
-        )
-      );
-
-      if (usages.length > 0 || hasProjectArtifacts) {
-        setDeleteConfirmation({
-          selectedIds: [...selectedIds],
-          fileIds: selectedFileIds,
-          mediaFiles: selectedFiles,
-          usages,
-        });
-        closeContextMenu();
-        return;
-      }
-    }
-
-    await deleteSelectedItems([...selectedIds], selectedFileIds);
-  }, [selectedIds, files, getMediaFileUsages, deleteSelectedItems, closeContextMenu]);
-
-  const confirmMediaDelete = useCallback(async () => {
-    if (!deleteConfirmation || deleteConfirmationBusy) return;
-    setDeleteConfirmationBusy(true);
-    try {
-      await deleteSelectedItems(deleteConfirmation.selectedIds, deleteConfirmation.fileIds);
-      setDeleteConfirmation(null);
-    } catch (error) {
-      log.error('Failed to delete media items', error);
-    } finally {
-      setDeleteConfirmationBusy(false);
-    }
-  }, [deleteConfirmation, deleteConfirmationBusy, deleteSelectedItems]);
-
-  // Get the active parent folder (icons view: current open folder, classic/board view: selected folder or null)
-  const getActiveParentId = useCallback((): string | null => {
-    if (contextMenu && contextMenu.parentId !== undefined) return contextMenu.parentId;
-    if (viewMode === 'icons' && gridFolderId) return gridFolderId;
-    // In classic/board view, if a single folder is selected, create inside it
-    if (selectedIds.length === 1) {
-      const sel = folders.find(f => f.id === selectedIds[0]);
-      if (sel) return sel.id;
-    }
-    return null;
-  }, [contextMenu, viewMode, gridFolderId, selectedIds, folders]);
+  const {
+    getActiveParentId,
+    handleImport,
+    handleFileChange,
+    handleNewComposition,
+    handleNewFolder,
+    handleNewText,
+    handleNewText3D,
+    handleNewSolid,
+    handleNewMesh,
+    handleNewCamera,
+    handleNewSplatEffector,
+    handleNewMathScene,
+    handleNewMotionShape,
+    handleImportGaussianSplat,
+  } = useMediaPanelAddImportCommands({
+    fileInputRef,
+    fileSystemSupported,
+    contextMenu,
+    viewMode,
+    gridFolderId,
+    selectedIds,
+    folders,
+    compositionCount: compositions.length,
+    importFiles,
+    importFilesWithPicker,
+    createComposition,
+    createFolder,
+    createTextItem,
+    getOrCreateTextFolder,
+    createSolidItem,
+    getOrCreateSolidFolder,
+    createMeshItem,
+    getOrCreateMeshFolder,
+    createCameraItem,
+    getOrCreateCameraFolder,
+    createSplatEffectorItem,
+    getOrCreateSplatEffectorFolder,
+    createMathSceneItem,
+    getOrCreateMathSceneFolder,
+    createMotionShapeItem,
+    getOrCreateMotionShapeFolder,
+    importGaussianSplat,
+    closeContextMenu,
+  });
 
   // Copy / paste / duplicate of media-panel items (#187)
   const handleCopySelected = useCallback(() => {
@@ -1531,84 +1119,6 @@ export function MediaPanel() {
     document.addEventListener('keydown', handleKeyDown, { capture: true });
     return () => document.removeEventListener('keydown', handleKeyDown, { capture: true });
   }, [selectedIds, copyMediaItems, pasteMediaItems, duplicateMediaItems, hasMediaClipboard, getActiveParentId, showFloatingText, handleDelete]);
-
-  // New composition
-  const handleNewComposition = useCallback(() => {
-    createComposition(`Comp ${compositions.length + 1}`, { parentId: getActiveParentId() });
-    closeContextMenu();
-  }, [compositions.length, createComposition, getActiveParentId, closeContextMenu]);
-
-  // New folder
-  const handleNewFolder = useCallback(() => {
-    createFolder('New Folder', getActiveParentId());
-    closeContextMenu();
-  }, [createFolder, getActiveParentId, closeContextMenu]);
-
-  // New text item (in Media Panel, can be dragged to timeline)
-  const handleNewText = useCallback(() => {
-    const textFolderId = getOrCreateTextFolder();
-    createTextItem(undefined, textFolderId);
-    closeContextMenu();
-  }, [createTextItem, getOrCreateTextFolder, closeContextMenu]);
-
-  const handleNewText3D = useCallback(() => {
-    const textFolderId = getOrCreateTextFolder();
-    createMeshItem('text3d', undefined, textFolderId);
-    closeContextMenu();
-  }, [createMeshItem, getOrCreateTextFolder, closeContextMenu]);
-
-  // New solid item (in Media Panel, can be dragged to timeline)
-  const handleNewSolid = useCallback(() => {
-    const solidFolderId = getOrCreateSolidFolder();
-    createSolidItem(undefined, '#ffffff', solidFolderId);
-    closeContextMenu();
-  }, [createSolidItem, getOrCreateSolidFolder, closeContextMenu]);
-
-  // New mesh item (in Media Panel, can be dragged to timeline)
-  const handleNewMesh = useCallback((meshType: import('../../stores/mediaStore/types').MeshPrimitiveType) => {
-    const meshFolderId = getOrCreateMeshFolder();
-    createMeshItem(meshType, undefined, meshFolderId);
-    closeContextMenu();
-  }, [createMeshItem, getOrCreateMeshFolder, closeContextMenu]);
-
-  const handleNewCamera = useCallback(() => {
-    const cameraFolderId = getOrCreateCameraFolder();
-    createCameraItem(undefined, cameraFolderId);
-    closeContextMenu();
-  }, [createCameraItem, getOrCreateCameraFolder, closeContextMenu]);
-
-  const handleNewSplatEffector = useCallback(() => {
-    const effectorFolderId = getOrCreateSplatEffectorFolder();
-    createSplatEffectorItem(undefined, effectorFolderId);
-    closeContextMenu();
-  }, [createSplatEffectorItem, getOrCreateSplatEffectorFolder, closeContextMenu]);
-
-  const handleNewMathScene = useCallback(() => {
-    const mathFolderId = getOrCreateMathSceneFolder();
-    createMathSceneItem(undefined, mathFolderId);
-    closeContextMenu();
-  }, [createMathSceneItem, getOrCreateMathSceneFolder, closeContextMenu]);
-
-  const handleNewMotionShape = useCallback((primitive: import('../../types/motionDesign').ShapePrimitive) => {
-    const motionFolderId = getOrCreateMotionShapeFolder();
-    createMotionShapeItem(primitive, undefined, motionFolderId);
-    closeContextMenu();
-  }, [createMotionShapeItem, getOrCreateMotionShapeFolder, closeContextMenu]);
-
-  // Import Gaussian Avatar (.zip) — opens file picker, imports with forced gaussian-avatar type
-  const handleImportGaussianSplat = useCallback(() => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.ply,.compressed.ply,.splat,.ksplat,.spz,.sog,.lcc,.zip';
-    input.onchange = async (e) => {
-      const fileList = (e.target as HTMLInputElement).files;
-      if (fileList && fileList.length > 0) {
-        await importGaussianSplat(fileList[0]);
-      }
-    };
-    input.click();
-    closeContextMenu();
-  }, [importGaussianSplat, closeContextMenu]);
 
   // Composition settings
   const openCompositionSettings = useCallback((comp: Composition) => {

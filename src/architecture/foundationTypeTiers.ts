@@ -48,7 +48,9 @@ export const foundationTypeBoundaryBaselines = {
   allTypesImportFiles: 776,
   sharedSchemaRuntimeHandleTokenHits: 23,
   projectSchemaProductImportHits: 0,
-  globalTypesIndexRawLines: 1194,
+  // Ratcheted down 2026-06-10: barrel reached the 150-line target (133 raw
+  // lines after packets 145 + 159); the ceiling now freezes that state.
+  globalTypesIndexRawLines: 150,
   globalTypesIndexTargetLines: 150,
 } as const;
 
@@ -150,9 +152,30 @@ export const foundationRuntimeHandleClassifications = [
   {
     path: 'src/types/index.ts',
     ownerTier: 'compatibility-facade',
-    maxCurrentHits: 21,
+    maxCurrentHits: 0,
     gateId: 'P1_RUNTIME_HANDLES_FORBIDDEN_IN_SHARED_SCHEMA',
-    note: 'Runtime handles in the global type barrel are compatibility debt for P1A lease extraction.',
+    note: 'The global type barrel facade no longer declares runtime-handle-bearing types.',
+  },
+  {
+    path: 'src/types/mediaSequences.ts',
+    ownerTier: 'compatibility-facade',
+    maxCurrentHits: 2,
+    gateId: 'P1_RUNTIME_HANDLES_FORBIDDEN_IN_SHARED_SCHEMA',
+    note: 'Sequence frame File handles are compatibility debt until runtime lease extraction.',
+  },
+  {
+    path: 'src/types/layers.ts',
+    ownerTier: 'compatibility-facade',
+    maxCurrentHits: 9,
+    gateId: 'P1_RUNTIME_HANDLES_FORBIDDEN_IN_SHARED_SCHEMA',
+    note: 'Layer runtime handles are compatibility debt until render and media lease contracts own them.',
+  },
+  {
+    path: 'src/types/timeline.ts',
+    ownerTier: 'compatibility-facade',
+    maxCurrentHits: 10,
+    gateId: 'P1_RUNTIME_HANDLES_FORBIDDEN_IN_SHARED_SCHEMA',
+    note: 'Timeline runtime handles are compatibility debt until timeline sources use runtime lease contracts.',
   },
   {
     path: 'src/types/renderTarget.ts',

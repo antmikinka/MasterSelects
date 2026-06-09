@@ -597,6 +597,33 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
   Universal Signal end-to-end AI-bridge smoke passed in the real browser, and
   the P4 FlashBoard lane exit gate closed with zero console errors/log
   anomalies plus previously verified active-generation integration suites.
+- Wave 4 type-barrel closure completed:
+  `P1-TYPES-BARREL-THIN-159`; `src/types/index.ts` is now a 133-raw-line
+  re-export facade under the 150-line target, with role clusters in
+  `mediaSequences.ts`, `layers.ts`, `project.ts`, and `timeline.ts`.
+- Wave 4 orchestrator ratchet completed:
+  `foundationTypeBoundaryBaselines.globalTypesIndexRawLines` ratcheted 1194 ->
+  150; the type-barrel goal criterion is met.
+- Wave 4 P1A object-url lease migration completed:
+  `P1A-OBJECTURL-LEASE-MIGRATION-160`; HMR-safe
+  `mediaRuntimeObjectUrlLeaseOwner` owns `RuntimeSourceId` object-URL leases,
+  and `blobUrlManager.ts` is a delegating compatibility facade with the same
+  exported API.
+- Wave 4 MediaPanel continuation completed:
+  `P4-MEDIA-PANEL-SPLIT-161`; view-mode transition/reveal control moved to
+  `useMediaPanelViewTransition.ts`, reducing `MediaPanel.tsx` from 3974 to
+  3644 raw lines.
+- Wave 4 P2 freeze blueprint completed:
+  `P2-GETSTATE-CLASSIFICATION-SCOUT-162`; accepted the render-path/module-scope
+  hard-target list, allowed-adapter proposal, runtime lease owner-map
+  extension, store split candidates, and five proposed P2 packets. Formal
+  hardening remains `P2-GETSTATE-ADAPTER-FREEZE`.
+- Wave 4 FlashBoard CSS budget split completed:
+  `P4-FLASHBOARD-CONTROLS-CSS-SPLIT-163`; split chat controls into
+  `FlashBoardChatControls.css`, preserving all 76 unique class selectors and
+  cascade order.
+- Wave 4 verification:
+  Orchestrator-verified: npx tsc -b clean; 11 test files / 105 tests green (guards, mediaRuntime leases, mediaPanel, historyStore).
 
 ## High-Conflict Ownership Snapshot
 
@@ -617,19 +644,19 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 
 ## Active Packet
 
-None. Wave 3 (`RENAME-STRESS-TEST-155`,
-`P1A-MEDIA-RUNTIME-CONTRACTS-156`, `P4-MEDIA-PANEL-SPLIT-157`) is completed
-and orchestrator-verified with the full unit suite; Universal Signal runtime
-smoke passed and the FlashBoard lane gate is closed.
+None. Wave 4 (`P1-TYPES-BARREL-THIN-159`,
+`P1A-OBJECTURL-LEASE-MIGRATION-160`, `P4-MEDIA-PANEL-SPLIT-161`,
+`P2-GETSTATE-CLASSIFICATION-SCOUT-162`,
+`P4-FLASHBOARD-CONTROLS-CSS-SPLIT-163`, plus orchestrator ratchet) is completed
+and verified; the type-barrel goal criterion is met.
 
 ## Queued Packets
 
-No worker-owned source packet is currently active. Next wave candidates:
-type-barrel thinning toward the 150-line target, P1A migration packet 1
-(blobUrlManager object-url lease owner), and next MediaPanel slice.
+No worker-owned source packet is currently active. Next wave candidates: P1A
+webCodecsHelpers lease migration, next MediaPanel slice, then
+P2-GETSTATE-ADAPTER-FREEZE formalization.
 
 ## Immediate Next Step
 
-Orchestrator authors the next wave: type-barrel thinning toward the 150-line
-target, P1A migration packet 1 (blobUrlManager object-url lease owner), and
-next MediaPanel slice.
+Orchestrator authors the next wave: P1A webCodecsHelpers lease migration, next
+MediaPanel slice, then P2-GETSTATE-ADAPTER-FREEZE formalization.

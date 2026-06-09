@@ -60,7 +60,7 @@ export const mediaRuntimeLeaseOwnerContracts = [
   {
     handleKind: 'html-media-element',
     owner: 'services/mediaRuntime',
-    owningPath: 'src/services/mediaRuntime/runtimePlayback.ts',
+    owningPath: 'src/services/mediaRuntime/mediaElementLeases.ts',
     gateId: 'P1A_SINGLE_RUNTIME_LEASE_DOMAIN',
     note: 'HTML media elements are runtime playback state, not durable clip state.',
   },

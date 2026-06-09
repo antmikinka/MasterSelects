@@ -18,11 +18,10 @@ orchestrator or worker-agent execution run starts.
 - Handoff templates: prepared for execution only
 - Source implementation: current bounded source packet has explicit write set,
   forbidden files, and gates
-- Current bounded packet: none; wave 3 (packets 155-157) completed and
-  orchestrator-verified with the full unit suite; Universal Signal runtime
-  smoke passed and the FlashBoard lane gate is closed; next wave = type-barrel
-  thinning toward the 150-line target, P1A migration packet 1 (blobUrlManager
-  object-url lease owner), and next MediaPanel slice.
+- Current bounded packet: none; wave 4 (packets 159-163 plus orchestrator
+  ratchet) completed and verified; type-barrel goal criterion met; next wave =
+  P1A webCodecsHelpers lease migration, next MediaPanel slice, then
+  P2-GETSTATE-ADAPTER-FREEZE formalization.
 - Completed source/tooling packet: `P0-REG-001`; focused registry checks passed.
 - Completed bounded packet: `P0-BASELINE-REFRESH-001`, read-only plus docs.
 - Completed bounded packet: `P1-CONTRACT-001`, contracts and focused boundary
@@ -1959,9 +1958,63 @@ orchestrator or worker-agent execution run starts.
   at 5 files and 16 tests.
   The UI-level composer click-through smoke is explicitly reassigned to Phase 7
   bridge-handler work because a composer driver tool does not exist yet.
-- Next eligible packet: type-barrel thinning toward the 150-line target, P1A
-  migration packet 1 (blobUrlManager object-url lease owner), and next
-  MediaPanel slice.
+- Completed bounded packet:
+  `P1-TYPES-BARREL-THIN-159`; `src/types/index.ts` is now a 133-raw-line
+  re-export facade, under the 150-line target. Remaining clusters moved to
+  `mediaSequences.ts` (51), `layers.ts` (95), `project.ts` (17), and
+  `timeline.ts` (286). `foundationTypeTiers` classifications updated:
+  `index.ts` runtime-handle maxCurrentHits lowered 21 -> 0; new
+  compatibility-facade entries cover `mediaSequences` (2), `layers` (9), and
+  `timeline` (10). Accepted debt: pure-moved inline
+  `import('../stores|engine|services')` type expressions remain in
+  `layers.ts`/`timeline.ts` under their hit ceilings.
+  Orchestrator-verified: npx tsc -b clean; 11 test files / 105 tests green (guards, mediaRuntime leases, mediaPanel, historyStore).
+- Orchestrator ratchet:
+  `foundationTypeBoundaryBaselines.globalTypesIndexRawLines` was ratcheted
+  1194 -> 150 by the orchestrator; guard tests are green. The type-barrel goal
+  criterion (barrel at target, ratchet updated downward) is MET.
+- Completed bounded packet:
+  `P1A-OBJECTURL-LEASE-MIGRATION-160`; added HMR-safe
+  `mediaRuntimeObjectUrlLeaseOwner` in
+  `src/services/mediaRuntime/objectUrlLeases.ts` (261 lines) with
+  `RuntimeSourceId`-keyed leases, idempotent revoke, and leak
+  accounting/diagnostics. `src/stores/timeline/helpers/blobUrlManager.ts` is
+  now a 122-line delegating facade with the identical exported API; all 14 call
+  sites were verified signature-compatible. Added
+  `tests/unit/mediaRuntimeObjectUrlLease.test.ts`.
+  Orchestrator-verified: npx tsc -b clean; 11 test files / 105 tests green (guards, mediaRuntime leases, mediaPanel, historyStore).
+- Completed bounded packet:
+  `P4-MEDIA-PANEL-SPLIT-161`; extracted the view-mode transition/reveal
+  controller to `media/panel/useMediaPanelViewTransition.ts` (355 lines,
+  including DOM animation capture and cleanup). `MediaPanel.tsx` dropped from
+  3974 to 3644 raw lines.
+  Orchestrator-verified: npx tsc -b clean; 11 test files / 105 tests green (guards, mediaRuntime leases, mediaPanel, historyStore).
+- Completed read-only packet:
+  `P2-GETSTATE-CLASSIFICATION-SCOUT-162`; delivered the accepted P2 freeze
+  blueprint. It contains the complete class-(c) render-path/module-scope hard
+  target list with file:line evidence, concentrated in `RenderDispatcher`,
+  `LayerCollector`, `NestedCompRenderer`, `useEngine`, `renderScheduler`,
+  `compositionRenderer`, `Preview.tsx`, properties tabs, and boot files. It
+  also proposes allowed adapters (`aiTools`, guided actions, persistence,
+  midi, sam2/matanyone, flashboard services, mediaRuntime, audio recording,
+  export serialization, editorBoot), extends the runtime lease owner map to
+  audio routing/manager, `ClipAudioRenderService`, thumbnail
+  renderer/cacheService, `ScrubbingCache`, and `ParallelDecodeManager`, lists
+  store split candidates (`dockStore` 1790, `historyStore` 1529,
+  `fileManageSlice` 1309, `fileImportSlice` 812, `compositionSlice` 810), and
+  proposes five P2 packets. The adapter list and runtime lease owner map are
+  accepted at blueprint level; formal gate hardening remains
+  `P2-GETSTATE-ADAPTER-FREEZE`.
+  Orchestrator-verified: npx tsc -b clean; 11 test files / 105 tests green (guards, mediaRuntime leases, mediaPanel, historyStore).
+- Completed bounded packet:
+  `P4-FLASHBOARD-CONTROLS-CSS-SPLIT-163`; split
+  `FlashBoardControls.css` (1035 raw) at the `.fb-chat-panel` boundary into
+  `FlashBoardControls.css` (630) plus new `FlashBoardChatControls.css` (405).
+  The manifest import was added in cascade position; 76 unique class selectors
+  were preserved exactly, and line conservation was exact.
+  Orchestrator-verified: npx tsc -b clean; 11 test files / 105 tests green (guards, mediaRuntime leases, mediaPanel, historyStore).
+- Next eligible packet: P1A webCodecsHelpers lease migration, next MediaPanel
+  slice, then P2-GETSTATE-ADAPTER-FREEZE formalization.
 - Product source refactors remain blocked outside approved packet write sets.
 
 ## Document Map
@@ -2153,12 +2206,13 @@ Gates and subchecks:
   - [x] durable store tier defined
   - [x] runtime store/lease tier defined
   - [x] render/runtime tier defined
-- [ ] `P1_GLOBAL_TYPES_BARREL_THIN`
+- [x] `P1_GLOBAL_TYPES_BARREL_THIN`
   - [x] `src/types/index.ts` compatibility plan defined
   - [x] retirement order defined
   - [x] current broad type-barrel fan-in frozen by
         `tests/unit/foundationTypeBoundary.test.ts`
-  - [ ] broad barrel still needs shrink/retirement below the target budget
+  - [x] broad barrel shrunk below the 150-line target by
+        `P1-TYPES-BARREL-THIN-159`
 - [ ] `P1_TYPE_TIER_NO_RUNTIME_IMPORTS`
   - [x] scan forbids DOM/GPU/File/Blob/VideoFrame/runtime services in pure tiers
   - [x] current runtime-handle hits classified as compatibility or
@@ -2181,8 +2235,9 @@ Gates and subchecks:
         `tests/unit/foundationTypeBoundary.test.ts`
   - [x] project schema runtime-handle hits are rejected by
         `tests/unit/projectSchemaBoundary.test.ts`
-  - [ ] existing `src/types/index.ts` runtime-handle debt removed by later P1
-        barrel retirement
+  - [x] existing `src/types/index.ts` runtime-handle debt removed by
+        `P1-TYPES-BARREL-THIN-159`; accepted compatibility-facade hits remain
+        in role modules under guard ceilings
   - [x] project sequence-frame `File` hydration debt removed by
         `P3-HYDRATION-ADAPTER-001`
 
@@ -2236,6 +2291,10 @@ Execution state:
 - [x] `src/services/mediaRuntime/persistedStateGuard.ts` rejects live handles
       through `structuredClone`, JSON roundtrip, runtime-field, object URL, and
       runtime-object checks.
+- [x] `src/services/mediaRuntime/objectUrlLeases.ts` owns HMR-safe
+      `RuntimeSourceId` object-URL leases, revoke idempotency, and leak
+      accounting; `blobUrlManager.ts` is a compatibility facade over that
+      owner.
 - [x] Focused check passed:
       `npm run test -- tests/unit/persistedStateRuntimeHandles.test.ts tests/unit/mediaRuntimeLeaseContracts.test.ts tests/unit/foundationTypeBoundary.test.ts tests/unit/completeArchitectureRegistry.test.ts tests/unit/timelineArchitectureRegistry.test.ts`.
 - [ ] Legacy `MediaFile.file` and existing clip runtime fields remain
@@ -2333,11 +2392,14 @@ Gates and subchecks:
   - [ ] durable state is serializable
   - [ ] runtime leases are referenced by ids only
 - [ ] `P2_RUNTIME_LEASE_OWNERS_DEFINED`
-  - [ ] lease owner map covers media, audio, render, decoder, worker, GPU
+  - [x] lease owner map blueprint covers media, audio, render, decoder,
+        worker, and GPU; formalized gate remains
+        `P2-GETSTATE-ADAPTER-FREEZE`
 - [ ] `P2_GETSTATE_USAGE_CLASSIFIED`
-  - [ ] async fresh reads classified
-  - [ ] bridge/adapter reads allowlisted
-  - [ ] module-scope/render-path reads flagged
+  - [x] async fresh reads classified at scout/blueprint level
+  - [x] bridge/adapter reads allowlisted at scout/blueprint level
+  - [x] module-scope/render-path reads flagged with hard-target file:line
+        evidence
 - [ ] `P2_GETSTATE_MODULE_SCOPE_FORBIDDEN`
   - [ ] hard gate forbids new module-scope live reads
 - [ ] `P2_HISTORY_AND_DOCK_SPLIT`
@@ -2806,8 +2868,10 @@ Do not:
 - [x] Define store/runtime gates.
 - [x] Replace blind `getState()` reduction with usage classification.
 - [x] Add combined store/project contract-freeze requirement.
-- [ ] Define allowed `getState()` adapter list.
-- [ ] Define runtime lease owner map.
+- [x] Define allowed `getState()` adapter list at accepted P2 blueprint level;
+      formalization remains `P2-GETSTATE-ADAPTER-FREEZE`.
+- [x] Define runtime lease owner map at accepted P2 blueprint level;
+      formalization remains `P2-GETSTATE-ADAPTER-FREEZE`.
 - [ ] Define store selector/action planner file targets.
 - [ ] Define history serializer guard for runtime-handle leaks.
 - [ ] Define dock layout localStorage versus project persistence ownership.
