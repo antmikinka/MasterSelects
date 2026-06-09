@@ -3069,6 +3069,6 @@ describe('timeline architecture registry', () => {
 
   it('keeps the removed passive DOM clip renderer deleted', () => {
     expect(existsSync(path.join(repoRoot, 'src', 'components', 'timeline', 'TimelineClip.tsx'))).toBe(false);
-    expect(readRepoFile('docs/refactor/Timeline-System-Refactor-Plan.md')).toContain('Do not restore `TimelineClip.tsx`');
+    expect(readRepoFile('docs/completed/architecture/Timeline-System-Refactor-Plan.md')).toContain('Do not restore `TimelineClip.tsx`');
   });
 });

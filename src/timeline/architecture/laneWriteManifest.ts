@@ -28,7 +28,7 @@ export const timelineRefactorLanes = [
       'src/timeline/architecture/**',
       'src/timeline/contracts/schema/**',
       'tests/unit/timelineArchitectureRegistry.test.ts',
-      'docs/refactor/Timeline-System-Refactor-Handoff.md',
+      'docs/completed/architecture/Timeline-System-Refactor-Handoff.md',
     ],
     forbiddenWriteSet: [
       'src/components/timeline/Timeline.tsx',
@@ -150,7 +150,8 @@ export const timelineRefactorLanes = [
     status: 'done',
     writeSet: [
       'tests/**',
-      'docs/refactor/**',
+      'docs/completed/architecture/**',
+      'docs/completed/**',
       'docs/Features/**',
     ],
     forbiddenWriteSet: [

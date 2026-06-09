@@ -290,7 +290,7 @@ export const timelineExitCriteriaCoverage = [
   {
     gateId: 'P5_DOCS_HANDOFF_COMPLETE',
     criteria: ['handoff, feature docs, and plan reflect shipped architecture'],
-    evidence: [{ kind: 'handoff', path: 'docs/refactor/Timeline-System-Refactor-Handoff.md', note: 'final handoff entry' }],
+    evidence: [{ kind: 'handoff', path: 'docs/completed/architecture/Timeline-System-Refactor-Handoff.md', note: 'final handoff entry' }],
   },
   { gateId: 'P5_FULL_CHECK_CHAIN_GREEN',
     criteria: ['npm run build, npm run lint, and npm run test pass on final HEAD'],

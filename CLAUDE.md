@@ -290,11 +290,15 @@ The watcher writes local reports to `.codex-usage/`, which stays local and is gi
 
 ## 6A. Timeline Refactor Agent Execution Protocol
 
+The issue-253 timeline-system refactor is complete. This protocol is now a
+guardrail for follow-up timeline architecture work, regression cleanup, or any
+future reopened timeline-refactor lane.
+
 This section applies when working on the timeline system refactor described in:
 
-- `docs/refactor/timeline-system-agent-plans/cross-team-final-synthesis.md`
-- `docs/refactor/Timeline-System-Refactor-Plan.md`
-- `docs/refactor/Timeline-System-Refactor-Handoff.md`
+- `docs/completed/architecture/timeline-system-agent-plans/cross-team-final-synthesis.md`
+- `docs/completed/architecture/Timeline-System-Refactor-Plan.md`
+- `docs/completed/architecture/Timeline-System-Refactor-Handoff.md`
 
 The refactor goal is the clean long-term architecture, not compatibility
 preservation and not a minimum-risk patch. Risk and churn are acceptable when
@@ -305,8 +309,8 @@ they move toward the agreed architecture.
 Before editing timeline refactor code, every main agent and spawned agent must
 read:
 
-1. `docs/refactor/timeline-system-agent-plans/cross-team-final-synthesis.md`
-2. `docs/refactor/Timeline-System-Refactor-Handoff.md`
+1. `docs/completed/architecture/timeline-system-agent-plans/cross-team-final-synthesis.md`
+2. `docs/completed/architecture/Timeline-System-Refactor-Handoff.md`
 3. The current lane/gate/debt files if they already exist:
    - `src/timeline/architecture/gateRegistry*`
    - `src/timeline/architecture/laneWriteManifest*`
@@ -472,7 +476,7 @@ that prevents repetitive build/test cycles during the refactor.
 ### Handoff Requirements
 
 At the end of any timeline refactor slice, update
-`docs/refactor/Timeline-System-Refactor-Handoff.md` with:
+`docs/completed/architecture/Timeline-System-Refactor-Handoff.md` with:
 
 - one-line progress marker in the form
   `Progress: <lane> <percent>% | Gate: <gate> | Status: <blocked/active/done>`

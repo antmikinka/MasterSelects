@@ -4,7 +4,7 @@
 
 Status: shape MVP in progress. The data model, property registry, shape editing tab, GPU rectangle/ellipse renderer, persistence, nested composition path, and export layer path are wired.
 
-The motion design system follows `docs/plans/motion-design-system-plan.md`. It is native MasterSelects timeline content, not an embedded external editor.
+The motion design system follows `docs/completed/plans/motion-design-system-plan.md`. It is native MasterSelects timeline content, not an embedded external editor.
 
 ## Current Scope
 

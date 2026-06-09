@@ -90,7 +90,7 @@ const centibelToLevel = (cb) => Math.max(0, Math.min(1, Math.pow(10, -cb / 200))
 // ── Profiles ─────────────────────────────────────────────────────────────────────
 // `full`  : native sample rate, any program set (the default; gitignored local + CDN).
 // `lite`  : the committed offline bundle — a curated instrument list downsampled to
-//           22.05 kHz (near-native, ~⅓ smaller). See docs/Features/GM-Sampler-Plan.md.
+//           22.05 kHz (near-native, ~⅓ smaller). See docs/completed/features/GM-Sampler-Plan.md.
 const LITE_TARGET_RATE = 22050;
 // The user-curated 21-instrument lite set (20 melodic + Standard drum kit), by GM #.
 const LITE_PROGRAMS = [

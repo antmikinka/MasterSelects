@@ -4,7 +4,7 @@
 // from `public/instruments/gm/<NNNN>.json` at runtime (data, never bundled). PCM is
 // stored as RAW mono samples (Int16 by default, `pcmFormat`) so `GmSampleBank` can
 // build an AudioBuffer for ANY context sample rate synchronously (live ≠ export
-// rate) without `decodeAudioData` resampling — see docs/Features/GM-Sampler-Plan.md §5.
+// rate) without `decodeAudioData` resampling — see docs/completed/features/GM-Sampler-Plan.md §5.
 //
 // The schema carries zones + loop + envelope from v1 (even though v1 ships a single
 // zone) so the ~15 MB of generated assets never has to be regenerated for a format

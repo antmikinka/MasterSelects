@@ -7,7 +7,7 @@
 // every snapshot.
 //
 // The bus is deliberately scoped to live audio meter telemetry only (see
-// docs/plans/runtime-audio-meter-bus-plan.md). It is NOT a generic global event bus.
+// docs/completed/plans/runtime-audio-meter-bus-plan.md). It is NOT a generic global event bus.
 
 import type { AudioMeterSnapshot } from '../../types';
 import {
