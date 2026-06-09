@@ -1,422 +1,255 @@
 # MasterSelects Agent Instructions
 
-Repository instructions for Codex, Claude, and other coding agents working on MasterSelects.
+Repository instructions for all coding agents working on MasterSelects: the
+Claude orchestrator, Codex workers, and any other agent.
 
-`AGENTS.md` and `CLAUDE.md` are intentionally identical. When workflow, branch rules, debug recipes, or project conventions change, update both files to the same content.
-
----
-
-## -1. Working Principle / Top Memory
-
-Never assume that you are the only person or agent working in the current branch. Treat all unrelated changes as someone else's active work: never revert, overwrite, clean up, reformat, or otherwise undo changes you did not make unless the user explicitly asks for that exact operation.
-
-MasterSelects is not optimized for short-term fixes. Because this project can move very quickly with AI-powered development and currently has no external users blocked by changes, large and correct architectural decisions are explicitly allowed and preferred.
-
-Default behavior: think long term, build the real target architecture, do not build MVPs, mocks, throwaway prototypes, or small temporary solutions when the robust solution is directly reachable. Use short-term hacks only when the user explicitly requests them or when a hard technical blocker leaves no better implementation path.
+`AGENTS.md` and `CLAUDE.md` are intentionally byte-identical. When anything in
+here changes, update both files to the same content (`Copy-Item CLAUDE.md
+AGENTS.md` or equivalent). Parity check: `fc.exe /b AGENTS.md CLAUDE.md`.
 
 ---
 
-## 0. Project Goal
+## 1. Working Principles
 
-By June 2026, MasterSelects should support all media files, not only video, audio, and images, but genuinely everything:
-
-- 3D: OBJ, FBX, glTF
-- Documents: PDF, SVG
-- CAD / technical data: DXF, STEP
-- Data formats: JSON, CSV, binary formats, point clouds, and more
-
-The inspiration is the TouchDesigner principle: every file becomes a visual signal. There are no "unsupported" files. Everything becomes texture, geometry, or data, can be placed on the timeline, composited, and exported.
-
----
-
-## 1. Command Modes
-
-### Fast Commands
-
-Fast commands are explicit exceptions to the normal check, push, merge, documentation, and versioning rules. When the user says one of these exact commands, follow this section even if other sections would normally require checks.
-
-#### `fast commit`
-
-Use when the user says `fast commit`.
-
-1. Stage everything in the current worktree, including untracked files: `git add -A`.
-2. Commit without running build, lint, tests, or targeted checks.
-3. Do not require documentation updates.
-4. Do not bump versions or update changelog.
-5. Use the user's supplied commit message if present; otherwise derive a concise message from the diff.
-
-#### `fast push`
-
-Use when the user says `fast push`.
-
-1. If the worktree is dirty, perform `fast commit` first.
-2. Push the current branch.
-3. If the branch has no upstream, push with upstream: `git push -u origin <branch>`.
-4. Do not run build, lint, tests, or targeted checks.
-5. Do not require documentation, version, or changelog updates.
-
-#### `fast merge`
-
-Use when the user says `fast merge`.
-
-1. Remember the current source branch.
-2. If the worktree is dirty, perform `fast commit` first.
-3. Push the current source branch, setting upstream if needed.
-4. Fetch `origin`.
-5. Switch to local `master`.
-6. Bring local `master` to `origin/master`.
-7. Merge the source branch directly into `master`.
-8. Push `master` directly to `origin/master`.
-9. Do not create a PR.
-10. Do not go through `staging` unless `staging` is the source branch.
-11. Do not wait for GitHub checks.
-12. Do not run build, lint, tests, or targeted checks.
-13. Do not bump versions or update changelog.
-14. If a merge conflict occurs, stop and report the conflict. Do not auto-resolve by guessing.
-
-### Normal Commands
-
-Any commit, push, merge, release, or readiness request that does not explicitly use a `fast ...` command follows the normal rules:
-
-- Run `npm run build`, `npm run lint`, and `npm run test` before commit, release, merge, or final commit readiness.
-- Do not commit if build, lint, or tests fail.
-- Update relevant docs in `docs/Features/` for feature, UI, workflow, architecture, or user-visible behavior changes.
-- Update version and changelog for normal merges to `master`.
-- Do not repeat the full check chain if it already passed on the exact same HEAD after the latest changes. Reuse the latest successful check result and state that it was reused.
+- Never assume you are the only person or agent working in the current branch.
+  Treat all unrelated changes as someone else's active work: never revert,
+  overwrite, clean up, reformat, or otherwise undo changes you did not make
+  unless the user explicitly asks for that exact operation.
+- Think long term. Build the real target architecture, not MVPs, mocks, or
+  throwaway prototypes, when the robust solution is directly reachable.
+  Short-term hacks only on explicit user request or a hard technical blocker.
+  The project moves fast with AI-powered development and has no external users
+  blocked by changes; large, correct architectural decisions are preferred.
+- Project goal (June 2026): every file becomes a visual signal — video, audio,
+  images, 3D (OBJ/FBX/glTF), documents (PDF/SVG), CAD (DXF/STEP), data
+  (JSON/CSV/binary/point clouds). There are no "unsupported" files: everything
+  becomes texture, geometry, or data, can be placed on the timeline,
+  composited, and exported.
 
 ---
 
-## 2. Branch, Commit, Push, And Merge Rules
+## 2. Orchestration Model
 
-### Branch Rules
+Decided 2026-06-09. One Claude Code session acts as master orchestrator;
+OpenAI Codex CLI agents are dispatched as headless workers via `codex exec`
+(gpt-5.5, xhigh reasoning, fast tier — the user-level Codex defaults).
 
-| Branch | Purpose |
+| Role | Owns |
 |---|---|
-| `staging` | Development, default target for ongoing work |
-| `master` | Production |
-
-Normal rule: never commit directly to `master`, never merge to `master` independently, and never push independently unless the user explicitly asks for it.
-
-Exceptions:
-
-- `fast push`
-- `fast merge`
-- issue branches created through the Issue Handling Workflow
-- direct user instructions that explicitly ask for commit, push, or merge
-
-### Issue Handling Workflow
-
-When taking over a GitHub issue, always use this flow:
-
-1. Comment `I am on it` on the issue.
-2. Assign the issue to `sportinger`.
-3. Create a new Git branch for the issue and link it to the issue on GitHub.
-4. Clone that branch into a new separate folder, then work from that folder so other agents can stay in their own working directories.
-5. Implement the issue in that branch folder.
-5.5 test and repeat till it works
-6. Commit and push to the issue branch at the agent's discretion when the work is coherent and locally checked.
-7. When the user says that everything works, merge the issue branch to `master` without waiting for GitHub checks.
-8. After the merge, comment on the issue with the result.
-
-This issue workflow is an explicit exception to the general "do not push independently" rule, but only for the created issue branch. Merging to `master` still requires the user's confirmation that everything works.
-
-### Normal Test, Commit, And Push Rules
-
-During ongoing work, test deliberately: choose relevant unit/smoke tests, build, or lint according to risk and change scope. The full suite is not required after every small intermediate change and should not be run routinely because of time/token cost.
-
-Before every normal push, all checks are mandatory:
-
-```bash
-npm run build
-npm run lint
-npm run test
-```
+| Orchestrator (Claude) | Packet specs (lane, goal, write set, forbidden files, checks, stop conditions), dispatch, post-packet verification (focused vitest + diff review), gate closure, queue/lane strategy, merges and pushes |
+| Workers (Codex) | Full packet lifecycle: source edits, `npx tsc -b` + scoped rg scans, checklist/queue bookkeeping in repo style, one packet commit on the issue branch |
 
 Rules:
 
-- Prefer small, coherent changes.
-- Do not commit if build, lint, or tests fail.
-- Do not push unless the user explicitly asks, except for issue branches and fast commands.
-- For feature changes, update relevant docs in `docs/Features/`.
-
-### Normal Merge To Master
-
-Only when the user explicitly requests a normal merge to `master`:
-
-1. Make sure required checks have passed for the exact HEAD being merged.
-2. If checks already passed on the same HEAD after the latest changes, do not rerun them.
-3. Bump the release version in all required version locations.
-4. Update changelog/release notes.
-5. Commit and push.
-6. Create and merge a PR from the source branch to `master`, unless the user explicitly asks for a direct merge.
-7. Bring `staging` back to the current `master` state when the normal workflow uses `staging`.
+- Workers never push, never merge, never self-extend scope. Extra debt found
+  mid-packet is reported, not fixed.
+- The Codex sandbox cannot run vitest (esbuild fails with `spawn EPERM`), so
+  workers must not claim test results. The orchestrator runs the focused test
+  suite after each packet and reverts or dispatches a fix-forward packet when
+  red.
+- Up to 6 parallel workers, only with disjoint write sets. At most one
+  concurrently running worker may hold
+  `docs/ongoing/Complete-refactor-checklist.md` and
+  `docs/ongoing/complete-refactor/execution-queue-and-lanes.md` in its write
+  set; other parallel workers return reports only.
+- Claude-side dispatch mechanics: `~/.claude/skills/codex-worker/SKILL.md`.
+- Doppelspitze (MCP, skill, agent bus, file-lock bus, lead-a/lead-b
+  coordination, handoff/logging) stays disabled for this repository unless the
+  user explicitly re-enables it. Coordinate through the checklist, the active
+  queue, and normal chat updates.
 
 ---
 
-## 3. Version And Changelog Locations
+## 3. Command Modes
+
+### Fast commands (explicit exceptions to all check/doc/version rules)
+
+`fast commit`:
+
+1. Stage everything including untracked files: `git add -A`.
+2. Commit without build, lint, or tests.
+3. No doc updates, no version bump, no changelog.
+4. Use the user's commit message if present; otherwise derive from the diff.
+
+`fast push`:
+
+1. If the worktree is dirty, `fast commit` first.
+2. Push the current branch; `git push -u origin <branch>` if no upstream.
+3. No checks, no docs, no versioning.
+
+`fast merge`:
+
+1. If dirty, `fast commit` first; push the source branch (set upstream if
+   needed).
+2. `git fetch origin`; switch to local `master`; bring it to `origin/master`.
+3. Merge the source branch directly into `master`; push `master` directly.
+4. No PR, no `staging` detour (unless staging is the source), no waiting for
+   GitHub checks, no checks/version/changelog.
+5. On merge conflict: stop and report. Never auto-resolve by guessing.
+
+### Normal commands
+
+Anything not using a `fast ...` command:
+
+- Full chain before normal commit, push, release, merge, or final readiness:
+  `npm run build`, `npm run lint`, `npm run test`. Do not commit if any fail.
+- Do not rerun the chain if it already passed on the exact same HEAD after the
+  latest changes; reuse the result and say so.
+- Feature, UI, workflow, architecture, or user-visible behavior changes update
+  the relevant docs in `docs/Features/`.
+- Normal merges to `master` bump version + changelog (section 5).
+
+---
+
+## 4. Branches, Issues, And Check Budget
+
+| Branch | Purpose |
+|---|---|
+| `staging` | development, default target for ongoing work |
+| `master` | production |
+
+- Never commit directly to `master`, never merge to `master` independently,
+  never push independently — except: fast commands, issue branches (below), or
+  direct explicit user instruction.
+- Issue workflow: comment "I am on it" → assign `sportinger` → create and link
+  an issue branch → clone it into a separate folder and work from there →
+  implement, test, repeat → commit and push to the issue branch at the agent's
+  discretion when the work is coherent and locally checked → merge to `master`
+  only after the user confirms everything works (no waiting for GitHub
+  checks) → comment the result on the issue.
+- Check budget: during ongoing work run focused unit/smoke tests, targeted
+  builds, or lint proportional to risk and change scope. Do not run the full
+  chain after every small edit; it is mandatory only at the normal-command
+  boundaries above. Refactor packet commits on issue branches follow the
+  bounded-packet checks defined in the queue, plus orchestrator test
+  verification.
+- Large command outputs are token- and time-expensive: report short summaries
+  and relevant error lines, not full logs.
+- Prefer small, coherent changes and packet-sized commits.
+
+### Normal merge to master (only on explicit user request)
+
+1. Required checks green on the exact HEAD being merged (reuse if already
+   green).
+2. Bump version + changelog, commit, push.
+3. PR from the source branch to `master` unless a direct merge is requested.
+4. Bring `staging` back to the current `master` state when the workflow uses
+   staging.
+
+---
+
+## 5. Version And Changelog Locations
 
 When intentionally bumping the release version, check all of these:
 
-- `src/version.ts`
-  - `APP_VERSION`
-  - `FEATURED_VIDEO.banner.title` if it contains the version
-  - `FEATURED_VIDEO.banner.message` if it names the release
-  - `BUILD_NOTICE.title` if it contains the version
-  - `BUILD_NOTICE.message` if it names the release
-- `src/changelog-data.json`
-  - add release notes / changelog entries at the beginning when a normal release or normal merge requires them
-- `package.json`
-  - top-level `"version"`
-- `package-lock.json`
-  - top-level `"version"`
-  - `packages[""].version`
+- `src/version.ts`: `APP_VERSION`; `FEATURED_VIDEO.banner.title`/`.message`
+  and `BUILD_NOTICE.title`/`.message` when they contain the version or name
+  the release.
+- `src/changelog-data.json`: add release notes at the beginning.
+- `package.json`: top-level `"version"`.
+- `package-lock.json`: top-level `"version"` and `packages[""].version`.
 
-Before a normal release, verify version consistency with a targeted search:
+Consistency scan before a normal release:
 
 ```bash
-rg -n "APP_VERSION|MasterSelects [0-9]+\\.[0-9]+\\.[0-9]+|\"version\": \"[0-9]+\\.[0-9]+\\.[0-9]+\"" src package.json package-lock.json
+rg -n "APP_VERSION|MasterSelects [0-9]+\.[0-9]+\.[0-9]+|\"version\": \"[0-9]+\.[0-9]+\.[0-9]+\"" src package.json package-lock.json
 ```
 
-Fast commands do not bump versions and do not update changelog unless the user explicitly adds that request.
+Fast commands never bump versions or update the changelog unless the user
+explicitly adds that request.
 
 ---
 
-## 4. Codex Skill Mapping
+## 6. Complete Refactor
 
-The old Claude commands under `C:\Users\admin\.claude\commands\` should be represented in Codex through skills. If the following skills are available, prefer them:
+The repo-wide Complete Refactor is the active architecture initiative. Do not
+restart meta-planning; read the plan and execute the next bounded packet.
 
-| Claude Command | Codex Skill | Purpose |
-|---|---|---|
-| `/masterselects` | `masterselects` | Timeline, clip, preview, and analysis actions through the local AI bridge |
-| `/cloudflare` | `cloudflare-api` | Cloudflare REST / Wrangler |
-| `/stripe` | `stripe-api` | Stripe REST API |
-| `/vazer` | `vazer-app-api` | Local VAZer app / XML / analysis |
-| `/react-doctor` | `react-doctor` | React codebase analysis |
-| `/nano-banana` | `nano-banana` | Image generation via Gemini |
-| `/kie` | `kie-ai-api-route` | Kie.ai image and video generation |
-| `/kling` | `kling` | Kling video prompting / API |
-| `/tasks` | `tasks` | Task list |
-| `/email` | `email` | Strato / OX mail |
-| `/gmail` | `gmail` | Gmail via IMAP/SMTP |
-| `/dienstplan` | `dienstplan` | Duty roster PDF -> calendar |
+1. `docs/ongoing/Complete-refactor.md` — plan and orchestrator index
+2. `docs/ongoing/Complete-refactor-checklist.md` — user-visible status source
+3. `docs/ongoing/complete-refactor/execution-queue-and-lanes.md` — active queue
 
-If a skill is not available, work directly through local scripts, MCP tools, the HTTP bridge, or APIs. Do not get stuck on Claude command files.
+Rules:
 
----
-
-## 5. MasterSelects Debug Bridge
-
-For app debugging, local AI tools exist behind `POST http://localhost:5173/api/ai-tools`. Prerequisite: the dev server is running and the app is open in a browser.
-
-| Tool | Parameters | Purpose |
-|---|---|---|
-| `getStats` | none | Engine snapshot: FPS, timing, decoder, drops, audio, GPU |
-| `getStatsHistory` | `samples?`, `intervalMs?` | Multiple snapshots with min/max/avg |
-| `getLogs` | `limit?`, `level?`, `module?`, `search?` | Retrieve filtered browser logs |
-| `getPlaybackTrace` | `windowMs?`, `limit?` | WebCodecs and VF pipeline events plus health state |
-| `debugExport` | `startTime?`, `endTime?`, `durationSeconds?`, `width?`, `height?`, `fps?`, `includeAudio?`, `exportMode?`, `download?`, `maxRuntimeMs?` | Dev-bridge-only export probe in the real browser. Calls `FrameExporter` and returns blob size, progress, engine state, and export/GPU logs. |
-
-The `masterselects` skill is the preferred entry point. If the skill cannot be used, call the HTTP bridge directly with `curl` or PowerShell.
-
-### Export Debug Through Bridge
-
-When export hangs or fails in the UI, first reproduce it in the real browser through the bridge. The local dev-bridge POST needs the bearer token from `.ai-bridge-token`:
-
-```powershell
-$token = Get-Content -Path .ai-bridge-token -Raw
-$headers = @{ Authorization = "Bearer $token"; 'Content-Type' = 'application/json' }
-
-$body = @{ tool = 'getStats'; args = @{} } | ConvertTo-Json -Depth 4
-Invoke-RestMethod -Uri 'http://localhost:5173/api/ai-tools' -Method Post -Headers $headers -Body $body
-```
-
-Smoke test without download:
-
-```powershell
-$body = @{
-  tool = 'debugExport'
-  args = @{
-    startTime = 0
-    durationSeconds = 1.0
-    width = 640
-    height = 360
-    fps = 15
-    includeAudio = $false
-    exportMode = 'fast'
-    download = $false
-    maxRuntimeMs = 25000
-  }
-} | ConvertTo-Json -Depth 6
-Invoke-RestMethod -Uri 'http://localhost:5173/api/ai-tools' -Method Post -Headers $headers -Body $body
-```
-
-Full timeline test with current export defaults:
-
-```powershell
-$body = @{ tool = 'debugExport'; args = @{ includeAudio = $true; exportMode = 'fast'; download = $false } } | ConvertTo-Json -Depth 6
-Invoke-RestMethod -Uri 'http://localhost:5173/api/ai-tools' -Method Post -Headers $headers -Body $body
-```
-
-Interpretation:
-
-- `debugExport` is intentionally not a chat/public tool. It is a self-registered dev-bridge handler with policy access for `devBridge`, `console`, and `internal`.
-- `maxRuntimeMs` cleanly aborts browser export before the dev-bridge request hangs. Raise it deliberately for long exports.
-- If `debugExport` returns a blob with `size > 0`, the browser export path basically works. Then investigate UI issues in `ExportPanel`, download handling, preset state, or progress state.
-- If logs show `WebGPU device lost during export` and `getStats` afterwards reports `renderLoop.isRunning=false`, `renderDispatcher=null`, or `targetCanvasCount=0`, the browser engine is in a stale device state. First run `reloadApp`/hard reload through the bridge or reload the browser, then test again.
-- Windows warnings about `requestAdapter(powerPreference)` and NativeHelper WebSocket errors are not automatically export blockers. NativeHelper matters only when the tested path actually needs it.
-- For timelines with video-only clips, `FrameExporter` must skip audio. A long start at "Rendering audio" points to broken audio range detection.
-
----
-
-## 6. Check Budget, Repo Memory, And Complete Refactor
-
-`AGENTS.md` and `CLAUDE.md` are concise durable memory for coding agents. Keep
-detailed active plans in docs, not in these files.
-
-During normal implementation, check sparingly: run targeted unit/smoke tests,
-individual builds, or lint only when risk and change scope justify it. Do not
-run full `npm run build`, `npm run lint`, and `npm run test` after every small
-edit. That full check chain is mandatory before normal commit, release, merge,
-or when the user explicitly asks for final commit readiness.
-
-Large command outputs are token- and time-expensive. For intermediate status,
-report short summaries and relevant error lines instead of repeating complete
-logs.
-
-For longer Codex/agent work, run the local usage watcher when practical:
-
-```bash
-npm run codex:usage:watch
-npm run codex:usage
-npm run codex:usage:stop
-```
-
-The watcher writes local reports to `.codex-usage/`, which stays local and is
-gitignored.
-
-### Complete Refactor Execution
-
-The repo-wide Complete Refactor is the active architecture initiative. When
-assigned refactor work, do not restart meta-planning. Read the plan, pick or
-execute the next bounded packet, and keep the checklist current.
-
-1. `docs/ongoing/Complete-refactor.md`
-2. `docs/ongoing/Complete-refactor-checklist.md`
-
-High-level rules:
-
-- Keep the checklist current when requirements, lanes, gates, blockers, or
-  verification needs change.
-- Execution should be run by one master orchestrator assigning bounded worker
-  packets.
-- Up to 6 worker agents may run in parallel only when write sets and shared hubs
-  are disjoint.
-- Doppelspitze is disabled for this repository. Do not use the Doppelspitze
-  MCP, skill, agent bus, file-lock bus, `lead-a`/`lead-b` coordination, or
-  Doppelspitze handoff/logging here unless the user explicitly re-enables it.
-  Coordinate through the checklist, active queue, normal chat updates, and
-  bounded packet docs instead.
-- Do not do broad unscoped source refactors. Every source change needs a lane,
-  write set, forbidden files, gate/check, and short report.
-- If a needed gate, contract, or write set is missing, define the smallest
-  required preflight entry in the plan/checklist, then continue with the bounded
-  packet.
+- Every source change needs a lane, write set, forbidden files, gate/check,
+  and a short report. No broad unscoped refactors.
 - Foundation lanes come first: shared types/barrels, runtime leases, project
   persistence, and dev-bridge quarantine before domain refactors.
-- The product-source ceiling is 700 LOC, with smaller role-specific budgets in
-  the plan.
-- Splits must reduce real coupling; do not split blindly by line count or create
-  dumping grounds such as broad `helpers.ts`, `utils.ts`, or `types.ts` files.
-- Runtime handles must stay out of durable stores, project data, pure shared
-  types, and cross-domain schema tiers.
-- Use focused gate checks and smokes during implementation; full build/lint/test
-  follows the normal rules above.
-- Keep refactor bookkeeping lean: use the checklist as the user-visible status
-  source, avoid duplicating packet history across docs, and rerun broad
-  architecture/smoke checks only when the packet changes the covered contract or
-  reaches a coherent verification boundary.
-- Keep `execution-queue-and-lanes.md` as an active queue, not a full history
-  archive. It should hold the active packet plus only the next few queued
-  packets; completed packets should collapse to checklist status and any
-  reusable check profile instead of leaving long repeated packet specs.
-
-Timeline-specific refactor details are no longer kept here. For reopened
-timeline architecture work, read the completed timeline refactor docs under
-`docs/completed/architecture/` and any relevant `src/timeline/architecture/*`
-registry or gate files.
+- Product-source ceiling is 700 LOC, with smaller role-specific budgets in the
+  plan. Splits must reduce real coupling — no `helpers.ts`/`utils.ts`/broad
+  `types.ts` dumping grounds, no blind line-count splits.
+- Runtime handles (File, Blob, object URLs, DOM/media elements, AudioContext,
+  VideoFrame, ImageBitmap, GPU objects, decoders, workers, service singletons)
+  stay out of durable stores, project data, pure shared types, and
+  cross-domain schema tiers.
+- Keep the checklist current in the same session whenever requirements, lanes,
+  gates, blockers, or verification needs change. Keep the queue file an active
+  queue (active packet + next few queued), not a history archive; completed
+  packets collapse to checklist lines.
+- If a needed gate, contract, or write set is missing, add the smallest
+  preflight entry to plan/checklist, then continue with the bounded packet.
+- Timeline is a protected lane: `src/stores/timeline/**`,
+  `src/components/timeline/**`, and `src/timeline/architecture/**` are
+  read-only except for explicit integration packets. Completed timeline
+  architecture docs live under `docs/completed/architecture/`.
 
 ---
 
 ## 7. Quick Reference
 
 ```bash
-npm install && npm run dev
-npm run dev:changelog
-npm run build
+npm install && npm run dev    # dev server (default)
+npm run dev:changelog         # only when the changelog dialog is needed
+npm run build                 # production builds show the changelog automatically
 npm run build:deploy
 npm run lint
-npm run test
-npm run test:watch
-npm run test:unit
-npm run test:ui
-npm run test:coverage
+npm run test                  # plus test:watch / test:unit / test:ui / test:coverage
 npm run preview
 ```
 
-### Dev Server Rules
-
-- Default is `npm run dev`.
-- Use `npm run dev:changelog` only when the changelog dialog is needed.
-- Production builds show the changelog automatically.
-
-### Native Helper
+Native helper (WebSocket port 9876, HTTP port 9877):
 
 ```bash
-cd tools/native-helper
-cargo run --release
+cd tools/native-helper && cargo run --release
 ```
 
-Windows MSI builds bundle `yt-dlp.exe`; source builds and non-Windows archives use `yt-dlp` next to the helper binary or from `PATH`.
-
-Ports:
-
-- WebSocket: `9876`
-- HTTP: `9877`
+Windows MSI builds bundle `yt-dlp.exe`; source builds and non-Windows archives
+use `yt-dlp` next to the helper binary or from `PATH`.
 
 ---
 
-## 8. Architecture
+## 8. Architecture Map
 
-Important areas:
-
-- `src/components/`: React UI, Timeline, Panels, Preview, Docking, Export, Mobile
-- `src/stores/`: Zustand stores for Timeline, Media, History, Settings, Dock, Slice, Render Targets, SAM2, Multicam, YouTube
-- `src/engine/`: WebGPU rendering, Render Dispatcher, texture/audio/export/analysis pipeline
-- `src/effects/`: GPU effects and shared shaders
-- `src/transitions/`: GPU transitions
-- `src/services/`: business logic such as Layer Builder, Media Runtime, Monitoring, Project Storage, AI Tools, Export
+- `src/components/`: React UI — Timeline, Panels, Preview, Docking, Export, Mobile
+- `src/stores/`: Zustand stores — Timeline, Media, History, Settings, Dock, Slice, Render Targets, SAM2, Multicam
+- `src/engine/`: WebGPU rendering, RenderDispatcher, texture/audio/export/analysis pipeline
+- `src/effects/`, `src/transitions/`: GPU effects and transitions
+- `src/services/`: business logic — LayerBuilder, Media Runtime, Monitoring, Project Storage, AI Tools, Export
+- `src/signals/`, `src/importers/`: Universal Signal foundation ("no unsupported files")
 - `src/hooks/`, `src/utils/`, `src/types/`, `src/workers/`, `src/shaders/`
 
-Especially central files:
+Especially central files: `src/engine/WebGPUEngine.ts`,
+`src/engine/render/RenderDispatcher.ts`, `src/stores/timeline/index.ts`,
+`src/stores/mediaStore/index.ts`, `src/stores/historyStore.ts`,
+`src/services/layerBuilder/LayerBuilderService.ts`, `src/services/logger.ts`,
+`src/engine/featureFlags.ts`.
 
-- `src/engine/WebGPUEngine.ts`
-- `src/engine/render/RenderDispatcher.ts`
-- `src/stores/timeline/index.ts`
-- `src/stores/mediaStore/index.ts`
-- `src/stores/historyStore.ts`
-- `src/services/layerBuilder/LayerBuilderService.ts`
-- `src/services/logger.ts`
-- `src/engine/featureFlags.ts`
+Render path:
 
-More context is in `README.md` and `docs/Features/README.md`.
+```text
+useEngine -> WebGPUEngine.initialize() -> RenderLoop.start()
+  -> RenderDispatcher.render(layers)
+     -> LayerCollector -> Compositor/Effects -> NestedCompRenderer
+     -> OutputPipeline -> SlicePipeline
+```
+
+More context: `README.md`, `docs/Features/README.md`.
 
 ---
 
 ## 9. Critical Patterns
 
-### HMR Singletons
-
-Singletons such as Engine, FFmpegBridge, or SAM2 must survive HMR.
+HMR singletons (Engine, FFmpegBridge, SAM2, runtime owners) must survive HMR:
 
 ```ts
 let instance: MyService | null = null;
@@ -432,9 +265,8 @@ if (import.meta.hot) {
 }
 ```
 
-### Avoid Stale Closures
-
-In async callbacks, always read fresh state through `get()` or functional updates.
+Avoid stale closures — read fresh state through `get()` or functional updates
+in async callbacks:
 
 ```ts
 video.onload = () => {
@@ -443,137 +275,76 @@ video.onload = () => {
 };
 ```
 
-### Other Patterns
-
 - Wait for `canplaythrough`, not only `loadeddata`.
-- Prefer functional `setState` updates.
-- Use lazy state initialization for expensive initialization.
+- Prefer functional `setState` updates; use lazy state initialization for
+  expensive setup.
 - Use `toSorted()` instead of `sort()` to avoid mutation.
-- All stores use `subscribeWithSelector`.
-- `settingsStore` and `dockStore` also use `persist`.
-- `mediaStore` uses a slice-creator signature that differs from Timeline.
+- All stores use `subscribeWithSelector`; `settingsStore` and `dockStore` also
+  use `persist`; `mediaStore` uses a slice-creator signature that differs from
+  Timeline.
 
 ---
 
-## 10. Debugging And Logging
+## 10. Debugging
 
-### Logger
+Logger:
 
 ```ts
 import { Logger } from '@/services/logger';
 const log = Logger.create('ModuleName');
-
-log.debug('Verbose', { data });
-log.info('Event');
-log.warn('Warning', data);
-log.error('Error', error);
 ```
 
-### Browser Console Shortcuts
+Browser console: `Logger.enable('WebGPU,FFmpeg')`, `Logger.enable('*')`,
+`Logger.setLevel('DEBUG')`, `Logger.search('device')`, `Logger.errors()`,
+`Logger.dump(50)`, `Logger.summary()`.
 
-```js
-Logger.enable('WebGPU,FFmpeg')
-Logger.enable('*')
-Logger.disable()
-Logger.setLevel('DEBUG')
-Logger.setLevel('WARN')
-Logger.search('device')
-Logger.errors()
-Logger.dump(50)
-Logger.summary()
+### AI debug bridge
+
+`POST http://localhost:5173/api/ai-tools` (dev server running, app open in a
+browser). Bearer token from `.ai-bridge-token`:
+
+```powershell
+$token = Get-Content -Path .ai-bridge-token -Raw
+$headers = @{ Authorization = "Bearer $token"; 'Content-Type' = 'application/json' }
+$body = @{ tool = 'getStats'; args = @{} } | ConvertTo-Json -Depth 4
+Invoke-RestMethod -Uri 'http://localhost:5173/api/ai-tools' -Method Post -Headers $headers -Body $body
 ```
 
-
-
-### Playback Debugging
-
-Available in the browser:
-
-- `window.__WC_PIPELINE__`
-- `window.__VF_PIPELINE__`
-
-Useful log modules:
-
-```js
-Logger.enable('WebCodecsPlayer,PlaybackHealth,LayerCollector')
-Logger.enable('VideoSyncManager,ParallelDecode,RenderLoop')
-Logger.setLevel('DEBUG')
-```
-
-Important monitoring services in `src/services/monitoring/`:
-
-- `playbackHealthMonitor`
-- `playbackDebugStats`
-- `framePhaseMonitor`
-- `wcPipelineMonitor`
-- `vfPipelineMonitor`
-- `scrubSettleState`
-
-When the dev server is running, prefer the AI bridge for repros:
-
-- `simulateScrub`
-- `simulatePlayback`
-- `simulatePlaybackPath`
-- `getPlaybackTrace`
-- `getClipDetails`
-- `reloadApp`
-
-More details: `docs/Features/Debugging.md` and `docs/Features/Playback-Debugging.md`.
-
----
-
-## 11. Render And Data Flow
-
-Rough render path:
-
-```text
-useEngine
-  -> WebGPUEngine.initialize()
-    -> RenderLoop.start()
-      -> RenderDispatcher.render(layers)
-        -> LayerCollector
-        -> Compositor / Effects
-        -> NestedCompRenderer
-        -> OutputPipeline
-        -> SlicePipeline
-```
-
-Texture types:
-
-| Source | GPU Type |
+| Tool | Purpose |
 |---|---|
-| HTMLVideoElement | `texture_external` via `importExternalTexture` |
-| Firefox HTMLVideo fallback | `texture_2d<f32>` |
-| VideoFrame | `texture_external` |
-| HTMLImageElement | `texture_2d<f32>` |
-| Canvas / Text | `texture_2d<f32>` |
-| Native decoder frames | dynamic `texture_2d<f32>` |
+| `getStats` / `getStatsHistory` | engine snapshot(s): FPS, timing, decoder, drops, audio, GPU |
+| `getLogs` | filtered browser logs (`limit`, `level`, `module`, `search`) |
+| `getPlaybackTrace` | WebCodecs/VF pipeline events plus health state |
+| `simulateScrub` / `simulatePlayback` / `simulatePlaybackPath` | playback repros |
+| `getClipDetails`, `reloadApp` | inspection / hard reload |
+| `debugExport` | dev-bridge-only export probe (runs FrameExporter in the real browser) |
+
+`debugExport` key facts: pass `maxRuntimeMs` so a hanging export aborts
+cleanly; a returned blob with `size > 0` means the browser export path works
+(then investigate ExportPanel, download handling, preset or progress state);
+`WebGPU device lost` plus `renderLoop.isRunning=false` afterwards means a
+stale device state — `reloadApp` first, then retest; video-only timelines must
+skip audio (a long hang at "Rendering audio" points to broken audio range
+detection). NativeHelper WebSocket warnings matter only when the tested path
+actually needs the helper.
+
+For timeline, playback, render, or export bugs: inspect logs, traces, and
+`src/services/monitoring/` (playbackHealthMonitor, playbackDebugStats,
+framePhaseMonitor, wcPipelineMonitor, vfPipelineMonitor, scrubSettleState)
+before editing. Browser globals: `window.__WC_PIPELINE__`,
+`window.__VF_PIPELINE__`. Useful module sets:
+`Logger.enable('WebCodecsPlayer,PlaybackHealth,LayerCollector')` and
+`Logger.enable('VideoSyncManager,ParallelDecode,RenderLoop')`.
+
+Details: `docs/Features/Debugging.md`, `docs/Features/Playback-Debugging.md`.
 
 ---
 
-## 12. Practical Agent Rules For This Repo
+## 11. Practical Rules
 
-- Read context before editing.
-- For timeline, playback, render, or export bugs, inspect logs/traces/monitoring first.
-- For larger feature changes, always check impact on `docs/Features/`, version/changelog locations, and tests.
-- For editor automation, prefer the `masterselects` skill instead of manual browser speculation.
+- Read context before editing. For larger feature changes, check impact on
+  `docs/Features/`, version/changelog locations, and tests.
+- When a request matches an available skill or tool of your harness, prefer it
+  over manual speculation (e.g. the `masterselects` skill for editor
+  automation, the AI bridge for playback/export repros).
 - Keep `AGENTS.md` and `CLAUDE.md` byte-identical.
-
-## Skill routing
-
-When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
-
-Key routing rules:
-- Product ideas/brainstorming → invoke /office-hours
-- Strategy/scope → invoke /plan-ceo-review
-- Architecture → invoke /plan-eng-review
-- Design system/plan review → invoke /design-consultation or /plan-design-review
-- Full review pipeline → invoke /autoplan
-- Bugs/errors → invoke /investigate
-- QA/testing site behavior → invoke /qa or /qa-only
-- Code review/diff check → invoke /review
-- Visual polish → invoke /design-review
-- Ship/deploy/PR → invoke /ship or /land-and-deploy
-- Save progress → invoke /context-save
-- Resume context → invoke /context-restore
-- Author a backlog-ready spec/issue → invoke /spec
