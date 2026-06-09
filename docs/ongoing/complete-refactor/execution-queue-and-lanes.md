@@ -549,6 +549,12 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
   Board, Timeline, render, export, preview, and media runtime. Focused
   FlashBoard tests, TypeScript, and diff-check passed.
 
+- FlashBoard Composer controller-hook wave completed through
+  `P4-FLASHBOARD-ACTIVE-REFERENCE-CONTROLLER-HOOK-SPLIT-144` (prompt-refine,
+  chat, ElevenLabs, generation-flow, prompt/Suno, and reference/Seedance
+  controller hooks; preflights 139/141/143). Per-packet detail lives in the
+  checklist. `FlashBoardComposer.tsx` is 951 LOC.
+
 ## High-Conflict Ownership Snapshot
 
 | Path or hub | Owner packet | Other packets may | Forbidden until |
@@ -568,80 +574,22 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 
 ## Active Packet
 
-```text
-Lane: P4 Media Panel And FlashBoard
-Packet: P4-FLASHBOARD-ACTIVE-COMPOSER-REMAINING-BOUNDARY-PREFLIGHT-139 FlashBoard Active Composer Remaining Boundary Preflight
-Mode: read-only preflight
-Goal: classify the remaining FlashBoard Composer responsibilities after the
-prompt-refine controller hook split and select the next coherent bounded packet.
-Read first:
-- src/components/panels/flashboard/FlashBoardComposer.tsx
-- src/components/panels/flashboard/useFlashBoardPromptRefineController.ts
-- src/components/panels/flashboard/useFlashBoardChatController.ts
-- src/components/panels/flashboard/useFlashBoardElevenLabsController.ts
-- src/components/panels/flashboard/FlashBoardGenerationRequestPlanner.ts
-- src/components/panels/flashboard/FlashBoardComposerSyncPlanner.ts
-- src/components/panels/flashboard/FlashBoardProviderTransitionPlanner.ts
-Allowed write set:
-- docs/ongoing/Complete-refactor-checklist.md
-- docs/ongoing/complete-refactor/execution-queue-and-lanes.md
-Forbidden files:
-- src/**
-- tests/**
-- package.json
-- package-lock.json
-- vite.config.*
-- tsconfig*.json
-- docs/Features/**
-- docs/completed/**
-Current contract: `P4-FLASHBOARD-ACTIVE-PROMPT-REFINE-CONTROLLER-HOOK-SPLIT-138`
-completed the prompt-refine controller extraction. Composer remains over the
-700 LOC product-source ceiling at 1298 LOC. Known remaining clusters include
-provider transition, composer sync, generation request/submit, Suno tuning,
-validation warnings, reference command/drop consumers, and JSX assembly.
-Target contract: no source edits. Produce the smallest next packet definition
-with explicit lane, write set, forbidden files, gates, and checks. Prefer the
-next split only when the scan shows a coherent boundary that reduces coupling
-without creating a generic helper/dumping-ground module. Timeline, Media Board,
-stores, services, project schema, render, export, preview, and media runtime
-remain protected unless the packet explicitly opens an integration write set.
-Expected gates:
-- P4_FLASHBOARD_ACTIVE_CONTRACT
-- P4_FLASHBOARD_COMPOSER_MODULE_TREE
-Expected checks:
-- LOC/readability snapshot for `FlashBoardComposer.tsx` and
-  adjacent FlashBoard role modules
-- rg -n "submitFlashBoardActiveGenerationRequest|buildFlashBoardGenerationRequest|buildFlashBoardComposerSyncPatch|buildFlashBoardProviderTransition|handleProviderChange|handleGenerate|resetSunoTuning|audioValidationError|backendValidationError|seedanceReferenceValidationError" src/components/panels/flashboard/FlashBoardComposer.tsx
-- rg -n "return \\(|<FlashBoard|renderedPopover|FlashBoardGenerationControls|FlashBoardChatControls|FlashBoardActionStack" src/components/panels/flashboard/FlashBoardComposer.tsx
-- rg -n "FlashBoardPromptRefiner|FlashBoardPromptRefinePlanner|refineFlashBoardPromptHosted|streamRefineFlashBoardPrompt|promptRefineAbortRef|promptBeforeAiRewrite|sunoBeforeAiRewrite" src/components/panels/flashboard/FlashBoardComposer.tsx src/components/panels/flashboard/useFlashBoardPromptRefineController.ts
-- git diff --check
-- fc.exe /b AGENTS.md CLAUDE.md
-Expected report:
-- remaining Composer cluster classification and recommended next packet
-- whether the next source packet should target submit/provider/sync, Suno
-  local state, JSX/view assembly, or stop for a broader boundary
-- current LOC snapshot and any over-budget adjacent modules
-Stop conditions:
-- the scan shows the next split needs store, service, project schema, Media
-  Board, Timeline, render, export, preview, or media runtime ownership
-```
+None. `P4-FLASHBOARD-ACTIVE-REFERENCE-CONTROLLER-HOOK-SPLIT-144` is completed
+and was closed by orchestrator verification on 2026-06-09 (tsc clean, focused
+FlashBoard tests 5 files/16 tests green, dependency scan clean, diff-check and
+AGENTS/CLAUDE parity passed); its spec is collapsed per the active-queue rule.
 
 ## Queued Packets
 
-No future source packet is currently queued. Define it only after
-`P4-FLASHBOARD-ACTIVE-COMPOSER-REMAINING-BOUNDARY-PREFLIGHT-139` reports
-its result.
+No future source packet is currently queued. The orchestrator is defining the
+FlashBoard lane closure packet next: a runtime smoke gate through the AI
+bridge (Composer opens, a generation request is submitted, an active
+generation record reaches the queue) as the exit condition for the P4
+FlashBoard Composer lane. No further Composer source split should be queued
+before that gate exists.
 
 ## Immediate Next Step
 
-Execute
-`P4-FLASHBOARD-ACTIVE-COMPOSER-REMAINING-BOUNDARY-PREFLIGHT-139` as the next
-bounded packet.
-
-Constraints:
-
-1. Do not edit source files.
-2. Keep the queue lean: active packet plus only the minimal next packet if the
-   scan proves one.
-3. Do not open Timeline, Media Board, stores, services, project schema, render,
-   export, preview, or media runtime write sets from this preflight.
+Orchestrator decision pending: define and execute the FlashBoard lane closure
+packet (runtime smoke gate), then re-point execution at foundation lanes
+(type-barrel split, Universal Signal integration) and Media Panel resumption.

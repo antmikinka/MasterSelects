@@ -1,12 +1,8 @@
-import { useState, useCallback, useMemo, useEffect, type CSSProperties } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useFlashBoardStore } from '../../../stores/flashboardStore';
 import {
-  submitFlashBoardActiveGenerationRequest,
   useHasFlashBoardActiveGenerationBoard,
 } from '../../../stores/flashboardStore/activeGenerationRecords';
-import type {
-  FlashBoardSunoVocalGender,
-} from '../../../stores/flashboardStore';
 import {
   DEFAULT_FLASHBOARD_MODEL_VERSION,
 } from '../../../stores/flashboardStore/defaults';
@@ -14,25 +10,15 @@ import { useMediaStore } from '../../../stores/mediaStore';
 import { useSettingsStore } from '../../../stores/settingsStore';
 import { useAccountStore } from '../../../stores/accountStore';
 import {
-  DEFAULT_SUNO_AUDIO_WEIGHT,
-  DEFAULT_SUNO_CUSTOM_MODE,
-  DEFAULT_SUNO_INSTRUMENTAL,
-  DEFAULT_SUNO_STYLE_WEIGHT,
-  DEFAULT_SUNO_WEIRDNESS_CONSTRAINT,
   SUNO_PROVIDER_ID,
 } from '../../../services/sunoService';
-import {
-  getSeedanceReferenceValidationError,
-  isSeedance2ProviderId,
-} from '../../../services/flashboard/seedanceReferenceRules';
 import type { CatalogEntry } from '../../../services/flashboard/types';
 import { FlashBoardActionStack } from './FlashBoardActionStack';
 import { FlashBoardChatControls } from './FlashBoardChatControls';
 import { FlashBoardChatOutput } from './FlashBoardChatOutput';
 import { FlashBoardElevenLabsSettingsPopovers } from './FlashBoardElevenLabsSettingsPopovers';
 import { FlashBoardElevenLabsVoicePopover } from './FlashBoardElevenLabsVoicePopover';
-import { buildFlashBoardGenerationActionState, getSunoStyleLimit } from './FlashBoardGenerationActionStatePlanner';
-import { buildFlashBoardGenerationRequest } from './FlashBoardGenerationRequestPlanner';
+import { buildFlashBoardGenerationActionState } from './FlashBoardGenerationActionStatePlanner';
 import { FlashBoardGenerationControls } from './FlashBoardGenerationControls';
 import { FlashBoardModelPopover } from './FlashBoardModelPopover';
 import {
@@ -44,29 +30,13 @@ import {
 } from './FlashBoardModelOptionsPlanner';
 import { FlashBoardMultishotPanel } from './FlashBoardMultishotPanel';
 import {
-  buildFallbackPrompt,
   MAX_MULTI_SHOTS,
 } from './FlashBoardMultishotPlanner';
 import { buildFlashBoardParameterOptions } from './FlashBoardParameterOptionsPlanner';
 import { FlashBoardParameterPopovers } from './FlashBoardParameterPopovers';
 import { FlashBoardPromptEditor } from './FlashBoardPromptEditor';
-import { buildFlashBoardComposerSyncPatch } from './FlashBoardComposerSyncPlanner';
-import { buildFlashBoardProviderTransition } from './FlashBoardProviderTransitionPlanner';
-import { buildFlashBoardReferenceBadges } from './FlashBoardReferenceBadgePlanner';
-import {
-  appendReferenceMediaFileIds,
-  clampReferenceMediaFileIds,
-  isReferenceableMediaType,
-} from './FlashBoardReferenceMediaPlanner';
 import { FlashBoardReferenceStrip } from './FlashBoardReferenceStrip';
 import { FlashBoardSunoPopovers } from './FlashBoardSunoPopovers';
-import {
-  buildFlashBoardSunoOptionsState,
-  buildFlashBoardSunoTuningResetState,
-} from './FlashBoardSunoOptionsPlanner';
-import { useFlashBoardReferenceCommands } from './useFlashBoardReferenceCommands';
-import { useFlashBoardReferenceFocus } from './useFlashBoardReferenceFocus';
-import { useFlashBoardReferenceDrop } from './useFlashBoardReferenceDrop';
 import { useFlashBoardMultishotController } from './useFlashBoardMultishotController';
 import { useFlashBoardComposerPopovers } from './useFlashBoardComposerPopovers';
 import { useFlashBoardPromptAutosize } from './useFlashBoardPromptAutosize';
@@ -75,9 +45,12 @@ import { useFlashBoardInitialEntrySync } from './useFlashBoardInitialEntrySync';
 import { useFlashBoardElevenLabsController } from './useFlashBoardElevenLabsController';
 import { useFlashBoardChatController } from './useFlashBoardChatController';
 import { useFlashBoardPromptRefineController } from './useFlashBoardPromptRefineController';
+import { useFlashBoardGenerationFlowController } from './useFlashBoardGenerationFlowController';
+import { useFlashBoardPromptSunoController } from './useFlashBoardPromptSunoController';
 import {
-  areFlashBoardVoiceSettingsEqual,
-} from './FlashBoardVoiceSettingsPlanner';
+  useFlashBoardReferenceController,
+  useFlashBoardReferenceValidationController,
+} from './useFlashBoardReferenceController';
 
 function normalizeApiKeyValue(value: unknown): string {
   return typeof value === 'string' ? value : '';
@@ -90,14 +63,6 @@ interface FlashBoardComposerProps {
   initialMode?: 'generate' | 'chat';
   allowedServices?: CatalogEntry['service'][];
   serviceScope?: CatalogEntry['service'];
-}
-
-function clampSunoWeight(value: number | undefined, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return fallback;
-  }
-
-  return Math.max(0, Math.min(1, value));
 }
 
 export function FlashBoardComposer({
@@ -187,11 +152,13 @@ export function FlashBoardComposer({
     renderedPopover,
     togglePopover,
   } = useFlashBoardComposerPopovers();
-  const {
-    handleReferenceStripPointerLeave,
-    referenceStripRef,
-    updateReferenceCardFocus,
-  } = useFlashBoardReferenceFocus();
+  const promptRefineCallbacksRef = useRef<{
+    clearPromptRefineError: () => void;
+    clearPromptRefineState: () => void;
+  }>({
+    clearPromptRefineError: () => {},
+    clearPromptRefineState: () => {},
+  });
 
   const [service, setService] = useState<CatalogEntry['service']>(
     initialEntry?.service ?? visibleCatalog[0]?.service ?? emptyCatalogFallbackService,
@@ -199,7 +166,6 @@ export function FlashBoardComposer({
   const [providerId, setProviderId] = useState(initialEntry?.providerId ?? visibleCatalog[0]?.providerId ?? initialProviderId ?? '');
   const [version, setVersion] = useState(initialVersion ?? initialEntry?.versions[0] ?? DEFAULT_FLASHBOARD_MODEL_VERSION);
   const [mode, setMode] = useState('std');
-  const [prompt, setPrompt] = useState('');
   const {
     activeChatModel,
     activeChatModelId,
@@ -253,23 +219,6 @@ export function FlashBoardComposer({
   const [aspectRatio, setAspectRatio] = useState('16:9');
   const [imageSize, setImageSize] = useState('1K');
   const [generateAudio, setGenerateAudio] = useState(false);
-  const [sunoCustomMode, setSunoCustomMode] = useState(composer.sunoCustomMode ?? DEFAULT_SUNO_CUSTOM_MODE);
-  const [sunoInstrumental, setSunoInstrumental] = useState(composer.sunoInstrumental ?? DEFAULT_SUNO_INSTRUMENTAL);
-  const [sunoStyle, setSunoStyle] = useState(composer.sunoStyle ?? '');
-  const [sunoTitle] = useState(composer.sunoTitle ?? '');
-  const [sunoNegativeTags, setSunoNegativeTags] = useState(composer.sunoNegativeTags ?? '');
-  const [sunoVocalGender, setSunoVocalGender] = useState<FlashBoardSunoVocalGender | ''>(
-    composer.sunoVocalGender ?? '',
-  );
-  const [sunoStyleWeight, setSunoStyleWeight] = useState(
-    clampSunoWeight(composer.sunoStyleWeight, DEFAULT_SUNO_STYLE_WEIGHT),
-  );
-  const [sunoWeirdnessConstraint, setSunoWeirdnessConstraint] = useState(
-    clampSunoWeight(composer.sunoWeirdnessConstraint, DEFAULT_SUNO_WEIRDNESS_CONSTRAINT),
-  );
-  const [sunoAudioWeight, setSunoAudioWeight] = useState(
-    clampSunoWeight(composer.sunoAudioWeight, DEFAULT_SUNO_AUDIO_WEIGHT),
-  );
   useFlashBoardInitialEntrySync({
     initialEntry,
     initialVersion,
@@ -309,6 +258,15 @@ export function FlashBoardComposer({
   const isSunoMode = selectedEntry?.providerId === SUNO_PROVIDER_ID || service === 'suno';
   const isElevenLabsMode = isAudioMode && !isSunoMode;
   const isHostedAudioMode = isElevenLabsMode && service === 'cloud';
+  const {
+    hasVideoReferenceInput,
+    seedanceReferenceModeActive,
+    seedanceReferenceValidationError,
+  } = useFlashBoardReferenceValidationController({
+    composer,
+    mediaFiles,
+    providerId,
+  });
   const {
     audioModelButtonLabel,
     audioOutputButtonLabel,
@@ -356,52 +314,6 @@ export function FlashBoardComposer({
     setVersion,
     version,
   });
-  const sunoOptionsState = useMemo(() => buildFlashBoardSunoOptionsState({
-    audioWeight: sunoAudioWeight,
-    customMode: sunoCustomMode,
-    instrumental: sunoInstrumental,
-    modelId: version,
-    styleWeight: sunoStyleWeight,
-    vocalGender: sunoVocalGender,
-    weirdnessConstraint: sunoWeirdnessConstraint,
-  }), [
-    sunoAudioWeight,
-    sunoCustomMode,
-    sunoInstrumental,
-    sunoStyleWeight,
-    sunoVocalGender,
-    sunoWeirdnessConstraint,
-    version,
-  ]);
-  const {
-    currentModelId: currentSunoModelId,
-    modelButtonLabel: sunoModelButtonLabel,
-    modeButtonLabel: sunoModeButtonLabel,
-    modelOptions: sunoModelOptions,
-    tuningChanged: sunoTuningChanged,
-    vocalGenderOptions: sunoVocalGenderOptions,
-  } = sunoOptionsState;
-  const hasSeedanceAudioReferenceInput = useMemo(
-    () => (composer.referenceMediaFileIds ?? []).some((mediaFileId) => (
-      mediaFiles.find((file) => file.id === mediaFileId)?.type === 'audio'
-    )),
-    [composer.referenceMediaFileIds, mediaFiles],
-  );
-  const hasSeedanceVisualReferenceInput = useMemo(
-    () => Boolean(composer.startMediaFileId || composer.endMediaFileId)
-      || (composer.referenceMediaFileIds ?? []).some((mediaFileId) => {
-        const mediaType = mediaFiles.find((file) => file.id === mediaFileId)?.type;
-        return mediaType === 'image' || mediaType === 'video';
-      }),
-    [composer.endMediaFileId, composer.referenceMediaFileIds, composer.startMediaFileId, mediaFiles],
-  );
-  const seedanceReferenceModeActive = isSeedance2ProviderId(providerId)
-    && (composer.referenceMediaFileIds ?? []).length > 0;
-  const seedanceReferenceValidationError = getSeedanceReferenceValidationError({
-    hasAudioReference: hasSeedanceAudioReferenceInput,
-    hasVisualReference: hasSeedanceVisualReferenceInput,
-    providerId,
-  });
   const supportsAudio = !isAudioMode
     && selectedEntry?.supportsGenerateAudio === true
     && !seedanceReferenceModeActive;
@@ -428,6 +340,47 @@ export function FlashBoardComposer({
     supportsMultiShot,
   });
   const {
+    currentSunoModelId,
+    effectivePrompt,
+    handleClearPrompt,
+    handlePromptChange,
+    handleSunoNegativeTagsChange,
+    handleSunoStyleChange,
+    handleSunoVocalGenderChange,
+    prompt,
+    resetSunoTuning,
+    setPrompt,
+    setSunoAudioWeight,
+    setSunoCustomMode,
+    setSunoInstrumental,
+    setSunoNegativeTags,
+    setSunoStyle,
+    setSunoStyleWeight,
+    setSunoWeirdnessConstraint,
+    sunoAudioWeight,
+    sunoCustomMode,
+    sunoInstrumental,
+    sunoModelButtonLabel,
+    sunoModeButtonLabel,
+    sunoModelOptions,
+    sunoNegativeTags,
+    sunoStyle,
+    sunoStyleLimit,
+    sunoStyleWeight,
+    sunoTitle,
+    sunoTuningChanged,
+    sunoVocalGender,
+    sunoVocalGenderOptions,
+    sunoWeirdnessConstraint,
+  } = useFlashBoardPromptSunoController({
+    composer,
+    isSunoMode,
+    multiShots,
+    normalizedMultiPrompt,
+    promptRefineCallbacksRef,
+    version,
+  });
+  const {
     chatInputRef,
     promptInputRef,
     resizePromptInput,
@@ -439,25 +392,6 @@ export function FlashBoardComposer({
     prompt,
   });
   const effectiveGenerateAudio = !isAudioMode && supportsAudio && (generateAudio || multiShots);
-  const effectivePrompt = useMemo(() => {
-    const trimmedPrompt = prompt.trim();
-
-    if (trimmedPrompt) {
-      return trimmedPrompt;
-    }
-
-    if (multiShots) {
-      return buildFallbackPrompt(normalizedMultiPrompt);
-    }
-
-    return '';
-  }, [multiShots, normalizedMultiPrompt, prompt]);
-  const hasVideoReferenceInput = useMemo(
-    () => (composer.referenceMediaFileIds ?? []).some((mediaFileId) => (
-      mediaFiles.find((file) => file.id === mediaFileId)?.type === 'video'
-    )),
-    [composer.referenceMediaFileIds, mediaFiles],
-  );
   const modelEntryOptions = useMemo(() => buildFlashBoardModelEntryOptions({
     activeModelEntries,
     duration,
@@ -581,69 +515,33 @@ export function FlashBoardComposer({
     selectedEntry,
     service,
   ]);
-  const maxReferenceMedia = selectedEntry?.maxReferenceMedia ?? selectedEntry?.maxReferenceImages;
-  const effectiveReferenceMediaFileIds = useMemo(
-    () => clampReferenceMediaFileIds(composer.referenceMediaFileIds ?? [], maxReferenceMedia),
-    [composer.referenceMediaFileIds, maxReferenceMedia],
-  );
-  const supportsTimelineReferenceRoles = !isAudioMode && selectedEntry?.supportsImageToVideo === true;
-  const supportsEndFrameReference = supportsTimelineReferenceRoles && !multiShots;
-  const mediaFilesById = useMemo(
-    () => new Map(mediaFiles.map((file) => [file.id, file])),
-    [mediaFiles],
-  );
-  const getCurrentReferenceMediaFileIds = useCallback(
-    () => useFlashBoardStore.getState().composer.referenceMediaFileIds ?? [],
-    [],
-  );
-  const updateReferenceMediaFileIds = useCallback((referenceMediaFileIds: string[]) => {
-    updateComposer({ referenceMediaFileIds });
-  }, [updateComposer]);
   const {
+    composerReferenceBadges,
+    composerStyle,
+    effectiveReferenceMediaFileIds,
+    getPromptRefineMediaFile,
+    handleComposerReferenceRoleChange,
     handleReferenceDragLeave,
     handleReferenceDragOver,
     handleReferenceDrop,
-    isReferenceDragOver,
-  } = useFlashBoardReferenceDrop({
-    appendReferenceMediaFileIds,
-    clampReferenceMediaFileIds,
-    getCurrentReferenceMediaFileIds,
-    isReferenceableMediaType,
-    maxReferenceMedia,
-    mediaFilesById,
-    updateReferenceMediaFileIds,
-  });
-  const {
-    handleComposerReferenceRoleChange,
+    handleReferenceStripPointerLeave,
     handleRemoveComposerReference,
-  } = useFlashBoardReferenceCommands({
-    clampReferenceMediaFileIds,
-    composerEndMediaFileId: composer.endMediaFileId,
-    composerStartMediaFileId: composer.startMediaFileId,
-    effectiveReferenceMediaFileIds,
+    isReferenceDragOver,
     maxReferenceMedia,
-    setHoveredComposerReference,
+    referenceStripRef,
+    showComposerReferences,
     supportsEndFrameReference,
     supportsTimelineReferenceRoles,
+    updateReferenceCardFocus,
+  } = useFlashBoardReferenceController({
+    composer,
+    isAudioMode,
+    mediaFiles,
+    multiShots,
+    selectedEntry,
+    setHoveredComposerReference,
     updateComposer,
   });
-  const composerReferenceBadges = useMemo(() => buildFlashBoardReferenceBadges({
-    endMediaFileId: composer.endMediaFileId,
-    isReferenceableMediaType,
-    mediaFilesById,
-    referenceMediaFileIds: effectiveReferenceMediaFileIds,
-    startMediaFileId: composer.startMediaFileId,
-  }), [
-    composer.endMediaFileId,
-    composer.startMediaFileId,
-    effectiveReferenceMediaFileIds,
-    mediaFilesById,
-    isReferenceableMediaType,
-  ]);
-  const getPromptRefineMediaFile = useCallback(
-    (mediaFileId: string) => mediaFilesById.get(mediaFileId),
-    [mediaFilesById],
-  );
   const {
     canRestorePrompt,
     clearPromptRefineError,
@@ -691,87 +589,46 @@ export function FlashBoardComposer({
     sunoWeirdnessConstraint,
     version,
   });
+  promptRefineCallbacksRef.current.clearPromptRefineError = clearPromptRefineError;
+  promptRefineCallbacksRef.current.clearPromptRefineState = clearPromptRefineState;
 
-  useEffect(() => {
-    if (!selectedEntry) {
-      return;
-    }
-
-    const nextPatch = buildFlashBoardComposerSyncPatch({
-      composer,
-      effectiveGenerateAudio,
-      effectiveReferenceMediaFileIds,
-      isAudioMode,
-      isElevenLabsMode,
-      isSunoMode,
-      languageCode,
-      languageOverride,
-      maxReferenceMedia,
-      multiShots,
-      normalizedMultiPrompt,
-      outputFormat,
-      providerId,
-      selectedEntry,
-      service,
-      sunoAudioWeight,
-      sunoCustomMode,
-      sunoInstrumental,
-      sunoNegativeTags,
-      sunoStyle,
-      sunoStyleWeight,
-      sunoTitle,
-      sunoVocalGender,
-      sunoWeirdnessConstraint,
-      version,
-      voiceId,
-      voiceName,
-      voiceSettings,
-      areVoiceSettingsEqual: areFlashBoardVoiceSettingsEqual,
-    });
-
-    if (Object.keys(nextPatch).length > 0) {
-      updateComposer(nextPatch);
-    }
-  }, [
-    composer.endMediaFileId,
-    composer.generateAudio,
-    composer.languageCode,
-    composer.languageOverride,
-    composer.multiPrompt,
-    composer.multiShots,
-    composer.outputFormat,
-    composer.outputType,
-    composer.providerId,
-    composer.referenceMediaFileIds,
-    composer.service,
-    composer.startMediaFileId,
-    composer.sunoAudioWeight,
-    composer.sunoCustomMode,
-    composer.sunoInstrumental,
-    composer.sunoNegativeTags,
-    composer.sunoStyle,
-    composer.sunoStyleWeight,
-    composer.sunoTitle,
-    composer.sunoVocalGender,
-    composer.sunoWeirdnessConstraint,
-    composer.version,
-    composer.voiceId,
-    composer.voiceName,
-    composer.voiceSettings,
+  const {
+    handleAudioToggle,
+    handleGenerate,
+    handleKeyDown,
+    handleProviderChange,
+  } = useFlashBoardGenerationFlowController({
+    aspectRatio,
+    canGenerate,
+    chatPanelOpen,
+    closePopover,
+    composer,
+    duration,
     effectiveGenerateAudio,
+    effectivePrompt,
     effectiveReferenceMediaFileIds,
+    imageSize,
     isAudioMode,
     isElevenLabsMode,
     isSunoMode,
     languageCode,
     languageOverride,
     maxReferenceMedia,
+    mode,
     multiShots,
     normalizedMultiPrompt,
     outputFormat,
     providerId,
     selectedEntry,
     service,
+    setAspectRatio,
+    setDuration,
+    setGenerateAudio,
+    setImageSize,
+    setMode,
+    setProviderId,
+    setService,
+    setVersion,
     sunoAudioWeight,
     sunoCustomMode,
     sunoInstrumental,
@@ -781,12 +638,14 @@ export function FlashBoardComposer({
     sunoTitle,
     sunoVocalGender,
     sunoWeirdnessConstraint,
+    supportsAudio,
     updateComposer,
     version,
+    visibleCatalog,
     voiceId,
     voiceName,
     voiceSettings,
-  ]);
+  });
 
   useEffect(() => {
     if (popover === 'model') {
@@ -794,214 +653,8 @@ export function FlashBoardComposer({
     }
   }, [popover, selectedModelCategory]);
 
-  const handleProviderChange = useCallback((newService: CatalogEntry['service'], newId: string) => {
-    setService(newService);
-    setProviderId(newId);
-    const entry = visibleCatalog.find((e) => e.service === newService && e.providerId === newId);
-    if (entry) {
-      const transition = buildFlashBoardProviderTransition({
-        currentAspectRatio: aspectRatio,
-        currentDuration: duration,
-        currentImageSize: imageSize,
-        currentMode: mode,
-        effectiveGenerateAudio,
-        endMediaFileId: composer.endMediaFileId,
-        entry,
-        languageCode,
-        languageOverride,
-        multiShots,
-        normalizedMultiPrompt,
-        outputFormat,
-        referenceMediaFileIds: composer.referenceMediaFileIds,
-        startMediaFileId: composer.startMediaFileId,
-        sunoAudioWeight,
-        sunoCustomMode,
-        sunoInstrumental,
-        sunoNegativeTags,
-        sunoProviderId: SUNO_PROVIDER_ID,
-        sunoStyle,
-        sunoStyleWeight,
-        sunoTitle,
-        sunoVocalGender,
-        sunoWeirdnessConstraint,
-        voiceId,
-        voiceName,
-        voiceSettings,
-        clampReferenceMediaFileIds,
-      });
-
-      setVersion(transition.nextVersion);
-      if (transition.nextMode !== undefined) setMode(transition.nextMode);
-      if (transition.nextDuration !== undefined) setDuration(transition.nextDuration);
-      if (transition.nextAspectRatio !== undefined) setAspectRatio(transition.nextAspectRatio);
-      if (transition.nextImageSize !== undefined) setImageSize(transition.nextImageSize);
-
-      updateComposer(transition.composerPatch);
-    }
-    closePopover();
-  }, [
-    aspectRatio,
-    closePopover,
-    composer.endMediaFileId,
-    composer.referenceMediaFileIds,
-    composer.startMediaFileId,
-    duration,
-    effectiveGenerateAudio,
-    imageSize,
-    languageCode,
-    languageOverride,
-    mode,
-    multiShots,
-    normalizedMultiPrompt,
-    outputFormat,
-    updateComposer,
-    visibleCatalog,
-    sunoAudioWeight,
-    sunoCustomMode,
-    sunoInstrumental,
-    sunoNegativeTags,
-    sunoStyle,
-    sunoStyleWeight,
-    sunoTitle,
-    sunoVocalGender,
-    sunoWeirdnessConstraint,
-    voiceId,
-    voiceName,
-    voiceSettings,
-  ]);
-
-  const handleGenerate = useCallback(() => {
-    if (!canGenerate || !selectedEntry) return;
-
-    const requestIsAudio = selectedEntry.outputType === 'audio' || service === 'elevenlabs' || service === 'suno';
-    const requestIsSuno = service === 'suno' || providerId === SUNO_PROVIDER_ID;
-    submitFlashBoardActiveGenerationRequest(buildFlashBoardGenerationRequest({
-      aspectRatio,
-      duration,
-      effectiveGenerateAudio,
-      effectivePrompt,
-      effectiveReferenceMediaFileIds,
-      endMediaFileId: composer.endMediaFileId,
-      imageSize,
-      isAudioRequest: requestIsAudio,
-      isSunoRequest: requestIsSuno,
-      languageCode,
-      languageOverride,
-      mode,
-      multiShots,
-      normalizedMultiPrompt,
-      outputFormat,
-      providerId,
-      selectedEntry,
-      service,
-      startMediaFileId: composer.startMediaFileId,
-      sunoAudioWeight,
-      sunoCustomMode,
-      sunoInstrumental,
-      sunoNegativeTags,
-      sunoStyle,
-      sunoStyleWeight,
-      sunoTitle,
-      sunoVocalGender,
-      sunoWeirdnessConstraint,
-      version,
-      voiceId,
-      voiceName,
-      voiceSettings,
-    }));
-  }, [
-    aspectRatio,
-    canGenerate,
-    composer.endMediaFileId,
-    composer.startMediaFileId,
-    duration,
-    effectiveGenerateAudio,
-    effectivePrompt,
-    effectiveReferenceMediaFileIds,
-    imageSize,
-    languageCode,
-    languageOverride,
-    mode,
-    multiShots,
-    normalizedMultiPrompt,
-    outputFormat,
-    providerId,
-    selectedEntry,
-    service,
-    sunoAudioWeight,
-    sunoCustomMode,
-    sunoInstrumental,
-    sunoNegativeTags,
-    sunoStyle,
-    sunoStyleWeight,
-    sunoTitle,
-    sunoVocalGender,
-    sunoWeirdnessConstraint,
-    version,
-    voiceId,
-    voiceName,
-    voiceSettings,
-  ]);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (chatPanelOpen) {
-      return;
-    }
-
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-      handleGenerate();
-    }
-  }, [chatPanelOpen, handleGenerate]);
-
-  const handleAudioToggle = useCallback(() => {
-    if (!supportsAudio || multiShots) {
-      return;
-    }
-
-    setGenerateAudio((current) => !current);
-  }, [multiShots, supportsAudio]);
-
-  const handlePromptChange = useCallback((value: string) => {
-    setPrompt(value);
-    clearPromptRefineError();
-  }, [clearPromptRefineError]);
-
-  const handleSunoStyleChange = useCallback((value: string) => {
-    setSunoStyle(value);
-    clearPromptRefineError();
-    if (value.trim()) {
-      setSunoCustomMode(true);
-    }
-  }, [clearPromptRefineError]);
-
-  const handleSunoNegativeTagsChange = useCallback((value: string) => {
-    setSunoNegativeTags(value);
-    clearPromptRefineError();
-  }, [clearPromptRefineError]);
-
-  const handleClearPrompt = useCallback(() => {
-    setPrompt('');
-    if (isSunoMode) {
-      setSunoStyle('');
-      setSunoNegativeTags('');
-    }
-    clearPromptRefineState();
-  }, [clearPromptRefineState, isSunoMode]);
-
-  const resetSunoTuning = useCallback(() => {
-    const resetState = buildFlashBoardSunoTuningResetState();
-    setSunoVocalGender(resetState.vocalGender);
-    setSunoStyleWeight(resetState.styleWeight);
-    setSunoWeirdnessConstraint(resetState.weirdnessConstraint);
-    setSunoAudioWeight(resetState.audioWeight);
-  }, []);
-
   if (!hasGenerationBoard) return null;
 
-  const showComposerReferences = composerReferenceBadges.length > 0;
-  const composerStyle = showComposerReferences
-    ? ({ '--fb-reference-strip-width': `${Math.max(80, composerReferenceBadges.length * 80 + 4)}px` } as CSSProperties)
-    : undefined;
   const showGenerationCloudActions = Boolean(backendValidationError && service === 'cloud' && /sign in/i.test(backendValidationError));
 
   return (
@@ -1057,7 +710,7 @@ export function FlashBoardComposer({
           referenceMediaCount={effectiveReferenceMediaFileIds.length}
           sunoNegativeTags={sunoNegativeTags}
           sunoStyle={sunoStyle}
-          sunoStyleLimit={getSunoStyleLimit(version)}
+          sunoStyleLimit={sunoStyleLimit}
           onAutosizeInput={resizePromptInput}
           onChatInputKeyDown={handleChatInputKeyDown}
           onChatPromptChange={handleChatPromptChange}
@@ -1185,7 +838,7 @@ export function FlashBoardComposer({
             onModelChange={setVersion}
             onResetTuning={resetSunoTuning}
             onStyleWeightChange={setSunoStyleWeight}
-            onVocalGenderChange={(value) => setSunoVocalGender(value as FlashBoardSunoVocalGender | '')}
+            onVocalGenderChange={handleSunoVocalGenderChange}
             onWeirdnessConstraintChange={setSunoWeirdnessConstraint}
           />
 

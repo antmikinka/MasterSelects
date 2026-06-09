@@ -18,10 +18,10 @@ orchestrator or worker-agent execution run starts.
 - Handoff templates: prepared for execution only
 - Source implementation: current bounded source packet has explicit write set,
   forbidden files, and gates
-- Current bounded packet:
-  `P4-FLASHBOARD-ACTIVE-COMPOSER-REMAINING-BOUNDARY-PREFLIGHT-139`,
-  read-only packet to classify the remaining FlashBoard Composer boundary after
-  the prompt-refine controller hook split.
+- Current bounded packet: none;
+  `P4-FLASHBOARD-ACTIVE-REFERENCE-CONTROLLER-HOOK-SPLIT-144` is completed and
+  an orchestrator decision is pending on FlashBoard lane closure (runtime
+  smoke gate) before any further Composer split.
 - Completed source/tooling packet: `P0-REG-001`; focused registry checks passed.
 - Completed bounded packet: `P0-BASELINE-REFRESH-001`, read-only plus docs.
 - Completed bounded packet: `P1-CONTRACT-001`, contracts and focused boundary
@@ -1731,10 +1731,131 @@ orchestrator or worker-agent execution run starts.
   render/export/preview, and media runtime. Focused FlashBoard tests passed with
   5 files and 16 tests; `npx tsc -b --pretty false` and
   `fc.exe /b AGENTS.md CLAUDE.md` passed.
+- Completed bounded packet:
+  `P4-FLASHBOARD-ACTIVE-COMPOSER-REMAINING-BOUNDARY-PREFLIGHT-139`; re-scanned
+  remaining `FlashBoardComposer.tsx` responsibilities after the prompt-refine
+  controller split. Current snapshots: `FlashBoardComposer.tsx` 1298 LOC,
+  `useFlashBoardPromptRefineController.ts` 362 LOC,
+  `useFlashBoardChatController.ts` 373 LOC,
+  `useFlashBoardElevenLabsController.ts` 302 LOC,
+  `FlashBoardControls.css` 1035 LOC, and `FlashBoardPopovers.css` 718 LOC.
+  Prompt-refine ownership stayed in the prompt-refine hook; Composer only
+  consumes returned handlers/state. The next coherent source boundary is
+  generation flow orchestration: `buildFlashBoardComposerSyncPatch`,
+  `buildFlashBoardProviderTransition`, `buildFlashBoardGenerationRequest`,
+  `submitFlashBoardActiveGenerationRequest`, `handleProviderChange`, and
+  `handleGenerate` are concentrated in Composer with the existing planner
+  modules already split. JSX extraction remains premature because it would still
+  be mostly prop forwarding. CSS overages remain known but should wait for a CSS
+  packet. Source stayed untouched during the preflight; `git diff --check` and
+  `fc.exe /b AGENTS.md CLAUDE.md` are the required closing checks.
+- Completed bounded packet:
+  `P4-FLASHBOARD-ACTIVE-GENERATION-FLOW-CONTROLLER-HOOK-SPLIT-140`; extracted
+  the local generation-flow orchestration into
+  `useFlashBoardGenerationFlowController.ts`. Composer now injects current
+  state, setters, catalog data, `updateComposer`, generation-action state, and
+  primitive planner inputs, while the hook owns the composer sync effect,
+  provider transition handler, generation request/submit handler, Ctrl/Cmd+Enter
+  generate keydown, and generation audio toggle. Current snapshots:
+  `FlashBoardComposer.tsx` 1084 LOC and
+  `useFlashBoardGenerationFlowController.ts` 378 LOC. Composer no longer imports
+  `submitFlashBoardActiveGenerationRequest`,
+  `buildFlashBoardGenerationRequest`, `buildFlashBoardComposerSyncPatch`, or
+  `buildFlashBoardProviderTransition`; it only consumes returned generation
+  handlers. The hook dependency scan stayed free of store hooks, media/settings/
+  account stores, prompt-refine/chat/ElevenLabs services, CSS, Media Board,
+  Timeline, render/export/preview, WebGPU, and media runtime. Focused FlashBoard
+  tests passed with 5 files and 16 tests; `npx tsc -b --pretty false` passed.
+- Completed bounded packet:
+  `P4-FLASHBOARD-ACTIVE-COMPOSER-REMAINING-BOUNDARY-PREFLIGHT-141`; re-scanned
+  remaining `FlashBoardComposer.tsx` responsibilities after the generation-flow
+  controller split. Current snapshots: `FlashBoardComposer.tsx` 1084 LOC,
+  `useFlashBoardGenerationFlowController.ts` 378 LOC,
+  `useFlashBoardPromptRefineController.ts` 362 LOC,
+  `useFlashBoardChatController.ts` 373 LOC,
+  `useFlashBoardElevenLabsController.ts` 302 LOC,
+  `FlashBoardControls.css` 1035 LOC, and `FlashBoardPopovers.css` 718 LOC.
+  Generation-flow ownership stayed in `useFlashBoardGenerationFlowController`;
+  Composer only consumes returned generation handlers. The next coherent source
+  boundary is the local prompt/Suno controller: prompt state, Suno field state,
+  Suno option derivation, prompt/Suno field-change handlers, clear-prompt
+  coordination, effective prompt derivation, and Suno tuning reset are still
+  local in Composer and can be extracted without touching stores, services,
+  project schema, Media Board, Timeline, render, export, preview, media runtime,
+  CSS, chat, ElevenLabs, prompt-refine services, or existing component/planner
+  contracts. JSX extraction remains premature because it would still be mostly
+  prop forwarding; reference/validation extraction has more store/reference
+  coupling and should wait for a dedicated boundary.
+- Completed bounded packet:
+  `P4-FLASHBOARD-ACTIVE-PROMPT-SUNO-CONTROLLER-HOOK-SPLIT-142`; extracted the
+  local prompt/Suno controller into
+  `useFlashBoardPromptSunoController.ts`. Composer now injects composer initial
+  Suno values, `isSunoMode`, multishot state, version, and a narrow
+  prompt-refine callback ref, while the hook owns prompt text state, Suno field
+  state, Suno option derivation, effective-prompt fallback, prompt/Suno
+  field-change handlers, clear-prompt coordination, vocal-gender selection, and
+  Suno tuning reset. Current snapshots: `FlashBoardComposer.tsx` 996 LOC,
+  `useFlashBoardPromptSunoController.ts` 163 LOC,
+  `useFlashBoardGenerationFlowController.ts` 362 LOC,
+  `useFlashBoardPromptRefineController.ts` 336 LOC,
+  `useFlashBoardChatController.ts` 337 LOC, and
+  `useFlashBoardElevenLabsController.ts` 274 LOC. Composer no longer imports
+  Suno defaults, Suno options builders, fallback-prompt helpers, or the Suno
+  vocal-gender type; it only consumes returned prompt/Suno state and handlers.
+  The new hook dependency scan stayed free of store hooks, generation submit,
+  chat/ElevenLabs/prompt-refine services, CSS, Media Board, Timeline,
+  render/export/preview, WebGPU, and media runtime. Focused FlashBoard tests
+  passed with 5 files and 16 tests; `npx tsc -b --pretty false` passed;
+  `git diff --check` passed with only LF/CRLF warnings; `fc.exe /b AGENTS.md
+  CLAUDE.md` passed.
 - Next eligible packet: execute
-  `P4-FLASHBOARD-ACTIVE-COMPOSER-REMAINING-BOUNDARY-PREFLIGHT-139` as a
-  read-only scan of remaining Composer responsibilities before selecting another
-  source split.
+  `P4-FLASHBOARD-ACTIVE-COMPOSER-REMAINING-BOUNDARY-PREFLIGHT-143` to re-scan
+  the remaining Composer responsibilities after the prompt/Suno controller
+  split, then define the next bounded source packet from that scan.
+- Completed bounded packet:
+  `P4-FLASHBOARD-ACTIVE-COMPOSER-REMAINING-BOUNDARY-PREFLIGHT-143`; re-scanned
+  remaining `FlashBoardComposer.tsx` responsibilities after the prompt/Suno
+  controller split. Current snapshots: `FlashBoardComposer.tsx` 996 LOC,
+  `useFlashBoardPromptSunoController.ts` 163 LOC,
+  `useFlashBoardGenerationFlowController.ts` 362 LOC,
+  `useFlashBoardPromptRefineController.ts` 336 LOC,
+  `useFlashBoardChatController.ts` 337 LOC,
+  `useFlashBoardElevenLabsController.ts` 274 LOC,
+  `FlashBoardControls.css` 895 LOC, and `FlashBoardPopovers.css` 633 LOC.
+  The remaining coherent clusters are model/catalog/parameter derivation and
+  popover selection, reference/Seedance validation and badge/drop/command
+  coordination, validation warning/cloud-action assembly, and final JSX
+  composition. The next source boundary is a local reference controller hook
+  because it composes already-split reference helpers, keeps stale-reference
+  protection inside a ref instead of Composer `getState()`, and can return
+  reference ids/badges/drop handlers/validation values without touching stores,
+  project schema, Media Board, Timeline, render/export/preview, media runtime,
+  CSS, chat, ElevenLabs, prompt/Suno, prompt-refine, generation submit, or
+  provider switching. Source stayed untouched during this preflight.
+- Next eligible packet: execute
+  `P4-FLASHBOARD-ACTIVE-REFERENCE-CONTROLLER-HOOK-SPLIT-144` to extract only
+  the remaining reference/Seedance controller composition into
+  `useFlashBoardReferenceController.ts`.
+- Completed bounded packet:
+  `P4-FLASHBOARD-ACTIVE-REFERENCE-CONTROLLER-HOOK-SPLIT-144`; extracted the
+  local reference/Seedance controller composition into
+  `useFlashBoardReferenceController.ts`. Composer injects composer state, media
+  files, selected entry, provider id, mode booleans, `updateComposer`, and the
+  hovered-reference setter, and consumes returned reference ids, badges,
+  Seedance validation values, support booleans, drop/command handlers, and
+  reference style inputs; stale-drop protection moved behind a local ref
+  instead of a Composer store read. Current snapshots: `FlashBoardComposer.tsx`
+  951 LOC and `useFlashBoardReferenceController.ts` 202 LOC. The worker
+  executing this packet was stopped before running its checks; the orchestrator
+  closed the packet retroactively: `npx tsc -b --pretty false` clean, focused
+  FlashBoard tests passed with 5 files and 16 tests, the hook dependency scan
+  stayed free of store hooks/services/CSS (type-only store imports plus the
+  relocated `seedanceReferenceRules` import match the packet contract),
+  `git diff --check` passed with only LF/CRLF warnings, and
+  `fc.exe /b AGENTS.md CLAUDE.md` passed.
+- Next eligible packet: orchestrator decision pending; define the FlashBoard
+  lane closure packet (runtime smoke gate through the AI bridge) before any
+  further Composer source split.
 - Product source refactors remain blocked outside approved packet write sets.
 
 ## Document Map
