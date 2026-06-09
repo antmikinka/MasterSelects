@@ -622,6 +622,10 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
   `P4-FLASHBOARD-CONTROLS-CSS-SPLIT-163`; split chat controls into
   `FlashBoardChatControls.css`, preserving all 76 unique class selectors and
   cascade order.
+- P2 getState adapter freeze completed:
+  `P2-GETSTATE-ADAPTER-FREEZE-167`; executable policy now has 20 allowed
+  adapter paths and 177 hard-target files frozen at 669 current hits. The guard
+  fails unknown non-adapter access and hard-target ceiling increases.
 - Wave 4 verification:
   Orchestrator-verified: npx tsc -b clean; 11 test files / 105 tests green (guards, mediaRuntime leases, mediaPanel, historyStore).
 
@@ -644,19 +648,16 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 
 ## Active Packet
 
-None. Wave 4 (`P1-TYPES-BARREL-THIN-159`,
-`P1A-OBJECTURL-LEASE-MIGRATION-160`, `P4-MEDIA-PANEL-SPLIT-161`,
-`P2-GETSTATE-CLASSIFICATION-SCOUT-162`,
-`P4-FLASHBOARD-CONTROLS-CSS-SPLIT-163`, plus orchestrator ratchet) is completed
-and verified; the type-barrel goal criterion is met.
+None.
 
 ## Queued Packets
 
-No worker-owned source packet is currently active. Next wave candidates: P1A
-webCodecsHelpers lease migration, next MediaPanel slice, then
-P2-GETSTATE-ADAPTER-FREEZE formalization.
+No worker-owned source packet is currently active. Next wave candidates:
+render-contract scout / verification, then P2 `getState()` reduction packets
+against `P2-GETSTATE-ADAPTER-FREEZE-167`.
 
 ## Immediate Next Step
 
-Orchestrator authors the next wave: P1A webCodecsHelpers lease migration, next
-MediaPanel slice, then P2-GETSTATE-ADAPTER-FREEZE formalization.
+Orchestrator verifies the render-contract scout work and dispatches bounded P2
+reduction packets that lower hard-target ceilings without changing adapter
+policy.

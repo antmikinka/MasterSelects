@@ -2,6 +2,7 @@ export * from './adapterDebtLedger';
 export * from './exitCriteriaCoverage';
 export * from './foundationTypeTiers';
 export * from './gateRegistry';
+export * from './getStateAccessPolicy';
 export * from './highConflictOwnership';
 export * from './laneWriteManifest';
 export * from './retiredPathLedger';

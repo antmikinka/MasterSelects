@@ -2013,8 +2013,16 @@ orchestrator or worker-agent execution run starts.
   The manifest import was added in cascade position; 76 unique class selectors
   were preserved exactly, and line conservation was exact.
   Orchestrator-verified: npx tsc -b clean; 11 test files / 105 tests green (guards, mediaRuntime leases, mediaPanel, historyStore).
-- Next eligible packet: P1A webCodecsHelpers lease migration, next MediaPanel
-  slice, then P2-GETSTATE-ADAPTER-FREEZE formalization.
+- Completed bounded packet:
+  `P2-GETSTATE-ADAPTER-FREEZE-167`; added executable
+  `getStateAccessPolicy` with 20 accepted adapter paths and 177 class-(c) hard
+  target files frozen at 669 current hits, plus
+  `tests/unit/getStateAccessPolicy.test.ts` to reject unknown non-adapter
+  access and ceiling increases. The runtime lease owner map remains accepted
+  from the `P2-GETSTATE-CLASSIFICATION-SCOUT-162` blueprint for follow-up P2
+  reduction packets.
+- Next eligible packet: render-contract scout / verification, then P2
+  `getState()` reduction packets against the executable freeze.
 - Product source refactors remain blocked outside approved packet write sets.
 
 ## Document Map
@@ -2393,15 +2401,19 @@ Gates and subchecks:
   - [ ] runtime leases are referenced by ids only
 - [ ] `P2_RUNTIME_LEASE_OWNERS_DEFINED`
   - [x] lease owner map blueprint covers media, audio, render, decoder,
-        worker, and GPU; formalized gate remains
-        `P2-GETSTATE-ADAPTER-FREEZE`
+        worker, and GPU; accepted at blueprint level in
+        `P2-GETSTATE-CLASSIFICATION-SCOUT-162` and cited by
+        `P2-GETSTATE-ADAPTER-FREEZE-167`
 - [ ] `P2_GETSTATE_USAGE_CLASSIFIED`
   - [x] async fresh reads classified at scout/blueprint level
   - [x] bridge/adapter reads allowlisted at scout/blueprint level
   - [x] module-scope/render-path reads flagged with hard-target file:line
         evidence
+  - [x] executable adapter allowlist and hard-target ceilings added in
+        `src/architecture/getStateAccessPolicy.ts`
 - [ ] `P2_GETSTATE_MODULE_SCOPE_FORBIDDEN`
-  - [ ] hard gate forbids new module-scope live reads
+  - [x] hard gate forbids unknown non-adapter live reads and ceiling increases
+        via `tests/unit/getStateAccessPolicy.test.ts`
 - [ ] `P2_HISTORY_AND_DOCK_SPLIT`
   - [ ] history serializers separated
   - [ ] dock migration/layout ownership separated
@@ -2869,9 +2881,10 @@ Do not:
 - [x] Replace blind `getState()` reduction with usage classification.
 - [x] Add combined store/project contract-freeze requirement.
 - [x] Define allowed `getState()` adapter list at accepted P2 blueprint level;
-      formalization remains `P2-GETSTATE-ADAPTER-FREEZE`.
+      formalized by `P2-GETSTATE-ADAPTER-FREEZE-167`.
 - [x] Define runtime lease owner map at accepted P2 blueprint level;
-      formalization remains `P2-GETSTATE-ADAPTER-FREEZE`.
+      accepted in `P2-GETSTATE-CLASSIFICATION-SCOUT-162` and cited by
+      `P2-GETSTATE-ADAPTER-FREEZE-167`.
 - [ ] Define store selector/action planner file targets.
 - [ ] Define history serializer guard for runtime-handle leaks.
 - [ ] Define dock layout localStorage versus project persistence ownership.

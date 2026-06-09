@@ -2,7 +2,6 @@
 
 import React, { useCallback, useMemo, useRef, useState, useEffect, useLayoutEffect } from 'react';
 import './MediaPanel.css';
-import { Logger } from '../../services/logger';
 import { CompositionSettingsDialog } from './media/CompositionSettingsDialog';
 import { SolidSettingsDialog } from './media/SolidSettingsDialog';
 import { LabelColorPicker } from './media/LabelColorPicker';
@@ -44,6 +43,7 @@ import { useMediaPanelAddImportCommands } from './media/panel/useMediaPanelAddIm
 import { useMediaPanelDragDropMarquee, type MediaPanelMarquee } from './media/panel/useMediaPanelDragDropMarquee';
 import { useMediaPanelProjectItems } from './media/panel/useMediaPanelProjectItems';
 import { getMediaDeleteImpact, useMediaPanelRenameDeleteCommands } from './media/panel/useMediaPanelRenameDeleteCommands';
+import { useMediaPanelSelectionCommands } from './media/panel/useMediaPanelSelectionCommands';
 import { useMediaPanelViewTransition } from './media/panel/useMediaPanelViewTransition';
 import { MediaBoardAnnotationLayer } from './media/board/MediaBoardAnnotationLayer';
 import { MediaBoardView } from './media/board/MediaBoardView';
@@ -121,9 +121,7 @@ import type {
   MediaBoardViewportSize,
 } from './media/board/types';
 import { isProxyFrameCountComplete } from '../../stores/mediaStore/helpers/proxyCompleteness';
-import { thumbnailCacheService } from '../../services/thumbnailCacheService';
 
-const log = Logger.create('MediaPanel');
 import { useMediaStore } from '../../stores/mediaStore';
 import { useFlashBoardStore } from '../../stores/flashboardStore';
 import type {
@@ -192,81 +190,6 @@ function getProjectItemIconType(item: ProjectItem | undefined): string | undefin
   return item.type;
 }
 
-async function regenerateTimelineSourceThumbnails(mediaFile: MediaFile): Promise<void> {
-  if (mediaFile.type !== 'video') return;
-
-  const createdUrl = mediaFile.file ? URL.createObjectURL(mediaFile.file) : null;
-  const sourceUrl = createdUrl ?? mediaFile.url;
-  if (!sourceUrl) return;
-
-  const video = document.createElement('video');
-  video.src = sourceUrl;
-  video.preload = 'auto';
-  video.muted = true;
-  video.playsInline = true;
-  video.crossOrigin = 'anonymous';
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const timeoutId = window.setTimeout(() => {
-        cleanup();
-        reject(new Error('Video metadata timeout'));
-      }, 5000);
-
-      const cleanup = () => {
-        window.clearTimeout(timeoutId);
-        video.removeEventListener('loadedmetadata', onReady);
-        video.removeEventListener('error', onError);
-      };
-
-      const onReady = () => {
-        cleanup();
-        resolve();
-      };
-
-      const onError = () => {
-        cleanup();
-        reject(new Error('Video metadata failed'));
-      };
-
-      video.addEventListener('loadedmetadata', onReady, { once: true });
-      video.addEventListener('error', onError, { once: true });
-      video.load();
-    });
-
-    const duration = mediaFile.duration || video.duration || 0;
-    if (duration > 0) {
-      await thumbnailCacheService.clearSource(mediaFile.id);
-      await thumbnailCacheService.generateForSource(mediaFile.id, video, duration, mediaFile.fileHash);
-    }
-  } finally {
-    video.pause();
-    video.removeAttribute('src');
-    try {
-      video.load();
-    } catch {
-      // Ignore detached video cleanup errors.
-    }
-    if (createdUrl) {
-      URL.revokeObjectURL(createdUrl);
-    }
-  }
-}
-
-function appendUniqueIds(current: string[], next: string[]): string[] {
-  const seen = new Set(current);
-  const result = [...current];
-
-  for (const id of next) {
-    if (!seen.has(id)) {
-      seen.add(id);
-      result.push(id);
-    }
-  }
-
-  return result;
-}
-
 function getAncestorFolderIds(item: ProjectItem, folders: MediaFolder[]): string[] {
   const ancestors: string[] = [];
   const seen = new Set<string>();
@@ -312,22 +235,6 @@ export function MediaPanel() {
   const pasteMediaItems = useMediaStore(state => state.pasteMediaItems);
   const hasMediaClipboard = useMediaStore(state => state.hasMediaClipboard);
 
-  // Floating "Copied"/"Pasted"/"Duplicated" indicator that rises + fades near the
-  // cursor (WoW-style floating combat text), see #187.
-  const lastPointerRef = useRef<{ x: number; y: number }>({
-    x: typeof window !== 'undefined' ? window.innerWidth / 2 : 0,
-    y: typeof window !== 'undefined' ? window.innerHeight / 2 : 0,
-  });
-  const floatingTextIdRef = useRef(0);
-  const [floatingTexts, setFloatingTexts] = useState<Array<{ id: number; text: string; x: number; y: number }>>([]);
-  const showFloatingText = useCallback((text: string) => {
-    const { x, y } = lastPointerRef.current;
-    const id = ++floatingTextIdRef.current;
-    setFloatingTexts((prev) => [...prev, { id, text, x, y }]);
-    window.setTimeout(() => {
-      setFloatingTexts((prev) => prev.filter((entry) => entry.id !== id));
-    }, 900);
-  }, []);
   const expandedFolderIds = useMediaStore(state => state.expandedFolderIds);
   const fileSystemSupported = useMediaStore(state => state.fileSystemSupported);
   const proxyFolderName = useMediaStore(state => state.proxyFolderName);
@@ -356,7 +263,9 @@ export function MediaPanel() {
     toggleFolderExpanded,
     setSelection,
     addToSelection,
+    removeFromSelection,
     openCompositionTab,
+    setSourceMonitorFile,
     updateComposition,
     generateProxy,
     generateAudioProxy,
@@ -847,70 +756,6 @@ export function MediaPanel() {
     getSlotGridProgress: getTimelineSlotGridProgress,
   });
 
-  // Handle item selection
-  const handleItemClick = useCallback((id: string, e: React.MouseEvent) => {
-    setSelectedMediaBoardAnnotationId(null);
-    if (e.ctrlKey || e.metaKey) {
-      // Toggle: add or remove
-      if (selectedIds.includes(id)) {
-        const { removeFromSelection } = useMediaStore.getState();
-        removeFromSelection(id);
-      } else {
-        addToSelection(id);
-      }
-    } else if (e.shiftKey) {
-      addToSelection(id);
-    } else {
-      setSelection([id]);
-    }
-  }, [addToSelection, setSelection, selectedIds]);
-
-  // Handle double-click (open/expand)
-  const handleItemDoubleClick = useCallback(async (item: ProjectItem) => {
-    if ('isExpanded' in item) {
-      // Folders navigate in icon view and expand/collapse in the denser views.
-      if (viewMode === 'icons') {
-        setGridFolderId(item.id);
-      } else {
-        toggleFolderExpanded(item.id);
-      }
-    } else if (item.type === 'composition') {
-      // Open composition in timeline (as a tab)
-      openCompositionTab(item.id);
-    } else if ((item.type === 'video' || item.type === 'image' || item.type === 'audio') && 'file' in item && (item as MediaFile).file) {
-      // Open in source monitor
-      useMediaStore.getState().setSourceMonitorFile(item.id);
-    } else if ('file' in item && mediaNeedsRelink(item as MediaFile)) {
-      // Media file needs reload - request permission
-      const success = await reloadFile(item.id);
-      if (success) {
-        log.info('File reloaded successfully');
-      }
-    }
-  }, [toggleFolderExpanded, openCompositionTab, reloadFile, viewMode]);
-
-  // Context menu
-  const handleContextMenu = useCallback((
-    e: React.MouseEvent,
-    itemId?: string,
-    parentId?: string | null,
-    boardPosition?: { x: number; y: number },
-  ) => {
-    e.preventDefault();
-    if (itemId && !selectedIds.includes(itemId)) {
-      // If right-clicking an unselected item, select only it (unless Ctrl held)
-      if (e.ctrlKey || e.metaKey) {
-        addToSelection(itemId);
-      } else {
-        setSelection([itemId]);
-      }
-    }
-    if (itemId) {
-      setSelectedMediaBoardAnnotationId(null);
-    }
-    setContextMenu({ x: e.clientX, y: e.clientY, itemId, parentId, boardPosition });
-  }, [selectedIds, setSelection, addToSelection]);
-
   const suppressNextMediaBoardContextMenu = useCallback(() => {
     suppressMediaBoardContextMenuRef.current = true;
     if (suppressMediaBoardContextMenuTimerRef.current !== null) {
@@ -938,52 +783,6 @@ export function MediaPanel() {
     closeContextMenu,
   });
   const mediaContextLocalHandlers = useMediaContextLocalHandlers({ moveToFolder, setSolidSettingsDialog, closeContextMenu });
-
-  const handleToggleAiPromptReferences = useCallback((mediaFileIds: string[]) => {
-    if (mediaFileIds.length === 0) {
-      closeContextMenu();
-      return;
-    }
-
-    const currentReferences = useFlashBoardStore.getState().composer.referenceMediaFileIds ?? [];
-    const allSelectedReferences = mediaFileIds.every((id) => currentReferences.includes(id));
-    const nextReferences = allSelectedReferences
-      ? currentReferences.filter((id) => !mediaFileIds.includes(id))
-      : appendUniqueIds(currentReferences, mediaFileIds);
-
-    updateFlashBoardComposer({ referenceMediaFileIds: nextReferences });
-    setGenerativeTrayExpanded(true);
-    closeContextMenu();
-  }, [closeContextMenu, updateFlashBoardComposer]);
-
-  const handleRegenerateMediaThumbnails = useCallback((mediaFile: MediaFile) => {
-    void (async () => {
-      await ensureFileThumbnail(mediaFile.id, { force: true });
-      await regenerateTimelineSourceThumbnails(mediaFile);
-    })().catch((error) => {
-      log.warn('Failed to regenerate media thumbnails', {
-        id: mediaFile.id,
-        name: mediaFile.name,
-        error,
-      });
-    });
-    closeContextMenu();
-  }, [closeContextMenu, ensureFileThumbnail]);
-
-  const handleRegenerateMediaAudioProxy = useCallback((mediaFile: MediaFile, force: boolean) => {
-    void generateAudioProxy(mediaFile.id, { force });
-    closeContextMenu();
-  }, [closeContextMenu, generateAudioProxy]);
-
-  const handleRegenerateMediaWaveform = useCallback((mediaFile: MediaFile) => {
-    void generateMediaWaveform(mediaFile.id, { force: true });
-    closeContextMenu();
-  }, [closeContextMenu, generateMediaWaveform]);
-
-  const handleRegenerateMediaSpectrogram = useCallback((mediaFile: MediaFile) => {
-    void generateMediaSpectrogram(mediaFile.id, { force: true });
-    closeContextMenu();
-  }, [closeContextMenu, generateMediaSpectrogram]);
 
   // Handle badge click — select clip using this media file, open properties panel with target tab
   const handleBadgeClick = useCallback((mediaFileId: string, tab: 'transcript' | 'analysis') => {
@@ -1048,77 +847,49 @@ export function MediaPanel() {
     closeContextMenu,
   });
 
-  // Copy / paste / duplicate of media-panel items (#187)
-  const handleCopySelected = useCallback(() => {
-    if (selectedIds.length > 0) {
-      copyMediaItems([...selectedIds]);
-      showFloatingText('Copied');
-    }
-    closeContextMenu();
-  }, [selectedIds, copyMediaItems, showFloatingText, closeContextMenu]);
-
-  const handleDuplicateSelected = useCallback(() => {
-    if (selectedIds.length > 0) {
-      duplicateMediaItems([...selectedIds]);
-      showFloatingText('Duplicated');
-    }
-    closeContextMenu();
-  }, [selectedIds, duplicateMediaItems, showFloatingText, closeContextMenu]);
-
-  const handlePasteItems = useCallback(() => {
-    const pasted = pasteMediaItems(getActiveParentId());
-    if (pasted.length > 0) showFloatingText('Pasted');
-    closeContextMenu();
-  }, [pasteMediaItems, getActiveParentId, showFloatingText, closeContextMenu]);
-
-  // Keyboard copy/paste/duplicate, scoped to when the pointer is over the media
-  // panel (mirrors the existing select-all hover scoping in useTimelineKeyboard).
-  // Capture phase + stopImmediatePropagation so timeline copy/paste doesn't also fire.
-  const mediaPanelRootRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.altKey) return;
-      const root = mediaPanelRootRef.current;
-      if (!root || !root.matches(':hover')) return;
-      const active = document.activeElement as HTMLElement | null;
-      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) {
-        return; // let the browser handle text editing / copy-paste while typing
-      }
-
-      // Delete / Backspace removes the highlighted media items (#207).
-      if ((e.key === 'Delete' || e.key === 'Backspace') && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-        if (selectedIds.length === 0) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        void handleDelete();
-        return;
-      }
-
-      if (!(e.ctrlKey || e.metaKey) || e.shiftKey) return;
-      const key = e.key.toLowerCase();
-      if (key === 'c') {
-        if (selectedIds.length === 0) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        copyMediaItems([...selectedIds]);
-        showFloatingText('Copied');
-      } else if (key === 'v') {
-        if (!hasMediaClipboard()) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        const pasted = pasteMediaItems(getActiveParentId());
-        if (pasted.length > 0) showFloatingText('Pasted');
-      } else if (key === 'd') {
-        if (selectedIds.length === 0) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        duplicateMediaItems([...selectedIds]);
-        showFloatingText('Duplicated');
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown, { capture: true });
-    return () => document.removeEventListener('keydown', handleKeyDown, { capture: true });
-  }, [selectedIds, copyMediaItems, pasteMediaItems, duplicateMediaItems, hasMediaClipboard, getActiveParentId, showFloatingText, handleDelete]);
+  const {
+    mediaPanelRootRef,
+    floatingTexts,
+    handleMediaPanelMouseMove,
+    handleItemClick,
+    handleItemDoubleClick,
+    handleContextMenu,
+    handleToggleAiPromptReferences,
+    handleRegenerateMediaThumbnails,
+    handleRegenerateMediaAudioProxy,
+    handleRegenerateMediaWaveform,
+    handleRegenerateMediaSpectrogram,
+    handleCopySelected,
+    handleDuplicateSelected,
+    handlePasteItems,
+  } = useMediaPanelSelectionCommands({
+    selectedIds,
+    viewMode,
+    setGridFolderId,
+    setContextMenu,
+    closeContextMenu,
+    setSelectedMediaBoardAnnotationId,
+    setGenerativeTrayExpanded,
+    getActiveParentId,
+    getAiReferenceMediaFileIds: () => useFlashBoardStore.getState().composer.referenceMediaFileIds ?? [],
+    updateAiReferenceMediaFileIds: (referenceMediaFileIds) => updateFlashBoardComposer({ referenceMediaFileIds }),
+    setSelection,
+    addToSelection,
+    removeFromSelection,
+    toggleFolderExpanded,
+    openCompositionTab,
+    reloadFile,
+    setSourceMonitorFile,
+    ensureFileThumbnail,
+    generateAudioProxy,
+    generateMediaWaveform,
+    generateMediaSpectrogram,
+    copyMediaItems,
+    duplicateMediaItems,
+    pasteMediaItems,
+    hasMediaClipboard,
+    handleDelete,
+  });
 
   // Composition settings
   const openCompositionSettings = useCallback((comp: Composition) => {
@@ -3156,7 +2927,7 @@ export function MediaPanel() {
       onDrop={handleRootDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
-      onMouseMove={(e) => { lastPointerRef.current = { x: e.clientX, y: e.clientY }; }}
+      onMouseMove={handleMediaPanelMouseMove}
       onClick={() => { if (contextMenu) closeContextMenu(); }}
     >
       <MediaFloatingFeedbackPortal items={floatingTexts} />
