@@ -4,18 +4,30 @@ import { DEFAULT_TRANSFORM } from './constants';
 import { engine } from '../../engine/WebGPUEngine';
 import { layerBuilder } from '../../services/layerBuilder';
 import { createDefaultMathScene } from '../../services/mathScene/defaultScene';
-import { mathSceneRenderer } from '../../services/mathScene/MathSceneRenderer';
 import { generateMathSceneClipId } from './helpers/idGenerator';
 import { useMediaStore } from '../mediaStore';
 import { Logger } from '../../services/logger';
+import {
+  createTimelineMathSceneCanvasRuntime,
+  getTimelineGeneratedCanvasRuntime,
+  renderTimelineMathSceneCanvasRuntime,
+} from '../../services/timeline/timelineGeneratedCanvasRuntime';
 
 const log = Logger.create('MathSceneClipSlice');
 
 function renderMathClipNow(clip: TimelineClip, playheadPosition: number): void {
-  if (clip.source?.type !== 'math-scene' || !clip.source.textCanvas || !clip.mathScene) return;
+  if (clip.source?.type !== 'math-scene' || !clip.mathScene) return;
+  const canvas = getTimelineGeneratedCanvasRuntime(clip);
+  if (!canvas) return;
   const localTime = Math.max(0, Math.min(clip.duration, playheadPosition - clip.startTime));
-  mathSceneRenderer.render(clip.mathScene, clip.source.textCanvas, localTime, clip.duration);
-  engine.getTextureManager()?.updateCanvasTexture(clip.source.textCanvas);
+  renderTimelineMathSceneCanvasRuntime({
+    mathScene: clip.mathScene,
+    currentCanvas: canvas,
+    localTime,
+    duration: clip.duration,
+    dimensions: { width: canvas.width, height: canvas.height },
+  });
+  engine.getTextureManager()?.updateCanvasTexture(canvas);
 }
 
 function rerenderAfterMathUpdate(clip: TimelineClip, playheadPosition: number): void {
@@ -45,8 +57,11 @@ export const createMathSceneClipSlice: SliceCreator<MathSceneClipActions> = (set
     const compHeight = activeComp?.height || 1080;
     const clipId = generateMathSceneClipId();
     const mathScene = createDefaultMathScene();
-    const canvas = mathSceneRenderer.createCanvas(compWidth, compHeight);
-    mathSceneRenderer.render(mathScene, canvas, 0, duration);
+    const canvas = createTimelineMathSceneCanvasRuntime({
+      mathScene,
+      duration,
+      dimensions: { width: compWidth, height: compHeight },
+    });
 
     const mathClip: TimelineClip = {
       id: clipId,

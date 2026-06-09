@@ -8,6 +8,11 @@ import { NativeHelperClient } from '../../../services/nativeHelper/NativeHelperC
 import { useMediaStore } from '../../mediaStore';
 import { useTimelineStore } from '../index';
 import { Logger } from '../../../services/logger';
+import {
+  hasNativeDecoderForTimelineClip,
+  registerNativeDecoderForTimelineClip,
+  releaseAllNativeDecoderRuntimeRecords,
+} from '../../../services/timeline/nativeDecoderRuntimeRegistry';
 
 const log = Logger.create('NativeUpgrade');
 
@@ -16,6 +21,17 @@ type FileWithPath = File & { path?: string };
 let upgradeInProgress = false;
 // Track clips that failed to upgrade (no path found) — don't retry endlessly
 const failedClipIds = new Set<string>();
+
+function hasLegacyNativeDecoderSource(clip: TimelineClip): boolean {
+  return !!clip.source && 'nativeDecoder' in clip.source;
+}
+
+function stripLegacyNativeDecoderSource(clip: TimelineClip): TimelineClip {
+  if (!clip.source || !('nativeDecoder' in clip.source)) return clip;
+  const { nativeDecoder, ...restSource } = clip.source;
+  void nativeDecoder?.close().catch(() => undefined);
+  return { ...clip, source: restSource };
+}
 
 /**
  * Upgrade all video clips to NativeDecoder.
@@ -31,7 +47,7 @@ export async function upgradeAllClipsToNativeDecoder(): Promise<void> {
     const mediaStore = useMediaStore.getState();
 
     const videoClips = clips.filter(
-      (c) => c.source?.type === 'video' && !c.source.nativeDecoder && !failedClipIds.has(c.id)
+      (c) => c.source?.type === 'video' && !hasNativeDecoderForTimelineClip(c) && !failedClipIds.has(c.id)
     );
 
     if (videoClips.length === 0) {
@@ -53,6 +69,17 @@ export async function upgradeAllClipsToNativeDecoder(): Promise<void> {
         const nativeDecoder = await NativeDecoder.open(filePath);
         // Decode frame 0 so preview isn't black
         await nativeDecoder.seekToFrame(0);
+        const registered = registerNativeDecoderForTimelineClip({
+          clipId: clip.id,
+          mediaFileId: clip.source?.mediaFileId ?? clip.mediaFileId,
+          filePath,
+          decoder: nativeDecoder,
+        });
+        if (!registered) {
+          await nativeDecoder.close().catch(() => undefined);
+          failedClipIds.add(clip.id);
+          continue;
+        }
 
         // Update clip in store
         const currentClips = useTimelineStore.getState().clips;
@@ -61,7 +88,7 @@ export async function upgradeAllClipsToNativeDecoder(): Promise<void> {
             if (c.id !== clip.id || !c.source) return c;
             return {
               ...c,
-              source: { ...c.source, nativeDecoder, filePath },
+              source: { ...c.source, filePath },
             };
           }),
         });
@@ -82,19 +109,16 @@ export async function upgradeAllClipsToNativeDecoder(): Promise<void> {
  */
 export function downgradeAllClipsFromNativeDecoder(): void {
   const clips = useTimelineStore.getState().clips;
-  const hasNH = clips.some((c) => c.source?.nativeDecoder);
+  const hasNH = clips.some((c) => hasNativeDecoderForTimelineClip(c) || hasLegacyNativeDecoderSource(c));
   if (!hasNH) return;
 
   log.info('Downgrading all clips from NativeDecoder');
+  releaseAllNativeDecoderRuntimeRecords();
   const currentClips = useTimelineStore.getState().clips;
   useTimelineStore.setState({
     clips: currentClips.map((c) => {
-      if (!c.source?.nativeDecoder) return c;
-      // Close the decoder
-      c.source.nativeDecoder.close().catch(() => {});
-      // Remove nativeDecoder but keep filePath for future upgrades
-      const { nativeDecoder: _, ...restSource } = c.source;
-      return { ...c, source: restSource };
+      // Remove legacy source decoder handles but keep filePath for future upgrades.
+      return stripLegacyNativeDecoderSource(c);
     }),
   });
   // Clear failed set so re-upgrade can be attempted
@@ -122,7 +146,7 @@ export function startClipWatcher(): void {
     if (clips.length !== prevClipCount) {
       prevClipCount = clips.length;
       const hasUnupgraded = clips.some(
-        (c) => c.source?.type === 'video' && !c.source.nativeDecoder && !failedClipIds.has(c.id)
+        (c) => c.source?.type === 'video' && !hasNativeDecoderForTimelineClip(c) && !failedClipIds.has(c.id)
       );
       if (hasUnupgraded && NativeHelperClient.isConnected()) {
         void upgradeAllClipsToNativeDecoder();

@@ -1,6 +1,7 @@
 import type { RenderTarget, RenderSource } from '../../types/renderTarget';
 import { useMediaStore } from '../../stores/mediaStore';
-import type { RenderResourceDescriptor } from './runtimeCoordinatorTypes';
+import type { RuntimeProviderDemand } from '../../timeline';
+import { createRenderResourceDescriptorFromDemand } from './runtimeProviderDemandBridge';
 import { timelineRuntimeCoordinator } from './timelineRuntimeCoordinator';
 
 function getRenderTargetResourceId(targetId: string): string {
@@ -36,6 +37,12 @@ function getSourceTags(source: RenderSource): string[] {
   return tags;
 }
 
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T;
+}
+
 export function reportRenderTargetResource(target: RenderTarget): void {
   if (!target.canvas || !target.context) {
     releaseRenderTargetResource(target.id);
@@ -51,25 +58,33 @@ export function reportRenderTargetResource(target: RenderTarget): void {
   ];
   const width = target.canvas.width || target.canvas.clientWidth || undefined;
   const height = target.canvas.height || target.canvas.clientHeight || undefined;
-  const resource: RenderResourceDescriptor = {
-    id: getRenderTargetResourceId(target.id),
-    kind: 'image-canvas',
+  const resourceId = getRenderTargetResourceId(target.id);
+  const demand: RuntimeProviderDemand = {
+    id: resourceId,
+    facetId: `${resourceId}:facet`,
+    resourceKind: 'image-canvas',
     policyId: 'render-target',
-    owner: {
+    leasePolicy: 'retain-until-release',
+    owner: removeUndefinedValues({
       ownerId: target.id,
-      ownerType: 'render-target',
+      ownerType: 'render-target' as const,
       compositionId,
-    },
-    source: {
+    }),
+    source: removeUndefinedValues({
       sourceId: target.source.type,
       compositionId,
-    },
-    imageKind: 'html-canvas',
-    imageId: target.id,
+    }),
     dimensions: {
       width,
       height,
     },
+    priority: target.enabled ? 'visible' : 'background',
+    tags,
+  };
+  const resource = createRenderResourceDescriptorFromDemand(demand, {
+    resourceKind: 'image-canvas',
+    imageKind: 'html-canvas',
+    imageId: target.id,
     memoryCost: width && height
       ? {
           gpuBytes: width * height * 4,
@@ -91,8 +106,7 @@ export function reportRenderTargetResource(target: RenderTarget): void {
           ],
     },
     label: target.name,
-    tags,
-  };
+  });
 
   timelineRuntimeCoordinator.retainResource(resource);
 }

@@ -5,9 +5,11 @@ import type {
   TimelineRuntimeAdmissionDecision,
   TimelineRuntimePolicyId,
 } from './runtimeCoordinatorTypes';
+import type { RuntimeProviderDemand } from '../../timeline';
+import { createRenderResourceDescriptorFromDemand } from './runtimeProviderDemandBridge';
 import { timelineRuntimeCoordinator } from './timelineRuntimeCoordinator';
 
-export interface TimelineImageHydrationResourceOptions {
+interface TimelineImageHydrationDescriptorResourceOptions {
   id: string;
   policyId: TimelineRuntimePolicyId;
   owner: RuntimeResourceOwnerDescriptor;
@@ -16,6 +18,17 @@ export interface TimelineImageHydrationResourceOptions {
   label?: string;
   tags?: readonly string[];
 }
+
+interface TimelineImageHydrationDemandResourceOptions {
+  demand: RuntimeProviderDemand;
+  imageId?: string;
+  label?: string;
+  tags?: readonly string[];
+}
+
+export type TimelineImageHydrationResourceOptions =
+  | TimelineImageHydrationDescriptorResourceOptions
+  | TimelineImageHydrationDemandResourceOptions;
 
 export interface TimelineImageHydrationOptions {
   url: string;
@@ -40,11 +53,37 @@ function detachImageSource(image: HTMLImageElement): void {
   image.src = '';
 }
 
+function isDemandResourceOptions(
+  resource: TimelineImageHydrationResourceOptions
+): resource is TimelineImageHydrationDemandResourceOptions {
+  return 'demand' in resource;
+}
+
 function createImageResourceDescriptor(
   options: TimelineImageHydrationOptions
 ): ImageCanvasResourceDescriptor | null {
   if (!options.resource) {
     return null;
+  }
+
+  if (isDemandResourceOptions(options.resource)) {
+    const demand: RuntimeProviderDemand = {
+      ...options.resource.demand,
+      source: {
+        ...(options.resource.demand.source ?? {}),
+        previewPath: options.resource.demand.source?.previewPath ?? options.url,
+      },
+    };
+    return createRenderResourceDescriptorFromDemand(demand, {
+      resourceKind: 'image-canvas',
+      diagnostics: {
+        status: 'unknown',
+      },
+      imageKind: 'html-image',
+      imageId: options.resource.imageId ?? `${demand.id}:image`,
+      label: options.resource.label ?? 'Runtime image hydration',
+      tags: options.resource.tags,
+    }) as ImageCanvasResourceDescriptor;
   }
 
   return {

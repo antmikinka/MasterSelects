@@ -110,6 +110,12 @@ describe('vector runtime reporting', () => {
       memoryCost: {
         heapBytes: 320 * 180 * 4,
       },
+      tags: expect.arrayContaining([
+        'runtime-provider-demand',
+        'background-cache',
+        'background-layer',
+        'vector-animation',
+      ]),
     });
 
     reservation.release();

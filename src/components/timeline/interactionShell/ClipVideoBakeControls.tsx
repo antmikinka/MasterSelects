@@ -1,14 +1,14 @@
 import { useCallback, useMemo } from 'react';
 import { ClipVideoBakeRegionOverlays } from '../components/ClipVideoBakeRegionOverlays';
 import { resolveClipVideoBakeRegionOverlays } from '../utils/activeRegionOverlays';
-import { useTimelineStore } from '../../../stores/timeline';
-import type { ClipInteractionShellCommandContext } from './types';
+import type { ClipInteractionShellCommandContext, ClipInteractionShellCommands } from './types';
 
 const VIDEO_BAKE_REGION_TIMELINE_EPSILON = 0.001;
 const AUDIO_EXTENSIONS = new Set(['wav', 'mp3', 'ogg', 'flac', 'aac', 'm4a', 'wma', 'aiff', 'opus']);
 
 interface ClipVideoBakeControlsProps {
   context: ClipInteractionShellCommandContext;
+  commands?: ClipInteractionShellCommands;
 }
 
 function sourceTimeToClipTimelineTime(context: ClipInteractionShellCommandContext, sourceTime: number): number {
@@ -29,11 +29,8 @@ function isShellAudioClip(context: ClipInteractionShellCommandContext): boolean 
     AUDIO_EXTENSIONS.has(fileExt);
 }
 
-export function ClipVideoBakeControls({ context }: ClipVideoBakeControlsProps) {
+export function ClipVideoBakeControls({ context, commands }: ClipVideoBakeControlsProps) {
   const videoBake = context.activeModules.videoBake;
-  const bakeClipVideoBakeRegion = useTimelineStore(state => state.bakeClipVideoBakeRegion);
-  const unbakeClipVideoBakeRegion = useTimelineStore(state => state.unbakeClipVideoBakeRegion);
-  const removeClipVideoBakeRegion = useTimelineStore(state => state.removeClipVideoBakeRegion);
 
   const overlays = useMemo(() => {
     if (!videoBake?.enabled) return [];
@@ -49,16 +46,16 @@ export function ClipVideoBakeControls({ context }: ClipVideoBakeControlsProps) {
   }, [context, videoBake]);
 
   const handleBakeRegion = useCallback((regionId: string) => {
-    void bakeClipVideoBakeRegion(context.clip.id, regionId);
-  }, [bakeClipVideoBakeRegion, context.clip.id]);
+    commands?.onModuleCommand?.('video-bake', { type: 'video-bake:bake-region', regionId }, context);
+  }, [commands, context]);
 
   const handleUnbakeRegion = useCallback((regionId: string) => {
-    unbakeClipVideoBakeRegion(context.clip.id, regionId);
-  }, [context.clip.id, unbakeClipVideoBakeRegion]);
+    commands?.onModuleCommand?.('video-bake', { type: 'video-bake:unbake-region', regionId }, context);
+  }, [commands, context]);
 
   const handleRemoveRegion = useCallback((regionId: string) => {
-    removeClipVideoBakeRegion(context.clip.id, regionId);
-  }, [context.clip.id, removeClipVideoBakeRegion]);
+    commands?.onModuleCommand?.('video-bake', { type: 'video-bake:remove-region', regionId }, context);
+  }, [commands, context]);
 
   if (!videoBake?.enabled || overlays.length === 0) return null;
 

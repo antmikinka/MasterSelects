@@ -1,3 +1,5 @@
+import type { TimelinePaintPacket, TimelinePaintResourceTable } from '../../../timeline';
+
 export interface TimelineClipCanvasWorkerThumbnailStripResource {
   kind: 'thumbnail-strip';
   bitmap: ImageBitmap;
@@ -91,21 +93,58 @@ export interface TimelineClipCanvasWorkerFadeVisualsResource {
 
 export interface TimelineClipCanvasWorkerClip {
   id: string;
-  name: string;
-  x: number;
-  width: number;
-  selected: boolean;
-  hovered: boolean;
-  isAudio?: boolean;
-  waveformEnabled?: boolean;
-  thumbnailStrip?: TimelineClipCanvasWorkerThumbnailStripResource;
-  compositionVisuals?: TimelineClipCanvasWorkerCompositionVisualsResource;
-  trimVisuals?: TimelineClipCanvasWorkerTrimVisualsResource;
-  fadeVisuals?: TimelineClipCanvasWorkerFadeVisualsResource;
-  passiveDecorations?: TimelineClipCanvasWorkerPassiveDecorationsResource;
-  waveform?: TimelineClipCanvasWorkerWaveformResource;
-  spectrogram?: TimelineClipCanvasWorkerSpectrogramResource;
-  midiPreview?: TimelineClipCanvasWorkerMidiPreviewResource;
+  paintPacket: TimelinePaintPacket;
+}
+
+export interface TimelineClipCanvasWorkerThumbnailStripPayload {
+  resourceId: string;
+  resource: TimelineClipCanvasWorkerThumbnailStripResource;
+}
+
+export interface TimelineClipCanvasWorkerWaveformPayload {
+  resourceId: string;
+  resource: TimelineClipCanvasWorkerWaveformResource;
+}
+
+export interface TimelineClipCanvasWorkerSpectrogramPayload {
+  resourceId: string;
+  resource: TimelineClipCanvasWorkerSpectrogramResource;
+}
+
+export interface TimelineClipCanvasWorkerMidiPreviewPayload {
+  resourceId: string;
+  resource: TimelineClipCanvasWorkerMidiPreviewResource;
+}
+
+export interface TimelineClipCanvasWorkerFadeVisualsPayload {
+  resourceId: string;
+  resource: TimelineClipCanvasWorkerFadeVisualsResource;
+}
+
+export interface TimelineClipCanvasWorkerTrimVisualsPayload {
+  facetId: string;
+  resource: TimelineClipCanvasWorkerTrimVisualsResource;
+}
+
+export interface TimelineClipCanvasWorkerPassiveDecorationsPayload {
+  facetId: string;
+  resource: TimelineClipCanvasWorkerPassiveDecorationsResource;
+}
+
+export interface TimelineClipCanvasWorkerCompositionVisualsPayload {
+  facetId: string;
+  resource: TimelineClipCanvasWorkerCompositionVisualsResource;
+}
+
+export interface TimelineClipCanvasWorkerPaintPayloadTable {
+  thumbnailStrips: readonly TimelineClipCanvasWorkerThumbnailStripPayload[];
+  waveforms: readonly TimelineClipCanvasWorkerWaveformPayload[];
+  spectrograms: readonly TimelineClipCanvasWorkerSpectrogramPayload[];
+  midiPreviews: readonly TimelineClipCanvasWorkerMidiPreviewPayload[];
+  fadeVisuals: readonly TimelineClipCanvasWorkerFadeVisualsPayload[];
+  trimVisuals: readonly TimelineClipCanvasWorkerTrimVisualsPayload[];
+  passiveDecorations: readonly TimelineClipCanvasWorkerPassiveDecorationsPayload[];
+  compositionVisuals: readonly TimelineClipCanvasWorkerCompositionVisualsPayload[];
 }
 
 export interface TimelineClipCanvasWorkerInitMessage {
@@ -117,6 +156,8 @@ export interface TimelineClipCanvasWorkerDrawMessage {
   type: 'draw';
   requestId: number;
   clips: TimelineClipCanvasWorkerClip[];
+  paintResources: TimelinePaintResourceTable;
+  paintPayloads: TimelineClipCanvasWorkerPaintPayloadTable;
   height: number;
   cssWidth: number;
   dpr: number;

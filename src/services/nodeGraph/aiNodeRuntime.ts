@@ -19,6 +19,8 @@ import { extractAINodeGeneratedCode } from './aiNodeDefinition';
 import { buildClipNodeGraph } from './clipGraphProjection';
 import { timelineRuntimeCoordinator } from '../timeline/timelineRuntimeCoordinator';
 import type { RenderResourceDescriptor } from '../timeline/runtimeCoordinatorTypes';
+import type { RuntimeProviderDemand } from '../../timeline';
+import { createRenderResourceDescriptorFromDemand } from '../timeline/runtimeProviderDemandBridge';
 import { getCachedTimelineLoudnessEnvelope } from '../audio/timelineLoudnessEnvelopeCache';
 import {
   getCachedTimelineFrequencySummary,
@@ -437,6 +439,12 @@ function getCanvasByteSize(width: number, height: number): number {
   return Math.max(0, Math.round(width) * Math.round(height) * 4);
 }
 
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T;
+}
+
 function getAINodeRuntimeCacheResourceIds(key: string): readonly [string, string] {
   const hash = hashString(key);
   return [
@@ -445,15 +453,15 @@ function getAINodeRuntimeCacheResourceIds(key: string): readonly [string, string
   ];
 }
 
-function getAINodeRuntimeOwner(clip: TimelineClip, source: LayerSource): RenderResourceDescriptor['owner'] {
-  return {
+function getAINodeRuntimeOwner(clip: TimelineClip, source: LayerSource): RuntimeProviderDemand['owner'] {
+  return removeUndefinedValues({
     ownerId: `timeline:ai-node-runtime:${clip.id}`,
-    ownerType: 'clip',
+    ownerType: 'clip' as const,
     clipId: clip.id,
     trackId: clip.trackId,
     compositionId: clip.compositionId,
     mediaFileId: source.mediaFileId ?? clip.source?.mediaFileId ?? clip.mediaFileId,
-  };
+  });
 }
 
 function createAINodeRuntimeCanvasResource(params: {
@@ -467,12 +475,14 @@ function createAINodeRuntimeCanvasResource(params: {
   height: number;
 }): RenderResourceDescriptor {
   const owner = getAINodeRuntimeOwner(params.clip, params.source);
-  return {
+  const demand: RuntimeProviderDemand = {
     id: params.id,
-    kind: 'image-canvas',
+    facetId: `${params.id}:facet`,
+    resourceKind: 'image-canvas',
     policyId: 'interactive',
+    leasePolicy: 'lease-visible',
     owner,
-    source: {
+    source: removeUndefinedValues({
       sourceId: params.source.runtimeSourceId ?? params.source.mediaFileId ?? params.clip.mediaFileId,
       mediaFileId: params.source.mediaFileId ?? params.clip.mediaFileId,
       clipId: params.clip.id,
@@ -480,20 +490,22 @@ function createAINodeRuntimeCanvasResource(params: {
       compositionId: owner.compositionId,
       projectPath: params.source.filePath,
       previewPath: params.source.previewPath,
-    },
-    runtime: params.source.runtimeSourceId && params.source.runtimeSessionKey
-      ? {
-          runtimeSourceId: params.source.runtimeSourceId,
-          runtimeSessionKey: params.source.runtimeSessionKey,
-        }
-      : undefined,
-    imageKind: 'html-canvas',
-    imageId: params.imageId,
+    }),
     dimensions: {
       width: params.width,
       height: params.height,
       durationSeconds: params.clip.duration,
     },
+    priority: 'visible',
+    tags: ['timeline', 'node-graph', 'ai-node-runtime', params.layerId],
+  };
+
+  return createRenderResourceDescriptorFromDemand(demand, {
+    resourceKind: 'image-canvas',
+    imageKind: 'html-canvas',
+    imageId: params.imageId,
+    runtimeSourceId: params.source.runtimeSourceId,
+    runtimeSessionKey: params.source.runtimeSessionKey,
     memoryCost: {
       heapBytes: getCanvasByteSize(params.width, params.height),
     },
@@ -506,8 +518,7 @@ function createAINodeRuntimeCanvasResource(params: {
       },
     },
     label: params.label,
-    tags: ['timeline', 'node-graph', 'ai-node-runtime', params.layerId],
-  };
+  });
 }
 
 function createAINodeRuntimeCanvasResources(params: {

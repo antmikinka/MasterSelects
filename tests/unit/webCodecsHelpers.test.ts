@@ -110,6 +110,24 @@ describe('initWebCodecsPlayer', () => {
 
     expect(player).toBeTruthy();
     expect(timelineRuntimeCoordinator.getBridgeStats().policies.interactive.budgetReport.usage.frameProviders).toBe(1);
+    const retainedResource = timelineRuntimeCoordinator.getBridgeStats().policies.interactive.resources[0];
+    expect(retainedResource).toMatchObject({
+      kind: 'video-frame-provider',
+      policyId: 'interactive',
+      providerKind: 'webcodecs',
+      canSeek: true,
+      canProvideStaleFrame: false,
+      frameFormat: 'video-frame',
+      source: {
+        previewPath: file.name,
+      },
+    });
+    expect(retainedResource?.tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'lease-visible',
+      'timeline-helper',
+      'webcodecs',
+    ]));
 
     player?.destroy?.();
 

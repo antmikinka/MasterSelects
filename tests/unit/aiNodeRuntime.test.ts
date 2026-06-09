@@ -176,6 +176,11 @@ describe('AI node runtime', () => {
         memoryCost: {
           heapBytes: 4 * 2 * 4,
         },
+        tags: expect.arrayContaining([
+          'runtime-provider-demand',
+          'lease-visible',
+          'ai-node-runtime',
+        ]),
       }),
     ]));
 

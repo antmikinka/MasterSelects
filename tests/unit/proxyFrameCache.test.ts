@@ -370,6 +370,12 @@ describe('proxyFrameCache legacy image runtime reporting', () => {
         heapBytes: 320 * 180 * 4 * 2,
       },
     });
+    expect(resource?.tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'background-cache',
+      'proxy-frame-cache',
+      'jpeg-proxy-frame',
+    ]));
     expect(stats.policies.thumbnail.budgetReport.usage.resources).toBe(1);
     expect(stats.policies.thumbnail.budgetReport.usage.imageBitmaps).toBe(1);
 
@@ -452,6 +458,12 @@ describe('proxyFrameCache decoded audio buffer runtime reporting', () => {
         heapBytes: 2 * 48_000 * 2 * 4,
       },
     });
+    expect(resource?.tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'background-cache',
+      'proxy-frame-cache',
+      'decoded-audio-buffer',
+    ]));
 
     proxyFrameCache.clearAudioBufferCache();
 
@@ -551,6 +563,12 @@ describe('proxyFrameCache audio proxy element runtime reporting', () => {
         },
       },
     });
+    expect(resource?.tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'lease-visible',
+      'proxy-frame-cache',
+      'audio-proxy',
+    ]));
 
     proxyFrameCache.releaseAudioProxy('media-proxy');
 
@@ -632,6 +650,12 @@ describe('proxyFrameCache WebCodecs VideoFrame runtime reporting', () => {
         decodedFrameBytes: 160 * 90 * 4 * 2,
       },
     });
+    expect(resource?.tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'background-cache',
+      'proxy-frame-cache',
+      'webcodecs-video-frame',
+    ]));
     expect(stats.policies.interactive.budgetReport.usage.frameProviders).toBe(1);
 
     proxyFrameCache.clearForMedia('video-media');

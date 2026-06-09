@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useMediaStore } from '../../../stores/mediaStore';
-import { useTimelineStore } from '../../../stores/timeline';
 import { formatStemJobPhase, isActiveStemJobPhase } from '../../../stores/timeline/helpers/stemSeparationJobPhases';
 import type { ClipStemSeparationJobStemChoice } from '../../../stores/timeline/types';
 import { ClipStemSwitcher } from '../components/ClipStemSwitcher';
 import { EMPTY_STEM_CHOICES } from '../constants/clipStemConstants';
-import type { ClipInteractionShellCommandContext } from './types';
+import type { ClipInteractionShellCommandContext, ClipInteractionShellCommands } from './types';
 
 interface ClipStemControlsProps {
   context: ClipInteractionShellCommandContext;
+  commands?: ClipInteractionShellCommands;
 }
 
 function getClipSourceMediaFileId(clip: { mediaFileId?: string; source?: { mediaFileId?: string } | null }): string | null {
@@ -37,40 +36,20 @@ function getStemChoices(context: ClipInteractionShellCommandContext): readonly C
     }));
 }
 
-export function ClipStemControls({ context }: ClipStemControlsProps) {
+export function ClipStemControls({ context, commands }: ClipStemControlsProps) {
   const stemModule = context.activeModules.stem;
   const stemJob = stemModule?.job ?? null;
   const activeStemSeparationJob = stemJob && isActiveStemJobPhase(stemJob.phase) ? stemJob : null;
   const [stemMenuOpen, setStemMenuOpen] = useState(false);
   const stemMenuCloseTimerRef = useRef<number | null>(null);
-  const mediaFilesState = useMediaStore((state) => state.files);
-  const mediaFiles = useMemo(
-    () => (Array.isArray(mediaFilesState) ? mediaFilesState : []),
-    [mediaFilesState],
-  );
-  const clips = useTimelineStore((state) => state.clips);
-  const setClipSourceToStem = useTimelineStore((state) => state.setClipSourceToStem);
-  const prewarmStemSourceMediaFiles = useTimelineStore((state) => state.prewarmStemSourceMediaFiles);
   const completedStemChoices = useMemo(() => getStemChoices(context), [context]);
   const hasCompletedStemChoices = completedStemChoices.length > 0;
-  const stemSourceClip = stemJob
-    ? clips.find((clip) => clip.id === stemJob.clipId)
-    : null;
-  let stemSourceMediaFileId = stemJob?.sourceMediaFileId ?? getClipSourceMediaFileId(stemSourceClip ?? context.clip);
-  if (!stemSourceMediaFileId) {
-    for (const stem of completedStemChoices) {
-      const sourceMediaFileId = mediaFiles.find((file) => file.id === stem.mediaFileId)?.stemInfo?.sourceMediaFileId;
-      if (sourceMediaFileId) {
-        stemSourceMediaFileId = sourceMediaFileId;
-        break;
-      }
-    }
-  }
+  const stemSourceClip = stemModule?.sourceClip ?? null;
+  const stemSourceMediaFileId = stemModule?.sourceMediaFileId ??
+    stemJob?.sourceMediaFileId ??
+    getClipSourceMediaFileId(stemSourceClip ?? context.clip);
   const activeStemMediaFileId = getClipSourceMediaFileId(stemSourceClip ?? context.clip) ?? undefined;
-  const hasStemSourceChoice = Boolean(
-    stemSourceMediaFileId &&
-    mediaFiles.some((file) => file.id === stemSourceMediaFileId && file.type === 'audio'),
-  );
+  const hasStemSourceChoice = Boolean(stemSourceMediaFileId);
 
   const clearStemMenuCloseTimer = useCallback(() => {
     if (stemMenuCloseTimerRef.current === null) return;
@@ -84,11 +63,16 @@ export function ClipStemControls({ context }: ClipStemControlsProps) {
     if (stemSourceMediaFileId) {
       mediaFileIds.unshift(stemSourceMediaFileId);
     }
-    prewarmStemSourceMediaFiles(mediaFileIds);
+    commands?.onModuleCommand?.(
+      'stem',
+      { type: 'stem:prewarm-source-media-files', mediaFileIds },
+      context,
+    );
   }, [
+    commands,
     completedStemChoices,
+    context,
     hasCompletedStemChoices,
-    prewarmStemSourceMediaFiles,
     stemSourceMediaFileId,
   ]);
 
@@ -116,8 +100,13 @@ export function ClipStemControls({ context }: ClipStemControlsProps) {
   const handleStemChoiceClick = useCallback((stemMediaFileId: string) => (event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
-    setClipSourceToStem(context.clip.id, stemMediaFileId);
-  }, [context.clip.id, setClipSourceToStem]);
+    commands?.onModuleCommand?.(
+      'stem',
+      { type: 'stem:set-clip-source', stemMediaFileId },
+      context,
+      event,
+    );
+  }, [commands, context]);
 
   const handleStemSwitcherMouseEnter = useCallback(() => {
     clearStemMenuCloseTimer();

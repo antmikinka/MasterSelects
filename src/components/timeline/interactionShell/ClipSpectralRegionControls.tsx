@@ -1,8 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useMediaStore } from '../../../stores/mediaStore';
-import type { MediaFile } from '../../../stores/mediaStore/types';
-import { useTimelineStore } from '../../../stores/timeline';
-import type { TimelineSpectralRegionSelection } from '../../../stores/timeline/types';
 import { ClipSpectralRegionOverlays } from '../components/ClipSpectralRegionOverlays';
 import { isAudioRegionModifierPressed } from '../utils/audioRegionDisplay';
 import {
@@ -15,11 +11,16 @@ import {
   resolveSpectralImageLayerOverlays,
   resolveSpectralRegionOverlay,
 } from '../utils/spectralRegionOverlays';
-import type { ClipInteractionShellCommandContext } from './types';
+import type { ClipInteractionShellCommandContext, ClipInteractionShellCommands } from './types';
 
 interface ClipSpectralRegionControlsProps {
   context: ClipInteractionShellCommandContext;
+  commands?: ClipInteractionShellCommands;
 }
+
+type ClipSpectralRegionSelection = NonNullable<
+  NonNullable<ClipInteractionShellCommandContext['activeModules']['spectralRegion']>['selection']
+>;
 
 type SpectralRegionDragState = {
   anchorTimelineTime: number;
@@ -35,14 +36,6 @@ type SpectralRegionDragState = {
   brushTimeRadiusSeconds?: number;
   brushFrequencyRadiusHz?: number;
 };
-
-function isShellAudioClip(context: ClipInteractionShellCommandContext): boolean {
-  const sourceType = context.clip.source?.type;
-  const fileExt = (context.clip.name || '').split('.').pop()?.toLowerCase() || '';
-  return context.track.type === 'audio' ||
-    sourceType === 'audio' ||
-    ['wav', 'mp3', 'ogg', 'flac', 'aac', 'm4a', 'wma', 'aiff', 'opus'].includes(fileExt);
-}
 
 function timelineTimeFromClientX(context: ClipInteractionShellCommandContext, clientX: number, rectLeft: number, rectWidth: number): number {
   const x = Math.max(0, Math.min(rectWidth, clientX - rectLeft));
@@ -63,7 +56,7 @@ function resolveDragSelection(
   drag: SpectralRegionDragState,
   clientX: number,
   clientY: number,
-): TimelineSpectralRegionSelection {
+): ClipSpectralRegionSelection {
   const focusTimelineTime = timelineTimeFromClientX(context, clientX, drag.rectLeft, drag.rectWidth);
   const focusFrequencyHz = frequencyHzFromSpectralY(clientY - drag.rectTop, drag.rectHeight, drag.maxFrequencyHz);
   const clip = {
@@ -98,60 +91,30 @@ function resolveDragSelection(
   });
 }
 
-function getDroppedImageMediaFileId(dataTransfer: DataTransfer): string | null {
+function getDroppedImageMediaFileId(
+  dataTransfer: DataTransfer,
+  spectralImageFilesById: ReadonlyMap<string, { id: string; type?: string }>,
+): string | null {
   const mediaFileId = dataTransfer.getData('application/x-media-file-id');
   if (!mediaFileId) return null;
-  const file = useMediaStore.getState().files.find(candidate => candidate.id === mediaFileId);
+  const file = spectralImageFilesById.get(mediaFileId);
   return file?.type === 'image' ? file.id : null;
 }
 
-export function ClipSpectralRegionControls({ context }: ClipSpectralRegionControlsProps) {
+export function ClipSpectralRegionControls({ context, commands }: ClipSpectralRegionControlsProps) {
   const spectralRegion = context.activeModules.spectralRegion;
-  const audioFocusMode = useTimelineStore(state => state.audioFocusMode);
-  const audioDisplayMode = useTimelineStore(state => state.audioDisplayMode);
-  const activeTimelineToolId = useTimelineStore(state => state.activeTimelineToolId);
-  const storeSelection = useTimelineStore(state => state.audioSpectralRegionSelection);
-  const setAudioSpectralRegionSelection = useTimelineStore(state => state.setAudioSpectralRegionSelection);
-  const clearAudioSpectralRegionSelection = useTimelineStore(state => state.clearAudioSpectralRegionSelection);
-  const applySpectralRegionEdit = useTimelineStore(state => state.applySpectralRegionEdit);
-  const addClipSpectralImageLayer = useTimelineStore(state => state.addClipSpectralImageLayer);
-  const mediaFilesMaybe = useMediaStore(state => state.files) as unknown;
-  const selectedIdsMaybe = useMediaStore(state => state.selectedIds) as unknown;
-  const mediaFiles = useMemo(
-    () => (Array.isArray(mediaFilesMaybe) ? mediaFilesMaybe : []),
-    [mediaFilesMaybe],
-  );
-  const selectedIds = useMemo(
-    () => (Array.isArray(selectedIdsMaybe) ? selectedIdsMaybe : []),
-    [selectedIdsMaybe],
-  );
   const [drag, setDrag] = useState<SpectralRegionDragState | null>(null);
   const maxFrequencyHz = getSpectralMaxFrequencyHz(undefined);
-  const selection = storeSelection?.clipId === context.clip.id
-    ? storeSelection
-    : spectralRegion?.selection ?? null;
-  const canSelectSpectralRegion = audioFocusMode &&
-    isShellAudioClip(context) &&
-    audioDisplayMode === 'spectral' &&
-    activeTimelineToolId === 'select' &&
-    context.track.locked !== true;
+  const selection = spectralRegion?.selection ?? null;
+  const canSelectSpectralRegion = spectralRegion?.canSelectRegion === true;
 
   const spectralImageFilesById = useMemo(() => {
-    const entries = mediaFiles
-      .filter((file): file is MediaFile => file.type === 'image')
+    const entries = (spectralRegion?.imageMediaFiles ?? [])
+      .filter(file => file.type === 'image')
       .map(file => [file.id, file] as const);
     return new Map(entries);
-  }, [mediaFiles]);
-  const selectedSpectralImageFileId = useMemo(() => {
-    for (const id of selectedIds) {
-      const file = spectralImageFilesById.get(id);
-      if (file?.type === 'image') return file.id;
-    }
-    return null;
-  }, [selectedIds, spectralImageFilesById]);
-  const selectedSpectralImageFile = selectedSpectralImageFileId
-    ? spectralImageFilesById.get(selectedSpectralImageFileId) ?? null
-    : null;
+  }, [spectralRegion?.imageMediaFiles]);
+  const selectedSpectralImageFile = spectralRegion?.selectedImageFile ?? null;
 
   const regionOverlay = useMemo(() => resolveSpectralRegionOverlay({
     selection,
@@ -182,8 +145,13 @@ export function ClipSpectralRegionControls({ context }: ClipSpectralRegionContro
   const handleApplySpectralRegionEdit = useCallback((type: 'spectral-mask' | 'spectral-resynthesis') => (event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    applySpectralRegionEdit(type);
-  }, [applySpectralRegionEdit]);
+    commands?.onModuleCommand?.(
+      'spectral-region',
+      { type: 'spectral-region:apply-edit', editType: type },
+      context,
+      event as React.MouseEvent<HTMLElement>,
+    );
+  }, [commands, context]);
 
   const addSpectralImageLayerFromSelection = useCallback((imageMediaFileId: string) => {
     if (!selection) return null;
@@ -191,19 +159,23 @@ export function ClipSpectralRegionControls({ context }: ClipSpectralRegionContro
     const end = Math.max(selection.sourceInPoint, selection.sourceOutPoint);
     if (end - start <= 0.0005) return null;
 
-    return addClipSpectralImageLayer(context.clip.id, {
-      imageMediaFileId,
-      timeStart: start,
-      duration: end - start,
-      frequencyMin: selection.frequencyMinHz,
-      frequencyMax: selection.frequencyMaxHz,
-      opacity: 0.85,
-      blendMode: 'attenuate',
-      gainDb: -18,
-      featherTime: 0.02,
-      featherFrequency: 80,
-    });
-  }, [addClipSpectralImageLayer, context.clip.id, selection]);
+    commands?.onModuleCommand?.('spectral-region', {
+      type: 'spectral-region:add-image-layer',
+      layer: {
+        imageMediaFileId,
+        timeStart: start,
+        duration: end - start,
+        frequencyMin: selection.frequencyMinHz,
+        frequencyMax: selection.frequencyMaxHz,
+        opacity: 0.85,
+        blendMode: 'attenuate',
+        gainDb: -18,
+        featherTime: 0.02,
+        featherFrequency: 80,
+      },
+    }, context);
+    return true;
+  }, [commands, context, selection]);
 
   const handleAddSelectedImageSpectralLayer = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -235,26 +207,34 @@ export function ClipSpectralRegionControls({ context }: ClipSpectralRegionContro
     };
 
     setDrag(nextDrag);
-    setAudioSpectralRegionSelection(resolveDragSelection(context, nextDrag, event.clientX, event.clientY));
-  }, [canSelectSpectralRegion, context, maxFrequencyHz, setAudioSpectralRegionSelection]);
+    commands?.onModuleCommand?.(
+      'spectral-region',
+      {
+        type: 'spectral-region:set-selection',
+        selection: resolveDragSelection(context, nextDrag, event.clientX, event.clientY),
+      },
+      context,
+      event,
+    );
+  }, [canSelectSpectralRegion, commands, context, maxFrequencyHz]);
 
   const handleSpectralRegionDoubleClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (!isAudioRegionModifierPressed(event)) return;
     event.preventDefault();
     event.stopPropagation();
-    clearAudioSpectralRegionSelection();
-  }, [clearAudioSpectralRegionSelection]);
+    commands?.onModuleCommand?.('spectral-region', { type: 'spectral-region:clear-selection' }, context, event);
+  }, [commands, context]);
 
   const handleSpectralImageLayerDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
-    if (!canSelectSpectralRegion || !getDroppedImageMediaFileId(event.dataTransfer)) return;
+    if (!canSelectSpectralRegion || !getDroppedImageMediaFileId(event.dataTransfer, spectralImageFilesById)) return;
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = 'copy';
-  }, [canSelectSpectralRegion]);
+  }, [canSelectSpectralRegion, spectralImageFilesById]);
 
   const handleSpectralImageLayerDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     if (!canSelectSpectralRegion) return;
-    const imageMediaFileId = getDroppedImageMediaFileId(event.dataTransfer);
+    const imageMediaFileId = getDroppedImageMediaFileId(event.dataTransfer, spectralImageFilesById);
     if (!imageMediaFileId) return;
 
     event.preventDefault();
@@ -284,20 +264,33 @@ export function ClipSpectralRegionControls({ context }: ClipSpectralRegionContro
       maxFrequencyHz,
     });
 
-    addClipSpectralImageLayer(context.clip.id, {
-      imageMediaFileId,
-      timeStart: nextSelection.sourceInPoint,
-      duration: Math.max(0.001, nextSelection.sourceOutPoint - nextSelection.sourceInPoint),
-      frequencyMin: nextSelection.frequencyMinHz,
-      frequencyMax: nextSelection.frequencyMaxHz,
-      opacity: 0.85,
-      blendMode: 'attenuate',
-      gainDb: -18,
-      featherTime: 0.02,
-      featherFrequency: 80,
-    });
-    setAudioSpectralRegionSelection(nextSelection);
-  }, [addClipSpectralImageLayer, canSelectSpectralRegion, context, maxFrequencyHz, setAudioSpectralRegionSelection]);
+    commands?.onModuleCommand?.(
+      'spectral-region',
+      {
+        type: 'spectral-region:add-image-layer',
+        layer: {
+          imageMediaFileId,
+          timeStart: nextSelection.sourceInPoint,
+          duration: Math.max(0.001, nextSelection.sourceOutPoint - nextSelection.sourceInPoint),
+          frequencyMin: nextSelection.frequencyMinHz,
+          frequencyMax: nextSelection.frequencyMaxHz,
+          opacity: 0.85,
+          blendMode: 'attenuate',
+          gainDb: -18,
+          featherTime: 0.02,
+          featherFrequency: 80,
+        },
+      },
+      context,
+      event,
+    );
+    commands?.onModuleCommand?.(
+      'spectral-region',
+      { type: 'spectral-region:set-selection', selection: nextSelection },
+      context,
+      event,
+    );
+  }, [canSelectSpectralRegion, commands, context, maxFrequencyHz, spectralImageFilesById]);
 
   useEffect(() => {
     if (!drag || !canSelectSpectralRegion) return;
@@ -308,7 +301,14 @@ export function ClipSpectralRegionControls({ context }: ClipSpectralRegionContro
         return;
       }
       event.preventDefault();
-      setAudioSpectralRegionSelection(resolveDragSelection(context, drag, event.clientX, event.clientY));
+      commands?.onModuleCommand?.(
+        'spectral-region',
+        {
+          type: 'spectral-region:set-selection',
+          selection: resolveDragSelection(context, drag, event.clientX, event.clientY),
+        },
+        context,
+      );
     };
 
     const handleDocumentMouseUp = (event: MouseEvent) => {
@@ -317,7 +317,7 @@ export function ClipSpectralRegionControls({ context }: ClipSpectralRegionContro
         Math.abs(event.clientX - drag.startClientX) < 3 &&
         Math.abs(event.clientY - drag.startClientY) < 3
       ) {
-        clearAudioSpectralRegionSelection();
+        commands?.onModuleCommand?.('spectral-region', { type: 'spectral-region:clear-selection' }, context);
       }
       setDrag(null);
     };
@@ -329,7 +329,7 @@ export function ClipSpectralRegionControls({ context }: ClipSpectralRegionContro
       document.removeEventListener('mousemove', handleDocumentMouseMove);
       document.removeEventListener('mouseup', handleDocumentMouseUp);
     };
-  }, [canSelectSpectralRegion, clearAudioSpectralRegionSelection, context, drag, setAudioSpectralRegionSelection]);
+  }, [canSelectSpectralRegion, commands, context, drag]);
 
   if (!spectralRegion?.enabled || (!regionOverlay && imageLayerOverlays.length === 0 && !canSelectSpectralRegion)) {
     return null;

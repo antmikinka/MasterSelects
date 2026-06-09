@@ -1,4 +1,5 @@
 import type { TimelineClip } from '../../types';
+import type { RuntimeProviderDemand } from '../../timeline';
 import type { VectorAnimationProvider } from '../../types/vectorAnimation';
 import type {
   RenderResourceDescriptor,
@@ -6,6 +7,7 @@ import type {
   TimelineRuntimeAdmissionDecision,
   TimelineRuntimePolicyId,
 } from '../timeline/runtimeCoordinatorTypes';
+import { createRenderResourceDescriptorFromDemand } from '../timeline/runtimeProviderDemandBridge';
 import { timelineRuntimeCoordinator } from '../timeline/timelineRuntimeCoordinator';
 
 export interface VectorRuntimePrepareOptions {
@@ -36,18 +38,34 @@ function normalizeDimension(value: number | undefined): number {
   return Number.isFinite(value) && (value ?? 0) > 0 ? Math.round(value!) : 512;
 }
 
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T;
+}
+
+function getLeasePolicy(policyId: TimelineRuntimePolicyId): RuntimeProviderDemand['leasePolicy'] {
+  if (policyId === 'interactive' || policyId === 'slot-deck') {
+    return 'lease-visible';
+  }
+  if (policyId === 'export') {
+    return 'retain-until-release';
+  }
+  return 'background-cache';
+}
+
 function getOwner(
   clip: TimelineClip,
   options: VectorRuntimePrepareOptions,
-): RuntimeResourceOwnerDescriptor {
-  return {
+): RuntimeProviderDemand['owner'] {
+  return removeUndefinedValues({
     ownerId: options.ownerId ?? `vector-runtime:${clip.id}`,
     ownerType: options.ownerType ?? 'clip',
     clipId: clip.id,
     trackId: clip.trackId,
     compositionId: options.compositionId ?? clip.compositionId,
     mediaFileId: clip.source?.mediaFileId ?? clip.mediaFileId,
-  };
+  });
 }
 
 export function createVectorRuntimeCanvasResource(params: {
@@ -65,46 +83,50 @@ export function createVectorRuntimeCanvasResource(params: {
   const resourceId = options.resourceId
     ?? `timeline-runtime:${policyId}:${owner.ownerId}:image-canvas:text-canvas`;
 
-  return {
+  const imageId = options.imageId ?? `${owner.ownerId}:text-canvas`;
+  const demand: RuntimeProviderDemand = {
     id: resourceId,
-    kind: 'image-canvas',
+    facetId: `${resourceId}:facet`,
+    resourceKind: 'image-canvas',
     policyId,
+    leasePolicy: getLeasePolicy(policyId),
     owner,
-    source: {
+    source: removeUndefinedValues({
       sourceId: params.clip.source?.runtimeSourceId ?? params.clip.source?.mediaFileId ?? params.clip.mediaFileId,
       mediaFileId: params.clip.source?.mediaFileId ?? params.clip.mediaFileId,
       clipId: params.clip.id,
       trackId: params.clip.trackId,
       compositionId: owner.compositionId,
       projectPath: params.clip.source?.filePath,
-    },
-    runtime: params.clip.source?.runtimeSourceId && params.clip.source.runtimeSessionKey
-      ? {
-          runtimeSourceId: params.clip.source.runtimeSourceId,
-          runtimeSessionKey: params.clip.source.runtimeSessionKey,
-        }
-      : undefined,
-    imageKind: 'html-canvas',
-    imageId: options.imageId ?? `${owner.ownerId}:text-canvas`,
+    }),
     dimensions: {
       width,
       height,
       durationSeconds: params.clip.source?.naturalDuration ?? params.clip.duration,
     },
+    priority: policyId === 'interactive' || policyId === 'slot-deck' ? 'visible' : 'background',
+    tags: options.tags ?? ['vector-runtime', params.provider],
+  };
+
+  return createRenderResourceDescriptorFromDemand(demand, {
+    resourceKind: 'image-canvas',
+    imageKind: 'html-canvas',
+    imageId,
+    runtimeSourceId: params.clip.source?.runtimeSourceId,
+    runtimeSessionKey: params.clip.source?.runtimeSessionKey,
     memoryCost: {
       heapBytes: width * height * 4,
     },
     diagnostics: {
       status: 'unknown',
       provider: {
-        providerId: options.imageId ?? `${owner.ownerId}:text-canvas`,
+        providerId: imageId,
         providerKind: 'canvas',
         status: 'unknown',
       },
     },
     label: options.label ?? `${params.provider === 'lottie' ? 'Lottie' : 'Rive'} runtime canvas`,
-    tags: options.tags ?? ['vector-runtime', params.provider],
-  };
+  });
 }
 
 export function reserveVectorRuntimeCanvasResource(params: {

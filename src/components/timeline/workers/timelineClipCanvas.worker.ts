@@ -9,23 +9,28 @@
 // fresh per-draw strip ImageBitmaps, plus waveform/spectrogram numeric data.
 
 import type {
-  TimelineClipCanvasWorkerAnalysisOverlayResource as WorkerAnalysisOverlayResource,
   TimelineClipCanvasWorkerClip as WorkerPlainClip,
   TimelineClipCanvasWorkerDrawMessage as DrawMessage,
   TimelineClipCanvasWorkerDrawnMessage as DrawnMessage,
   TimelineClipCanvasWorkerIncomingMessage as IncomingMessage,
   TimelineClipCanvasWorkerMidiPreviewResource as WorkerMidiPreviewResource,
   TimelineClipCanvasWorkerOutgoingMessage as OutgoingMessage,
-  TimelineClipCanvasWorkerPassiveBadge as WorkerPassiveBadge,
-  TimelineClipCanvasWorkerProgressBar as WorkerProgressBar,
+  TimelineClipCanvasWorkerPaintPayloadTable as WorkerPaintPayloadTable,
   TimelineClipCanvasWorkerSourceExtensionGhostResource as WorkerSourceExtensionGhost,
   TimelineClipCanvasWorkerWaveformResource as WorkerWaveformResource,
 } from '../utils/timelineClipCanvasWorkerContract';
+import type { TimelinePaintFacetKind, TimelinePaintResourceRef } from '../../../timeline';
 import {
   TIMELINE_CLIP_CANVAS_LOD_BAR_PX,
   TIMELINE_CLIP_CANVAS_LOD_LABEL_PX,
 } from '../timelineRenderConstants';
 import { writeTimelineSpectralColor } from '../utils/spectralColor';
+import { drawWorkerPassiveDecorations } from './timelineClipCanvasWorkerPassivePainter';
+import { estimateWorkerPayloadResourceBytes } from './timelineClipCanvasWorkerPayloadMetrics';
+import {
+  drawWorkerWaveformCenterLine,
+  drawWorkerWaveformColumns,
+} from './timelineClipCanvasWorkerWaveformPainter';
 
 const LOD_BAR_PX = TIMELINE_CLIP_CANVAS_LOD_BAR_PX;
 const LOD_LABEL_PX = TIMELINE_CLIP_CANVAS_LOD_LABEL_PX;
@@ -54,113 +59,67 @@ function withAlpha(color: string, alpha: number): string {
   return color;
 }
 
-function drawWaveformCenterLine(
-  context: OffscreenCanvasRenderingContext2D,
-  width: number,
-  height: number,
-  alpha = 0.16,
-): void {
-  const midY = height / 2;
-  context.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
-  context.lineWidth = 1;
-  context.beginPath();
-  context.moveTo(0, midY);
-  context.lineTo(width, midY);
-  context.stroke();
-}
-
-function drawWaveformColumns(
-  context: OffscreenCanvasRenderingContext2D,
-  columns: Float32Array,
-  columnCount: number,
-  width: number,
-  height: number,
-  mode: WorkerWaveformResource['mode'],
-): void {
-  if (columnCount <= 0 || columns.length < columnCount * 4) {
-    drawWaveformCenterLine(context, width, height, 0.18);
-    return;
-  }
-
-  const midY = height / 2;
-  const halfHeight = Math.max(1, (height - 6) / 2);
-  const xAt = (index: number) => {
-    if (columnCount <= 1) return width / 2;
-    return (index / (columnCount - 1)) * width;
-  };
-  const columnAt = (index: number) => {
-    const offset = index * 4;
-    return {
-      min: columns[offset] ?? 0,
-      max: columns[offset + 1] ?? 0,
-      rms: columns[offset + 2] ?? 0,
-      peak: columns[offset + 3] ?? 0,
-    };
-  };
-
-  context.beginPath();
-  for (let index = 0; index < columnCount; index += 1) {
-    const column = columnAt(index);
-    const x = xAt(index);
-    const y = midY - Math.max(column.max, column.peak * 0.04, 0) * halfHeight;
-    if (index === 0) {
-      context.moveTo(x, y);
-    } else {
-      const previousX = xAt(index - 1);
-      const previousY = midY - Math.max(columnAt(index - 1).max, columnAt(index - 1).peak * 0.04, 0) * halfHeight;
-      context.quadraticCurveTo(previousX, previousY, (previousX + x) / 2, (previousY + y) / 2);
-    }
-  }
-  context.lineTo(width, midY + Math.max(-columnAt(columnCount - 1).min, columnAt(columnCount - 1).peak * 0.04, 0) * halfHeight);
-  for (let index = columnCount - 1; index >= 0; index -= 1) {
-    const column = columnAt(index);
-    const x = xAt(index);
-    const y = midY + Math.max(-column.min, column.peak * 0.04, 0) * halfHeight;
-    if (index === columnCount - 1) {
-      context.lineTo(x, y);
-    } else {
-      const nextX = xAt(index + 1);
-      const nextY = midY + Math.max(-columnAt(index + 1).min, columnAt(index + 1).peak * 0.04, 0) * halfHeight;
-      context.quadraticCurveTo(nextX, nextY, (nextX + x) / 2, (nextY + y) / 2);
-    }
-  }
-  context.closePath();
-  context.fillStyle = mode === 'compact'
-    ? 'rgba(235, 241, 248, 0.62)'
-    : 'rgba(178, 230, 255, 0.36)';
-  context.fill();
-
-  if (mode === 'detailed') {
-    context.beginPath();
-    for (let index = 0; index < columnCount; index += 1) {
-      const column = columnAt(index);
-      const x = xAt(index);
-      const y = midY - Math.min(column.rms * 0.84, column.peak * 0.72) * halfHeight;
-      if (index === 0) {
-        context.moveTo(x, y);
-      } else {
-        context.lineTo(x, y);
-      }
-    }
-    context.strokeStyle = 'rgba(216, 240, 255, 0.42)';
-    context.lineWidth = 1;
-    context.stroke();
-  }
-
-  drawWaveformCenterLine(context, width, height, mode === 'compact' ? 0.12 : 0.16);
-}
-
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
+}
+
+function workerClipPaintX(clip: WorkerPlainClip): number {
+  return clip.paintPacket.bodyRect.x;
+}
+
+function workerClipPaintWidth(clip: WorkerPlainClip): number {
+  return clip.paintPacket.bodyRect.width;
+}
+
+type WorkerPaintResourceById = ReadonlyMap<string, TimelinePaintResourceRef>;
+type WorkerThumbnailPayloadByResourceId = ReadonlyMap<string, WorkerPaintPayloadTable['thumbnailStrips'][number]['resource']>;
+type WorkerWaveformPayloadByResourceId = ReadonlyMap<string, WorkerPaintPayloadTable['waveforms'][number]['resource']>;
+type WorkerSpectrogramPayloadByResourceId = ReadonlyMap<string, WorkerPaintPayloadTable['spectrograms'][number]['resource']>;
+type WorkerMidiPreviewPayloadByResourceId = ReadonlyMap<string, WorkerPaintPayloadTable['midiPreviews'][number]['resource']>;
+type WorkerFadeVisualsPayloadByResourceId = ReadonlyMap<string, WorkerPaintPayloadTable['fadeVisuals'][number]['resource']>;
+type WorkerTrimVisualsPayloadByFacetId = ReadonlyMap<string, WorkerPaintPayloadTable['trimVisuals'][number]['resource']>;
+type WorkerCompositionVisualsPayloadByFacetId = ReadonlyMap<
+  string,
+  WorkerPaintPayloadTable['compositionVisuals'][number]['resource']
+>;
+
+function workerClipPaintFacet(clip: WorkerPlainClip, kind: TimelinePaintFacetKind) {
+  return clip.paintPacket.facets.find((facet) => facet.kind === kind);
+}
+
+function workerClipHasPaintResource(
+  clip: WorkerPlainClip,
+  kind: TimelinePaintFacetKind,
+  resourceById: WorkerPaintResourceById,
+  resourceKind: TimelinePaintResourceRef['kind'],
+): boolean {
+  const facet = workerClipPaintFacet(clip, kind);
+  if (!facet) return false;
+  if (facet.resourceRefIds.length === 0) return true;
+  return facet.resourceRefIds.some((resourceId) => resourceById.get(resourceId)?.kind === resourceKind);
+}
+
+function workerClipPaintResourceId(
+  clip: WorkerPlainClip,
+  kind: TimelinePaintFacetKind,
+  resourceById: WorkerPaintResourceById,
+  resourceKind: TimelinePaintResourceRef['kind'],
+): string | undefined {
+  const facet = workerClipPaintFacet(clip, kind);
+  return facet?.resourceRefIds.find((resourceId) => resourceById.get(resourceId)?.kind === resourceKind);
 }
 
 function drawClipThumbnailStrip(
   context: OffscreenCanvasRenderingContext2D,
   clip: WorkerPlainClip,
   top: number,
+  resourceById: WorkerPaintResourceById,
+  thumbnailPayloadByResourceId: WorkerThumbnailPayloadByResourceId,
 ): number {
-  const strip = clip.thumbnailStrip;
+  const resourceId = workerClipPaintResourceId(clip, 'thumbnail-strip', resourceById, 'thumbnail-bitmap');
+  if (!resourceId) return 0;
+  const strip = thumbnailPayloadByResourceId.get(resourceId);
   if (!strip || strip.width <= 0 || strip.height <= 0) return 0;
 
   context.save();
@@ -187,8 +146,12 @@ function drawClipSpectrogram(
   clip: WorkerPlainClip,
   top: number,
   height: number,
+  resourceById: WorkerPaintResourceById,
+  spectrogramPayloadByResourceId: WorkerSpectrogramPayloadByResourceId,
 ): void {
-  const spectrogram = clip.spectrogram;
+  const resourceId = workerClipPaintResourceId(clip, 'spectrogram', resourceById, 'spectrogram-raster');
+  if (!resourceId) return;
+  const spectrogram = spectrogramPayloadByResourceId.get(resourceId);
   if (!spectrogram || spectrogram.rasterWidth <= 0 || spectrogram.rasterHeight <= 0) return;
 
   const expectedLength = spectrogram.rasterWidth * spectrogram.rasterHeight;
@@ -205,8 +168,8 @@ function drawClipSpectrogram(
   if (!bitmapCtx) return;
   bitmapCtx.putImageData(image, 0, 0);
 
-  const x = clip.x;
-  const w = clip.width;
+  const x = workerClipPaintX(clip);
+  const w = workerClipPaintWidth(clip);
   const h = height - 2;
   context.save();
   context.beginPath();
@@ -221,10 +184,14 @@ function drawClipWaveform(
   clip: WorkerPlainClip,
   top: number,
   height: number,
+  resourceById: WorkerPaintResourceById,
+  waveformPayloadByResourceId: WorkerWaveformPayloadByResourceId,
 ): void {
-  if (!clip.waveformEnabled) return;
-  const x = clip.x;
-  const w = clip.width;
+  if (!workerClipHasPaintResource(clip, 'waveform', resourceById, 'waveform-columns')) return;
+  const waveformResourceId = workerClipPaintResourceId(clip, 'waveform', resourceById, 'waveform-columns');
+  const waveform = waveformResourceId ? waveformPayloadByResourceId.get(waveformResourceId) : undefined;
+  const x = workerClipPaintX(clip);
+  const w = workerClipPaintWidth(clip);
   const h = height - 2;
   context.save();
   context.beginPath();
@@ -233,22 +200,28 @@ function drawClipWaveform(
   context.fillStyle = 'rgba(4, 10, 18, 0.24)';
   context.fillRect(x, top, w, h);
   context.translate(x, top);
-  if (clip.waveform) {
-    drawWaveformColumns(context, clip.waveform.columns, clip.waveform.columnCount, w, h, clip.waveform.mode);
+  if (waveform) {
+    drawWorkerWaveformColumns(context, waveform.columns, waveform.columnCount, w, h, waveform.mode);
   } else {
-    drawWaveformCenterLine(context, w, h, 0.18);
+    drawWorkerWaveformCenterLine(context, w, h, 0.18);
   }
   context.restore();
 }
 
 function drawWorkerMidiPreview(
   context: OffscreenCanvasRenderingContext2D,
+  clip: WorkerPlainClip,
   midiPreview: WorkerMidiPreviewResource | undefined,
   x: number,
   top: number,
   width: number,
   height: number,
+  resourceById: WorkerPaintResourceById,
+  midiPayloadByResourceId: WorkerMidiPreviewPayloadByResourceId,
 ): void {
+  const resourceId = workerClipPaintResourceId(clip, 'midi-preview', resourceById, 'midi-bars');
+  if (!resourceId) return;
+  midiPreview = midiPayloadByResourceId.get(resourceId);
   if (!midiPreview || midiPreview.barCount <= 0 || midiPreview.bars.length < midiPreview.barCount * 5) {
     return;
   }
@@ -340,7 +313,7 @@ function drawWorkerCompositionMixdownWaveform(
   context.rect(x, waveformTop, width, waveformHeight);
   context.clip();
   context.translate(x, waveformTop);
-  drawWaveformColumns(context, waveform.columns, waveform.columnCount, width, waveformHeight, 'compact');
+  drawWorkerWaveformColumns(context, waveform.columns, waveform.columnCount, width, waveformHeight, 'compact');
   context.restore();
 }
 
@@ -368,11 +341,14 @@ function drawWorkerCompositionDecorations(
   clip: WorkerPlainClip,
   top: number,
   height: number,
+  compositionVisualsPayloadByFacetId: WorkerCompositionVisualsPayloadByFacetId,
 ): number {
-  const composition = clip.compositionVisuals;
+  const facet = workerClipPaintFacet(clip, 'composition-visuals');
+  if (!facet) return 0;
+  const composition = compositionVisualsPayloadByFacetId.get(facet.id);
   if (!composition) return 0;
-  const x = clip.x;
-  const width = clip.width;
+  const x = workerClipPaintX(clip);
+  const width = workerClipPaintWidth(clip);
   const bodyHeight = height - 2;
   let thumbnailDrawCount = 0;
 
@@ -406,201 +382,6 @@ function drawWorkerCompositionDecorations(
     drawWorkerCompositionOutline(context, x, top, width, bodyHeight);
   }
   return thumbnailDrawCount;
-}
-
-function drawWorkerClipProgressBars(
-  context: OffscreenCanvasRenderingContext2D,
-  bars: readonly WorkerProgressBar[] | undefined,
-  x: number,
-  top: number,
-  width: number,
-): void {
-  if (!bars || bars.length === 0 || width < 10) return;
-
-  bars.slice(0, 3).forEach((bar, index) => {
-    const y = top + 3 + index * 3;
-    const progress = Math.max(0.02, Math.min(1, bar.progress / 100));
-    context.fillStyle = 'rgba(15, 23, 42, 0.5)';
-    context.fillRect(x + 4, y, Math.max(0, width - 8), 2);
-    context.fillStyle = bar.color;
-    context.fillRect(x + 4, y, Math.max(1, (width - 8) * progress), 2);
-  });
-}
-
-function drawWorkerClipBadges(
-  context: OffscreenCanvasRenderingContext2D,
-  badges: readonly WorkerPassiveBadge[] | undefined,
-  x: number,
-  top: number,
-  width: number,
-): void {
-  if (!badges || badges.length === 0 || width < 28) return;
-
-  context.save();
-  context.font = '9px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif';
-  context.textAlign = 'center';
-  context.textBaseline = 'middle';
-
-  let right = x + width - 5;
-  for (let index = badges.length - 1; index >= 0; index -= 1) {
-    const badge = badges[index];
-    const badgeW = Math.max(14, badge.label.length * 6 + 8);
-    const left = right - badgeW;
-    if (left < x + 4) break;
-
-    context.beginPath();
-    context.roundRect(left, top + 4, badgeW, 14, 3);
-    context.fillStyle = badge.fill;
-    context.fill();
-    if (badge.stroke) {
-      context.strokeStyle = badge.stroke;
-      context.lineWidth = 1;
-      context.stroke();
-    }
-    context.fillStyle = 'rgba(255, 255, 255, 0.96)';
-    context.fillText(badge.label, left + badgeW / 2, top + 11);
-    right = left - 3;
-  }
-
-  context.restore();
-}
-
-function drawWorkerTranscriptMarkers(
-  context: OffscreenCanvasRenderingContext2D,
-  markers: Float32Array | undefined,
-  x: number,
-  top: number,
-  width: number,
-  height: number,
-): void {
-  if (!markers || markers.length < 2 || width < 18) return;
-  const markerTop = top + Math.max(4, height - 7);
-  context.fillStyle = 'rgba(129, 140, 248, 0.82)';
-  for (let index = 0; index + 1 < markers.length; index += 2) {
-    const startRatio = Math.max(0, Math.min(1, markers[index] ?? 0));
-    const endRatio = Math.max(startRatio, Math.min(1, markers[index + 1] ?? startRatio));
-    const left = x + startRatio * width;
-    const right = x + endRatio * width;
-    context.fillRect(left, markerTop, Math.max(1, right - left), 2);
-  }
-}
-
-function drawWorkerAnalysisSeries(
-  context: OffscreenCanvasRenderingContext2D,
-  points: Float32Array,
-  pointCount: number,
-  valueOffset: number,
-  x: number,
-  width: number,
-  graphTop: number,
-  graphHeight: number,
-  stroke: string,
-  fill: string,
-): void {
-  const yForPoint = (index: number) => {
-    const value = clamp01(points[index * 4 + valueOffset] ?? 0);
-    return graphTop + graphHeight - value * graphHeight * 0.82;
-  };
-  const xForPoint = (index: number) => {
-    const ratio = clamp01(points[index * 4] ?? 0);
-    return x + ratio * width;
-  };
-
-  context.beginPath();
-  context.moveTo(xForPoint(0), graphTop + graphHeight);
-  for (let index = 0; index < pointCount; index += 1) {
-    context.lineTo(xForPoint(index), yForPoint(index));
-  }
-  context.lineTo(xForPoint(pointCount - 1), graphTop + graphHeight);
-  context.closePath();
-  context.fillStyle = fill;
-  context.fill();
-
-  context.beginPath();
-  for (let index = 0; index < pointCount; index += 1) {
-    const px = xForPoint(index);
-    const py = yForPoint(index);
-    if (index === 0) {
-      context.moveTo(px, py);
-    } else {
-      context.lineTo(px, py);
-    }
-  }
-  context.strokeStyle = stroke;
-  context.lineWidth = 1.2;
-  context.stroke();
-}
-
-function drawWorkerAnalysisOverlay(
-  context: OffscreenCanvasRenderingContext2D,
-  overlay: WorkerAnalysisOverlayResource | undefined,
-  x: number,
-  top: number,
-  width: number,
-  height: number,
-): void {
-  if (!overlay || width < 24) return;
-  const pointCount = Math.min(overlay.pointCount, Math.floor(overlay.points.length / 4));
-  if (pointCount < 2) return;
-
-  const graphTop = top + Math.max(12, height * 0.28);
-  const graphHeight = Math.max(8, height - (graphTop - top) - 8);
-  context.save();
-  context.lineCap = 'round';
-  context.lineJoin = 'round';
-  drawWorkerAnalysisSeries(
-    context,
-    overlay.points,
-    pointCount,
-    1,
-    x,
-    width,
-    graphTop,
-    graphHeight,
-    'rgba(34, 197, 94, 0.82)',
-    'rgba(34, 197, 94, 0.12)',
-  );
-  drawWorkerAnalysisSeries(
-    context,
-    overlay.points,
-    pointCount,
-    2,
-    x,
-    width,
-    graphTop,
-    graphHeight,
-    'rgba(59, 130, 246, 0.72)',
-    'rgba(59, 130, 246, 0.10)',
-  );
-
-  context.fillStyle = 'rgba(250, 204, 21, 0.82)';
-  for (let index = 0; index < pointCount; index += 1) {
-    if ((overlay.points[index * 4 + 3] ?? 0) <= 0) continue;
-    const px = x + clamp01(overlay.points[index * 4] ?? 0) * width;
-    context.beginPath();
-    context.arc(px, top + 7, 2, 0, Math.PI * 2);
-    context.fill();
-  }
-  context.restore();
-}
-
-function drawWorkerPassiveDecorations(
-  context: OffscreenCanvasRenderingContext2D,
-  clip: WorkerPlainClip,
-  top: number,
-  height: number,
-): void {
-  const decorations = clip.passiveDecorations;
-  if (!decorations) return;
-  context.save();
-  context.beginPath();
-  context.roundRect(clip.x, top, clip.width, height - 2, Math.min(4, (height - 2) / 4));
-  context.clip();
-  drawWorkerAnalysisOverlay(context, decorations.analysisOverlay, clip.x, top, clip.width, height - 2);
-  drawWorkerTranscriptMarkers(context, decorations.transcriptMarkers, clip.x, top, clip.width, height - 2);
-  drawWorkerClipProgressBars(context, decorations.progressBars, clip.x, top, clip.width);
-  drawWorkerClipBadges(context, decorations.badges, clip.x, top, clip.width);
-  context.restore();
 }
 
 function drawWorkerSourceExtensionGhost(
@@ -656,8 +437,11 @@ function drawWorkerTrimVisuals(
   clip: WorkerPlainClip,
   top: number,
   height: number,
+  trimPayloadByFacetId: WorkerTrimVisualsPayloadByFacetId,
 ): void {
-  const ghosts = clip.trimVisuals?.sourceExtensionGhosts;
+  const facet = workerClipPaintFacet(clip, 'trim-visuals');
+  if (!facet) return;
+  const ghosts = trimPayloadByFacetId.get(facet.id)?.sourceExtensionGhosts;
   if (!ghosts || ghosts.length === 0) return;
   ghosts.forEach((ghost) => drawWorkerSourceExtensionGhost(context, ghost, top, height - 2));
 }
@@ -667,13 +451,17 @@ function drawWorkerFadeVisuals(
   clip: WorkerPlainClip,
   top: number,
   height: number,
+  resourceById: WorkerPaintResourceById,
+  fadePayloadByResourceId: WorkerFadeVisualsPayloadByResourceId,
 ): void {
-  const fade = clip.fadeVisuals;
+  const resourceId = workerClipPaintResourceId(clip, 'fade-visuals', resourceById, 'fade-curve-points');
+  if (!resourceId) return;
+  const fade = fadePayloadByResourceId.get(resourceId);
   if (!fade || fade.curveCount <= 0 || fade.curves.length < fade.curveCount * 6) return;
   const bodyHeight = height - 2;
 
   context.save();
-  context.translate(clip.x, top);
+  context.translate(workerClipPaintX(clip), top);
   context.lineCap = 'round';
   context.lineJoin = 'round';
 
@@ -727,27 +515,6 @@ function drawWorkerFadeVisuals(
   context.restore();
 }
 
-function estimateWorkerClipResourceBytes(clip: WorkerPlainClip): number {
-  const thumbnailBytes = clip.thumbnailStrip
-    ? clip.thumbnailStrip.bitmap.width * clip.thumbnailStrip.bitmap.height * 4
-    : 0;
-  const compositionThumbnailBytes = clip.compositionVisuals?.segmentThumbnailStrip
-    ? clip.compositionVisuals.segmentThumbnailStrip.bitmap.width * clip.compositionVisuals.segmentThumbnailStrip.bitmap.height * 4
-    : 0;
-  return thumbnailBytes +
-    compositionThumbnailBytes +
-    (clip.compositionVisuals?.nestedBoundaries?.byteLength ?? 0) +
-    (clip.compositionVisuals?.segmentRects?.byteLength ?? 0) +
-    (clip.compositionVisuals?.mixdownWaveform?.columns.byteLength ?? 0) +
-    (clip.passiveDecorations?.transcriptMarkers?.byteLength ?? 0) +
-    (clip.passiveDecorations?.analysisOverlay?.points.byteLength ?? 0) +
-    (clip.fadeVisuals?.curves.byteLength ?? 0) +
-    (clip.fadeVisuals?.points.byteLength ?? 0) +
-    (clip.waveform?.columns.byteLength ?? 0) +
-    (clip.midiPreview?.bars.byteLength ?? 0) +
-    (clip.spectrogram?.values.byteLength ?? 0);
-}
-
 function draw(msg: DrawMessage): DrawnMessage {
   if (!canvas || !ctx) {
     throw new Error('worker canvas is not initialized');
@@ -768,13 +535,40 @@ function draw(msg: DrawMessage): DrawnMessage {
   ctx.font = '11px ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif';
   ctx.textBaseline = 'middle';
 
-  const transferredResourceBytes = clips.reduce((total, clip) => total + estimateWorkerClipResourceBytes(clip), 0);
+  const paintResourceById = new Map(msg.paintResources.resources.map((resource) => [resource.id, resource]));
+  const thumbnailPayloadByResourceId = new Map(
+    msg.paintPayloads.thumbnailStrips.map((payload) => [payload.resourceId, payload.resource]),
+  );
+  const waveformPayloadByResourceId = new Map(
+    msg.paintPayloads.waveforms.map((payload) => [payload.resourceId, payload.resource]),
+  );
+  const spectrogramPayloadByResourceId = new Map(
+    msg.paintPayloads.spectrograms.map((payload) => [payload.resourceId, payload.resource]),
+  );
+  const midiPayloadByResourceId = new Map(
+    msg.paintPayloads.midiPreviews.map((payload) => [payload.resourceId, payload.resource]),
+  );
+  const fadePayloadByResourceId = new Map(
+    msg.paintPayloads.fadeVisuals.map((payload) => [payload.resourceId, payload.resource]),
+  );
+  const trimPayloadByFacetId = new Map(
+    msg.paintPayloads.trimVisuals.map((payload) => [payload.facetId, payload.resource]),
+  );
+  const passiveDecorationsPayloadByFacetId = new Map(
+    msg.paintPayloads.passiveDecorations.map((payload) => [payload.facetId, payload.resource]),
+  );
+  const compositionVisualsPayloadByFacetId = new Map(
+    msg.paintPayloads.compositionVisuals.map((payload) => [payload.facetId, payload.resource]),
+  );
+  const transferredResourceBytes = estimateWorkerPayloadResourceBytes(msg.paintPayloads);
   let thumbnailClipCount = 0;
   let thumbnailDrawCount = 0;
   for (const clip of clips) {
-    const x = clip.x;
-    const w = clip.width;
-    const isSel = clip.selected;
+    const x = workerClipPaintX(clip);
+    const w = workerClipPaintWidth(clip);
+    const isSel = clip.paintPacket.state.selected;
+    const isHovered = clip.paintPacket.state.hovered;
+    const label = clip.paintPacket.label;
     if (w < LOD_BAR_PX) {
       ctx.fillStyle = isSel ? fillSelected : fill;
       ctx.fillRect(x, 1, Math.max(1, w), height - 2);
@@ -786,33 +580,39 @@ function draw(msg: DrawMessage): DrawnMessage {
     ctx.roundRect(x, top, w, h, radius);
     ctx.fillStyle = isSel ? fillSelected : fill;
     ctx.fill();
-    if (clip.thumbnailStrip) {
+    if (workerClipPaintResourceId(clip, 'thumbnail-strip', paintResourceById, 'thumbnail-bitmap')) {
       thumbnailClipCount += 1;
-      thumbnailDrawCount += drawClipThumbnailStrip(ctx, clip, top);
+      thumbnailDrawCount += drawClipThumbnailStrip(ctx, clip, top, paintResourceById, thumbnailPayloadByResourceId);
     }
-    drawWorkerMidiPreview(ctx, clip.midiPreview, x, top, w, height);
-    drawClipSpectrogram(ctx, clip, top, height);
-    drawClipWaveform(ctx, clip, top, height);
-    const compositionThumbnailDraws = drawWorkerCompositionDecorations(ctx, clip, top, height);
+    drawWorkerMidiPreview(ctx, clip, undefined, x, top, w, height, paintResourceById, midiPayloadByResourceId);
+    drawClipSpectrogram(ctx, clip, top, height, paintResourceById, spectrogramPayloadByResourceId);
+    drawClipWaveform(ctx, clip, top, height, paintResourceById, waveformPayloadByResourceId);
+    const compositionThumbnailDraws = drawWorkerCompositionDecorations(
+      ctx,
+      clip,
+      top,
+      height,
+      compositionVisualsPayloadByFacetId,
+    );
     if (compositionThumbnailDraws > 0) {
       thumbnailClipCount += 1;
       thumbnailDrawCount += compositionThumbnailDraws;
     }
-    drawWorkerTrimVisuals(ctx, clip, top, height);
-    drawWorkerFadeVisuals(ctx, clip, top, height);
-    drawWorkerPassiveDecorations(ctx, clip, top, height);
+    drawWorkerTrimVisuals(ctx, clip, top, height, trimPayloadByFacetId);
+    drawWorkerFadeVisuals(ctx, clip, top, height, paintResourceById, fadePayloadByResourceId);
+    drawWorkerPassiveDecorations(ctx, clip, top, height, passiveDecorationsPayloadByFacetId);
     ctx.beginPath();
     ctx.roundRect(x, top, w, h, radius);
     ctx.lineWidth = isSel ? 2 : 1;
-    ctx.strokeStyle = isSel ? '#ffffff' : clip.hovered ? '#9dc8ff' : border;
+    ctx.strokeStyle = isSel ? '#ffffff' : isHovered ? '#9dc8ff' : border;
     ctx.stroke();
-    if (w >= LOD_LABEL_PX && clip.name) {
+    if (w >= LOD_LABEL_PX && label) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(x + 5, top, w - 10, h);
       ctx.clip();
       ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
-      ctx.fillText(clip.name, x + 6, top + h / 2);
+      ctx.fillText(label, x + 6, top + h / 2);
       ctx.restore();
     }
   }

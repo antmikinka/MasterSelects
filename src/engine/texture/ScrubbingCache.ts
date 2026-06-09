@@ -14,6 +14,8 @@ import {
   type RamPreviewCompositeCacheReport,
   type RamPreviewGpuFrameReport,
 } from '../../services/timeline/ramPreviewRuntimeReporting';
+import type { RuntimeProviderDemand } from '../../timeline';
+import { createRenderResourceDescriptorFromDemand } from '../../services/timeline/runtimeProviderDemandBridge';
 import { timelineRuntimeCoordinator } from '../../services/timeline/timelineRuntimeCoordinator';
 import type {
   RenderResourceDescriptor,
@@ -30,6 +32,12 @@ function hashString(value: string): string {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(36);
+}
+
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T;
 }
 
 type ScrubbingTextureEntry = {
@@ -415,10 +423,12 @@ export class ScrubbingCache {
       : readyState >= HTMLMediaElement.HAVE_METADATA
         ? 'ok'
         : 'unknown';
-    return {
+    const demand: RuntimeProviderDemand = {
       id: resourceId,
-      kind: 'html-media',
+      facetId: `${resourceId}:facet`,
+      resourceKind: 'html-media',
       policyId: 'background',
+      leasePolicy: 'background-cache',
       owner: {
         ownerId: `scrubbing-cache:background-preload:${hashString(videoSrc)}`,
         ownerType: 'timeline',
@@ -427,14 +437,20 @@ export class ScrubbingCache {
         sourceId: videoSrc,
         previewPath: videoSrc,
       },
-      mediaElementKind: 'video',
-      elementId: resourceId,
-      srcKind: this.getVideoSrcKind(videoSrc),
-      dimensions: {
+      dimensions: removeUndefinedValues({
         width: element?.videoWidth,
         height: element?.videoHeight,
         durationSeconds: this.getFiniteDuration(element?.duration ?? 0),
-      },
+      }),
+      priority: 'background',
+      tags: ['scrubbing-cache', 'background-preload', 'html-video'],
+    };
+
+    return createRenderResourceDescriptorFromDemand(demand, {
+      resourceKind: 'html-media',
+      mediaElementKind: 'video',
+      elementId: resourceId,
+      srcKind: this.getVideoSrcKind(videoSrc),
       diagnostics: {
         status,
         provider: {
@@ -451,8 +467,7 @@ export class ScrubbingCache {
         },
       },
       label: 'Background scrub preload video',
-      tags: ['scrubbing-cache', 'background-preload', 'html-video'],
-    };
+    });
   }
 
   private canRetainBackgroundPreloadVideo(videoSrc: string): TimelineRuntimeAdmissionDecision {

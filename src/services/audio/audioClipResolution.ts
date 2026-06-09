@@ -25,6 +25,17 @@ export function isAudioCapableTimelineClip(clip: TimelineClip): boolean {
     || AUDIO_FILE_EXTENSIONS.has(extension);
 }
 
+export function getTimelineClipAudioSourceFileKey(clip: TimelineClip): string | null {
+  const file = clip.file ?? clip.source?.file;
+  if (!(file instanceof File)) return null;
+  return [
+    file.name,
+    file.type,
+    file.size,
+    file.lastModified,
+  ].join(':');
+}
+
 export function resolveAudibleAudioClip(
   clips: readonly TimelineClip[],
   clipId: string,

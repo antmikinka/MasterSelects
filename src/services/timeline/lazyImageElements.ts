@@ -3,7 +3,9 @@ import type { MediaFile } from '../../stores/mediaStore/types';
 import type { FrameContext } from '../layerBuilder/types';
 import { engine } from '../../engine/WebGPUEngine';
 import { Logger } from '../logger';
+import type { RuntimeProviderDemand } from '../../timeline';
 import type { ImageCanvasResourceDescriptor, RenderResourceDescriptor } from './runtimeCoordinatorTypes';
+import { createRenderResourceDescriptorFromDemand } from './runtimeProviderDemandBridge';
 import { timelineRuntimeCoordinator } from './timelineRuntimeCoordinator';
 
 type LazyImageStatus = 'loading' | 'ready' | 'error';
@@ -130,6 +132,44 @@ function materializeLazyImageSource(source: PlannedLazyImageSource): { url: stri
   return null;
 }
 
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T;
+}
+
+function createLazyImageDemand(params: {
+  clipId: string;
+  trackId: string;
+  mediaFileId?: string;
+  sourceUrl?: string;
+  srcKind: LazyImageSrcKind;
+}): RuntimeProviderDemand {
+  return {
+    id: `timeline-lazy-image:${params.clipId}`,
+    facetId: `lazy-image:${params.clipId}`,
+    resourceKind: 'image-canvas',
+    policyId: 'interactive',
+    leasePolicy: 'lease-visible',
+    owner: removeUndefinedValues({
+      ownerId: params.clipId,
+      ownerType: 'clip' as const,
+      clipId: params.clipId,
+      trackId: params.trackId,
+      mediaFileId: params.mediaFileId,
+    }),
+    source: removeUndefinedValues({
+      sourceId: params.mediaFileId,
+      clipId: params.clipId,
+      trackId: params.trackId,
+      mediaFileId: params.mediaFileId,
+      previewPath: params.sourceUrl,
+    }),
+    priority: 'visible',
+    tags: ['primary-lazy-image', params.srcKind],
+  };
+}
+
 function createLazyImageDescriptor(params: {
   clipId: string;
   trackId: string;
@@ -138,32 +178,15 @@ function createLazyImageDescriptor(params: {
   srcKind: LazyImageSrcKind;
   status: LazyImageStatus;
 }): RenderResourceDescriptor & ImageCanvasResourceDescriptor {
-  return {
-    id: `timeline-lazy-image:${params.clipId}`,
-    kind: 'image-canvas',
-    policyId: 'interactive',
-    owner: {
-      ownerId: params.clipId,
-      ownerType: 'clip',
-      clipId: params.clipId,
-      trackId: params.trackId,
-      mediaFileId: params.mediaFileId,
-    },
-    source: {
-      sourceId: params.mediaFileId,
-      clipId: params.clipId,
-      trackId: params.trackId,
-      mediaFileId: params.mediaFileId,
-      previewPath: params.sourceUrl,
-    },
+  return createRenderResourceDescriptorFromDemand(createLazyImageDemand(params), {
+    resourceKind: 'image-canvas',
     diagnostics: {
       status: params.status === 'error' ? 'warning' : params.status === 'ready' ? 'ok' : 'unknown',
     },
     imageKind: 'html-image',
     imageId: getRecordKey(params.clipId),
     label: 'Lazy image element',
-    tags: ['primary-lazy-image', params.srcKind],
-  };
+  }) as RenderResourceDescriptor & ImageCanvasResourceDescriptor;
 }
 
 function classifyLazyImage(record: LazyImageRecord): RenderResourceDescriptor & ImageCanvasResourceDescriptor {

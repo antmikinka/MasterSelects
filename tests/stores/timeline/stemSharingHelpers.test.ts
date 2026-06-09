@@ -127,4 +127,27 @@ describe('stem sharing helpers', () => {
     expect(result.changedCount).toBe(1);
     expect(result.clips.find(clip => clip.id === 'audio-new')?.audioState?.stemSeparation?.activeSetId).toBe('stem-set-1');
   });
+
+  it('keeps legacy source file matching behind the audio source identity helper', () => {
+    const sourceFile = new File([], 'legacy-dialog.wav', { type: 'audio/wav', lastModified: 789 });
+    const duplicateFile = new File([], 'legacy-dialog.wav', { type: 'audio/wav', lastModified: 789 });
+    const sourceClip = createAudioClip({
+      id: 'audio-source',
+      file: undefined as unknown as File,
+      source: { type: 'audio', naturalDuration: 10, file: sourceFile },
+      audioState: {
+        stemSeparation: createStemState(),
+      },
+    });
+    const newClip = createAudioClip({
+      id: 'audio-new',
+      file: undefined as unknown as File,
+      source: { type: 'audio', naturalDuration: 10, file: duplicateFile },
+    });
+
+    const result = shareExistingStemStateWithClip([sourceClip, newClip], TRACKS, 'audio-new');
+
+    expect(result.changedCount).toBe(1);
+    expect(result.clips.find(clip => clip.id === 'audio-new')?.audioState?.stemSeparation?.activeSetId).toBe('stem-set-1');
+  });
 });

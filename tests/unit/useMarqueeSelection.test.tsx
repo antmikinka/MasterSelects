@@ -46,9 +46,15 @@ const track: TimelineTrack = {
 function MarqueeHarness({
   selectKeyframe,
   deselectAllKeyframes,
+  selectClip = vi.fn(),
+  geometryX,
+  timeToPixel = (time) => time * 10,
 }: {
   selectKeyframe: (keyframeId: string, addToSelection?: boolean) => void;
   deselectAllKeyframes: () => void;
+  selectClip?: (clipId: string | null, addToSelection?: boolean) => void;
+  geometryX?: number;
+  timeToPixel?: (time: number) => number;
 }) {
   const trackLanesRef = useRef<HTMLDivElement>(null);
   const clipKeyframes = new Map([
@@ -80,12 +86,12 @@ function MarqueeHarness({
     clipTrim: null,
     markerDrag: null,
     isDraggingPlayhead: false,
-    selectClip: vi.fn(),
+    selectClip,
     selectKeyframe,
     deselectAllKeyframes,
     setTimelineRangeSelection: vi.fn(),
     clearTimelineRangeSelection: vi.fn(),
-    timeToPixel: (time) => time * 10,
+    timeToPixel,
     pixelToTime: (pixel) => pixel / 10,
     isTrackExpanded: () => true,
     getTrackBaseHeight: () => 64,
@@ -105,6 +111,7 @@ function MarqueeHarness({
             className="keyframe-track-row flat"
             data-track-id="track-video"
             data-keyframe-property="opacity"
+            data-geometry-x={geometryX}
           >
             <div className="keyframe-track">
               <div className="keyframe-track-line" />
@@ -145,6 +152,68 @@ describe('useMarqueeSelection', () => {
     if (keyframeTrack) keyframeTrack.getBoundingClientRect = () => rect(0, 64, 1_000, 18);
 
     expect(container.querySelector('.keyframe-diamond')).toBeNull();
+
+    fireEvent.mouseDown(keyframeTrack as HTMLElement, { button: 0, clientX: 20, clientY: 70 });
+    await waitFor(() => expect(getByTestId('marquee-state').textContent).toBe('marquee'));
+
+    fireEvent.mouseMove(document, { clientX: 40, clientY: 80 });
+
+    await waitFor(() => {
+      expect(deselectAllKeyframes).toHaveBeenCalled();
+      expect(selectKeyframe).toHaveBeenCalledWith('keyframe-opacity', true);
+    });
+  });
+
+  it('uses kernel clip geometry for marquee clip hit testing', async () => {
+    useTimelineStore.setState({
+      selectedClipIds: new Set(),
+      selectedKeyframeIds: new Set(),
+      timelineRangeSelection: null,
+    });
+    const selectClip = vi.fn();
+    const { container, getByTestId } = render(
+      <MarqueeHarness
+        selectClip={selectClip}
+        selectKeyframe={vi.fn()}
+        deselectAllKeyframes={vi.fn()}
+        timeToPixel={(time) => (time === 1 ? 10 : time * 1000)}
+      />,
+    );
+
+    const lanes = getByTestId('timeline-lanes');
+    const clipRow = container.querySelector<HTMLElement>('.track-clip-row');
+
+    lanes.getBoundingClientRect = () => rect(0, 0, 1_000, 200);
+    if (clipRow) clipRow.getBoundingClientRect = () => rect(0, 0, 1_000, 64);
+
+    fireEvent.mouseDown(clipRow as HTMLElement, { button: 0, clientX: 10, clientY: 10 });
+    await waitFor(() => expect(getByTestId('marquee-state').textContent).toBe('marquee'));
+
+    fireEvent.mouseMove(document, { clientX: 35, clientY: 30 });
+
+    await waitFor(() => {
+      expect(selectClip).toHaveBeenCalledWith('clip-video', true);
+    });
+  });
+
+  it('uses kernel row geometry data for keyframe marquee hit testing when present', async () => {
+    const selectKeyframe = vi.fn();
+    const deselectAllKeyframes = vi.fn();
+    const { container, getByTestId } = render(
+      <MarqueeHarness
+        selectKeyframe={selectKeyframe}
+        deselectAllKeyframes={deselectAllKeyframes}
+        geometryX={0}
+      />,
+    );
+
+    const lanes = getByTestId('timeline-lanes');
+    const clipRow = container.querySelector<HTMLElement>('.track-clip-row');
+    const keyframeTrack = container.querySelector<HTMLElement>('.keyframe-track');
+
+    lanes.getBoundingClientRect = () => rect(0, 0, 1_000, 200);
+    if (clipRow) clipRow.getBoundingClientRect = () => rect(0, 0, 1_000, 64);
+    if (keyframeTrack) keyframeTrack.getBoundingClientRect = () => rect(120, 64, 1_000, 18);
 
     fireEvent.mouseDown(keyframeTrack as HTMLElement, { button: 0, clientX: 20, clientY: 70 });
     await waitFor(() => expect(getByTestId('marquee-state').textContent).toBe('marquee'));

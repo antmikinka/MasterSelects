@@ -14,36 +14,15 @@ import {
 } from '../helpers/webCodecsHelpers';
 import { shouldSkipWaveform } from '../helpers/waveformHelpers';
 import { generateLinkedClipIds } from '../helpers/idGenerator';
-import { updateClipById } from '../helpers/clipStateHelpers';
 import { detectVideoAudio } from '../helpers/audioDetection';
 import { getMP4MetadataFast, estimateDurationFromFileSize } from '../helpers/mp4MetadataHelper';
 import { Logger } from '../../../services/logger';
-import {
-  SOURCE_WAVEFORM_MAX_PREVIEW_SAMPLES,
-  SOURCE_WAVEFORM_PREVIEW_SAMPLES_PER_SECOND,
-  generateTimelineWaveformAnalysisForFile,
-  mapSourceWaveformPreviewProgress,
-  mapSourceWaveformPyramidProgress,
-} from '../../../services/audio/timelineWaveformPyramidCache';
+import { registerNativeDecoderForTimelineClip } from '../../../services/timeline/nativeDecoderRuntimeRegistry';
+import { loadLinkedAudio } from './videoLinkedAudioLoader';
+import { loadCachedProjectAnalysisForVideo } from './videoCachedAnalysisLoader';
+import { startVideoThumbnailGeneration } from './videoThumbnailLoader';
 
 const log = Logger.create('AddVideoClip');
-
-function getCachedMediaWaveform(mediaFileId: string | undefined): Pick<TimelineClip, 'audioState' | 'waveform' | 'waveformChannels' | 'waveformGenerating' | 'waveformProgress'> | null {
-  if (!mediaFileId) return null;
-  const mediaFile = useMediaStore.getState().files.find((file) => file.id === mediaFileId);
-  if (mediaFile?.waveformStatus === 'generating') return null;
-  if (!mediaFile?.waveform?.length && !mediaFile?.audioAnalysisRefs?.waveformPyramidId) return null;
-
-  return {
-    ...(mediaFile.waveform?.length ? { waveform: mediaFile.waveform } : {}),
-    ...(mediaFile.waveformChannels ? { waveformChannels: mediaFile.waveformChannels } : {}),
-    ...(mediaFile.audioAnalysisRefs
-      ? { audioState: { sourceAnalysisRefs: mediaFile.audioAnalysisRefs } }
-      : {}),
-    waveformGenerating: false,
-    waveformProgress: 100,
-  };
-}
 
 type FileWithPath = File & { path?: string };
 
@@ -184,6 +163,16 @@ export async function loadVideoMedia(params: LoadVideoMediaParams): Promise<void
 
       // Calculate native pixel scale so content appears at actual size
       const nativeScale = calculateNativeScale(nativeDecoder.width, nativeDecoder.height);
+      const registered = registerNativeDecoderForTimelineClip({
+        clipId,
+        mediaFileId,
+        filePath,
+        decoder: nativeDecoder,
+      });
+      if (!registered) {
+        await nativeDecoder.close().catch(() => undefined);
+        throw new Error(`Native decoder budget rejected "${file.name}"`);
+      }
 
       updateClip(clipId, {
         duration: naturalDuration,
@@ -192,7 +181,6 @@ export async function loadVideoMedia(params: LoadVideoMediaParams): Promise<void
           type: 'video',
           naturalDuration,
           mediaFileId,
-          nativeDecoder,
           filePath,
         },
         transform: { ...DEFAULT_TRANSFORM, scale: nativeScale },
@@ -276,19 +264,7 @@ export async function loadVideoMedia(params: LoadVideoMediaParams): Promise<void
     // metadata probe video stays local and is released below.
     const isLargeFile = shouldSkipWaveform(file);
     if (thumbnailsEnabled && !isLargeFile && mediaFileId) {
-      import('../../../services/thumbnailCacheService').then(({ thumbnailCacheService }) => {
-        const mediaFile = useMediaStore.getState().files.find(f => f.id === mediaFileId);
-        const sourceUrl = mediaFile?.url || URL.createObjectURL(file);
-        const shouldRevokeSourceUrl = !mediaFile?.url;
-        const fileHash = mediaFile?.fileHash;
-        thumbnailCacheService
-          .generateForSourceUrl(mediaFileId, sourceUrl, naturalDuration, fileHash, 'anonymous')
-          .finally(() => {
-            if (shouldRevokeSourceUrl) {
-              URL.revokeObjectURL(sourceUrl);
-            }
-          });
-      });
+      startVideoThumbnailGeneration(file, mediaFileId, naturalDuration);
     }
 
     releaseTemporaryMediaElement(video);
@@ -296,27 +272,7 @@ export async function loadVideoMedia(params: LoadVideoMediaParams): Promise<void
     log.debug('Skipping thumbnails for NativeDecoder file', { file: file.name });
   }
 
-  // Load cached analysis from project folder if available (non-blocking).
-  // Uses getAllAnalysisMerged to combine all analyzed ranges (not just exact match).
-  if (mediaFileId) {
-    import('../../../services/project/ProjectFileService').then(async ({ projectFileService }) => {
-      if (!projectFileService.isProjectOpen()) return;
-      try {
-        const merged = await projectFileService.getAllAnalysisMerged(mediaFileId);
-        if (merged && merged.frames.length > 0) {
-          setClips(clips => clips.map(c => {
-            if (c.id !== clipId || c.analysisStatus === 'ready') return c;
-            return {
-              ...c,
-              analysis: { frames: merged.frames as import('../../../types').FrameAnalysisData[], sampleInterval: merged.sampleInterval },
-              analysisStatus: 'ready' as const,
-            };
-          }));
-          log.debug('Loaded cached analysis for new clip', { file: file.name, frames: merged.frames.length });
-        }
-      } catch { /* no cached analysis */ }
-    });
-  }
+  loadCachedProjectAnalysisForVideo(clipId, file.name, mediaFileId, setClips);
 
   // Load audio for linked clip (skip for NativeDecoder - browser can't decode ProRes/DNxHD audio)
   // For browser path, audio clip is already created and will be removed by background detectVideoAudio if no audio
@@ -334,77 +290,6 @@ export async function loadVideoMedia(params: LoadVideoMediaParams): Promise<void
   const mediaStore = useMediaStore.getState();
   if (!mediaStore.getFileByName(file.name)) {
     mediaStore.importFile(file);
-  }
-}
-
-/**
- * Load audio element and generate waveform for linked audio clip.
- */
-async function loadLinkedAudio(
-  file: File,
-  audioClipId: string,
-  naturalDuration: number,
-  mediaFileId: string | undefined,
-  waveformsEnabled: boolean,
-  updateClip: (id: string, updates: Partial<TimelineClip>) => void,
-  setClips: (updater: (clips: TimelineClip[]) => TimelineClip[]) => void
-): Promise<void> {
-  // Mark audio clip as ready immediately
-  const cachedWaveform = getCachedMediaWaveform(mediaFileId);
-  updateClip(audioClipId, {
-    source: { type: 'audio', naturalDuration, mediaFileId },
-    isLoading: false,
-    ...(cachedWaveform ?? {}),
-  });
-
-  // Generate waveform in background (non-blocking) - only if enabled and not large file
-  const isLargeFile = shouldSkipWaveform(file);
-  if (waveformsEnabled && !isLargeFile && !cachedWaveform) {
-    // Mark waveform generation starting
-    setClips(clips => updateClipById(clips, audioClipId, { waveformGenerating: true, waveformProgress: 0 }));
-
-    try {
-      const analysis = await generateTimelineWaveformAnalysisForFile(file, {
-        mediaFileId,
-        includePyramid: true,
-        samplesPerSecond: SOURCE_WAVEFORM_PREVIEW_SAMPLES_PER_SECOND,
-        maxPreviewSamples: SOURCE_WAVEFORM_MAX_PREVIEW_SAMPLES,
-        onProgress: (progress, partialWaveform) => {
-          setClips(clips => updateClipById(clips, audioClipId, {
-            waveformProgress: mapSourceWaveformPreviewProgress(progress),
-            waveform: partialWaveform,
-          }));
-        },
-        onPyramidProgress: (progress) => {
-          setClips(clips => updateClipById(clips, audioClipId, {
-            waveformProgress: mapSourceWaveformPyramidProgress(progress),
-          }));
-        },
-      });
-      setClips(clips => {
-        const currentClip = clips.find(c => c.id === audioClipId);
-        return updateClipById(clips, audioClipId, {
-          waveform: analysis.waveform,
-          waveformChannels: analysis.waveformChannels,
-          ...(analysis.audioAnalysisRefs
-            ? {
-                audioState: {
-                  ...(currentClip?.audioState ?? {}),
-                  sourceAnalysisRefs: {
-                    ...(currentClip?.audioState?.sourceAnalysisRefs ?? {}),
-                    ...analysis.audioAnalysisRefs,
-                  },
-                },
-              }
-            : {}),
-          waveformGenerating: false,
-          waveformProgress: 100,
-        });
-      });
-    } catch (e) {
-      log.warn('Waveform generation failed', e);
-      setClips(clips => updateClipById(clips, audioClipId, { waveformGenerating: false }));
-    }
   }
 }
 

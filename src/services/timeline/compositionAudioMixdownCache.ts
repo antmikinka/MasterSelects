@@ -1,8 +1,10 @@
 import type { TimelineClip } from '../../types';
+import type { RuntimeProviderDemand } from '../../timeline';
 import { compositionAudioMixer, type CompositionMixdownResult } from '../compositionAudioMixer';
 import { Logger } from '../logger';
 import { timelineRuntimeCoordinator } from './timelineRuntimeCoordinator';
 import type { RenderResourceDescriptor } from './runtimeCoordinatorTypes';
+import { createRenderResourceDescriptorFromDemand } from './runtimeProviderDemandBridge';
 import {
   getCompositionAudioMixdownKey,
   getCompositionMixdownAudioElementResourceId,
@@ -35,7 +37,15 @@ const pendingMixdowns = new Map<string, PendingMixdownEntry>();
 const completedMixdowns = new Map<string, CompositionAudioMixdownRequestResult | null>();
 
 function estimateAudioBufferBytes(buffer: AudioBuffer): number {
-  return buffer.length * buffer.numberOfChannels * Float32Array.BYTES_PER_ELEMENT;
+  const length = Number.isFinite(buffer.length) ? buffer.length : 0;
+  const channelCount = Number.isFinite(buffer.numberOfChannels) ? buffer.numberOfChannels : 0;
+  return Math.max(0, length * channelCount * Float32Array.BYTES_PER_ELEMENT);
+}
+
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T;
 }
 
 function createCompositionMixdownBufferResource(
@@ -44,28 +54,35 @@ function createCompositionMixdownBufferResource(
 ): RenderResourceDescriptor {
   const [compositionId] = key.split(':', 1);
   const resourceId = getCompositionMixdownBufferResourceId(key);
-  return {
+  const runtimeSourceId = `composition-audio-mixdown:${hashCompositionAudioMixdownKey(key)}`;
+  const demand: RuntimeProviderDemand = {
     id: resourceId,
-    kind: 'runtime-binding',
+    facetId: `${resourceId}:facet`,
+    resourceKind: 'runtime-binding',
     policyId: 'interactive',
+    leasePolicy: 'background-cache',
     owner: {
       ownerId: 'composition-audio-mixdown-cache',
-      ownerType: 'timeline',
+      ownerType: 'timeline' as const,
       compositionId,
     },
     source: {
       sourceId: key,
       compositionId,
     },
-    runtime: {
-      runtimeSourceId: `composition-audio-mixdown:${hashCompositionAudioMixdownKey(key)}`,
-      runtimeSessionKey: key,
-    },
-    dimensions: {
+    dimensions: removeUndefinedValues({
       durationSeconds: value.duration,
       sampleRate: value.buffer.sampleRate,
       channelCount: value.buffer.numberOfChannels,
-    },
+    }),
+    priority: 'background',
+    tags: ['composition-audio-mixdown', 'audio-buffer-cache'],
+  };
+
+  return createRenderResourceDescriptorFromDemand(demand, {
+    resourceKind: 'runtime-binding',
+    runtimeSourceId,
+    runtimeSessionKey: key,
     memoryCost: {
       heapBytes: estimateAudioBufferBytes(value.buffer),
     },
@@ -79,8 +96,7 @@ function createCompositionMixdownBufferResource(
       },
     },
     label: 'Composition mixdown AudioBuffer cache entry',
-    tags: ['composition-audio-mixdown', 'audio-buffer-cache'],
-  };
+  });
 }
 
 function createCompositionMixdownAudioElementResource(params: {
@@ -89,28 +105,36 @@ function createCompositionMixdownAudioElementResource(params: {
   buffer: AudioBuffer;
 }): RenderResourceDescriptor {
   const resourceId = getCompositionMixdownAudioElementResourceId(params.clipId);
-  return {
+  const demand: RuntimeProviderDemand = {
     id: resourceId,
-    kind: 'html-media',
+    facetId: `${resourceId}:facet`,
+    resourceKind: 'html-media',
     policyId: 'interactive',
-    owner: {
+    leasePolicy: 'lease-visible',
+    owner: removeUndefinedValues({
       ownerId: `composition-audio-mixdown:${params.clipId}`,
-      ownerType: 'clip',
+      ownerType: 'clip' as const,
       clipId: params.clipId,
       compositionId: params.compositionId,
-    },
-    source: {
+    }),
+    source: removeUndefinedValues({
       clipId: params.clipId,
       compositionId: params.compositionId,
-    },
-    mediaElementKind: 'audio',
-    elementId: resourceId,
-    srcKind: 'blob-url',
-    dimensions: {
+    }),
+    dimensions: removeUndefinedValues({
       durationSeconds: params.buffer.duration,
       sampleRate: params.buffer.sampleRate,
       channelCount: params.buffer.numberOfChannels,
-    },
+    }),
+    priority: 'visible',
+    tags: ['composition-audio-mixdown', 'playback-audio-element'],
+  };
+
+  return createRenderResourceDescriptorFromDemand(demand, {
+    resourceKind: 'html-media',
+    mediaElementKind: 'audio',
+    elementId: resourceId,
+    srcKind: 'blob-url',
     memoryCost: {
       heapBytes: estimateAudioBufferBytes(params.buffer),
     },
@@ -123,8 +147,7 @@ function createCompositionMixdownAudioElementResource(params: {
       },
     },
     label: 'Composition mixdown playback audio element',
-    tags: ['composition-audio-mixdown', 'playback-audio-element'],
-  };
+  });
 }
 
 function releaseCompletedMixdownBufferResource(key: string): void {

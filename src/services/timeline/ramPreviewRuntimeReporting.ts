@@ -1,9 +1,14 @@
 import type { LayerSource, TimelineClip } from '../../types';
 import type {
+  RuntimeProviderDemand,
+  TimelineRuntimeResourceKind,
+} from '../../timeline';
+import type {
   RenderResourceDescriptor,
   RuntimeHealthStatus,
   TimelineRuntimeAdmissionDecision,
 } from './runtimeCoordinatorTypes';
+import { createRenderResourceDescriptorFromDemand } from './runtimeProviderDemandBridge';
 import { timelineRuntimeCoordinator } from './timelineRuntimeCoordinator';
 
 const RAM_PREVIEW_POLICY_ID = 'ram-preview' as const;
@@ -104,57 +109,109 @@ function getSrcKind(
   return 'project-path';
 }
 
-function getRunOwner(runId: string, report?: Pick<RamPreviewClipSourceReport, 'clip'>) {
-  return {
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T;
+}
+
+function hasDefinedEntries(value: object): boolean {
+  return Object.keys(value).length > 0;
+}
+
+function getRunOwner(
+  runId: string,
+  report?: Pick<RamPreviewClipSourceReport, 'clip'>
+): RuntimeProviderDemand['owner'] {
+  return removeUndefinedValues({
     ownerId: getRamPreviewRunOwnerId(runId),
     ownerType: 'ram-preview' as const,
     clipId: report?.clip.id,
     trackId: report?.clip.trackId,
     mediaFileId: report?.clip.mediaFileId,
-  };
+  });
 }
 
-function getSourceDescriptor(report: RamPreviewClipSourceReport) {
-  return {
+function getSourceDescriptor(report: RamPreviewClipSourceReport): RuntimeProviderDemand['source'] {
+  return removeUndefinedValues({
     sourceId: report.source.runtimeSourceId,
     mediaFileId: report.source.mediaFileId ?? report.clip.mediaFileId,
     clipId: report.clip.id,
     trackId: report.clip.trackId,
     compositionId: report.nestedCompositionId,
-  };
+  });
 }
 
-function getBaseSourceDescriptor(report: RamPreviewClipSourceReport) {
-  return {
+function createRamPreviewDemand(params: {
+  id: string;
+  resourceKind: TimelineRuntimeResourceKind;
+  owner: RuntimeProviderDemand['owner'];
+  source?: RuntimeProviderDemand['source'];
+  dimensions?: RuntimeProviderDemand['dimensions'];
+  priority?: RuntimeProviderDemand['priority'];
+  cacheKey?: string;
+  tags: readonly string[];
+}): RuntimeProviderDemand {
+  const demand: RuntimeProviderDemand = {
+    id: params.id,
+    facetId: `${params.id}:facet`,
+    resourceKind: params.resourceKind,
     policyId: RAM_PREVIEW_POLICY_ID,
+    leasePolicy: 'background-cache',
+    owner: params.owner,
+    priority: params.priority ?? 'background',
+    tags: params.tags,
+  };
+  if (params.source && hasDefinedEntries(params.source)) {
+    demand.source = params.source;
+  }
+  if (params.dimensions && hasDefinedEntries(params.dimensions)) {
+    demand.dimensions = params.dimensions;
+  }
+  if (params.cacheKey) {
+    demand.cacheKey = params.cacheKey;
+  }
+  return demand;
+}
+
+function createRamPreviewSourceDemand(
+  report: RamPreviewClipSourceReport,
+  resourceKind: TimelineRuntimeResourceKind,
+  resourceId: string
+): RuntimeProviderDemand {
+  return createRamPreviewDemand({
+    id: resourceId,
+    resourceKind,
     owner: getRunOwner(report.runId, report),
     source: getSourceDescriptor(report),
     dimensions: {
       durationSeconds: report.clip.duration,
     },
     tags: ['ram-preview', report.source.type],
-  };
+  });
 }
 
 function createRamPreviewRunJobResource(report: RamPreviewRunJobReport): RenderResourceDescriptor {
-  return {
-    id: getRunResourceId(report.runId, 'job:render'),
-    kind: 'job',
-    policyId: RAM_PREVIEW_POLICY_ID,
+  const resourceId = getRunResourceId(report.runId, 'job:render');
+  return createRenderResourceDescriptorFromDemand(createRamPreviewDemand({
+    id: resourceId,
+    resourceKind: 'job',
     owner: getRunOwner(report.runId),
-    jobId: report.runId,
-    jobKind: 'ram-preview-render',
-    startedAtMs: report.startedAtMs,
     source: {
       previewPath: `${report.start.toFixed(3)}-${report.end.toFixed(3)}`,
     },
-    dimensions: {
+    dimensions: removeUndefinedValues({
       durationSeconds: Math.max(0, report.end - report.start),
       fps: report.frameCount,
-    },
-    label: report.label ?? 'RAM preview render',
+    }),
     tags: ['ram-preview', 'render-job'],
-  };
+  }), {
+    resourceKind: 'job',
+    jobId: report.runId,
+    jobKind: 'ram-preview-render',
+    startedAtMs: report.startedAtMs,
+    label: report.label ?? 'RAM preview render',
+  });
 }
 
 export function canRetainRamPreviewRunJob(
@@ -167,43 +224,52 @@ export function reportRamPreviewRunJob(report: RamPreviewRunJobReport): void {
   retain(createRamPreviewRunJobResource(report));
 }
 
+function getRamPreviewImageElementSourceReport(
+  report: RamPreviewImageElementAdmissionReport
+): RamPreviewClipSourceReport {
+  return {
+    runId: report.runId,
+    clip: report.clip,
+    layerId: report.layerId,
+    nestedCompositionId: report.nestedCompositionId,
+    source: {
+      type: 'image',
+      mediaFileId: report.clip.mediaFileId,
+    } as LayerSource,
+  };
+}
+
+function getRamPreviewImageElementResourceId(
+  report: RamPreviewImageElementAdmissionReport
+): string {
+  return getClipSourceId(getRamPreviewImageElementSourceReport(report), 'image-canvas:image');
+}
+
 function createRamPreviewImageElementResource(
   report: RamPreviewImageElementAdmissionReport
 ): RenderResourceDescriptor {
-  return {
-    ...getBaseSourceDescriptor({
-      runId: report.runId,
-      clip: report.clip,
-      layerId: report.layerId,
-      nestedCompositionId: report.nestedCompositionId,
-      source: {
-        type: 'image',
-        mediaFileId: report.clip.mediaFileId,
-      } as LayerSource,
-    }),
-    id: getClipSourceId({
-      runId: report.runId,
-      clip: report.clip,
-      layerId: report.layerId,
-      nestedCompositionId: report.nestedCompositionId,
-      source: {
-        type: 'image',
-        mediaFileId: report.clip.mediaFileId,
-      } as LayerSource,
-    }, 'image-canvas:image'),
-    kind: 'image-canvas',
-    imageKind: 'html-image',
-    imageId: `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:image`,
-    source: {
+  return createRenderResourceDescriptorFromDemand(createRamPreviewDemand({
+    id: getRamPreviewImageElementResourceId(report),
+    resourceKind: 'image-canvas',
+    owner: getRunOwner(report.runId, report),
+    source: removeUndefinedValues({
       sourceId: report.clip.mediaFileId,
       mediaFileId: report.clip.mediaFileId,
       clipId: report.clip.id,
       trackId: report.clip.trackId,
       compositionId: report.nestedCompositionId,
       previewPath: report.previewPath,
+    }),
+    dimensions: {
+      durationSeconds: report.clip.duration,
     },
+    tags: ['ram-preview', 'image'],
+  }), {
+    resourceKind: 'image-canvas',
+    imageKind: 'html-image',
+    imageId: `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:image`,
     label: 'RAM preview image element',
-  };
+  });
 }
 
 export function canRetainRamPreviewImageElement(
@@ -226,184 +292,176 @@ export function reserveRamPreviewImageElement(
 export function releaseReservedRamPreviewImageElement(
   report: RamPreviewImageElementAdmissionReport
 ): void {
-  timelineRuntimeCoordinator.releaseResource(
-    getClipSourceId({
-      runId: report.runId,
-      clip: report.clip,
-      layerId: report.layerId,
-      nestedCompositionId: report.nestedCompositionId,
-      source: {
-        type: 'image',
-        mediaFileId: report.clip.mediaFileId,
-      } as LayerSource,
-    }, 'image-canvas:image')
-  );
+  timelineRuntimeCoordinator.releaseResource(getRamPreviewImageElementResourceId(report));
 }
 
 export function reportRamPreviewClipSource(report: RamPreviewClipSourceReport): void {
-  const base = getBaseSourceDescriptor(report);
-
   if (report.source.runtimeSourceId && report.source.runtimeSessionKey) {
-    retain({
-      ...base,
-      id: getClipSourceId(
-        report,
-        `runtime-binding:${report.source.runtimeSourceId}:${report.source.runtimeSessionKey}`
-      ),
-      kind: 'runtime-binding',
-      runtime: {
+    const resourceId = getClipSourceId(
+      report,
+      `runtime-binding:${report.source.runtimeSourceId}:${report.source.runtimeSessionKey}`
+    );
+    retain(createRenderResourceDescriptorFromDemand(
+      createRamPreviewSourceDemand(report, 'runtime-binding', resourceId),
+      {
+        resourceKind: 'runtime-binding',
         runtimeSourceId: report.source.runtimeSourceId,
         runtimeSessionKey: report.source.runtimeSessionKey,
-      },
-      label: 'RAM preview runtime binding',
-    });
+        label: 'RAM preview runtime binding',
+      }
+    ));
   }
 
   if (report.source.webCodecsPlayer) {
     const provider = report.source.webCodecsPlayer;
     const status: RuntimeHealthStatus = provider.isFullMode() ? 'ok' : 'warning';
-    retain({
-      ...base,
-      id: getClipSourceId(report, 'video-frame-provider'),
-      kind: 'video-frame-provider',
-      providerId: `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:provider`,
-      providerKind: 'runtime-frame-provider',
-      canSeek: true,
-      canProvideStaleFrame: true,
-      frameFormat: 'video-frame',
-      runtime: report.source.runtimeSourceId && report.source.runtimeSessionKey
-        ? {
-            runtimeSourceId: report.source.runtimeSourceId,
-            runtimeSessionKey: report.source.runtimeSessionKey,
-          }
-        : undefined,
-      diagnostics: {
-        status,
-        provider: {
-          providerId: `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:provider`,
-          providerKind: 'webcodecs',
+    const providerId = `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:provider`;
+    const resourceId = getClipSourceId(report, 'video-frame-provider');
+    retain(createRenderResourceDescriptorFromDemand(
+      createRamPreviewSourceDemand(report, 'video-frame-provider', resourceId),
+      {
+        resourceKind: 'video-frame-provider',
+        providerId,
+        providerKind: 'runtime-frame-provider',
+        canSeek: true,
+        canProvideStaleFrame: true,
+        frameFormat: 'video-frame',
+        runtimeSourceId: report.source.runtimeSourceId,
+        runtimeSessionKey: report.source.runtimeSessionKey,
+        diagnostics: {
           status,
-          isReady: provider.isFullMode(),
-          isPlaying: provider.isPlaying,
-          isSeeking: provider.isSeeking?.(),
-          isDecodePending: provider.isDecodePending?.(),
-          currentTimeSeconds: provider.currentTime,
-          targetTimeSeconds: report.sourceTime,
-          pendingSeekTimeSeconds: provider.getPendingSeekTime?.() ?? null,
+          provider: {
+            providerId,
+            providerKind: 'webcodecs',
+            status,
+            isReady: provider.isFullMode(),
+            isPlaying: provider.isPlaying,
+            isSeeking: provider.isSeeking?.(),
+            isDecodePending: provider.isDecodePending?.(),
+            currentTimeSeconds: provider.currentTime,
+            targetTimeSeconds: report.sourceTime,
+            pendingSeekTimeSeconds: provider.getPendingSeekTime?.() ?? null,
+          },
         },
-      },
-      label: 'RAM preview frame provider',
-    });
+        label: 'RAM preview frame provider',
+      }
+    ));
   }
 
   if (report.source.videoElement) {
     const video = report.source.videoElement;
     const src = video.currentSrc || video.src;
     const status = getMediaStatus(video);
-    retain({
-      ...base,
-      id: getClipSourceId(report, 'html-media:video'),
-      kind: 'html-media',
-      mediaElementKind: 'video',
-      elementId: `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:video`,
-      srcKind: getSrcKind(src),
-      diagnostics: {
-        status,
-        provider: {
-          providerId: `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:video`,
-          providerKind: 'html-video',
+    const elementId = `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:video`;
+    const resourceId = getClipSourceId(report, 'html-media:video');
+    retain(createRenderResourceDescriptorFromDemand(
+      createRamPreviewSourceDemand(report, 'html-media', resourceId),
+      {
+        resourceKind: 'html-media',
+        mediaElementKind: 'video',
+        elementId,
+        srcKind: getSrcKind(src),
+        diagnostics: {
           status,
-          isReady: video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA,
-          isPlaying: !video.paused,
-          isSeeking: video.seeking,
-          currentTimeSeconds: video.currentTime,
-          targetTimeSeconds: report.sourceTime,
-          readyState: video.readyState,
-          networkState: video.networkState,
-          errorCode: video.error ? String(video.error.code) : undefined,
+          provider: {
+            providerId: elementId,
+            providerKind: 'html-video',
+            status,
+            isReady: video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA,
+            isPlaying: !video.paused,
+            isSeeking: video.seeking,
+            currentTimeSeconds: video.currentTime,
+            targetTimeSeconds: report.sourceTime,
+            readyState: video.readyState,
+            networkState: video.networkState,
+            errorCode: video.error ? String(video.error.code) : undefined,
+          },
         },
-      },
-      label: 'RAM preview video element',
-    });
+        label: 'RAM preview video element',
+      }
+    ));
   }
 
   if (report.source.imageElement) {
-    retain({
-      ...base,
-      id: getClipSourceId(report, 'image-canvas:image'),
-      kind: 'image-canvas',
-      imageKind: 'html-image',
-      imageId: `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:image`,
-      label: 'RAM preview image element',
-    });
+    const resourceId = getClipSourceId(report, 'image-canvas:image');
+    retain(createRenderResourceDescriptorFromDemand(
+      createRamPreviewSourceDemand(report, 'image-canvas', resourceId),
+      {
+        resourceKind: 'image-canvas',
+        imageKind: 'html-image',
+        imageId: `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:image`,
+        label: 'RAM preview image element',
+      }
+    ));
   }
 
   if (report.source.textCanvas) {
-    retain({
-      ...base,
-      id: getClipSourceId(report, 'image-canvas:text-canvas'),
-      kind: 'image-canvas',
-      imageKind: 'html-canvas',
-      imageId: `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:text-canvas`,
-      label: 'RAM preview text canvas',
-    });
+    const resourceId = getClipSourceId(report, 'image-canvas:text-canvas');
+    retain(createRenderResourceDescriptorFromDemand(
+      createRamPreviewSourceDemand(report, 'image-canvas', resourceId),
+      {
+        resourceKind: 'image-canvas',
+        imageKind: 'html-canvas',
+        imageId: `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:text-canvas`,
+        label: 'RAM preview text canvas',
+      }
+    ));
   }
 }
 
 function createRamPreviewVideoSourceAdmissionResources(
   report: RamPreviewClipSourceReport
 ): RenderResourceDescriptor[] {
-  const base = getBaseSourceDescriptor(report);
   const resources: RenderResourceDescriptor[] = [];
 
   if (report.source.runtimeSourceId && report.source.runtimeSessionKey) {
-    resources.push({
-      ...base,
-      id: getClipSourceId(
-        report,
-        `runtime-binding:${report.source.runtimeSourceId}:${report.source.runtimeSessionKey}`
-      ),
-      kind: 'runtime-binding',
-      runtime: {
+    const resourceId = getClipSourceId(
+      report,
+      `runtime-binding:${report.source.runtimeSourceId}:${report.source.runtimeSessionKey}`
+    );
+    resources.push(createRenderResourceDescriptorFromDemand(
+      createRamPreviewSourceDemand(report, 'runtime-binding', resourceId),
+      {
+        resourceKind: 'runtime-binding',
         runtimeSourceId: report.source.runtimeSourceId,
         runtimeSessionKey: report.source.runtimeSessionKey,
-      },
-      label: 'RAM preview runtime binding',
-    });
+        label: 'RAM preview runtime binding',
+      }
+    ));
   }
 
   if (report.source.webCodecsPlayer) {
-    resources.push({
-      ...base,
-      id: getClipSourceId(report, 'video-frame-provider'),
-      kind: 'video-frame-provider',
-      providerId: `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:provider`,
-      providerKind: 'runtime-frame-provider',
-      canSeek: true,
-      canProvideStaleFrame: true,
-      frameFormat: 'video-frame',
-      runtime: report.source.runtimeSourceId && report.source.runtimeSessionKey
-        ? {
-            runtimeSourceId: report.source.runtimeSourceId,
-            runtimeSessionKey: report.source.runtimeSessionKey,
-          }
-        : undefined,
-      label: 'RAM preview frame provider',
-    });
+    const resourceId = getClipSourceId(report, 'video-frame-provider');
+    resources.push(createRenderResourceDescriptorFromDemand(
+      createRamPreviewSourceDemand(report, 'video-frame-provider', resourceId),
+      {
+        resourceKind: 'video-frame-provider',
+        providerId: `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:provider`,
+        providerKind: 'runtime-frame-provider',
+        canSeek: true,
+        canProvideStaleFrame: true,
+        frameFormat: 'video-frame',
+        runtimeSourceId: report.source.runtimeSourceId,
+        runtimeSessionKey: report.source.runtimeSessionKey,
+        label: 'RAM preview frame provider',
+      }
+    ));
   }
 
   if (report.source.videoElement) {
     const video = report.source.videoElement;
     const src = video.currentSrc || video.src;
-    resources.push({
-      ...base,
-      id: getClipSourceId(report, 'html-media:video'),
-      kind: 'html-media',
-      mediaElementKind: 'video',
-      elementId: `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:video`,
-      srcKind: getSrcKind(src),
-      label: 'RAM preview video element',
-    });
+    const resourceId = getClipSourceId(report, 'html-media:video');
+    resources.push(createRenderResourceDescriptorFromDemand(
+      createRamPreviewSourceDemand(report, 'html-media', resourceId),
+      {
+        resourceKind: 'html-media',
+        mediaElementKind: 'video',
+        elementId: `${getRamPreviewRunOwnerId(report.runId)}:${report.layerId ?? report.clip.id}:video`,
+        srcKind: getSrcKind(src),
+        label: 'RAM preview video element',
+      }
+    ));
   }
 
   return resources;
@@ -454,20 +512,23 @@ const RAM_PREVIEW_GPU_FRAME_CACHE_OWNER_ID = 'ram-preview:gpu-frame-cache';
 function createRamPreviewCompositeCacheResource(
   report: RamPreviewCompositeCacheReport
 ): RenderResourceDescriptor {
-  return {
-    id: 'ram-preview:composite-cache:image-data',
-    kind: 'image-canvas',
-    policyId: RAM_PREVIEW_POLICY_ID,
+  const resourceId = 'ram-preview:composite-cache:image-data';
+  return createRenderResourceDescriptorFromDemand(createRamPreviewDemand({
+    id: resourceId,
+    resourceKind: 'image-canvas',
     owner: {
       ownerId: RAM_PREVIEW_COMPOSITE_CACHE_OWNER_ID,
       ownerType: 'ram-preview',
     },
-    imageKind: 'offscreen-canvas',
-    imageId: 'ram-preview:composite-cache',
-    dimensions: {
+    dimensions: removeUndefinedValues({
       width: report.width,
       height: report.height,
-    },
+    }),
+    tags: ['ram-preview', 'composite-cache', 'cpu'],
+  }), {
+    resourceKind: 'image-canvas',
+    imageKind: 'offscreen-canvas',
+    imageId: 'ram-preview:composite-cache',
     memoryCost: {
       heapBytes: report.heapBytes,
     },
@@ -483,8 +544,7 @@ function createRamPreviewCompositeCacheResource(
       ],
     },
     label: 'RAM preview CPU composite cache',
-    tags: ['ram-preview', 'composite-cache', 'cpu'],
-  };
+  });
 }
 
 export function canRetainRamPreviewCompositeCache(
@@ -514,30 +574,34 @@ function getGpuFrameResourceId(frameKey: number): string {
 }
 
 function createRamPreviewGpuFrameResource(report: RamPreviewGpuFrameReport): RenderResourceDescriptor {
-  return {
-    id: getGpuFrameResourceId(report.frameKey),
-    kind: 'gpu-texture',
-    policyId: RAM_PREVIEW_POLICY_ID,
+  const resourceId = getGpuFrameResourceId(report.frameKey);
+  return createRenderResourceDescriptorFromDemand(createRamPreviewDemand({
+    id: resourceId,
+    resourceKind: 'gpu-texture',
     owner: {
       ownerId: RAM_PREVIEW_GPU_FRAME_CACHE_OWNER_ID,
       ownerType: 'ram-preview',
     },
-    textureId: getGpuFrameResourceId(report.frameKey),
-    textureKind: 'ram-preview-frame',
-    format: report.format,
-    dimensions: {
-      width: report.width,
-      height: report.height,
-    },
-    memoryCost: {
-      gpuBytes: report.gpuBytes,
-    },
     source: {
       previewPath: report.time.toFixed(3),
     },
-    label: 'RAM preview GPU cached frame',
+    dimensions: removeUndefinedValues({
+      width: report.width,
+      height: report.height,
+    }),
     tags: ['ram-preview', 'gpu-frame-cache'],
-  };
+  }), {
+    resourceKind: 'gpu-texture',
+    textureId: resourceId,
+    textureKind: 'ram-preview-frame',
+    format: report.format,
+    memoryCost: report.gpuBytes === undefined
+      ? undefined
+      : {
+          gpuBytes: report.gpuBytes,
+        },
+    label: 'RAM preview GPU cached frame',
+  });
 }
 
 export function canRetainRamPreviewGpuFrame(

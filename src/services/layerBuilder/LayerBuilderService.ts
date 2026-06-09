@@ -1,66 +1,51 @@
 // LayerBuilderService - Main orchestrator for layer building
 // Delegates video sync to VideoSyncManager and audio sync to AudioTrackSyncManager
 
-import type { TimelineClip, Layer, NestedCompositionData, BlendMode, ClipTransform, VideoBakeRegion } from '../../types';
-import { compileRuntimeColorGrade } from '../../types';
+import type { TimelineClip, Layer, VideoBakeRegion } from '../../types';
 import type { FrameContext } from './types';
-import { LAYER_BUILDER_CONSTANTS } from './types';
-import { createFrameContext, getClipTimeInfo, getMediaFileForClip, isVideoTrackVisible } from './FrameContext';
+import { createFrameContext, isVideoTrackVisible } from './FrameContext';
 import { LayerCache } from './LayerCache';
 import { TransformCache } from './TransformCache';
 import { VideoSyncManager } from './VideoSyncManager';
 import { AudioTrackSyncManager } from './AudioTrackSyncManager';
-import { proxyFrameCache } from '../proxyFrameCache';
 import { layerPlaybackManager } from '../layerPlaybackManager';
 import { engine } from '../../engine/WebGPUEngine';
-import { DEFAULT_TEXT_3D_PROPERTIES } from '../../stores/timeline/constants';
-import {
-  canUseSharedPreviewRuntimeSession,
-  getPreviewRuntimeSource,
-  getRuntimeFrameProvider,
-  getScrubRuntimeSource,
-} from '../mediaRuntime/runtimePlayback';
-import { scrubSettleState } from '../scrubSettleState';
 import { Logger } from '../logger';
-import { flags } from '../../engine/featureFlags';
-import { getInterpolatedClipTransform } from '../../utils/keyframeInterpolation';
-import { getEffectiveScale } from '../../utils/transformScale';
-import { getInterpolatedMotionLayer } from '../../utils/motionInterpolation';
-import {
-  getGaussianSplatSequenceFrame,
-  getGaussianSplatSequenceFrameRuntimeKey,
-  getGaussianSplatSequenceFrameUrl,
-  resolveGaussianSplatSequenceData,
-} from '../../utils/gaussianSplatSequence';
-import { getModelSequenceFrame, getModelSequenceFrameUrl, resolveModelSequenceData } from '../../utils/modelSequence';
-import { resolveSceneEffectorsEnabled } from '../../engine/scene/SceneEffectorUtils';
+import type { RuntimeFrameProvider } from '../mediaRuntime/types';
 import { useTimelineStore } from '../../stores/timeline';
 import { useMediaStore } from '../../stores/mediaStore';
 import { videoBakeProxyCache } from '../videoBakeProxyCache';
-import { renderClipAINodesToCanvas } from '../nodeGraph';
-import { textRenderer } from '../textRenderer';
-import type { MediaFile } from '../../stores/mediaStore/types';
-import { getExpectedProxyFrameCount } from '../../stores/mediaStore/helpers/proxyCompleteness';
-import { DEFAULT_TRANSFORM, MAX_NESTING_DEPTH } from '../../stores/timeline/constants';
-import { prewarmGaussianSplatRuntime } from '../../engine/scene/runtime/SharedSplatRuntimeCache';
-import { resolveSharedSplatUseNativeRenderer } from '../../engine/scene/runtime/SharedSplatRuntimeUtils';
-import { vectorAnimationRuntimeManager } from '../vectorAnimation/VectorAnimationRuntimeManager';
-import { isVectorAnimationSourceType } from '../../types/vectorAnimation';
-import { mathSceneRenderer } from '../mathScene/MathSceneRenderer';
 import { hydrateTimelineMediaWindow } from '../timeline/lazyMediaElements';
-import { getLazyImageElementForClip } from '../timeline/lazyImageElements';
-import { getReusableModelUrl } from '../../stores/timeline/restoredMediaSource';
+import { getNativeDecoderForTimelineClip } from '../timeline/nativeDecoderRuntimeRegistry';
+import {
+  buildLayerBuilderImageLayer,
+  getLayerBuilderRenderableImageElement,
+} from './layerBuilder2dSources';
+import {
+  buildLayerBuilderCanvasBackedLayer,
+  syncLayerBuilderCanvasRuntimeSources,
+} from './layerBuilderCanvasSources';
+import { LayerBuilderProxyFrames } from './layerBuilderProxyFrames';
+import {
+  getLayerBuilderVideoSourceDebugInfo,
+  hasLayerBuilderRenderableVideoSource,
+  pauseLayerBuilderVideoSource,
+  selectLayerBuilderPausedVisualProvider,
+} from './layerBuilderVideoSources';
+import { buildLayerBuilderNativeDecoderLayer, buildLayerBuilderVideoLayer } from './layerBuilderVideoLayers';
+import { prewarmGaussianSplatClips } from './layerBuilder3dSources';
+import {
+  buildLayerBuilderGaussianSplatLayer,
+  buildLayerBuilderModelLayer,
+} from './layerBuilder3dLayers';
+import {
+  applyLayerBuilderAINodesToLayer,
+  withLayerBuilderMaskProperties,
+} from './layerBuilderLayerPostProcessing';
+import { buildLayerBuilderMotionShapeLayer } from './layerBuilderMotionLayers';
+import { buildLayerBuilderNestedCompLayer } from './layerBuilderNestedLayerBuilder';
 
 const log = Logger.create('LayerBuilder');
-const SCRUB_PROXY_HOLD_MAX_DRIFT_SECONDS = 0.15;
-const PAUSED_PROXY_HOLD_MAX_DRIFT_SECONDS = 0.5;
-// Cold-region scrub fallback: how far the nearest-cached-proxy search reaches.
-// While dragging the playhead, match proxyFrameCache's SCRUB_PRELOAD_RANGE (90 ≈ 3s)
-// so the frames the preloader already fetched ahead are actually used instead of
-// falling through to an empty-hold. Paused previews keep the tight default so they
-// never show a visibly wrong frame.
-const PROXY_NEAREST_DISTANCE_DEFAULT = 30;
-const PROXY_NEAREST_DISTANCE_SCRUB = 90;
 
 /**
  * LayerBuilderService - Builds render layers from timeline state
@@ -72,206 +57,26 @@ export class LayerBuilderService {
   private transformCache = new TransformCache();
   private videoSyncManager = new VideoSyncManager();
   private audioTrackSyncManager = new AudioTrackSyncManager();
-
-  // Proxy frame refs for fallback
-  private proxyFramesRef = new Map<string, { frameIndex: number; image: HTMLImageElement }>();
-  private proxyLoadingFrames = new Set<string>();
+  private proxyFrames = new LayerBuilderProxyFrames();
 
   // Lookahead preloading
-  private lastLookaheadTime = 0;
   private lastSplatLookaheadTime = 0;
 
   constructor() {
-    // Legacy gaussian-avatar path stays on disk for migration/reference only.
-    void this.buildGaussianAvatarLayer;
+    void this.getPausedVisualProvider;
   }
 
-  private hasRenderableVideoSource(source: TimelineClip['source'] | undefined): boolean {
-    return !!source?.videoElement || !!source?.webCodecsPlayer?.isFullMode();
-  }
-
-  private getPositiveDimension(value: number | undefined): number | undefined {
-    return typeof value === 'number' && Number.isFinite(value) && value > 0
-      ? value
-      : undefined;
-  }
-
-  private canUseHeldProxyFrame(
-    heldFrameIndex: number,
-    targetMediaTime: number,
-    proxyFps: number,
-    isDraggingPlayhead: boolean
-  ): boolean {
-    const heldMediaTime = heldFrameIndex / proxyFps;
-    const frameFloor = (isDraggingPlayhead ? 3 : 6) / proxyFps;
-    const maxDrift = Math.max(
-      frameFloor,
-      isDraggingPlayhead
-        ? SCRUB_PROXY_HOLD_MAX_DRIFT_SECONDS
-        : PAUSED_PROXY_HOLD_MAX_DRIFT_SECONDS
-    );
-    return Math.abs(heldMediaTime - targetMediaTime) <= maxDrift;
-  }
-
-  private getRenderableFile(file: File | undefined): File | undefined {
-    return file && (typeof file.size !== 'number' || file.size > 0) ? file : undefined;
-  }
-
-  private getLayerSourceMetadata(
-    clip: TimelineClip,
-    mediaFile?: { id?: string; width?: number; height?: number },
-    fallback?: { width?: number; height?: number },
-  ): { mediaFileId?: string; intrinsicWidth?: number; intrinsicHeight?: number } {
-    return {
-      mediaFileId: mediaFile?.id ?? clip.mediaFileId ?? clip.source?.mediaFileId,
-      intrinsicWidth: this.getPositiveDimension(mediaFile?.width) ?? this.getPositiveDimension(fallback?.width),
-      intrinsicHeight: this.getPositiveDimension(mediaFile?.height) ?? this.getPositiveDimension(fallback?.height),
-    };
-  }
-
-  private getClipModelSequence(clip: TimelineClip) {
-    const mediaFileId = clip.mediaFileId ?? clip.source?.mediaFileId;
-    const mediaFile = mediaFileId
-      ? useMediaStore.getState().files.find((file) => file.id === mediaFileId)
-      : undefined;
-
-    return resolveModelSequenceData(clip.source?.modelSequence, mediaFile?.modelSequence);
-  }
-
-  private resolveClipModelUrl(clip: TimelineClip, sourceTime: number): string | undefined {
-    const mediaFileId = clip.mediaFileId ?? clip.source?.mediaFileId;
-    const mediaFile = mediaFileId
-      ? useMediaStore.getState().files.find((file) => file.id === mediaFileId)
-      : undefined;
-
-    return getModelSequenceFrameUrl(
-      this.getClipModelSequence(clip),
-      sourceTime,
-      clip.source?.modelUrl ?? getReusableModelUrl(mediaFile),
-    );
-  }
-
-  private getClipGaussianSplatSequence(clip: TimelineClip) {
-    const mediaFileId = clip.mediaFileId ?? clip.source?.mediaFileId;
-    const mediaSequence = mediaFileId
-      ? useMediaStore.getState().files.find((file) => file.id === mediaFileId)?.gaussianSplatSequence
-      : undefined;
-
-    return resolveGaussianSplatSequenceData(clip.source?.gaussianSplatSequence, mediaSequence);
-  }
-
-  private resolveClipGaussianSplatFrame(clip: TimelineClip, sourceTime: number) {
-    return getGaussianSplatSequenceFrame(
-      this.getClipGaussianSplatSequence(clip),
-      sourceTime,
-    );
-  }
-
-  private resolveClipGaussianSplatUrl(clip: TimelineClip, sourceTime: number): string | undefined {
-    return getGaussianSplatSequenceFrameUrl(
-      this.getClipGaussianSplatSequence(clip),
-      sourceTime,
-      clip.source?.gaussianSplatUrl,
-    );
-  }
-
-  private resolveClipGaussianSplatFile(
-    clip: TimelineClip,
-    sourceTime: number,
-    mediaFile?: { file?: File },
-  ): File | undefined {
-    return (
-      this.getRenderableFile(this.resolveClipGaussianSplatFrame(clip, sourceTime)?.file) ??
-      this.getRenderableFile(mediaFile?.file) ??
-      this.getRenderableFile(clip.source?.file) ??
-      this.getRenderableFile(clip.file)
-    );
+  private hasRenderableVideoSource(source: TimelineClip['source'] | undefined, clip?: TimelineClip): boolean {
+    return hasLayerBuilderRenderableVideoSource(source, clip);
   }
 
   private getPausedVisualProvider(
     source: TimelineClip['source'],
-    runtimeProvider: ReturnType<typeof getRuntimeFrameProvider>,
+    runtimeProvider: RuntimeFrameProvider | null,
     targetTime: number,
     options?: { preferFreshRuntime?: boolean }
   ) {
-    const preferFreshRuntime = options?.preferFreshRuntime === true;
-    const freshFrameTolerance = 0.12;
-    const providerDistance = (
-      provider:
-        | {
-          currentTime: number;
-          getPendingSeekTime?: () => number | null | undefined;
-          hasFrame?: () => boolean;
-          getCurrentFrame?: () => unknown;
-          isFullMode?: () => boolean;
-        }
-        | null
-        | undefined
-    ): number => {
-      if (!provider?.isFullMode?.()) {
-        return Number.POSITIVE_INFINITY;
-      }
-      const hasFrame =
-        (provider.hasFrame?.() ?? false) ||
-        !!provider.getCurrentFrame?.();
-      if (!hasFrame) {
-        return Number.POSITIVE_INFINITY;
-      }
-      const effectiveTime = provider.getPendingSeekTime?.() ?? provider.currentTime;
-      return Number.isFinite(effectiveTime)
-        ? Math.abs(effectiveTime - targetTime)
-        : Number.POSITIVE_INFINITY;
-    };
-
-    const runtimeHasFrame =
-      (runtimeProvider?.hasFrame?.() ?? false) ||
-      !!runtimeProvider?.getCurrentFrame?.();
-    const runtimeEffectiveTime = runtimeProvider?.getPendingSeekTime?.() ?? runtimeProvider?.currentTime;
-    if (
-      runtimeProvider?.isFullMode() &&
-      runtimeHasFrame &&
-      runtimeEffectiveTime !== undefined &&
-      Math.abs(runtimeEffectiveTime - targetTime) <= 0.05
-    ) {
-      return runtimeProvider;
-    }
-
-    const clipPlayer = source?.webCodecsPlayer;
-    const clipHasFrame =
-      (clipPlayer?.hasFrame?.() ?? false) ||
-      !!clipPlayer?.getCurrentFrame?.();
-    const runtimeDistance = providerDistance(runtimeProvider);
-    const clipDistance = providerDistance(clipPlayer);
-    if (!clipPlayer?.isFullMode()) {
-      return runtimeHasFrame && runtimeProvider?.isFullMode() ? runtimeProvider : undefined;
-    }
-
-    if (preferFreshRuntime && runtimeProvider?.isFullMode()) {
-      const runtimeIsFresh = runtimeHasFrame && runtimeDistance <= freshFrameTolerance;
-      const clipIsFresh = clipHasFrame && clipDistance <= freshFrameTolerance;
-
-      if (runtimeIsFresh && runtimeDistance <= clipDistance) {
-        return runtimeProvider;
-      }
-      if (clipIsFresh) {
-        return clipPlayer;
-      }
-      return runtimeProvider;
-    }
-
-    if (runtimeHasFrame && runtimeDistance < clipDistance) {
-      return runtimeProvider;
-    }
-
-    if (clipHasFrame) {
-      return clipPlayer;
-    }
-
-    if (runtimeHasFrame && runtimeProvider?.isFullMode()) {
-      return runtimeProvider;
-    }
-
-    return clipPlayer;
+    return selectLayerBuilderPausedVisualProvider(source, runtimeProvider, targetTime, options);
   }
 
   /**
@@ -280,8 +85,7 @@ export class LayerBuilderService {
   invalidateCache(): void {
     this.layerCache.invalidate();
     this.transformCache.clear();
-    this.proxyFramesRef.clear();
-    this.proxyLoadingFrames.clear();
+    this.proxyFrames.clear();
   }
 
   /**
@@ -292,8 +96,7 @@ export class LayerBuilderService {
     // Create frame context (single store read)
     const ctx = createFrameContext();
     hydrateTimelineMediaWindow(ctx);
-    this.syncActiveVectorAnimationClips(ctx);
-    this.syncActiveMathSceneClips(ctx);
+    syncLayerBuilderCanvasRuntimeSources(ctx);
     const { activeLayerSlots = {}, activeCompositionId } = useMediaStore.getState();
     const slotGridActive = useTimelineStore.getState().slotGridProgress > 0.5;
     const hasActiveLayerSlots = Object.keys(activeLayerSlots).length > 0;
@@ -318,7 +121,7 @@ export class LayerBuilderService {
       return this.mergeBackgroundLayers([], ctx.playheadPosition);
     }
 
-    this.prewarmGaussianSplatClips(ctx);
+    this.lastSplatLookaheadTime = prewarmGaussianSplatClips(ctx, this.lastSplatLookaheadTime);
 
     const bakedLayer = this.buildActiveCompositionVideoBakeLayer(ctx);
     if (bakedLayer) {
@@ -344,18 +147,13 @@ export class LayerBuilderService {
             trackId: clip.trackId,
             sourceType: clip.source?.type,
             isLoading: clip.isLoading ?? false,
-            hasVideoElement: !!clip.source?.videoElement,
-            videoReadyState: clip.source?.videoElement?.readyState ?? null,
-            hasWebCodecsPlayer: !!clip.source?.webCodecsPlayer,
-            webCodecsFullMode: clip.source?.webCodecsPlayer?.isFullMode?.() ?? false,
-            webCodecsHasFrame: clip.source?.webCodecsPlayer?.hasFrame?.() ?? false,
-            webCodecsPendingSeek: clip.source?.webCodecsPlayer?.getPendingSeekTime?.() ?? null,
+            ...getLayerBuilderVideoSourceDebugInfo(clip),
           })),
         });
       }
       // Preload upcoming nested comp frames during playback
       if (ctx.isPlaying) {
-        this.preloadUpcomingNestedCompFrames(ctx);
+        this.proxyFrames.prewarmUpcomingNestedCompFrames(ctx);
       }
     }
 
@@ -365,24 +163,6 @@ export class LayerBuilderService {
 
     // Merge background layers from active layer slots
     return this.mergeBackgroundLayers(primaryLayers, ctx.playheadPosition);
-  }
-
-  private collectKnownClipIds(clips: TimelineClip[]): string[] {
-    const ids: string[] = [];
-    const visit = (clip: TimelineClip) => {
-      ids.push(clip.id);
-      if (clip.nestedClips?.length) {
-        for (const nestedClip of clip.nestedClips) {
-          visit(nestedClip);
-        }
-      }
-    };
-
-    for (const clip of clips) {
-      visit(clip);
-    }
-
-    return ids;
   }
 
   private getActiveCompositionVideoBakeRegion(ctx: FrameContext): VideoBakeRegion | undefined {
@@ -412,23 +192,7 @@ export class LayerBuilderService {
 
   private pausePrimaryCompositionVideoSources(ctx: FrameContext): void {
     const pauseClip = (clip: TimelineClip) => {
-      if (clip.source?.videoElement && !clip.source.videoElement.paused) {
-        clip.source.videoElement.pause();
-      }
-
-      const previewSource = getPreviewRuntimeSource(
-        clip.source,
-        clip.trackId,
-        canUseSharedPreviewRuntimeSession(clip, ctx.clipsAtTime),
-      );
-      const scrubSource = getScrubRuntimeSource(
-        clip.source,
-        clip.trackId,
-        canUseSharedPreviewRuntimeSession(clip, ctx.clipsAtTime),
-      );
-      getRuntimeFrameProvider(previewSource)?.pause();
-      getRuntimeFrameProvider(scrubSource)?.pause();
-      clip.source?.webCodecsPlayer?.pause();
+      pauseLayerBuilderVideoSource(clip, ctx);
 
       for (const nestedClip of clip.nestedClips ?? []) {
         pauseClip(nestedClip);
@@ -437,28 +201,6 @@ export class LayerBuilderService {
 
     for (const clip of ctx.clips) {
       pauseClip(clip);
-    }
-  }
-
-  private syncActiveVectorAnimationClips(ctx: FrameContext): void {
-    for (const clip of ctx.clipsAtTime) {
-      if (isVectorAnimationSourceType(clip.source?.type)) {
-        vectorAnimationRuntimeManager.renderClipAtTime(
-          clip,
-          ctx.playheadPosition,
-          ctx.getInterpolatedVectorAnimationSettings(clip.id, ctx.playheadPosition - clip.startTime),
-        );
-      }
-    }
-
-    vectorAnimationRuntimeManager.pruneClipRuntimes(this.collectKnownClipIds(ctx.clips));
-  }
-
-  private syncActiveMathSceneClips(ctx: FrameContext): void {
-    for (const clip of ctx.clipsAtTime) {
-      if (clip.source?.type !== 'math-scene') continue;
-      const timeInfo = getClipTimeInfo(ctx, clip);
-      mathSceneRenderer.renderClip(clip, timeInfo.clipLocalTime);
     }
   }
 
@@ -613,49 +355,71 @@ export class LayerBuilderService {
 
     // Nested composition
     if (clip.isComposition && clip.nestedClips && clip.nestedClips.length > 0) {
-      layer = this.buildNestedCompLayer(clip, layerIndex, ctx, opacityOverride);
+      layer = buildLayerBuilderNestedCompLayer({
+        clip,
+        layerIndex,
+        ctx,
+        transformCache: this.transformCache,
+        proxyFrames: this.proxyFrames,
+        opacityOverride,
+      });
     }
     // Native decoder (ProRes/DNxHD turbo mode)
-    else if (clip.source?.nativeDecoder) {
-      layer = this.buildNativeDecoderLayer(clip, layerIndex, ctx, opacityOverride);
+    else if (getNativeDecoderForTimelineClip(clip)) {
+      layer = buildLayerBuilderNativeDecoderLayer({
+        clip,
+        layerIndex,
+        ctx,
+        transformCache: this.transformCache,
+        opacityOverride,
+        nativeDecoder: getNativeDecoderForTimelineClip(clip)!,
+      });
     }
     // Video clip
-    else if (this.hasRenderableVideoSource(clip.source)) {
-      layer = this.buildVideoLayer(clip, layerIndex, ctx, opacityOverride);
+    else if (this.hasRenderableVideoSource(clip.source, clip)) {
+      layer = buildLayerBuilderVideoLayer({
+        clip,
+        layerIndex,
+        ctx,
+        transformCache: this.transformCache,
+        opacityOverride,
+        proxyFrames: this.proxyFrames,
+        previewContinuationResolver: this.videoSyncManager,
+      });
     }
     // Image clip
     else if (clip.source?.type === 'image') {
-      const imageElement = this.getRenderableImageElement(clip, ctx);
+      const imageElement = getLayerBuilderRenderableImageElement(clip, ctx);
       if (imageElement) {
-        layer = this.buildImageLayer(clip, layerIndex, ctx, imageElement, opacityOverride);
+        layer = withLayerBuilderMaskProperties(buildLayerBuilderImageLayer({
+          clip,
+          layerIndex,
+          ctx,
+          transformCache: this.transformCache,
+          imageElement,
+          opacityOverride,
+        }), clip);
       }
     }
-    // Vector animation canvas-backed clip
-    else if (isVectorAnimationSourceType(clip.source?.type)) {
-      const textCanvas = vectorAnimationRuntimeManager.renderClipAtTime(
-        clip,
-        ctx.playheadPosition,
-        ctx.getInterpolatedVectorAnimationSettings(clip.id, ctx.playheadPosition - clip.startTime),
-      );
-      if (textCanvas) {
-        layer = this.buildTextLayer(clip, layerIndex, ctx, opacityOverride, textCanvas);
-      }
-    }
-    // Math Scene canvas-backed clip
-    else if (clip.source?.type === 'math-scene') {
-      const timeInfo = getClipTimeInfo(ctx, clip);
-      mathSceneRenderer.renderClip(clip, timeInfo.clipLocalTime);
-      if (clip.source?.textCanvas) {
-        layer = this.buildTextLayer(clip, layerIndex, ctx, opacityOverride);
-      }
-    }
-    // Text clip
-    else if (clip.source?.textCanvas) {
-      layer = this.buildTextLayer(clip, layerIndex, ctx, opacityOverride);
+    // Canvas-backed clip sources: vector animation, math scene, generated text.
+    else if ((layer = buildLayerBuilderCanvasBackedLayer({
+      clip,
+      layerIndex,
+      ctx,
+      transformCache: this.transformCache,
+      opacityOverride,
+    }))) {
+      layer = withLayerBuilderMaskProperties(layer, clip);
     }
     // Motion shape clip
     else if (clip.source?.type === 'motion-shape') {
-      layer = this.buildMotionShapeLayer(clip, layerIndex, ctx, opacityOverride);
+      layer = buildLayerBuilderMotionShapeLayer({
+        clip,
+        layerIndex,
+        ctx,
+        transformCache: this.transformCache,
+        opacityOverride,
+      });
     }
     // Motion null and adjustment clips are timeline/controller data for now.
     else if (clip.source?.type === 'motion-null' || clip.source?.type === 'motion-adjustment') {
@@ -671,15 +435,27 @@ export class LayerBuilderService {
     }
     // 3D Model clip
     else if (clip.source?.type === 'model') {
-      layer = this.buildModelLayer(clip, layerIndex, ctx, opacityOverride);
+      layer = buildLayerBuilderModelLayer({
+        clip,
+        layerIndex,
+        ctx,
+        transformCache: this.transformCache,
+        opacityOverride,
+      });
     }
     // Gaussian Splat clip (native WebGPU path)
     else if (clip.source?.type === 'gaussian-splat') {
-      layer = this.buildGaussianSplatLayer(clip, layerIndex, ctx, opacityOverride);
+      layer = buildLayerBuilderGaussianSplatLayer({
+        clip,
+        layerIndex,
+        ctx,
+        transformCache: this.transformCache,
+        opacityOverride,
+      });
     }
 
     if (layer?.source) {
-      layer = this.applyAINodesToLayer(clip, layer, ctx);
+      layer = applyLayerBuilderAINodesToLayer(clip, layer, ctx);
     }
 
     // Pass through 3D flag from clip to layer
@@ -688,1309 +464,6 @@ export class LayerBuilderService {
     }
 
     return layer;
-  }
-
-  private applyAINodesToLayer(clip: TimelineClip, layer: Layer, ctx: FrameContext): Layer {
-    if (!layer.source) {
-      return layer;
-    }
-
-    const timeInfo = getClipTimeInfo(ctx, clip);
-    const track = ctx.tracks.find(candidate => candidate.id === clip.trackId);
-    const linkedClip = this.findLinkedClip(clip, ctx);
-    const linkedTrack = linkedClip
-      ? ctx.tracks.find(candidate => candidate.id === linkedClip.trackId)
-      : undefined;
-    const canvas = renderClipAINodesToCanvas(
-      clip,
-      layer.source,
-      layer.id,
-      timeInfo.clipLocalTime,
-      (nodeId) => ctx.getInterpolatedNodeGraphParams(clip.id, nodeId, timeInfo.clipLocalTime),
-      {
-        track,
-        linkedClip,
-        linkedTrack,
-        masterAudioState: ctx.masterAudioState,
-      },
-    );
-    if (!canvas) {
-      return layer;
-    }
-
-    return {
-      ...layer,
-      source: {
-        type: 'text',
-        textCanvas: canvas,
-        intrinsicWidth: canvas.width,
-        intrinsicHeight: canvas.height,
-        mediaTime: layer.source.mediaTime,
-        targetMediaTime: layer.source.targetMediaTime,
-        previewPath: 'ai-node-runtime',
-      },
-    };
-  }
-
-  private findLinkedClip(clip: TimelineClip, ctx: FrameContext): TimelineClip | null {
-    if (clip.linkedClipId) {
-      return ctx.clips.find(candidate => candidate.id === clip.linkedClipId) ?? null;
-    }
-
-    return ctx.clips.find(candidate => candidate.linkedClipId === clip.id) ?? null;
-  }
-
-  private buildMotionShapeLayer(clip: TimelineClip, layerIndex: number, ctx: FrameContext, opacityOverride?: number): Layer | null {
-    if (!clip.motion || clip.motion.kind !== 'shape') {
-      return null;
-    }
-
-    const timeInfo = getClipTimeInfo(ctx, clip);
-    const transform = this.transformCache.getTransform(
-      `${ctx.activeCompId}_${layerIndex}_${clip.id}`,
-      ctx.getInterpolatedTransform(clip.id, timeInfo.clipLocalTime)
-    );
-    const effects = ctx.getInterpolatedEffects(clip.id, timeInfo.clipLocalTime);
-    const colorCorrection = ctx.getInterpolatedColorCorrection(clip.id, timeInfo.clipLocalTime);
-    const keyframes = useTimelineStore.getState().clipKeyframes.get(clip.id) ?? [];
-    const motion = getInterpolatedMotionLayer(clip, keyframes, timeInfo.clipLocalTime) ?? clip.motion;
-    const finalOpacity = opacityOverride !== undefined
-      ? transform.opacity * opacityOverride
-      : transform.opacity;
-
-    const layer: Layer = {
-      id: `${ctx.activeCompId}_layer_${layerIndex}_${clip.id}`,
-      name: clip.name,
-      sourceClipId: clip.id,
-      visible: true,
-      opacity: finalOpacity,
-      blendMode: transform.blendMode as BlendMode,
-      source: {
-        type: 'motion',
-        motion,
-      },
-      effects,
-      colorCorrection,
-      position: transform.position,
-      scale: transform.scale,
-      rotation: transform.rotation,
-    };
-
-    this.addMaskProperties(layer, clip);
-    return layer;
-  }
-
-  /**
-   * Build nested composition layer
-   */
-  private buildNestedCompLayer(clip: TimelineClip, layerIndex: number, ctx: FrameContext, opacityOverride?: number): Layer | null {
-    const timeInfo = getClipTimeInfo(ctx, clip);
-    const nestedLayers = this.buildNestedLayers(clip, timeInfo.clipTime, ctx);
-
-    if (nestedLayers.length === 0) return null;
-
-    const transform = this.transformCache.getTransform(
-      `${ctx.activeCompId}_${layerIndex}`,
-      ctx.getInterpolatedTransform(clip.id, timeInfo.clipTime)
-    );
-    const effects = ctx.getInterpolatedEffects(clip.id, timeInfo.clipTime);
-    const colorCorrection = ctx.getInterpolatedColorCorrection(clip.id, timeInfo.clipTime);
-
-    const composition = ctx.compositionById.get(clip.compositionId || '');
-    const compWidth = composition?.width || 1920;
-    const compHeight = composition?.height || 1080;
-
-    const nestedCompData: NestedCompositionData = {
-      compositionId: clip.compositionId || clip.id,
-      layers: nestedLayers,
-      width: compWidth,
-      height: compHeight,
-      currentTime: ctx.playheadPosition,
-      sceneClips: clip.nestedClips,
-      sceneTracks: clip.nestedTracks,
-    };
-
-    // Apply transition opacity override if provided
-    const finalOpacity = opacityOverride !== undefined
-      ? transform.opacity * opacityOverride
-      : transform.opacity;
-
-    const layer: Layer = {
-      id: `${ctx.activeCompId}_layer_${layerIndex}_${clip.id}`,
-      name: clip.name,
-      sourceClipId: clip.id,
-      visible: true,
-      opacity: finalOpacity,
-      blendMode: transform.blendMode as BlendMode,
-      source: { type: 'image', nestedComposition: nestedCompData },
-      effects,
-      colorCorrection,
-      position: transform.position,
-      scale: transform.scale,
-      rotation: transform.rotation,
-    };
-
-    this.addMaskProperties(layer, clip);
-    return layer;
-  }
-
-  /**
-   * Build native decoder layer
-   */
-  private buildNativeDecoderLayer(clip: TimelineClip, layerIndex: number, ctx: FrameContext, opacityOverride?: number): Layer {
-    const timeInfo = getClipTimeInfo(ctx, clip);
-    const mediaFile = getMediaFileForClip(ctx, clip);
-    const sourceMetadata = this.getLayerSourceMetadata(clip, mediaFile, {
-      width: clip.source?.videoElement?.videoWidth,
-      height: clip.source?.videoElement?.videoHeight,
-    });
-    const transform = this.transformCache.getTransform(
-      `${ctx.activeCompId}_${layerIndex}`,
-      ctx.getInterpolatedTransform(clip.id, timeInfo.clipLocalTime)
-    );
-    const effects = ctx.getInterpolatedEffects(clip.id, timeInfo.clipLocalTime);
-    const colorCorrection = ctx.getInterpolatedColorCorrection(clip.id, timeInfo.clipLocalTime);
-
-    // Apply transition opacity override if provided
-    const finalOpacity = opacityOverride !== undefined
-      ? transform.opacity * opacityOverride
-      : transform.opacity;
-
-    const layer: Layer = {
-      id: `${ctx.activeCompId}_layer_${layerIndex}_${clip.id}`,
-      name: clip.name,
-      sourceClipId: clip.id,
-      visible: true,
-      opacity: finalOpacity,
-      blendMode: transform.blendMode as BlendMode,
-      source: {
-        type: 'video',
-        nativeDecoder: clip.source!.nativeDecoder,
-        ...sourceMetadata,
-      },
-      effects,
-      colorCorrection,
-      position: transform.position,
-      scale: transform.scale,
-      rotation: transform.rotation,
-    };
-
-    this.addMaskProperties(layer, clip);
-    return layer;
-  }
-
-  /**
-   * Build video layer (with proxy support)
-   */
-  private buildVideoLayer(clip: TimelineClip, layerIndex: number, ctx: FrameContext, opacityOverride?: number): Layer | null {
-    const timeInfo = getClipTimeInfo(ctx, clip);
-    const mediaFile = getMediaFileForClip(ctx, clip);
-    const sourceMetadata = this.getLayerSourceMetadata(clip, mediaFile, {
-      width: clip.source?.videoElement?.videoWidth,
-      height: clip.source?.videoElement?.videoHeight,
-    });
-
-    // Check for proxy usage. Normal playback and paused inspection should stay
-    // on the live video path; JPEG proxy frames are an interactive scrub aid and
-    // can be stale/corrupt after large project restores.
-    const useProxyLayer =
-      ctx.proxyEnabled &&
-      mediaFile?.proxyFps &&
-      (ctx.isDraggingPlayhead || ctx.hasClipDragPreview);
-    if (useProxyLayer) {
-      const proxyLayer = this.tryBuildProxyLayer(clip, layerIndex, timeInfo.clipTime, mediaFile, ctx, opacityOverride);
-      if (proxyLayer) return proxyLayer;
-    }
-
-    // Direct video layer
-    const transform = this.transformCache.getTransform(
-      `${ctx.activeCompId}_${layerIndex}`,
-      ctx.getInterpolatedTransform(clip.id, timeInfo.clipLocalTime)
-    );
-    const effects = ctx.getInterpolatedEffects(clip.id, timeInfo.clipLocalTime);
-    const colorCorrection = ctx.getInterpolatedColorCorrection(clip.id, timeInfo.clipLocalTime);
-
-    // Apply transition opacity override if provided
-    const finalOpacity = opacityOverride !== undefined
-      ? transform.opacity * opacityOverride
-      : transform.opacity;
-
-    // During split-cut settles, reuse the previous same-source element briefly
-    // until the new segment's own element has decoded the target frame.
-    const continuationVideo = this.videoSyncManager.getPreviewContinuationVideoElement(
-      clip,
-      timeInfo.clipTime
-    );
-    const allowSharedPreviewSession = canUseSharedPreviewRuntimeSession(clip, ctx.clipsAtTime);
-    const isInteractivePreview = ctx.isDraggingPlayhead || ctx.hasClipDragPreview;
-    const keepScrubRuntimeActive =
-      isInteractivePreview || scrubSettleState.isPending(clip.id);
-    const useScrubRuntime = keepScrubRuntimeActive;
-    const previewRuntimeSource = useScrubRuntime
-      ? getScrubRuntimeSource(
-          clip.source,
-          clip.trackId,
-          allowSharedPreviewSession
-        )
-      : getPreviewRuntimeSource(
-          clip.source,
-          clip.trackId,
-          allowSharedPreviewSession
-        );
-    const runtimeProvider = getRuntimeFrameProvider(previewRuntimeSource);
-    const preferFreshPausedRuntime = useScrubRuntime;
-    const preferHtmlScrubPreview =
-      !flags.disableHtmlPreviewFallback &&
-      isInteractivePreview &&
-      !!clip.source?.videoElement &&
-      (!flags.useFullWebCodecsPlayback || !clip.source?.webCodecsPlayer?.isFullMode?.());
-    const playingVisualProvider =
-      runtimeProvider?.isFullMode()
-        ? runtimeProvider
-        : previewRuntimeSource?.webCodecsPlayer ?? clip.source?.webCodecsPlayer;
-    const visualProvider = ctx.isPlaying
-      ? playingVisualProvider
-      : preferHtmlScrubPreview
-        ? undefined
-        : this.getPausedVisualProvider(clip.source, runtimeProvider, timeInfo.clipTime, {
-            preferFreshRuntime: preferFreshPausedRuntime,
-          });
-
-    const layer: Layer = {
-      id: `${ctx.activeCompId}_layer_${layerIndex}`,
-      name: clip.name,
-      sourceClipId: clip.id,
-      visible: true,
-      opacity: finalOpacity,
-      blendMode: transform.blendMode as BlendMode,
-      source: {
-        type: 'video',
-        videoElement: continuationVideo ?? clip.source!.videoElement,
-        mediaTime: timeInfo.clipTime,
-        // Keep the clip's decoder attached even when audio uses a handoff element.
-        webCodecsPlayer: visualProvider ?? undefined,
-        runtimeSourceId: preferHtmlScrubPreview ? undefined : previewRuntimeSource?.runtimeSourceId,
-        runtimeSessionKey: preferHtmlScrubPreview ? undefined : previewRuntimeSource?.runtimeSessionKey,
-        ...sourceMetadata,
-      },
-      effects,
-      colorCorrection,
-      position: transform.position,
-      scale: transform.scale,
-      rotation: transform.rotation,
-    };
-
-    this.addMaskProperties(layer, clip);
-    return layer;
-  }
-
-  /**
-   * Try to build proxy layer, returns null if not available
-   */
-  private tryBuildProxyLayer(
-    clip: TimelineClip,
-    layerIndex: number,
-    clipTime: number,
-    mediaFile: MediaFile,
-    ctx: FrameContext,
-    opacityOverride?: number
-  ): Layer | null {
-    const proxyFps = mediaFile.proxyFps || 30;
-    const frameIndex = Math.floor(clipTime * proxyFps);
-
-    if (!this.canUseProxyFrame(mediaFile, frameIndex, proxyFps)) return null;
-
-    const cacheKey = `${mediaFile.id}_${clip.id}`;
-    const cachedFrame = proxyFrameCache.getCachedFrame(mediaFile.id, frameIndex, proxyFps);
-
-    if (cachedFrame) {
-      this.proxyFramesRef.set(cacheKey, { frameIndex, image: cachedFrame });
-      return this.buildImageLayerFromProxy(clip, layerIndex, cachedFrame, clipTime, ctx, opacityOverride, {
-        displayedMediaTime: frameIndex / proxyFps,
-        targetMediaTime: clipTime,
-        previewPath: 'proxy-image-frame',
-        proxyFrameIndex: frameIndex,
-      });
-    }
-
-    this.ensureProxyImageFrameLoaded(mediaFile.id, frameIndex, clipTime, proxyFps, cacheKey);
-
-    // Try to get nearest cached frame for smooth scrubbing. During an active
-    // playhead drag, reach as far as the preloader fetches ahead (±3s) so a
-    // cold-region teleport lands on a preloaded frame instead of empty-hold.
-    const nearestDistance = ctx.isDraggingPlayhead
-      ? PROXY_NEAREST_DISTANCE_SCRUB
-      : PROXY_NEAREST_DISTANCE_DEFAULT;
-    const nearestFrame = proxyFrameCache.getNearestCachedFrameEntry(mediaFile.id, frameIndex, nearestDistance);
-    if (nearestFrame) {
-      return this.buildImageLayerFromProxy(
-        clip,
-        layerIndex,
-        nearestFrame.image,
-        clipTime,
-        ctx,
-        opacityOverride,
-        {
-          displayedMediaTime: nearestFrame.frameIndex / proxyFps,
-          targetMediaTime: clipTime,
-          previewPath: 'proxy-image-frame-nearest',
-          proxyFrameIndex: nearestFrame.frameIndex,
-        }
-      );
-    }
-
-    // Use previous cached frame as fallback
-    const cached = this.proxyFramesRef.get(cacheKey);
-    if (
-      cached?.image &&
-      this.canUseHeldProxyFrame(cached.frameIndex, clipTime, proxyFps, ctx.isDraggingPlayhead)
-    ) {
-      return this.buildImageLayerFromProxy(clip, layerIndex, cached.image, clipTime, ctx, opacityOverride, {
-        displayedMediaTime: cached.frameIndex / proxyFps,
-        targetMediaTime: clipTime,
-        previewPath: 'proxy-image-frame-hold',
-        proxyFrameIndex: cached.frameIndex,
-      });
-    }
-
-    // Guaranteed floor during an active drag: once this clip has rendered any
-    // proxy frame, hold it (ignoring the drift gate) rather than dropping to an
-    // empty-hold while a fast fling outruns the preloader. The correct frame
-    // snaps in as soon as ensureProxyImageFrameLoaded resolves (~1 frame later).
-    if (ctx.isDraggingPlayhead && cached?.image) {
-      return this.buildImageLayerFromProxy(clip, layerIndex, cached.image, clipTime, ctx, opacityOverride, {
-        displayedMediaTime: cached.frameIndex / proxyFps,
-        targetMediaTime: clipTime,
-        previewPath: 'proxy-image-frame-hold-stale',
-        proxyFrameIndex: cached.frameIndex,
-      });
-    }
-
-    // No proxy frame available - return null to fall back to video
-    return null;
-  }
-
-  private canUseProxyFrame(mediaFile: MediaFile, frameIndex: number, proxyFps: number): boolean {
-    if (mediaFile.proxyFormat === 'mp4-all-intra') {
-      return false;
-    }
-
-    if (mediaFile.proxyStatus === 'ready') {
-      return true;
-    }
-
-    if (mediaFile.proxyStatus !== 'generating' || (mediaFile.proxyProgress || 0) <= 0) {
-      return false;
-    }
-
-    const fallbackDuration = mediaFile.duration || 10;
-    const totalFrames =
-      getExpectedProxyFrameCount(fallbackDuration, proxyFps) ??
-      Math.ceil(fallbackDuration * proxyFps);
-    const maxGeneratedFrame = Math.floor(totalFrames * ((mediaFile.proxyProgress || 0) / 100));
-    return frameIndex < maxGeneratedFrame;
-  }
-
-  private ensureProxyImageFrameLoaded(
-    mediaFileId: string,
-    frameIndex: number,
-    clipTime: number,
-    proxyFps: number,
-    cacheKey: string
-  ): void {
-    const loadKey = `${mediaFileId}_${frameIndex}`;
-    if (this.proxyLoadingFrames.has(loadKey)) return;
-
-    this.proxyLoadingFrames.add(loadKey);
-    proxyFrameCache
-      .getFrame(mediaFileId, clipTime, proxyFps)
-      .then((image) => {
-        if (image) {
-          this.proxyFramesRef.set(cacheKey, { frameIndex, image });
-          engine.requestRender();
-        }
-      })
-      .finally(() => {
-        this.proxyLoadingFrames.delete(loadKey);
-      });
-  }
-
-  private getRenderableImageElement(clip: TimelineClip, ctx: FrameContext): HTMLImageElement | null {
-    return clip.source?.imageElement ?? getLazyImageElementForClip(ctx, clip);
-  }
-
-  /**
-   * Build image layer
-   */
-  private buildImageLayer(
-    clip: TimelineClip,
-    layerIndex: number,
-    ctx: FrameContext,
-    imageElement: HTMLImageElement,
-    opacityOverride?: number,
-  ): Layer {
-    const timeInfo = getClipTimeInfo(ctx, clip);
-    const transform = this.transformCache.getTransform(
-      `${ctx.activeCompId}_${layerIndex}`,
-      ctx.getInterpolatedTransform(clip.id, timeInfo.clipLocalTime)
-    );
-    const effects = ctx.getInterpolatedEffects(clip.id, timeInfo.clipLocalTime);
-    const colorCorrection = ctx.getInterpolatedColorCorrection(clip.id, timeInfo.clipLocalTime);
-
-    // Apply transition opacity override if provided
-    const finalOpacity = opacityOverride !== undefined
-      ? transform.opacity * opacityOverride
-      : transform.opacity;
-
-    const layer: Layer = {
-      id: `${ctx.activeCompId}_layer_${layerIndex}`,
-      name: clip.name,
-      sourceClipId: clip.id,
-      visible: true,
-      opacity: finalOpacity,
-      blendMode: transform.blendMode as BlendMode,
-      source: { type: 'image', imageElement },
-      effects,
-      colorCorrection,
-      position: transform.position,
-      scale: transform.scale,
-      rotation: transform.rotation,
-    };
-
-    this.addMaskProperties(layer, clip);
-    return layer;
-  }
-
-  private buildImageLayerFromProxy(
-    clip: TimelineClip,
-    layerIndex: number,
-    image: HTMLImageElement,
-    localTime: number,
-    ctx: FrameContext,
-    opacityOverride?: number,
-    timing?: {
-      displayedMediaTime: number;
-      targetMediaTime: number;
-      previewPath: string;
-      proxyFrameIndex?: number;
-    }
-  ): Layer {
-    const mediaFile = getMediaFileForClip(ctx, clip);
-    const sourceMetadata = this.getLayerSourceMetadata(clip, mediaFile, {
-      width: image.naturalWidth || image.width,
-      height: image.naturalHeight || image.height,
-    });
-    const transform = this.transformCache.getTransform(
-      `${ctx.activeCompId}_${layerIndex}`,
-      ctx.getInterpolatedTransform(clip.id, localTime)
-    );
-    const effects = ctx.getInterpolatedEffects(clip.id, localTime);
-    const colorCorrection = ctx.getInterpolatedColorCorrection(clip.id, localTime);
-    const finalOpacity = opacityOverride !== undefined
-      ? transform.opacity * opacityOverride
-      : transform.opacity;
-
-    const layer: Layer = {
-      id: `${ctx.activeCompId}_layer_${layerIndex}`,
-      name: clip.name,
-      sourceClipId: clip.id,
-      visible: true,
-      opacity: finalOpacity,
-      blendMode: transform.blendMode as BlendMode,
-      source: {
-        type: 'image',
-        imageElement: image,
-        ...sourceMetadata,
-        mediaTime: timing?.displayedMediaTime,
-        targetMediaTime: timing?.targetMediaTime,
-        previewPath: timing?.previewPath,
-        proxyFrameIndex: timing?.proxyFrameIndex,
-      },
-      effects,
-      colorCorrection,
-      position: transform.position,
-      scale: transform.scale,
-      rotation: transform.rotation,
-    };
-
-    this.addMaskProperties(layer, clip);
-    return layer;
-  }
-
-  /**
-   * Build text layer
-   */
-  private buildTextLayer(
-    clip: TimelineClip,
-    layerIndex: number,
-    ctx: FrameContext,
-    opacityOverride?: number,
-    sourceTextCanvas?: HTMLCanvasElement,
-  ): Layer {
-    const timeInfo = getClipTimeInfo(ctx, clip);
-    const transform = this.transformCache.getTransform(
-      `${ctx.activeCompId}_${layerIndex}`,
-      ctx.getInterpolatedTransform(clip.id, timeInfo.clipLocalTime)
-    );
-    const effects = ctx.getInterpolatedEffects(clip.id, timeInfo.clipLocalTime);
-    const colorCorrection = ctx.getInterpolatedColorCorrection(clip.id, timeInfo.clipLocalTime);
-    let textCanvas = sourceTextCanvas ?? clip.source!.textCanvas;
-    const interpolatedTextBounds = clip.textProperties
-      ? ctx.getInterpolatedTextBounds(clip.id, timeInfo.clipLocalTime)
-      : undefined;
-    if (clip.textProperties && interpolatedTextBounds && textCanvas) {
-      const hasBoundsKeyframes =
-        ctx.hasKeyframes(clip.id, 'textBounds.path') ||
-        ctx.hasKeyframes(clip.id, 'textBounds.position.x') ||
-        ctx.hasKeyframes(clip.id, 'textBounds.position.y');
-      if (hasBoundsKeyframes) {
-        const runtimeCanvas = textRenderer.createCanvas(textCanvas.width, textCanvas.height);
-        textRenderer.render({
-          ...clip.textProperties,
-          boxEnabled: true,
-          textBounds: interpolatedTextBounds,
-        }, runtimeCanvas);
-        textCanvas = runtimeCanvas;
-      }
-    }
-
-    // Apply transition opacity override if provided
-    const finalOpacity = opacityOverride !== undefined
-      ? transform.opacity * opacityOverride
-      : transform.opacity;
-
-    const layer: Layer = {
-      id: `${ctx.activeCompId}_layer_${layerIndex}`,
-      name: clip.name,
-      sourceClipId: clip.id,
-      visible: true,
-      opacity: finalOpacity,
-      blendMode: transform.blendMode as BlendMode,
-      source: { type: 'text', textCanvas },
-      effects,
-      colorCorrection,
-      position: transform.position,
-      scale: transform.scale,
-      rotation: transform.rotation,
-    };
-
-    this.addMaskProperties(layer, clip);
-    return layer;
-  }
-
-  /**
-   * Build 3D model layer — rendered by the shared 3D scene
-   */
-  private buildModelLayer(clip: TimelineClip, layerIndex: number, ctx: FrameContext, opacityOverride?: number): Layer {
-    const timeInfo = getClipTimeInfo(ctx, clip);
-    const transform = this.transformCache.getTransform(
-      `${ctx.activeCompId}_${layerIndex}`,
-      ctx.getInterpolatedTransform(clip.id, timeInfo.clipLocalTime)
-    );
-    const effects = ctx.getInterpolatedEffects(clip.id, timeInfo.clipLocalTime);
-    const colorCorrection = ctx.getInterpolatedColorCorrection(clip.id, timeInfo.clipLocalTime);
-    const meshType = clip.meshType ?? clip.source?.meshType;
-    const text3DProperties = meshType === 'text3d'
-      ? (clip.text3DProperties ?? clip.source?.text3DProperties ?? DEFAULT_TEXT_3D_PROPERTIES)
-      : (clip.text3DProperties ?? clip.source?.text3DProperties);
-    const modelSequence = this.getClipModelSequence(clip);
-    const modelFrame = getModelSequenceFrame(modelSequence, timeInfo.clipTime);
-    const modelUrl = this.resolveClipModelUrl(clip, timeInfo.clipTime);
-
-    const finalOpacity = opacityOverride !== undefined
-      ? transform.opacity * opacityOverride
-      : transform.opacity;
-
-    const layer: Layer = {
-      id: `${ctx.activeCompId}_layer_${layerIndex}`,
-      name: clip.name,
-      sourceClipId: clip.id,
-      visible: true,
-      opacity: finalOpacity,
-      blendMode: transform.blendMode as BlendMode,
-      source: {
-        type: 'model',
-        modelUrl,
-        modelFileName: modelFrame?.name ?? clip.source?.modelFileName ?? clip.file?.name ?? clip.name,
-        ...(modelSequence ? { modelSequence } : {}),
-        file: this.getRenderableFile(clip.file),
-        threeDEffectorsEnabled: resolveSceneEffectorsEnabled(clip.source?.threeDEffectorsEnabled),
-        meshType,
-        text3DProperties,
-      },
-      effects,
-      colorCorrection,
-      position: transform.position,
-      scale: transform.scale,
-      rotation: transform.rotation,
-      is3D: true,
-      wireframe: clip.wireframe,
-    };
-
-    this.addMaskProperties(layer, clip);
-    return layer;
-  }
-
-  /**
-   * Build Gaussian Avatar layer — rendered by GaussianSplatSceneRenderer
-   */
-  private buildGaussianAvatarLayer(clip: TimelineClip, layerIndex: number, ctx: FrameContext, opacityOverride?: number): Layer {
-    const timeInfo = getClipTimeInfo(ctx, clip);
-    const transform = this.transformCache.getTransform(
-      `${ctx.activeCompId}_${layerIndex}`,
-      ctx.getInterpolatedTransform(clip.id, timeInfo.clipLocalTime)
-    );
-    const effects = ctx.getInterpolatedEffects(clip.id, timeInfo.clipLocalTime);
-    const colorCorrection = ctx.getInterpolatedColorCorrection(clip.id, timeInfo.clipLocalTime);
-
-    const finalOpacity = opacityOverride !== undefined
-      ? transform.opacity * opacityOverride
-      : transform.opacity;
-
-    const layer: Layer = {
-      id: `${ctx.activeCompId}_layer_${layerIndex}`,
-      name: clip.name,
-      sourceClipId: clip.id,
-      visible: true,
-      opacity: finalOpacity,
-      blendMode: transform.blendMode as BlendMode,
-      source: {
-        type: 'gaussian-avatar',
-        gaussianAvatarUrl: clip.source?.gaussianAvatarUrl,
-        gaussianBlendshapes: clip.source?.gaussianBlendshapes,
-      },
-      effects,
-      colorCorrection,
-      position: transform.position,
-      scale: transform.scale,
-      rotation: transform.rotation,
-      is3D: true,
-    };
-
-    this.addMaskProperties(layer, clip);
-    return layer;
-  }
-
-  /**
-   * Build Gaussian Splat layer — rendered natively via WebGPU
-   */
-  private buildGaussianSplatSourcePayload(
-    clip: TimelineClip,
-    clipLocalTime: number,
-    mediaFile?: { id?: string; fileHash?: string; file?: File | undefined },
-  ): Layer['source'] {
-    const gaussianSplatSequence = this.getClipGaussianSplatSequence(clip);
-    const sequenceFrame = this.resolveClipGaussianSplatFrame(clip, clipLocalTime);
-    const useNativeRenderer = resolveSharedSplatUseNativeRenderer(clip.source?.gaussianSplatSettings);
-
-    return {
-      type: 'gaussian-splat',
-      mediaFileId: mediaFile?.id ?? clip.mediaFileId ?? clip.source?.mediaFileId,
-      file: this.resolveClipGaussianSplatFile(clip, clipLocalTime, mediaFile),
-      gaussianSplatUrl: this.resolveClipGaussianSplatUrl(clip, clipLocalTime),
-      gaussianSplatFileName: sequenceFrame?.name ?? clip.source?.gaussianSplatFileName ?? clip.file?.name ?? clip.name,
-      gaussianSplatFileHash: gaussianSplatSequence ? undefined : mediaFile?.fileHash,
-      gaussianSplatRuntimeKey: getGaussianSplatSequenceFrameRuntimeKey(
-        gaussianSplatSequence,
-        clipLocalTime,
-        clip.source?.gaussianSplatRuntimeKey ??
-          clip.source?.gaussianSplatFileHash ??
-          clip.source?.gaussianSplatFileName ??
-          clip.source?.gaussianSplatUrl ??
-          clip.id,
-      ),
-      gaussianSplatSequence,
-      gaussianSplatSettings: clip.source?.gaussianSplatSettings
-        ? {
-            ...clip.source.gaussianSplatSettings,
-            render: {
-              ...clip.source.gaussianSplatSettings.render,
-              useNativeRenderer,
-            },
-          }
-        : clip.source?.gaussianSplatSettings,
-      threeDEffectorsEnabled: resolveSceneEffectorsEnabled(clip.source?.threeDEffectorsEnabled),
-      mediaTime: clipLocalTime,
-    };
-  }
-
-  private buildGaussianSplatLayer(clip: TimelineClip, layerIndex: number, ctx: FrameContext, opacityOverride?: number): Layer {
-    const timeInfo = getClipTimeInfo(ctx, clip);
-    const mediaFile = getMediaFileForClip(ctx, clip);
-    const source = this.buildGaussianSplatSourcePayload(
-      clip,
-      timeInfo.clipLocalTime,
-      mediaFile,
-    );
-    const transform = this.transformCache.getTransform(
-      `${ctx.activeCompId}_${layerIndex}`,
-      ctx.getInterpolatedTransform(clip.id, timeInfo.clipLocalTime),
-    );
-    const effects = ctx.getInterpolatedEffects(clip.id, timeInfo.clipLocalTime);
-    const colorCorrection = ctx.getInterpolatedColorCorrection(clip.id, timeInfo.clipLocalTime);
-
-    const finalOpacity = opacityOverride !== undefined
-      ? transform.opacity * opacityOverride
-      : transform.opacity;
-
-    const layer: Layer = {
-      id: `${ctx.activeCompId}_layer_${layerIndex}`,
-      name: clip.name,
-      sourceClipId: clip.id,
-      visible: true,
-      opacity: finalOpacity,
-      blendMode: transform.blendMode as BlendMode,
-      source,
-      effects,
-      colorCorrection,
-      position: transform.position,
-      scale: transform.scale,
-      rotation: transform.rotation,
-      is3D: true,
-    };
-
-    this.addMaskProperties(layer, clip);
-    return layer;
-  }
-
-  private prewarmGaussianSplatClips(ctx: FrameContext): void {
-    if (ctx.now - this.lastSplatLookaheadTime < LAYER_BUILDER_CONSTANTS.LOOKAHEAD_INTERVAL) {
-      return;
-    }
-    this.lastSplatLookaheadTime = ctx.now;
-
-    const lookBehind = ctx.isDraggingPlayhead ? 1.25 : 0.1;
-    const lookAhead = ctx.isPlaying ? LAYER_BUILDER_CONSTANTS.LOOKAHEAD_SECONDS : 1.25;
-    const rangeStart = Math.max(0, ctx.playheadPosition - lookBehind);
-    const rangeEnd = ctx.playheadPosition + lookAhead;
-
-    for (const clip of ctx.clips) {
-      if (clip.source?.type !== 'gaussian-splat') continue;
-      if (!isVideoTrackVisible(ctx, clip.trackId)) continue;
-      if (clip.startTime > rangeEnd || clip.startTime + clip.duration < rangeStart) continue;
-
-      const mediaFile = getMediaFileForClip(ctx, clip);
-      if (clip.source?.gaussianSplatSequence || mediaFile?.gaussianSplatSequence) continue;
-      const file = mediaFile?.file ?? clip.file;
-      if (!file) continue;
-
-      prewarmGaussianSplatRuntime({
-        cacheKey:
-          mediaFile?.fileHash ??
-          mediaFile?.id ??
-          clip.source?.mediaFileId ??
-          clip.id,
-        fileHash: mediaFile?.fileHash,
-        file,
-        url: clip.source?.gaussianSplatUrl,
-        fileName: file.name || clip.name,
-        requestedMaxSplats: clip.source?.gaussianSplatSettings?.render.maxSplats ?? 0,
-      });
-    }
-  }
-
-  /**
-   * Add mask properties to layer if clip has masks
-   */
-  private addMaskProperties(layer: Layer, clip: TimelineClip): void {
-    if (clip.masks?.some(m => m.enabled !== false)) {
-      layer.maskClipId = clip.id;
-      layer.maskInvert = false;
-    }
-  }
-
-  /**
-   * Build nested layers (simplified - delegates to separate method for full implementation)
-   */
-  private buildNestedLayers(clip: TimelineClip, clipTime: number, ctx: FrameContext, depth: number = 0): Layer[] {
-    if (!clip.nestedClips || !clip.nestedTracks) return [];
-    if (depth >= MAX_NESTING_DEPTH) return [];
-
-    // Filter for video tracks that are visible (default to visible if not explicitly set)
-    const nestedVideoTracks = clip.nestedTracks.filter(t => t.type === 'video' && t.visible !== false);
-    const layers: Layer[] = [];
-
-    // Iterate forwards to maintain correct layer order (track 0 = bottom, track N = top)
-    for (let i = 0; i < nestedVideoTracks.length; i++) {
-      const nestedTrack = nestedVideoTracks[i];
-      const nestedClip = clip.nestedClips.find(
-        nc =>
-          nc.trackId === nestedTrack.id &&
-          clipTime >= nc.startTime &&
-          clipTime < nc.startTime + nc.duration
-      );
-
-      if (!nestedClip) {
-        // Log why no clip was found for this track
-        const clipsOnTrack = clip.nestedClips.filter(nc => nc.trackId === nestedTrack.id);
-        if (clipsOnTrack.length > 0) {
-          log.debug('No active clip on track at time', {
-            trackId: nestedTrack.id,
-            clipTime,
-            clipsOnTrack: clipsOnTrack.map(nc => ({
-              name: nc.name,
-              startTime: nc.startTime,
-              endTime: nc.startTime + nc.duration,
-            })),
-          });
-        }
-        continue;
-      }
-
-      // nestedLocalTime is the time within the clip (0 to duration) - used for keyframe interpolation
-      const nestedLocalTime = clipTime - nestedClip.startTime;
-
-      // Build layer based on source type (pass nestedLocalTime for keyframe interpolation)
-      const nestedLayer = this.buildNestedClipLayer(nestedClip, nestedLocalTime, ctx, depth);
-      if (nestedLayer) {
-        layers.push(nestedLayer);
-      } else {
-        log.debug('Failed to build nested layer', {
-          clipId: nestedClip.id,
-          name: nestedClip.name,
-          isLoading: nestedClip.isLoading,
-          hasVideoElement: !!nestedClip.source?.videoElement,
-          hasImageElement: !!nestedClip.source?.imageElement,
-          videoReadyState: nestedClip.source?.videoElement?.readyState,
-        });
-      }
-    }
-
-    return layers;
-  }
-
-  /**
-   * Build layer for a nested clip
-   */
-  private buildNestedClipLayer(nestedClip: TimelineClip, nestedClipLocalTime: number, ctx: FrameContext, depth: number = 0): Layer | null {
-    // Get keyframes directly from the store (nested clips aren't in ctx.clips, so we can't use ctx.getInterpolatedTransform)
-    const { clipKeyframes } = useTimelineStore.getState();
-    const keyframes = clipKeyframes.get(nestedClip.id) || [];
-
-    // Build base transform from the nested clip's static transform
-    const baseTransform: ClipTransform = {
-      opacity: nestedClip.transform?.opacity ?? DEFAULT_TRANSFORM.opacity,
-      blendMode: nestedClip.transform?.blendMode ?? DEFAULT_TRANSFORM.blendMode,
-      position: {
-        x: nestedClip.transform?.position?.x ?? DEFAULT_TRANSFORM.position.x,
-        y: nestedClip.transform?.position?.y ?? DEFAULT_TRANSFORM.position.y,
-        z: nestedClip.transform?.position?.z ?? DEFAULT_TRANSFORM.position.z,
-      },
-      scale: {
-        ...(nestedClip.transform?.scale?.all !== undefined ? { all: nestedClip.transform.scale.all } : {}),
-        x: nestedClip.transform?.scale?.x ?? DEFAULT_TRANSFORM.scale.x,
-        y: nestedClip.transform?.scale?.y ?? DEFAULT_TRANSFORM.scale.y,
-        ...(nestedClip.transform?.scale?.z !== undefined ? { z: nestedClip.transform.scale.z } : {}),
-      },
-      rotation: {
-        x: nestedClip.transform?.rotation?.x ?? DEFAULT_TRANSFORM.rotation.x,
-        y: nestedClip.transform?.rotation?.y ?? DEFAULT_TRANSFORM.rotation.y,
-        z: nestedClip.transform?.rotation?.z ?? DEFAULT_TRANSFORM.rotation.z,
-      },
-    };
-
-    // Interpolate transform using keyframes (supports opacity fades, position animations, etc.)
-    const transform = keyframes.length > 0
-      ? getInterpolatedClipTransform(keyframes, nestedClipLocalTime, baseTransform, {
-          rotationMode: nestedClip.source?.type === 'camera' ? 'shortest' : 'linear',
-        })
-      : baseTransform;
-
-    // Interpolate effect parameters if there are effect keyframes
-    const effectKeyframes = keyframes.filter(k => k.property.startsWith('effect.'));
-    let effects = nestedClip.effects || [];
-    if (effectKeyframes.length > 0 && effects.length > 0) {
-      effects = effects.map(effect => {
-        const newParams = { ...effect.params };
-        Object.keys(effect.params).forEach(paramName => {
-          if (typeof effect.params[paramName] !== 'number') return;
-          const propertyKey = `effect.${effect.id}.${paramName}`;
-          const paramKeyframes = effectKeyframes.filter(k => k.property === propertyKey);
-          if (paramKeyframes.length > 0) {
-            // Simple linear interpolation for effect params
-            const sorted = [...paramKeyframes].sort((a, b) => a.time - b.time);
-            if (nestedClipLocalTime <= sorted[0].time) {
-              newParams[paramName] = sorted[0].value;
-            } else if (nestedClipLocalTime >= sorted[sorted.length - 1].time) {
-              newParams[paramName] = sorted[sorted.length - 1].value;
-            } else {
-              for (let i = 0; i < sorted.length - 1; i++) {
-                if (nestedClipLocalTime >= sorted[i].time && nestedClipLocalTime <= sorted[i + 1].time) {
-                  const t = (nestedClipLocalTime - sorted[i].time) / (sorted[i + 1].time - sorted[i].time);
-                  newParams[paramName] = sorted[i].value + t * (sorted[i + 1].value - sorted[i].value);
-                  break;
-                }
-              }
-            }
-          }
-        });
-        return { ...effect, params: newParams };
-      });
-    }
-
-    const renderScale = getEffectiveScale(transform.scale);
-
-    const baseLayer: Omit<Layer, 'source'> = {
-      id: `nested-layer-${nestedClip.id}`,
-      name: nestedClip.name,
-      sourceClipId: nestedClip.id,
-      visible: true,
-      opacity: transform.opacity ?? 1,
-      blendMode: (transform.blendMode || 'normal') as BlendMode,
-      effects,
-      colorCorrection: compileRuntimeColorGrade(nestedClip.colorCorrection),
-      position: {
-        x: transform.position?.x || 0,
-        y: transform.position?.y || 0,
-        z: transform.position?.z || 0,
-      },
-      scale: renderScale,
-      rotation: {
-        x: ((transform.rotation?.x || 0) * Math.PI) / 180,
-        y: ((transform.rotation?.y || 0) * Math.PI) / 180,
-        z: ((transform.rotation?.z || 0) * Math.PI) / 180,
-      },
-    };
-
-    // Add mask properties
-    if (nestedClip.masks?.some(m => m.enabled !== false)) {
-      baseLayer.maskClipId = nestedClip.id;
-      baseLayer.maskInvert = false;
-    }
-
-    // Handle sub-nested composition clips (Level 3+)
-    if (nestedClip.isComposition && nestedClip.nestedClips && nestedClip.nestedClips.length > 0) {
-      // Convert clip-local time to sub-composition timeline time (add inPoint)
-      const subCompTime = nestedClipLocalTime + (nestedClip.inPoint || 0);
-      const subLayers = this.buildNestedLayers(nestedClip, subCompTime, ctx, depth + 1);
-      if (subLayers.length === 0) return null;
-
-      const compositions = useMediaStore.getState().compositions;
-      const subComp = compositions.find(c => c.id === nestedClip.compositionId);
-      const subWidth = subComp?.width || 1920;
-      const subHeight = subComp?.height || 1080;
-
-      const nestedCompData: NestedCompositionData = {
-        compositionId: nestedClip.compositionId || nestedClip.id,
-        layers: subLayers,
-        width: subWidth,
-        height: subHeight,
-        currentTime: nestedClipLocalTime,
-        sceneClips: nestedClip.nestedClips,
-        sceneTracks: nestedClip.nestedTracks,
-      };
-
-      return {
-        ...baseLayer,
-        source: { type: 'image', nestedComposition: nestedCompData },
-      } as Layer;
-    }
-
-    // Skip clips that are still loading
-    if (nestedClip.isLoading) {
-      return null;
-    }
-
-    if (this.hasRenderableVideoSource(nestedClip.source)) {
-      const nestedClipTime = this.getNestedClipSourceTime(nestedClip, nestedClipLocalTime);
-
-      if (ctx.proxyEnabled) {
-        const mediaFile = getMediaFileForClip(ctx, nestedClip);
-        if (mediaFile?.proxyFps) {
-          const proxyLayer = this.tryBuildNestedProxyLayer(
-            nestedClip,
-            nestedClipTime,
-            mediaFile,
-            baseLayer,
-            ctx.isDraggingPlayhead,
-          );
-          if (proxyLayer) return proxyLayer;
-        }
-      }
-
-      const keepScrubRuntimeActive =
-        ctx.isDraggingPlayhead || scrubSettleState.isPending(nestedClip.id);
-      const useScrubRuntime = keepScrubRuntimeActive;
-      const previewRuntimeSource = useScrubRuntime
-        ? getScrubRuntimeSource(
-            nestedClip.source,
-            nestedClip.trackId,
-            true
-          )
-        : getPreviewRuntimeSource(
-            nestedClip.source,
-            nestedClip.trackId,
-            true
-          );
-      const runtimeProvider = getRuntimeFrameProvider(previewRuntimeSource);
-      const preferFreshPausedRuntime = useScrubRuntime;
-      const preferHtmlScrubPreview =
-        !flags.disableHtmlPreviewFallback &&
-        ctx.isDraggingPlayhead &&
-        !!nestedClip.source?.videoElement &&
-        (!flags.useFullWebCodecsPlayback || !nestedClip.source?.webCodecsPlayer?.isFullMode?.());
-      const playingVisualProvider =
-        runtimeProvider?.isFullMode()
-          ? runtimeProvider
-          : previewRuntimeSource?.webCodecsPlayer ?? nestedClip.source!.webCodecsPlayer;
-      return {
-        ...baseLayer,
-        source: {
-          type: 'video',
-          videoElement: nestedClip.source!.videoElement,
-          mediaTime: nestedClipTime,
-          webCodecsPlayer: ctx.isPlaying
-            ? playingVisualProvider
-            : preferHtmlScrubPreview
-              ? undefined
-              : this.getPausedVisualProvider(nestedClip.source, runtimeProvider, nestedClipTime, {
-                  preferFreshRuntime: preferFreshPausedRuntime,
-                }),
-          runtimeSourceId: preferHtmlScrubPreview ? undefined : previewRuntimeSource?.runtimeSourceId,
-          runtimeSessionKey: preferHtmlScrubPreview ? undefined : previewRuntimeSource?.runtimeSessionKey,
-        },
-      } as Layer;
-    } else if (nestedClip.source?.type === 'image') {
-      const imageElement = this.getRenderableImageElement(nestedClip, ctx);
-      if (!imageElement) {
-        return null;
-      }
-      return {
-        ...baseLayer,
-        source: { type: 'image', imageElement },
-      } as Layer;
-    } else if (nestedClip.source?.type === 'math-scene') {
-      mathSceneRenderer.renderClip(nestedClip, nestedClipLocalTime);
-      if (nestedClip.source?.textCanvas) {
-        return {
-          ...baseLayer,
-          source: { type: 'text', textCanvas: nestedClip.source.textCanvas },
-        } as Layer;
-      }
-    } else if (isVectorAnimationSourceType(nestedClip.source?.type)) {
-      const textCanvas = vectorAnimationRuntimeManager.renderClipAtTime(
-        nestedClip,
-        nestedClip.startTime + nestedClipLocalTime,
-        ctx.getInterpolatedVectorAnimationSettings(nestedClip.id, nestedClipLocalTime),
-      );
-      if (textCanvas) {
-        return {
-          ...baseLayer,
-          source: { type: 'text', textCanvas },
-        } as Layer;
-      }
-    } else if (nestedClip.source?.type === 'motion-shape' && nestedClip.motion?.kind === 'shape') {
-      return {
-        ...baseLayer,
-        source: {
-          type: 'motion',
-          motion: getInterpolatedMotionLayer(nestedClip, keyframes, nestedClipLocalTime) ?? nestedClip.motion,
-        },
-      } as Layer;
-    } else if (
-      nestedClip.source?.type === 'motion-null' ||
-      nestedClip.source?.type === 'motion-adjustment'
-    ) {
-      return null;
-    } else if (nestedClip.source?.type === 'model') {
-      const nestedSourceTime = nestedClip.reversed
-        ? nestedClip.outPoint - nestedClipLocalTime
-        : nestedClipLocalTime + nestedClip.inPoint;
-      return {
-        ...baseLayer,
-        source: {
-          type: 'model',
-          modelUrl: this.resolveClipModelUrl(nestedClip, nestedSourceTime),
-          file: nestedClip.file,
-          threeDEffectorsEnabled: resolveSceneEffectorsEnabled(nestedClip.source?.threeDEffectorsEnabled),
-          meshType: nestedClip.meshType ?? nestedClip.source?.meshType,
-          text3DProperties: (nestedClip.meshType ?? nestedClip.source?.meshType) === 'text3d'
-            ? (nestedClip.text3DProperties ?? nestedClip.source?.text3DProperties ?? DEFAULT_TEXT_3D_PROPERTIES)
-            : (nestedClip.text3DProperties ?? nestedClip.source?.text3DProperties),
-        },
-        is3D: true,
-      } as Layer;
-    } else if (nestedClip.source?.type === 'gaussian-splat') {
-      const mediaFile =
-        getMediaFileForClip(ctx, nestedClip) ??
-        useMediaStore.getState().files.find((file) =>
-          file.id === nestedClip.mediaFileId || file.id === nestedClip.source?.mediaFileId,
-        );
-      const source = this.buildGaussianSplatSourcePayload(
-        nestedClip,
-        nestedClipLocalTime,
-        mediaFile,
-      );
-      return {
-        ...baseLayer,
-        source,
-        is3D: true,
-      } as Layer;
-    }
-
-    return null;
-  }
-
-  private getNestedClipSourceTime(nestedClip: TimelineClip, nestedClipLocalTime: number): number {
-    const inPoint = nestedClip.inPoint ?? 0;
-    const outPoint = nestedClip.outPoint ?? nestedClip.duration;
-    return nestedClip.reversed
-      ? outPoint - nestedClipLocalTime
-      : nestedClipLocalTime + inPoint;
-  }
-
-  private tryBuildNestedProxyLayer(
-    nestedClip: TimelineClip,
-    nestedClipTime: number,
-    mediaFile: MediaFile,
-    baseLayer: Omit<Layer, 'source'>,
-    isDraggingPlayhead: boolean,
-  ): Layer | null {
-    const proxyFps = mediaFile.proxyFps || 30;
-    const frameIndex = Math.floor(nestedClipTime * proxyFps);
-    if (!this.canUseProxyFrame(mediaFile, frameIndex, proxyFps)) return null;
-
-    const cacheKey = `${mediaFile.id}_${nestedClip.id}`;
-    const exactFrame = proxyFrameCache.getCachedFrame(mediaFile.id, frameIndex, proxyFps);
-    if (exactFrame) {
-      this.proxyFramesRef.set(cacheKey, { frameIndex, image: exactFrame });
-      return this.buildNestedProxyImageLayer(baseLayer, exactFrame, mediaFile, frameIndex, nestedClipTime, 'nested-proxy-image-frame');
-    }
-
-    this.ensureProxyImageFrameLoaded(mediaFile.id, frameIndex, nestedClipTime, proxyFps, cacheKey);
-
-    const nearestDistance = isDraggingPlayhead
-      ? PROXY_NEAREST_DISTANCE_SCRUB
-      : PROXY_NEAREST_DISTANCE_DEFAULT;
-    const nearestFrame = proxyFrameCache.getNearestCachedFrameEntry(mediaFile.id, frameIndex, nearestDistance);
-    if (nearestFrame) {
-      return this.buildNestedProxyImageLayer(
-        baseLayer,
-        nearestFrame.image,
-        mediaFile,
-        nearestFrame.frameIndex,
-        nestedClipTime,
-        'nested-proxy-image-frame-nearest',
-      );
-    }
-
-    const heldFrame = this.proxyFramesRef.get(cacheKey);
-    if (
-      heldFrame?.image &&
-      this.canUseHeldProxyFrame(heldFrame.frameIndex, nestedClipTime, proxyFps, isDraggingPlayhead)
-    ) {
-      return this.buildNestedProxyImageLayer(
-        baseLayer,
-        heldFrame.image,
-        mediaFile,
-        heldFrame.frameIndex,
-        nestedClipTime,
-        'nested-proxy-image-frame-hold',
-      );
-    }
-
-    // Guaranteed floor during an active drag (mirrors tryBuildProxyLayer): hold
-    // any prior proxy frame for this nested clip rather than dropping to empty.
-    if (isDraggingPlayhead && heldFrame?.image) {
-      return this.buildNestedProxyImageLayer(
-        baseLayer,
-        heldFrame.image,
-        mediaFile,
-        heldFrame.frameIndex,
-        nestedClipTime,
-        'nested-proxy-image-frame-hold-stale',
-      );
-    }
-
-    return null;
-  }
-
-  private buildNestedProxyImageLayer(
-    baseLayer: Omit<Layer, 'source'>,
-    image: HTMLImageElement,
-    mediaFile: MediaFile,
-    frameIndex: number,
-    targetMediaTime: number,
-    previewPath: string,
-  ): Layer {
-    const proxyFps = mediaFile.proxyFps || 30;
-    return {
-      ...baseLayer,
-      source: {
-        type: 'image',
-        imageElement: image,
-        mediaFileId: mediaFile.id,
-        intrinsicWidth: image.naturalWidth || image.width,
-        intrinsicHeight: image.naturalHeight || image.height,
-        mediaTime: frameIndex / proxyFps,
-        targetMediaTime,
-        previewPath,
-        proxyFrameIndex: frameIndex,
-      },
-    };
-  }
-
-  /**
-   * Preload proxy frames for upcoming nested compositions
-   */
-  private preloadUpcomingNestedCompFrames(ctx: FrameContext): void {
-    if (ctx.now - this.lastLookaheadTime < LAYER_BUILDER_CONSTANTS.LOOKAHEAD_INTERVAL) {
-      return;
-    }
-    this.lastLookaheadTime = ctx.now;
-
-    const lookaheadEnd = ctx.playheadPosition + LAYER_BUILDER_CONSTANTS.LOOKAHEAD_SECONDS;
-
-    // Find upcoming nested comps
-    const upcomingNestedComps = ctx.clips.filter(clip =>
-      clip.isComposition &&
-      clip.nestedClips &&
-      clip.nestedClips.length > 0 &&
-      clip.startTime > ctx.playheadPosition &&
-      clip.startTime < lookaheadEnd
-    );
-
-    for (const nestedCompClip of upcomingNestedComps) {
-      this.preloadNestedCompFrames(nestedCompClip, ctx);
-    }
-  }
-
-  /**
-   * Preload frames for a specific nested composition
-   */
-  private preloadNestedCompFrames(nestedCompClip: TimelineClip, ctx: FrameContext): void {
-    if (!nestedCompClip.nestedClips) return;
-
-    const nestedStartTime = nestedCompClip.inPoint || 0;
-
-    for (const nestedClip of nestedCompClip.nestedClips) {
-      if (!nestedClip.source?.videoElement) continue;
-
-      // Check if active at start
-      if (nestedStartTime < nestedClip.startTime ||
-          nestedStartTime >= nestedClip.startTime + nestedClip.duration) {
-        continue;
-      }
-
-      const mediaFile = getMediaFileForClip(ctx, nestedClip);
-      if (!mediaFile?.proxyFps) continue;
-      if (mediaFile.proxyStatus !== 'ready' && mediaFile.proxyStatus !== 'generating') continue;
-
-      // Calculate frame to preload
-      const nestedLocalTime = nestedStartTime - nestedClip.startTime;
-      const nestedClipTime = nestedClip.reversed
-        ? nestedClip.outPoint - nestedLocalTime
-        : nestedLocalTime + nestedClip.inPoint;
-
-      const proxyFps = mediaFile.proxyFps;
-      const frameIndex = Math.floor(nestedClipTime * proxyFps);
-
-      // Preload 60 frames
-      const framesToPreload = Math.min(60, Math.ceil(proxyFps * 2));
-      for (let i = 0; i < framesToPreload; i++) {
-        void proxyFrameCache.getFrame(mediaFile.id, (frameIndex + i) / proxyFps, proxyFps);
-      }
-    }
   }
 
   getVideoSyncManager(): VideoSyncManager {

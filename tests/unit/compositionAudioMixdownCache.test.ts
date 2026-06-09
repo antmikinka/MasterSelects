@@ -213,6 +213,12 @@ describe('compositionAudioMixdownCache', () => {
       memoryCost: {
         heapBytes: 48_000 * 2 * Float32Array.BYTES_PER_ELEMENT,
       },
+      tags: expect.arrayContaining([
+        'runtime-provider-demand',
+        'background-cache',
+        'composition-audio-mixdown',
+        'audio-buffer-cache',
+      ]),
     });
 
     clearCompositionAudioMixdownCache();
@@ -296,6 +302,12 @@ describe('compositionAudioMixdownCache', () => {
       memoryCost: {
         heapBytes: 48_000 * 2 * Float32Array.BYTES_PER_ELEMENT,
       },
+      tags: expect.arrayContaining([
+        'runtime-provider-demand',
+        'lease-visible',
+        'composition-audio-mixdown',
+        'playback-audio-element',
+      ]),
     });
     expect(stats.budgetReport.usage.htmlMediaElements).toBe(1);
     expect(stats.budgetReport.usage.audioSources).toBe(1);

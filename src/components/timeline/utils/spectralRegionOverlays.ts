@@ -1,4 +1,3 @@
-import type { MediaFile } from '../../../stores/mediaStore/types';
 import type { TimelineSpectralRegionSelection } from '../../../stores/timeline/types';
 import { spectralYFromFrequencyHz } from './spectralSelection';
 
@@ -22,10 +21,18 @@ export interface SpectralImageLayerOverlayLayer {
   gainDb?: number;
 }
 
+export interface SpectralImageMediaRef {
+  id: string;
+  name: string;
+  type?: string;
+  url?: string;
+  thumbnailUrl?: string;
+}
+
 export interface SpectralImageLayerOverlay extends SpectralRegionOverlay {
   id: string;
   layer: SpectralImageLayerOverlayLayer;
-  mediaFile?: MediaFile;
+  mediaFile?: SpectralImageMediaRef;
 }
 
 function finiteNumberOr(value: unknown, fallback: number): number {
@@ -86,7 +93,7 @@ export function resolveSpectralImageLayerOverlays(input: {
   trackBaseHeight: number;
   maxFrequencyHz: number;
   sourceTimeToDisplayTimelineTime: (sourceTime: number) => number;
-  mediaFilesById: ReadonlyMap<string, MediaFile>;
+  mediaFilesById: ReadonlyMap<string, SpectralImageMediaRef>;
 }): SpectralImageLayerOverlay[] {
   if (!input.enabled || input.layers.length === 0) return [];
 

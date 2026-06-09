@@ -284,6 +284,7 @@ export const useTimelineStore = create<TimelineStore>()(
       compositionSwitchDirection: 'forward' as const,
 
       // Target track layout shown during composition switch exit
+      compositionSwitchSourceTracks: null,
       compositionSwitchTargetTracks: null,
 
       // Slot grid view progress (0 = full timeline, 1 = full grid view)

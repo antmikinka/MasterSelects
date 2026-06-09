@@ -1,19 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildTimelineClipCanvasWorkerDrawMessage,
+  createTimelineClipCanvasWorkerPaintClipInput,
   getTimelineClipCanvasWorkerEligibility,
-  type TimelineClipCanvasWorkerSourceClip,
+  type TimelineClipCanvasWorkerPaintClipInput,
 } from '../../src/components/timeline/utils/timelineClipCanvasWorkerModel';
+import type { TimelinePaintSourceClip } from '../../src/timeline';
 
-function createClip(overrides: Partial<TimelineClipCanvasWorkerSourceClip> = {}): TimelineClipCanvasWorkerSourceClip {
+function createSourceClip(overrides: Partial<TimelinePaintSourceClip> = {}): TimelinePaintSourceClip {
   return {
     id: 'clip-1',
+    trackId: 'track-1',
     name: 'Clip 1',
     startTime: 2,
     duration: 4,
     source: { type: 'solid' },
     ...overrides,
   };
+}
+
+function createClip(overrides: Partial<TimelinePaintSourceClip> = {}): TimelineClipCanvasWorkerPaintClipInput {
+  return createTimelineClipCanvasWorkerPaintClipInput(createSourceClip(overrides));
 }
 
 function createBitmap(overrides: Partial<ImageBitmap> = {}): ImageBitmap {
@@ -46,22 +53,51 @@ describe('timeline clip canvas worker model', () => {
     expect(result.eligibility).toEqual({ eligible: true, reasons: [] });
     expect(result.inputClipCount).toBe(2);
     expect(result.visibleClipCount).toBe(1);
-    expect(result.message).toEqual({
+    expect(result.message).toMatchObject({
       type: 'draw',
       requestId: 42,
       clips: [{
         id: 'clip-1',
-        name: 'Clip 1',
-        x: 14,
-        width: 48,
-        selected: true,
-        hovered: true,
+        paintPacket: {
+          schemaVersion: 1,
+          clipId: 'clip-1',
+          trackId: 'track-1',
+          bodyRect: { x: 14, y: 0, width: 48, height: 48 },
+          label: 'Clip 1',
+          state: {
+            selected: true,
+            hovered: true,
+            muted: false,
+            disabled: false,
+            pending: false,
+          },
+          facets: [
+            { kind: 'body', clipId: 'clip-1', resourceRefIds: [] },
+            { kind: 'label', clipId: 'clip-1', resourceRefIds: [] },
+          ],
+          resourceRefIds: [],
+        },
       }],
       height: 48,
       cssWidth: 200,
       dpr: 2,
       trackColor: '#4c9aff',
+      paintResources: {
+        schemaVersion: 1,
+        resources: [],
+      },
+      paintPayloads: {
+        thumbnailStrips: [],
+        waveforms: [],
+        spectrograms: [],
+        midiPreviews: [],
+        fadeVisuals: [],
+        trimVisuals: [],
+        passiveDecorations: [],
+        compositionVisuals: [],
+      },
     });
+    expect(result.message?.clips[0].paintPacket.geometryEpoch).toContain('worker-draw:42');
     expect(structuredClone(result.message)).toEqual(result.message);
   });
 
@@ -128,36 +164,40 @@ describe('timeline clip canvas worker model', () => {
 
     expect(result.eligibility).toEqual({ eligible: true, reasons: [] });
     expect(result.transferables).toHaveLength(1);
-    expect(result.message?.clips[0]).toMatchObject({
-      id: 'clip-1',
-      isAudio: true,
-      waveformEnabled: true,
-      waveform: {
-        kind: 'waveform',
-        columnCount: 2,
-        mode: 'detailed',
-      },
+    expect(result.message?.clips[0]).toMatchObject({ id: 'clip-1' });
+    expect(result.message?.clips[0].paintPacket.facets.map((facet) => facet.kind)).toContain('waveform');
+    expect(result.message?.clips[0].paintPacket.resourceRefIds).toContain('clip-1:waveform-columns');
+    const waveformPayload = result.message?.paintPayloads.waveforms[0]?.resource;
+    expect(result.message?.paintResources.resources).toContainEqual({
+      id: 'clip-1:waveform-columns',
+      kind: 'waveform-columns',
+      ownerClipId: 'clip-1',
+      byteEstimate: waveformPayload?.columns.byteLength,
+      transferMode: 'transfer',
     });
-    expect(result.message?.clips[0].waveform?.columns).toBeInstanceOf(Float32Array);
-    expect(Array.from(result.message?.clips[0].waveform?.columns ?? [])).toEqual(
+    expect(waveformPayload?.columns).toBeInstanceOf(Float32Array);
+    expect(Array.from(waveformPayload?.columns ?? [])).toEqual(
       preparedColumns.map((value) => expect.closeTo(value)),
     );
-    expect(result.message?.clips[0].waveform?.columns).not.toBe(preparedColumns);
-    expect(result.transferables[0]).toBe(result.message?.clips[0].waveform?.columns.buffer);
+    expect(waveformPayload?.columns).not.toBe(preparedColumns);
+    expect(result.transferables[0]).toBe(waveformPayload?.columns.buffer);
     const clonedMessage = structuredClone(result.message);
     expect(clonedMessage).toMatchObject({
       type: 'draw',
       requestId: 7,
-      clips: [{
-        id: 'clip-1',
-        waveform: {
-          kind: 'waveform',
-          columnCount: 2,
-          mode: 'detailed',
-        },
-      }],
+      clips: [{ id: 'clip-1' }],
+      paintPayloads: {
+        waveforms: [{
+          resourceId: 'clip-1:waveform-columns',
+          resource: {
+            kind: 'waveform',
+            columnCount: 2,
+            mode: 'detailed',
+          },
+        }],
+      },
     });
-    expect(Array.from(clonedMessage?.clips[0].waveform?.columns ?? [])).toEqual(
+    expect(Array.from(clonedMessage?.paintPayloads.waveforms[0]?.resource.columns ?? [])).toEqual(
       preparedColumns.map((value) => expect.closeTo(value)),
     );
   });
@@ -197,22 +237,19 @@ describe('timeline clip canvas worker model', () => {
 
     expect(result.eligibility).toEqual({ eligible: true, reasons: [] });
     expect(result.transferables).toHaveLength(1);
-    expect(result.message?.clips[0]).toMatchObject({
-      id: 'clip-1',
-      isAudio: true,
-      waveformEnabled: true,
-      spectrogram: {
-        kind: 'spectrogram',
-        rasterWidth: 3,
-        rasterHeight: 2,
-      },
+    expect(result.message?.clips[0]).toMatchObject({ id: 'clip-1' });
+    expect(result.message?.paintPayloads.spectrograms[0]?.resource).toMatchObject({
+      kind: 'spectrogram',
+      rasterWidth: 3,
+      rasterHeight: 2,
     });
-    expect(result.message?.clips[0].spectrogram?.values).toBeInstanceOf(Float32Array);
-    expect(Array.from(result.message?.clips[0].spectrogram?.values ?? [])).toEqual(
+    const spectrogramPayload = result.message?.paintPayloads.spectrograms[0]?.resource;
+    expect(spectrogramPayload?.values).toBeInstanceOf(Float32Array);
+    expect(Array.from(spectrogramPayload?.values ?? [])).toEqual(
       preparedValues.map((value) => expect.closeTo(value)),
     );
-    expect(result.message?.clips[0].spectrogram?.values).not.toBe(preparedValues);
-    expect(result.transferables[0]).toBe(result.message?.clips[0].spectrogram?.values.buffer);
+    expect(spectrogramPayload?.values).not.toBe(preparedValues);
+    expect(result.transferables[0]).toBe(spectrogramPayload?.values.buffer);
   });
 
   it('uses the shared audio analysis ref rules for prepared waveform clips', () => {
@@ -246,14 +283,10 @@ describe('timeline clip canvas worker model', () => {
     });
 
     expect(result.eligibility).toEqual({ eligible: true, reasons: [] });
-    expect(result.message?.clips[0]).toMatchObject({
-      id: 'clip-1',
-      isAudio: true,
-      waveformEnabled: true,
-      waveform: {
-        kind: 'waveform',
-        columnCount: 1,
-      },
+    expect(result.message?.clips[0]).toMatchObject({ id: 'clip-1' });
+    expect(result.message?.paintPayloads.waveforms[0]?.resource).toMatchObject({
+      kind: 'waveform',
+      columnCount: 1,
     });
   });
 
@@ -302,16 +335,14 @@ describe('timeline clip canvas worker model', () => {
     });
 
     expect(result.eligibility).toEqual({ eligible: true, reasons: [] });
-    expect(result.message?.clips[0]).toMatchObject({
-      id: 'clip-1',
-      thumbnailStrip: {
-        kind: 'thumbnail-strip',
-        bitmap,
-        x: 24,
-        width: 48,
-        height: 46,
-        drawCount: 2,
-      },
+    expect(result.message?.clips[0]).toMatchObject({ id: 'clip-1' });
+    expect(result.message?.paintPayloads.thumbnailStrips[0]?.resource).toMatchObject({
+      kind: 'thumbnail-strip',
+      bitmap,
+      x: 24,
+      width: 48,
+      height: 46,
+      drawCount: 2,
     });
     expect(result.transferables).toEqual([bitmap]);
   });
@@ -343,20 +374,22 @@ describe('timeline clip canvas worker model', () => {
     });
 
     expect(result.eligibility).toEqual({ eligible: true, reasons: [] });
-    expect(result.message?.clips[0].passiveDecorations).toMatchObject({
+    const passiveDecorations = result.message?.paintPayloads.passiveDecorations[0]?.resource;
+    expect(passiveDecorations).toMatchObject({
       kind: 'passive-decorations',
       badges: [{ label: 'L' }],
       progressBars: [{ progress: 42 }],
     });
-    expect(result.message?.clips[0].passiveDecorations?.transcriptMarkers).toBeInstanceOf(Float32Array);
-    expect(Array.from(result.message?.clips[0].passiveDecorations?.transcriptMarkers ?? [])).toEqual([
+    expect('passiveDecorations' in (result.message?.clips[0] ?? {})).toBe(false);
+    expect(passiveDecorations?.transcriptMarkers).toBeInstanceOf(Float32Array);
+    expect(Array.from(passiveDecorations?.transcriptMarkers ?? [])).toEqual([
       expect.closeTo(0.1),
       expect.closeTo(0.2),
       expect.closeTo(0.4),
       expect.closeTo(0.5),
     ]);
     expect(result.transferables).toEqual([
-      result.message?.clips[0].passiveDecorations?.transcriptMarkers?.buffer,
+      passiveDecorations?.transcriptMarkers?.buffer,
     ]);
   });
 
@@ -391,8 +424,10 @@ describe('timeline clip canvas worker model', () => {
       requestId: 12,
     });
 
-    const analysisOverlay = result.message?.clips[0].passiveDecorations?.analysisOverlay;
+    const passiveDecorations = result.message?.paintPayloads.passiveDecorations[0]?.resource;
+    const analysisOverlay = passiveDecorations?.analysisOverlay;
     expect(result.eligibility).toEqual({ eligible: true, reasons: [] });
+    expect('passiveDecorations' in (result.message?.clips[0] ?? {})).toBe(false);
     expect(analysisOverlay?.points).toBeInstanceOf(Float32Array);
     expect(analysisOverlay?.pointCount).toBe(2);
     expect(Array.from(analysisOverlay?.points ?? [])).toEqual([
@@ -443,18 +478,22 @@ describe('timeline clip canvas worker model', () => {
     expect(result.eligibility).toEqual({ eligible: true, reasons: [] });
     expect(result.message?.clips[0]).toMatchObject({
       id: 'clip-1',
-      x: 18,
-      width: 72,
-      trimVisuals: {
-        kind: 'trim-visuals',
-        body: {
+      paintPacket: {
+        bodyRect: {
           x: 18,
           width: 72,
         },
-        sourceExtensionGhosts: [
-          { edge: 'right', x: 90, width: 24 },
-        ],
       },
+    });
+    expect(result.message?.paintPayloads.trimVisuals[0]?.resource).toMatchObject({
+      kind: 'trim-visuals',
+      body: {
+        x: 18,
+        width: 72,
+      },
+      sourceExtensionGhosts: [
+        { edge: 'right', x: 90, width: 24 },
+      ],
     });
     expect(result.transferables).toEqual([]);
   });
@@ -489,7 +528,7 @@ describe('timeline clip canvas worker model', () => {
       requestId: 14,
     });
 
-    const fadeVisuals = result.message?.clips[0].fadeVisuals;
+    const fadeVisuals = result.message?.paintPayloads.fadeVisuals[0]?.resource;
     expect(result.eligibility).toEqual({ eligible: true, reasons: [] });
     expect(fadeVisuals?.curves).toBeInstanceOf(Float32Array);
     expect(fadeVisuals?.points).toBeInstanceOf(Float32Array);
@@ -574,8 +613,9 @@ describe('timeline clip canvas worker model', () => {
       requestId: 15,
     });
 
-    const compositionVisuals = result.message?.clips[0].compositionVisuals;
+    const compositionVisuals = result.message?.paintPayloads.compositionVisuals[0]?.resource;
     expect(result.eligibility).toEqual({ eligible: true, reasons: [] });
+    expect('compositionVisuals' in (result.message?.clips[0] ?? {})).toBe(false);
     expect(compositionVisuals?.outline).toBe(true);
     expect(compositionVisuals?.nestedBoundaries).toBeInstanceOf(Float32Array);
     expect(compositionVisuals?.segmentRects).toBeInstanceOf(Float32Array);
@@ -647,7 +687,7 @@ describe('timeline clip canvas worker model', () => {
     });
 
     expect(result.eligibility).toEqual({ eligible: true, reasons: [] });
-    expect(result.message?.clips[0].thumbnailStrip?.bitmap).toBe(bitmap);
+    expect(result.message?.paintPayloads.thumbnailStrips[0]?.resource.bitmap).toBe(bitmap);
   });
 
   it('allows reversed video clips when thumbnail visuals are prepared', () => {

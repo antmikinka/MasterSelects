@@ -3,7 +3,7 @@
 // Default click behavior is editor-first; the live-trigger flag swaps primary click to live launch.
 // Drag = reorder/move to any slot. Column header click activates all compositions in that column.
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMediaStore } from '../../stores/mediaStore';
 import { useTimelineStore } from '../../stores/timeline';
 import { useDockStore } from '../../stores/dockStore';
@@ -15,6 +15,8 @@ import { getSlotGridLabel } from '../../services/midi/midiMappingSummary';
 import { flags } from '../../engine/featureFlags';
 import { animateSlotGrid } from './slotGridAnimation';
 import { MiniTimeline } from './MiniTimeline';
+import { SlotGridDeckBadge } from './components/SlotGridDeckBadge';
+import { SlotGridTimeOverlay } from './components/SlotGridTimeOverlay';
 import type { Composition } from '../../stores/mediaStore';
 import type { SlotDeckState } from '../../stores/mediaStore/types';
 import './SlotGrid.css';
@@ -29,44 +31,6 @@ const GRID_ROWS = 4;
 const TOTAL_SLOTS = GRID_COLS * GRID_ROWS;
 const LABEL_WIDTH = 40;
 const EMPTY_SLOT_DECK_STATES: Record<number, SlotDeckState> = {};
-
-function getSlotDeckBadgeLabel(status: SlotDeckState['status']): string {
-  switch (status) {
-    case 'cold':
-      return 'C';
-    case 'warming':
-      return 'Wi';
-    case 'warm':
-      return 'Wa';
-    case 'hot':
-      return 'H';
-    case 'failed':
-      return 'F';
-    case 'disposed':
-      return 'D';
-    default:
-      return '?';
-  }
-}
-
-function getSlotDeckBadgeColor(status: SlotDeckState['status']): string {
-  switch (status) {
-    case 'cold':
-      return 'rgba(120, 128, 144, 0.92)';
-    case 'warming':
-      return 'rgba(194, 119, 24, 0.92)';
-    case 'warm':
-      return 'rgba(49, 140, 231, 0.92)';
-    case 'hot':
-      return 'rgba(30, 170, 94, 0.92)';
-    case 'failed':
-      return 'rgba(185, 42, 42, 0.92)';
-    case 'disposed':
-      return 'rgba(88, 96, 115, 0.92)';
-    default:
-      return 'rgba(88, 96, 115, 0.92)';
-  }
-}
 
 export function SlotGrid({ opacity }: SlotGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -586,7 +550,7 @@ export function SlotGrid({ opacity }: SlotGridProps) {
                       height={SLOT_SIZE - 4}
                     />
                     <div className="slot-grid-name">{comp.name}</div>
-                    <SlotTimeOverlay
+                    <SlotGridTimeOverlay
                       compId={comp.id}
                       duration={comp.duration}
                       isActive={isEditorActive || isLayerActive}
@@ -595,35 +559,11 @@ export function SlotGrid({ opacity }: SlotGridProps) {
                       initialPosition={comp.timelineData?.playheadPosition ?? 0}
                     />
                     {deckState && (
-                      <div
-                        className={`slot-grid-deck-badge slot-grid-deck-badge-${deckState.status}`}
-                        aria-label={`Slot ${slotIndex + 1} deck ${deckState.status}`}
-                        title={`Deck ${deckState.status}${slotDeckTitle ? ` (${slotDeckTitle})` : ''}`}
-                        data-slot-deck-status={deckState.status}
-                        style={{
-                          position: 'absolute',
-                          top: 4,
-                          left: 4,
-                          minWidth: 18,
-                          height: 18,
-                          padding: '0 5px',
-                          borderRadius: 999,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: 10,
-                          fontWeight: 700,
-                          letterSpacing: 0.2,
-                          lineHeight: 1,
-                          color: '#fff',
-                          background: getSlotDeckBadgeColor(deckState.status),
-                          boxShadow: '0 1px 4px rgba(0, 0, 0, 0.35)',
-                          pointerEvents: 'none',
-                          zIndex: 3,
-                        }}
-                      >
-                        {getSlotDeckBadgeLabel(deckState.status)}
-                      </div>
+                      <SlotGridDeckBadge
+                        slotIndex={slotIndex}
+                        deckState={deckState}
+                        slotDeckTitle={slotDeckTitle}
+                      />
                     )}
                   </div>
                 );
@@ -642,35 +582,11 @@ export function SlotGrid({ opacity }: SlotGridProps) {
                   title={slotDeckTitle ? `Deck: ${slotDeckTitle}` : undefined}
                 >
                   {deckState && (
-                    <div
-                      className={`slot-grid-deck-badge slot-grid-deck-badge-${deckState.status}`}
-                      aria-label={`Slot ${slotIndex + 1} deck ${deckState.status}`}
-                      title={`Deck ${deckState.status}${slotDeckTitle ? ` (${slotDeckTitle})` : ''}`}
-                      data-slot-deck-status={deckState.status}
-                      style={{
-                        position: 'absolute',
-                        top: 4,
-                        left: 4,
-                        minWidth: 18,
-                        height: 18,
-                        padding: '0 5px',
-                        borderRadius: 999,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 10,
-                        fontWeight: 700,
-                        letterSpacing: 0.2,
-                        lineHeight: 1,
-                        color: '#fff',
-                        background: getSlotDeckBadgeColor(deckState.status),
-                        boxShadow: '0 1px 4px rgba(0, 0, 0, 0.35)',
-                        pointerEvents: 'none',
-                        zIndex: 3,
-                      }}
-                    >
-                      {getSlotDeckBadgeLabel(deckState.status)}
-                    </div>
+                    <SlotGridDeckBadge
+                      slotIndex={slotIndex}
+                      deckState={deckState}
+                      slotDeckTitle={slotDeckTitle}
+                    />
                   )}
                 </div>
               );
@@ -696,112 +612,3 @@ export function SlotGrid({ opacity }: SlotGridProps) {
     </div>
   );
 }
-
-function fmtTime(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  const ms = Math.floor((seconds % 1) * 100);
-  const msStr = ms.toString().padStart(2, '0');
-  if (mins > 0) return `${mins}:${secs.toString().padStart(2, '0')}.${msStr}`;
-  return `${secs}.${msStr}`;
-}
-
-/** Slot overlay — playhead line + live time / duration display via rAF */
-const SlotTimeOverlay = memo(function SlotTimeOverlay({
-  compId,
-  duration,
-  isActive,
-  layerIndex,
-  slotSize,
-  initialPosition,
-}: {
-  compId: string;
-  duration: number;
-  isActive: boolean;
-  layerIndex: number;
-  slotSize: number;
-  initialPosition: number;
-}) {
-  const lineRef = useRef<HTMLDivElement>(null);
-  const timeRef = useRef<HTMLDivElement>(null);
-  // Local wall-clock anchor for background layers — completely independent of global state
-  const startedAtRef = useRef<number>(0);
-  const wasActiveRef = useRef(false);
-  // Track editor→background transitions to re-anchor wall-clock from saved position
-  const wasEditorRef = useRef(false);
-
-  // When slot becomes active, anchor the wall-clock
-  useEffect(() => {
-    if (isActive && !wasActiveRef.current) {
-      // Newly activated → set anchor so local time starts at initialPosition
-      startedAtRef.current = performance.now() - initialPosition * 1000;
-    }
-    wasActiveRef.current = isActive;
-  }, [isActive, initialPosition]);
-
-  useEffect(() => {
-    const line = lineRef.current;
-    const timeEl = timeRef.current;
-    if (!line || !timeEl || duration <= 0) return;
-
-    const durationStr = fmtTime(duration);
-
-    if (!isActive) {
-      line.style.display = 'none';
-      timeEl.textContent = `${fmtTime(0)} / ${durationStr}`;
-      return;
-    }
-
-    line.style.display = '';
-    let rafId: number;
-    const padding = 3;
-    const trackWidth = slotSize - padding * 2;
-
-    const update = () => {
-      const isEditor = useMediaStore.getState().activeCompositionId === compId;
-      const layerPlayback = layerPlaybackManager.getLayerPlaybackInfo(layerIndex);
-      let pos: number;
-      if (layerPlayback?.compositionId === compId) {
-        pos = layerPlayback.currentTime;
-      } else if (isEditor) {
-        // Editor comp: must reflect pause/scrub/seek — read from global playhead
-        pos = playheadState.isUsingInternalPosition
-          ? playheadState.position
-          : useTimelineStore.getState().playheadPosition;
-        wasEditorRef.current = true;
-      } else {
-        // Detect editor→background transition: re-anchor wall-clock from saved position
-        // so background playhead continues from where the editor left off
-        if (wasEditorRef.current) {
-          const comp = useMediaStore.getState().compositions.find(c => c.id === compId);
-          const savedPos = comp?.timelineData?.playheadPosition ?? 0;
-          startedAtRef.current = performance.now() - savedPos * 1000;
-          wasEditorRef.current = false;
-        }
-        // Background layer: pure local wall-clock, never reads from any shared state
-        const elapsed = (performance.now() - startedAtRef.current) / 1000;
-        pos = duration > 0 ? elapsed % duration : 0;
-      }
-      const pct = Math.max(0, Math.min(1, pos / duration));
-      line.style.left = `${padding + pct * trackWidth}px`;
-      timeEl.textContent = `${fmtTime(pos)} / ${durationStr}`;
-      rafId = requestAnimationFrame(update);
-    };
-
-    rafId = requestAnimationFrame(update);
-    return () => cancelAnimationFrame(rafId);
-  }, [compId, duration, isActive, layerIndex, slotSize]);
-
-  return (
-    <>
-      <div
-        ref={lineRef}
-        className="slot-grid-playhead"
-      />
-      <div
-        ref={timeRef}
-        className="slot-grid-time"
-      />
-    </>
-  );
-});

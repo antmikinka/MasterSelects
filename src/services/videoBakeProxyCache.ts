@@ -1,8 +1,10 @@
 import type { Layer, VideoBakeRegion } from '../types';
+import type { RuntimeProviderDemand } from '../timeline';
 import type {
   RenderResourceDescriptor,
   TimelineRuntimeAdmissionDecision,
 } from './timeline/runtimeCoordinatorTypes';
+import { createRenderResourceDescriptorFromDemand } from './timeline/runtimeProviderDemandBridge';
 import { timelineRuntimeCoordinator } from './timeline/timelineRuntimeCoordinator';
 import { Logger } from './logger';
 
@@ -40,10 +42,13 @@ function getArtifactOwnerId(compositionId: string, regionId: string): string {
 function createVideoBakeProxyResource(input: VideoBakeProxyArtifactInput): RenderResourceDescriptor {
   const ownerId = getArtifactOwnerId(input.compositionId, input.region.id);
   const duration = Math.max(0, input.region.endTime - input.region.startTime);
-  return {
-    id: `${ownerId}:html-media:video`,
-    kind: 'html-media',
+  const resourceId = `${ownerId}:html-media:video`;
+  const demand: RuntimeProviderDemand = {
+    id: resourceId,
+    facetId: `${resourceId}:facet`,
+    resourceKind: 'html-media',
     policyId: 'composition-render',
+    leasePolicy: 'background-cache',
     owner: {
       ownerId,
       ownerType: 'composition',
@@ -53,15 +58,21 @@ function createVideoBakeProxyResource(input: VideoBakeProxyArtifactInput): Rende
       sourceId: input.region.id,
       compositionId: input.compositionId,
     },
-    mediaElementKind: 'video',
-    elementId: `${ownerId}:video`,
-    srcKind: 'blob-url',
     dimensions: {
       width: input.width,
       height: input.height,
       fps: input.fps,
       durationSeconds: duration,
     },
+    priority: 'background',
+    tags: ['composition-render', 'video-bake-proxy'],
+  };
+
+  return createRenderResourceDescriptorFromDemand(demand, {
+    resourceKind: 'html-media',
+    mediaElementKind: 'video',
+    elementId: `${ownerId}:video`,
+    srcKind: 'blob-url',
     diagnostics: {
       status: 'unknown',
       provider: {
@@ -71,8 +82,7 @@ function createVideoBakeProxyResource(input: VideoBakeProxyArtifactInput): Rende
       },
     },
     label: 'Video bake proxy element',
-    tags: ['composition-render', 'video-bake-proxy'],
-  };
+  });
 }
 
 function createVideoBakeProxyAdmissionError(

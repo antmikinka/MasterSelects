@@ -13,7 +13,7 @@ import {
   timelineTimeRangeToRect,
   type TimelineGeometrySnapshot,
   type TimelineRenderModel,
-} from '../../src/components/timeline/renderModel';
+} from '../../src/timeline';
 
 const renderModel: TimelineRenderModel = {
   schemaVersion: 1,
@@ -305,7 +305,7 @@ const geometrySnapshot: TimelineGeometrySnapshot = {
   },
 };
 
-describe('timeline render model contracts', () => {
+describe('timeline kernel projection and geometry contracts', () => {
   it('keeps the render model structured-clone-safe plain data', () => {
     expect(findTimelineRuntimeReferences(renderModel)).toEqual([]);
     expect(isPlainTimelineRenderData(renderModel)).toBe(true);

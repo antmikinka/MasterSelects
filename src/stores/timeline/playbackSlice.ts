@@ -4,7 +4,6 @@ import type { PlaybackActions, SliceCreator } from './types';
 import { MIN_ZOOM, MAX_ZOOM, MIN_TRACK_HEADER_WIDTH, MAX_TRACK_HEADER_WIDTH } from './constants';
 import { useMediaStore } from '../mediaStore';
 import { engine } from '../../engine/WebGPUEngine';
-import { getRuntimeFrameProvider } from '../../services/mediaRuntime/runtimePlayback';
 import {
   getPlayheadPosition,
   playheadState,
@@ -22,6 +21,7 @@ import {
   persistTimelineTrackHeaderWidth,
 } from './viewPreferences';
 import { stopTimelineAudioPlayback } from '../../services/audio/timelineAudioPlaybackStopper';
+import { getTimelinePlaybackWarmupVideo } from '../../services/timeline/timelinePlaybackWarmupRuntime';
 
 function createPlaybackWarmupRequestId(): string {
   return `playback-warmup-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -91,31 +91,11 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
       playheadState.position = playbackStartPosition;
     }
 
-    const needsHtmlPlaybackReadiness = (
-      source: (typeof clips)[number]['source'] | undefined
-    ): source is NonNullable<(typeof clips)[number]['source']> & {
-      videoElement: HTMLVideoElement;
-    } => {
-      if (!source?.videoElement) {
-        return false;
-      }
-
-      const runtimeProvider = getRuntimeFrameProvider(source);
-      const frameProvider =
-        runtimeProvider?.isFullMode()
-          ? runtimeProvider
-          : source.webCodecsPlayer?.isFullMode()
-            ? source.webCodecsPlayer
-            : null;
-
-      return !frameProvider?.isFullMode();
-    };
-
     // Find all video clips at current playhead position that need to be ready
     const clipsAtPlayhead = clips.filter(clip => {
       const isAtPlayhead = playbackStartPosition >= clip.startTime &&
                            playbackStartPosition < clip.startTime + clip.duration;
-      const hasVideo = needsHtmlPlaybackReadiness(clip.source);
+      const hasVideo = getTimelinePlaybackWarmupVideo(clip.source) !== null;
       return isAtPlayhead && hasVideo;
     });
 
@@ -128,11 +108,12 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
         if (isAtPlayhead) {
           const compTime = playbackStartPosition - clip.startTime + clip.inPoint;
           for (const nestedClip of clip.nestedClips) {
-            if (needsHtmlPlaybackReadiness(nestedClip.source)) {
+            const warmupVideo = getTimelinePlaybackWarmupVideo(nestedClip.source);
+            if (warmupVideo) {
               const isNestedAtTime = compTime >= nestedClip.startTime &&
                                      compTime < nestedClip.startTime + nestedClip.duration;
               if (isNestedAtTime) {
-                nestedVideos.push(nestedClip.source.videoElement);
+                nestedVideos.push(warmupVideo);
               }
             }
           }
@@ -142,7 +123,10 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
 
     // Collect all videos that need to be ready
     const videosToCheck = Array.from(new Set([
-      ...clipsAtPlayhead.map(c => c.source!.videoElement!),
+      ...clipsAtPlayhead.flatMap(c => {
+        const warmupVideo = getTimelinePlaybackWarmupVideo(c.source);
+        return warmupVideo ? [warmupVideo] : [];
+      }),
       ...nestedVideos
     ]));
 
@@ -520,6 +504,10 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
 
   setCompositionSwitchDirection: (direction) => {
     set({ compositionSwitchDirection: direction });
+  },
+
+  setCompositionSwitchSourceTracks: (tracks) => {
+    set({ compositionSwitchSourceTracks: tracks ? tracks.map((track) => ({ ...track })) : null });
   },
 
   setCompositionSwitchTargetTracks: (tracks) => {

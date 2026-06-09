@@ -4,6 +4,7 @@ import { flags } from '../engine/featureFlags';
 import type { Composition, SlotDeckState } from '../stores/mediaStore/types';
 import { useMediaStore } from '../stores/mediaStore';
 import { DEFAULT_TRANSFORM } from '../stores/timeline/constants';
+import type { RuntimeProviderDemand } from '../timeline';
 import {
   bindSourceRuntimeForOwner,
   planSourceRuntimeBindingForOwner,
@@ -78,6 +79,12 @@ function sanitizeError(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T;
 }
 
 class SlotDeckManager {
@@ -470,22 +477,7 @@ class SlotDeckManager {
     const handle = startTimelineImageHydration({
       url,
       resource: {
-        id: `timeline-runtime:slot-deck:${ownerId}:image-canvas:image`,
-        policyId: 'slot-deck',
-        owner: {
-          ownerId,
-          ownerType: 'slot',
-          clipId: clip.id,
-          trackId: clip.trackId,
-          mediaFileId: clip.mediaFileId,
-        },
-        source: {
-          sourceId: clip.mediaFileId,
-          mediaFileId: clip.mediaFileId,
-          clipId: clip.id,
-          trackId: clip.trackId,
-          previewPath: url,
-        },
+        demand: this.createSlotDeckImageDemand(entry, clip, ownerId, url),
         imageId: `${ownerId}:image`,
         label: 'Slot deck image hydration',
         tags: ['slot-deck', 'image'],
@@ -532,6 +524,43 @@ class SlotDeckManager {
     }
     this.pendingImageHydrations.set(ownerId, handle);
     return true;
+  }
+
+  private createSlotDeckImageDemand(
+    entry: SlotDeckEntry,
+    clip: TimelineClip,
+    ownerId: string,
+    url: string
+  ): RuntimeProviderDemand {
+    const resourceId = `timeline-runtime:slot-deck:${ownerId}:image-canvas:image`;
+    return {
+      id: resourceId,
+      facetId: `${resourceId}:facet`,
+      resourceKind: 'image-canvas',
+      policyId: 'slot-deck',
+      leasePolicy: 'lease-visible',
+      owner: removeUndefinedValues({
+        ownerId,
+        ownerType: 'slot' as const,
+        clipId: clip.id,
+        trackId: clip.trackId,
+        compositionId: entry.compositionId,
+        mediaFileId: clip.mediaFileId,
+      }),
+      source: removeUndefinedValues({
+        sourceId: clip.mediaFileId,
+        mediaFileId: clip.mediaFileId,
+        clipId: clip.id,
+        trackId: clip.trackId,
+        compositionId: entry.compositionId,
+        previewPath: url,
+      }),
+      dimensions: {
+        durationSeconds: clip.duration,
+      },
+      priority: 'background',
+      tags: ['slot-deck', 'image'],
+    };
   }
 
   private loadVectorAnimationForClip(entry: SlotDeckEntry, clip: TimelineClip, file: File, sourceType: VectorAnimationProvider): void {

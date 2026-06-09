@@ -8,6 +8,7 @@ import type {
 import type {
   AnimatableProperty,
   AudioStemKind,
+  ClipAudioRegionGainPreview,
   ClipAudioStemState,
   Keyframe,
   SpectralImageLayer,
@@ -17,7 +18,10 @@ import type {
 } from '../../../types';
 import type {
   ClipStemSeparationJobState,
+  ApplyAudioRegionEditOptions,
+  ApplyAudioRegionGainEditOptions,
   TimelineAudioRegionSelection,
+  TimelineAudioRegionEditType,
   TimelineSpectralRegionSelection,
   TimelineToolId,
   TimelineVideoBakeRegionSelection,
@@ -204,6 +208,9 @@ export interface ClipInteractionShellAudioRegionModuleState extends ClipInteract
   selection: TimelineAudioRegionSelection | null;
   mode?: 'select' | 'move' | 'resize' | 'gain' | 'context-menu';
   gainPreviewDb?: number;
+  audioFocusMode?: boolean;
+  showEditMarkers?: boolean;
+  hasClipboard?: boolean;
 }
 
 export type ClipInteractionShellSpectralLayerRef = Readonly<
@@ -221,10 +228,34 @@ export type ClipInteractionShellSpectralLayerRef = Readonly<
   >
 >;
 
+export interface ClipInteractionShellSpectralImageMediaRef {
+  id: string;
+  name: string;
+  type?: 'image' | string;
+  url?: string;
+  thumbnailUrl?: string;
+}
+
+export interface ClipInteractionShellSpectralImageLayerInput {
+  imageMediaFileId: string;
+  timeStart: number;
+  duration: number;
+  frequencyMin: number;
+  frequencyMax: number;
+  opacity: number;
+  blendMode: 'attenuate' | 'boost' | 'gate' | 'sidechain-mask' | 'replace';
+  gainDb: number;
+  featherTime: number;
+  featherFrequency: number;
+}
+
 export interface ClipInteractionShellSpectralRegionModuleState extends ClipInteractionShellBaseModuleState {
   slot: 'spectral-region';
   selection: TimelineSpectralRegionSelection | null;
   imageLayers: readonly ClipInteractionShellSpectralLayerRef[];
+  imageMediaFiles: readonly ClipInteractionShellSpectralImageMediaRef[];
+  selectedImageFile: ClipInteractionShellSpectralImageMediaRef | null;
+  canSelectRegion: boolean;
   isImageDropTarget?: boolean;
 }
 
@@ -253,6 +284,8 @@ export interface ClipInteractionShellVideoBakeModuleState extends ClipInteractio
 export interface ClipInteractionShellStemModuleState extends ClipInteractionShellBaseModuleState {
   slot: 'stem';
   stemState: ClipAudioStemState | null;
+  sourceClip?: ClipInteractionShellClipRef | null;
+  sourceMediaFileId?: string | null;
   menuOpen?: boolean;
   activeStemKind?: AudioStemKind;
   job?: ClipStemSeparationJobState | null;
@@ -305,6 +338,38 @@ export interface ClipInteractionShellCommandContext {
   activeModules: ClipInteractionShellActiveModules;
 }
 
+export type ClipInteractionShellModuleCommand =
+  | { type: 'audio-region:set-selection'; selection: TimelineAudioRegionSelection }
+  | { type: 'audio-region:clear-selection' }
+  | {
+      type: 'audio-region:commit-operation-range';
+      operationIds: readonly string[];
+      selection: TimelineAudioRegionSelection;
+      historyLabel: string;
+    }
+  | { type: 'audio-region:set-gain-preview'; preview: ClipAudioRegionGainPreview }
+  | { type: 'audio-region:clear-gain-preview' }
+  | { type: 'audio-region:set-gain-edit'; options: ApplyAudioRegionGainEditOptions }
+  | { type: 'audio-region:apply-edit'; editType: TimelineAudioRegionEditType; options?: ApplyAudioRegionEditOptions }
+  | { type: 'audio-region:copy-selection' }
+  | { type: 'audio-region:paste-selection' }
+  | { type: 'audio-region:split-selection'; selection?: TimelineAudioRegionSelection | null }
+  | { type: 'audio-region:cut-selection'; selection?: TimelineAudioRegionSelection | null }
+  | { type: 'audio-region:toggle-operation'; operationId: string; disabled: boolean }
+  | { type: 'audio-region:remove-operation'; operationId: string }
+  | { type: 'audio-region:clear-stack' }
+  | { type: 'audio-region:bake-stack' }
+  | { type: 'audio-region:unbake-stack' }
+  | { type: 'video-bake:bake-region'; regionId: string }
+  | { type: 'video-bake:unbake-region'; regionId: string }
+  | { type: 'video-bake:remove-region'; regionId: string }
+  | { type: 'stem:prewarm-source-media-files'; mediaFileIds: readonly string[] }
+  | { type: 'stem:set-clip-source'; stemMediaFileId: string }
+  | { type: 'spectral-region:set-selection'; selection: TimelineSpectralRegionSelection }
+  | { type: 'spectral-region:clear-selection' }
+  | { type: 'spectral-region:apply-edit'; editType: 'spectral-mask' | 'spectral-resynthesis' }
+  | { type: 'spectral-region:add-image-layer'; layer: ClipInteractionShellSpectralImageLayerInput };
+
 export interface ClipInteractionShellCommands {
   onRootPointerDown?: (
     event: ReactPointerEvent<HTMLDivElement>,
@@ -340,10 +405,10 @@ export interface ClipInteractionShellCommands {
   ) => void;
   onModuleCommand?: (
     slot: ClipInteractionShellModuleSlot,
-    command: string,
+    command: ClipInteractionShellModuleCommand,
     context: ClipInteractionShellCommandContext,
     event?: ReactMouseEvent<HTMLElement> | ReactPointerEvent<HTMLElement> | ReactKeyboardEvent<HTMLElement>,
-  ) => void;
+  ) => void | Promise<void>;
 }
 
 export interface ClipInteractionShellProps {

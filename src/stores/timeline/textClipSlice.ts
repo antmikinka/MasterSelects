@@ -3,7 +3,6 @@
 import type { MaskVertex, TextBoundsPath, TimelineClip, TextClipProperties } from '../../types';
 import type { TextClipActions, SliceCreator } from './types';
 import { DEFAULT_TRANSFORM, DEFAULT_TEXT_PROPERTIES, DEFAULT_TEXT_DURATION } from './constants';
-import { textRenderer } from '../../services/textRenderer';
 import {
   cloneTextBoundsPath,
   createTextBoundsFromRect,
@@ -16,6 +15,12 @@ import { layerBuilder } from '../../services/layerBuilder';
 import { generateTextClipId } from './helpers/idGenerator';
 import { useMediaStore } from '../mediaStore';
 import { Logger } from '../../services/logger';
+import {
+  createTimelineTextCanvasRuntime,
+  getTimelineGeneratedCanvasRuntime,
+  getTimelineGeneratedCanvasRuntimeDimensions,
+  renderTimelineTextCanvasRuntime,
+} from '../../services/timeline/timelineGeneratedCanvasRuntime';
 
 const log = Logger.create('TextClipSlice');
 
@@ -155,9 +160,10 @@ export const createTextClipSlice: SliceCreator<TextClipActions> = (set, get) => 
     await googleFontsService.loadFont(DEFAULT_TEXT_PROPERTIES.fontFamily, DEFAULT_TEXT_PROPERTIES.fontWeight);
 
     const resolution = getActiveCompositionResolution();
-    const textProperties = getInitialTextProperties(resolution.width, resolution.height);
-    const canvas = textRenderer.createCanvas(resolution.width, resolution.height);
-    textRenderer.render(textProperties, canvas);
+    const { canvas, textProperties } = await createTimelineTextCanvasRuntime({
+      textProperties: getInitialTextProperties(resolution.width, resolution.height),
+      dimensions: resolution,
+    });
 
     const textClip: TimelineClip = {
       id: clipId,
@@ -199,7 +205,7 @@ export const createTextClipSlice: SliceCreator<TextClipActions> = (set, get) => 
     let newProps: TextClipProperties = { ...clip.textProperties, ...props };
 
     const fallbackResolution = getActiveCompositionResolution();
-    const currentCanvas = clip.source?.textCanvas;
+    const currentCanvas = getTimelineGeneratedCanvasRuntime(clip);
     const sourceWidth = currentCanvas?.width || fallbackResolution.width;
     const sourceHeight = currentCanvas?.height || fallbackResolution.height;
     const renderWidth = fallbackResolution.width;
@@ -231,12 +237,11 @@ export const createTextClipSlice: SliceCreator<TextClipActions> = (set, get) => 
         textBounds: createTextBoundsFromRect(box, renderWidth, renderHeight),
       };
     }
-    const canvas = currentCanvas &&
-      currentCanvas.width === renderWidth &&
-      currentCanvas.height === renderHeight
-      ? currentCanvas
-      : textRenderer.createCanvas(renderWidth, renderHeight);
-    textRenderer.render(newProps, canvas);
+    const canvas = renderTimelineTextCanvasRuntime({
+      textProperties: newProps,
+      currentCanvas,
+      dimensions: { width: renderWidth, height: renderHeight },
+    });
 
     const texMgr = engine.getTextureManager();
     if (texMgr) {
@@ -272,9 +277,13 @@ export const createTextClipSlice: SliceCreator<TextClipActions> = (set, get) => 
         const currentClip = currentClips.find(cl => cl.id === clipId);
         if (!currentClip?.textProperties) return;
 
-        const currentCanvas = currentClip.source?.textCanvas;
+        const currentCanvas = getTimelineGeneratedCanvasRuntime(currentClip);
         if (currentCanvas) {
-          textRenderer.render(currentClip.textProperties, currentCanvas);
+          renderTimelineTextCanvasRuntime({
+            textProperties: currentClip.textProperties,
+            currentCanvas,
+            dimensions: { width: currentCanvas.width, height: currentCanvas.height },
+          });
           engine.getTextureManager()?.updateCanvasTexture(currentCanvas);
           invalidateTextGpuBindings();
         }
@@ -294,9 +303,10 @@ export const createTextClipSlice: SliceCreator<TextClipActions> = (set, get) => 
   updateTextBounds: (clipId, updates) => {
     const clip = get().clips.find(candidate => candidate.id === clipId);
     if (!clip?.textProperties) return;
-    const sourceCanvas = clip.source?.textCanvas;
-    const width = sourceCanvas?.width || getActiveCompositionResolution().width;
-    const height = sourceCanvas?.height || getActiveCompositionResolution().height;
+    const { width, height } = getTimelineGeneratedCanvasRuntimeDimensions(
+      clip,
+      getActiveCompositionResolution(),
+    );
     const interpolatedBounds = get().getInterpolatedTextBounds(clip.id, get().playheadPosition - clip.startTime);
     const currentBounds = interpolatedBounds
       ? cloneTextBoundsPath(interpolatedBounds)
@@ -312,9 +322,10 @@ export const createTextClipSlice: SliceCreator<TextClipActions> = (set, get) => 
   updateTextBoundsVertex: (clipId, vertexId, updates, recordKeyframe = true) => {
     const clip = get().clips.find(candidate => candidate.id === clipId);
     if (!clip?.textProperties) return;
-    const sourceCanvas = clip.source?.textCanvas;
-    const width = sourceCanvas?.width || getActiveCompositionResolution().width;
-    const height = sourceCanvas?.height || getActiveCompositionResolution().height;
+    const { width, height } = getTimelineGeneratedCanvasRuntimeDimensions(
+      clip,
+      getActiveCompositionResolution(),
+    );
     const interpolatedBounds = get().getInterpolatedTextBounds(clip.id, get().playheadPosition - clip.startTime);
     const currentBounds = interpolatedBounds
       ? cloneTextBoundsPath(interpolatedBounds)
@@ -345,9 +356,10 @@ export const createTextClipSlice: SliceCreator<TextClipActions> = (set, get) => 
   updateTextBoundsVertices: (clipId, vertexUpdates, recordKeyframe = true) => {
     const clip = get().clips.find(candidate => candidate.id === clipId);
     if (!clip?.textProperties) return;
-    const sourceCanvas = clip.source?.textCanvas;
-    const width = sourceCanvas?.width || getActiveCompositionResolution().width;
-    const height = sourceCanvas?.height || getActiveCompositionResolution().height;
+    const { width, height } = getTimelineGeneratedCanvasRuntimeDimensions(
+      clip,
+      getActiveCompositionResolution(),
+    );
     const interpolatedBounds = get().getInterpolatedTextBounds(clip.id, get().playheadPosition - clip.startTime);
     const currentBounds = interpolatedBounds
       ? cloneTextBoundsPath(interpolatedBounds)

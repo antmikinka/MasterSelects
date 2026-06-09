@@ -112,6 +112,12 @@ describe('video bake proxy cache runtime admission', () => {
             fps: 30,
             durationSeconds: 2,
           }),
+          tags: expect.arrayContaining([
+            'runtime-provider-demand',
+            'background-cache',
+            'composition-render',
+            'video-bake-proxy',
+          ]),
         }),
       ]));
 

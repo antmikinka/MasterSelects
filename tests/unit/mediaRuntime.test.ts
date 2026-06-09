@@ -782,6 +782,15 @@ describe('media runtime bindings', () => {
     expect(getRuntimeFrameProvider(scrubSource)).toBe(scrubPlayer);
     expect(scrubPlayer.loadFile).toHaveBeenCalledWith(file);
     expect(scrubPlayer.seek).toHaveBeenCalledWith(3.25);
+    const resources = timelineRuntimeCoordinator
+      .getBridgeStats()
+      .policies.interactive.resources
+      .filter((resource) => resource.tags?.includes('runtime-playback'));
+    expect(resources).toHaveLength(2);
+    expect(resources.every((resource) =>
+      resource.tags?.includes('runtime-provider-demand') &&
+      resource.tags.includes('lease-visible')
+    )).toBe(true);
 
     releaseRuntimePlaybackSession(scrubSource);
 

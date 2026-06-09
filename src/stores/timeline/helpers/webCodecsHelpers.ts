@@ -6,11 +6,11 @@ import { engine } from '../../../engine/WebGPUEngine';
 import { flags } from '../../../engine/featureFlags';
 import { Logger } from '../../../services/logger';
 import { layerBuilder } from '../../../services/layerBuilder';
+import type { RuntimeProviderDemand } from '../../../timeline';
 import type {
-  RenderResourceDescriptor,
   TimelineRuntimeAdmissionDecision,
 } from '../../../services/timeline/runtimeCoordinatorTypes';
-import { timelineRuntimeCoordinator } from '../../../services/timeline/timelineRuntimeCoordinator';
+import { reserveRuntimeProviderDemandResource } from '../../../services/timeline/runtimeProviderDemandBridge';
 
 const log = Logger.create('WebCodecsHelpers');
 let webCodecsHelperProviderSequence = 0;
@@ -42,21 +42,28 @@ function reserveWebCodecsHelperProviderResource(params: {
 }): WebCodecsHelperAdmission {
   webCodecsHelperProviderSequence += 1;
   const providerId = `webcodecs-helper:${webCodecsHelperProviderSequence}:${params.fileName}`;
-  const resource: RenderResourceDescriptor = {
+  const sourceId = params.file
+    ? `${params.file.name}:${params.file.size}:${params.file.lastModified}`
+    : params.fileName;
+  const demand: RuntimeProviderDemand = {
     id: `${providerId}:frame-provider`,
-    kind: 'video-frame-provider',
+    facetId: providerId,
+    resourceKind: 'video-frame-provider',
     policyId: 'interactive',
+    leasePolicy: 'lease-visible',
     owner: {
       ownerId: providerId,
       ownerType: 'timeline',
-      mediaFileId: undefined,
     },
     source: {
-      sourceId: params.file
-        ? `${params.file.name}:${params.file.size}:${params.file.lastModified}`
-        : params.fileName,
+      sourceId,
       previewPath: params.fileName,
     },
+    priority: 'visible',
+    tags: ['timeline-helper', 'webcodecs'],
+  };
+  const reservation = reserveRuntimeProviderDemandResource(demand, {
+    resourceKind: 'video-frame-provider',
     providerId,
     providerKind: 'webcodecs',
     canSeek: params.fullMode,
@@ -68,21 +75,18 @@ function reserveWebCodecsHelperProviderResource(params: {
         }
       : undefined,
     label: 'Timeline helper WebCodecs provider',
-    tags: ['timeline-helper', 'webcodecs'],
-  };
-  const decision = timelineRuntimeCoordinator.canRetainResource(resource);
-  if (!decision.admitted) {
+  });
+  if (!reservation.admitted) {
     return {
       admitted: false,
-      decision,
+      decision: reservation.decision,
       release: () => undefined,
     };
   }
-  timelineRuntimeCoordinator.retainResource(resource);
   return {
     admitted: true,
-    resourceId: resource.id,
-    release: () => timelineRuntimeCoordinator.releaseResource(resource.id),
+    resourceId: reservation.resource.id,
+    release: reservation.release,
   };
 }
 

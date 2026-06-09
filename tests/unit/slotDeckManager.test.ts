@@ -229,6 +229,14 @@ describe('slotDeckManager', () => {
         },
       },
     });
+    const slotResources = timelineRuntimeCoordinator.getBridgeStats().policies['slot-deck'].resources;
+    for (const resource of slotResources) {
+      expect(resource.tags).toEqual(expect.arrayContaining([
+        'runtime-provider-demand',
+        'lease-visible',
+        'slot-deck',
+      ]));
+    }
 
     slotDeckManager.disposeSlot(0);
 
@@ -354,6 +362,14 @@ describe('slotDeckManager', () => {
       preparedClipCount: 1,
       readyClipCount: 0,
     });
+    const slotResources = timelineRuntimeCoordinator.getBridgeStats().policies['slot-deck'].resources;
+    expect(slotResources).toHaveLength(1);
+    expect(slotResources[0]?.tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'lease-visible',
+      'slot-deck',
+      'image',
+    ]));
 
     slotDeckManager.disposeSlot(0);
     createdImages[0].dispatchEvent(new Event('load'));

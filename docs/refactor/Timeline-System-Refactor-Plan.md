@@ -35,9 +35,10 @@ architecture. Do not preserve old runtime/render paths for convenience.
 - Full build/lint/test is not the normal slice loop. Gate-specific and
   touched-area checks are the default.
 
-## Current Baseline
+## Historical Baseline
 
-Current large timeline-related files at this planning checkpoint:
+Large timeline-related files at the original planning checkpoint. These counts
+are historical context, not the current post-refactor state:
 
 | File | Lines | Refactor Pressure |
 |---|---:|---|
@@ -53,18 +54,21 @@ Current large timeline-related files at this planning checkpoint:
 | `src/stores/timeline/serializationUtils.ts` | 1369 | Timeline load/save restore helpers. |
 | `src/stores/timeline/types.ts` | 1330 | Timeline state/action contracts. |
 
-Important existing facts:
+Important final facts:
 
 - `src/components/timeline/TimelineClip.tsx` is deleted.
 - Passive clip bodies render through `TimelineClipCanvas`.
 - Active clip DOM goes through `ClipInteractionShell`.
-- `src/components/timeline/renderModel/types.ts` and `geometry.ts` contain useful
-  contracts to migrate, not permanent component-owned homes.
-- `TimelineClipCanvas.tsx` still defines broad `CanvasClip` data. That type is
-  transitional debt and must be deleted through Phase 3 gates.
-- `src/types/index.ts` still contains runtime-bearing source fields. The first
-  implementation packets must account for this before treating `src/types/**` as
-  a clean kernel input.
+- Former `src/components/timeline/renderModel/types.ts` and `geometry.ts`
+  contracts have moved to `src/timeline/projection` and
+  `src/timeline/geometry`; do not recreate component-owned render-model
+  contracts.
+- `TimelineClipCanvas.tsx` no longer defines the broad `CanvasClip` or
+  `TimelineClipCanvasInputClip` bridges; passive drawing now consumes
+  kernel-owned paint/source contracts.
+- `src/types/index.ts` separates data-only timeline clip source descriptors
+  from explicit runtime-handle extension surfaces; `src/timeline/**` consumes
+  runtime-free schema and resource-demand contracts.
 - `src/services/timeline/timelineVisualDemand.ts` already exists with a
   render-loop-gating meaning. Do not reuse that name for kernel resource demand
   without renaming/isolation.
@@ -72,7 +76,7 @@ Important existing facts:
 ## Target Architecture
 
 ```text
-src/types/                         app-wide type tier; needs runtime-field split
+src/types/                         app-wide type tier; data source/runtime split
 src/timeline/
   contracts/
     schema/                        runtime-free timeline descriptor views
@@ -198,6 +202,38 @@ change-triggered architecture checks:
 | Fan-in | Any new module imported by many lanes must be reviewed as a potential new god object. |
 | High-conflict files | One owner at a time through `laneWriteManifest`. |
 
+Line count is only a pressure signal. A gate must not be marked satisfied from
+LOC reduction alone. The owning agent must also show which coupling was reduced:
+
+- timeline truth moved into `src/timeline/**` kernel contracts or pure builders
+- a host/service/store boundary became narrower and more explicit
+- source-kind logic moved into registered contributors or command planners
+- runtime handles moved out of editor/store/kernel paths into service-owned
+  leases or registries
+- legacy adapters, commented fallback blocks, or compatibility branches were
+  deleted or moved to importer-owned debt
+- behavior coverage was ported/replaced so the new boundary is tested directly
+
+The following are not acceptable as final refactor outcomes, even if they pass
+line budgets:
+
+- prop-funnel components that mostly forward large state/action bags
+- wrapper modules that rename old logic without reducing dependency direction,
+  mutation reach, source-kind branching, or runtime handle access
+- architecture tests that only assert string absence/presence when a behavior,
+  import-boundary, or contract test can reasonably prove the same gate
+- duplicated preview, geometry, paint, import, or resource logic split across
+  several files instead of isolated behind one contract
+- large commented legacy blocks, flag-disabled alternate paths, or quiet
+  compatibility branches in the active editor/runtime pipeline
+
+When a slice splits a file, its handoff entry must state:
+
+- the original coupling removed
+- the new owning contract/module
+- the behavior/static test proving the boundary
+- any remaining prop-funnel, wrapper, fallback, or string-only-test debt
+
 Explicitly forbidden new god-object names/patterns:
 
 - broad `viewModel/`
@@ -262,7 +298,7 @@ Initial known classifications:
 
 | Test | Classification | Replacement / Gate |
 |---|---|---|
-| `tests/unit/timelineRenderModel.test.ts` | `port` | Move to kernel projection/geometry tests for `P2_GEOMETRY_HIT_PARITY` and `P2_CLONE_SAFE_PROJECTION`. |
+| `tests/unit/timelineRenderModel.test.ts` | `port` | Move to kernel projection/geometry tests for `P2_TIMELINE_PROJECTION_ADOPTED` and `P2_GEOMETRY_SNAPSHOT_ADOPTED`. |
 | `tests/unit/timelineClipCanvasWorkerModel.test.ts` | `replace` | Replace worker message/eligibility structure assertions with contributor/paint-packet gates. |
 | `tests/unit/TimelineClipCanvasWorkerRuntime.test.tsx` | `split` | Port host/runtime behavior; delete assertions that preserve `CanvasClip` shape or worker/main fallback split after Phase 3. |
 | `tests/stores/timeline/trackSlice.test.ts` | `keep` | Store behavior coverage; keep outside kernel. |
@@ -277,12 +313,12 @@ The first registry packet should seed at least these debt entries:
 
 | Debt | Owner Lane | Delete / Split Gate |
 |---|---|---|
-| `CanvasClip` data-shape and field-coverage matrix | Projection/Canvas adapter | `P2_CANVASCLIP_FIELD_COVERAGE`, `P3_CANVASCLIP_DELETED` |
-| `CanvasClip` runtime-bearing fields such as `File` and source handles | Schema/runtime cleanup | `P1_SCHEMA_RUNTIME_FREE_BOUNDARY`, `P3_CANVASCLIP_ADAPTER_REMOVED` |
-| `CanvasClip` worker message, fallback lifecycle, resource warmups, diagnostics | Paint/runtime host | `P3_WORKER_TO_PAINT_PACKET_PARITY`, `P3_ADAPTER_DEBT_LEDGER_CLEARED` |
-| `timelineClipCanvasWorkerModel.ts` source-kind switches and LOC overage | Paint contributors | `P2_NO_SOURCE_KIND_SWITCH`, `P3_WORKER_TO_PAINT_PACKET_PARITY` |
-| `interactionShell/**` callback bags and app/store-shaped refs | Shell/commands | `P2_SHELL_CONTRACT_NARROW` |
-| `useExternalDrop.ts` direct clip/track creation and source-specific branches | Commands/import | `P2_DROP_COMMAND_PLANNER_PARITY`, `P4_IMPORTER_LEGACY_QUARANTINE` |
+| `CanvasClip` data-shape and field-coverage matrix | Projection/Canvas adapter | `P3_CANVAS_CLIP_FIELD_COVERAGE_GREEN`, `P3_CANVAS_CLIP_DELETED` |
+| `CanvasClip` runtime-bearing fields such as `File` and source handles | Schema/runtime cleanup | `P1_SCHEMA_RUNTIME_FREE_BOUNDARY`, `P3_CANVAS_CLIP_DELETED` |
+| `CanvasClip` worker message, fallback lifecycle, resource warmups, diagnostics | Paint/runtime host | `P3_PAINT_PACKET_ADOPTED`, `P5_RETIRED_PATHS_DELETED` |
+| `timelineClipCanvasWorkerModel.ts` source-kind switches and LOC overage | Paint contributors | `P3_PAINT_PACKET_ADOPTED`, `P3_CANVAS_CLIP_DELETED` |
+| `interactionShell/**` callback bags and app/store-shaped refs | Shell/commands | `P3_INTERACTION_SHELL_CALLBACKS_NARROW` |
+| `useExternalDrop.ts` direct clip/track creation and source-specific branches | Commands/import | `P4_DROP_IMPORT_COMMANDS_ROUTED`, `P4_IMPORTER_LEGACY_QUARANTINE` |
 | `serializationUtils.ts` runtime restore compatibility | Importer quarantine | `P4_IMPORTER_LEGACY_QUARANTINE` |
 | `VideoSyncManager.ts` and `AudioTrackSyncManager.ts` direct source handles | Runtime provider | `P4_RUNTIME_PROVIDER_DEMAND_ADOPTED`, `P4_TIMELINE_STATE_RUNTIME_HANDLES_REMOVED` |
 
@@ -296,7 +332,6 @@ store/media/overlay inputs
   -> TimelineGeometrySnapshot + TimelineSpatialIndex
   -> VisibleSet
   -> TimelineVisualResourceDemand/ResourceResolution
-  -> temporary CanvasClip adapter
   -> current canvas draw path
 ```
 
@@ -304,26 +339,19 @@ Also prove geometry-driven hit testing and shell mounting for that same track.
 
 Phase 2 exits only when these gates are green:
 
-- `P2_PROJECTION_LAYOUT_TIMING_KEYS`
-- `P2_CLONE_SAFE_PROJECTION`
-- `P2_CANVASCLIP_FIELD_COVERAGE`
-- `P2_CANVASCLIP_RUNTIME_FIELD_MATRIX`
-- `P2_CANVASCLIP_ADAPTER_NARROW`
-- `P2_GEOMETRY_HIT_PARITY`
-- `P2_GEOMETRY_SINGLE_SOURCE_NO_SCATTERED_TIME_TO_PIXEL`
-- `P2_SCROLL_NO_GEOMETRY_REBUILD`
-- `P2_EDIT_DISPATCH_BODY_TRIM_FADE`
-- `P2_DROP_COMMAND_PLANNER_PARITY`
-- `P2_DISPATCH_PURITY`
-- `P2_NO_SOURCE_KIND_SWITCH`
-- `P2_SOURCE_TYPE_TO_FACET_NORMALIZATION`
-- `P2_SHELL_CONTRACT_NARROW`
-- `P2_LANE_TRANSFER_BLOCKED`
+- `P2_TIMELINE_PROJECTION_ADOPTED`
+- `P2_GEOMETRY_SNAPSHOT_ADOPTED`
+- `P2_VISIBLE_SET_SINGLE_SOURCE`
+- `P2_SCROLL_DOES_NOT_REBUILD_GEOMETRY`
 
-`P2_CLONE_SAFE_PROJECTION` and `P2_CANVASCLIP_RUNTIME_FIELD_MATRIX` should reuse
-the existing runtime-reference detection ideas from
-`src/components/timeline/renderModel/types.ts` rather than inventing a weaker
-clone-safety check.
+The former granular P2 checks for projection timing keys, clone-safety,
+geometry hit parity, scattered `timeToPixel` removal, dispatch purity,
+source-kind normalization, shell contract narrowing, drop-command routing, and
+lane-transfer safety are covered by these registry gates plus their executable
+evidence in `src/timeline/architecture/exitCriteriaCoverage.ts`. Runtime-free
+projection/schema checks should reuse the runtime-reference detection in
+`src/timeline/projection/runtimeFreeData.ts` rather than inventing weaker
+clone-safety checks.
 
 ## Phase 3: Remove Passive Render Adapter
 
@@ -331,17 +359,16 @@ Move canvas rendering to paint packets and delete `CanvasClip`.
 
 Phase 3 exits only when these gates are green:
 
-- `P3_CANVAS_HOST_DIRECT_PAINT_PACKET`
-- `P3_PAINT_RESOURCE_TABLE_HOST_JOIN`
-- `P3_RESOURCE_RESOLUTION_CLONE_SAFE`
-- `P3_LEASE_RELEASE_TRANSFER_ACK`
-- `P3_WORKER_TO_PAINT_PACKET_PARITY`
-- `P3_PAINT_PACKET_STRUCTURAL_PARITY`
-- `P3_PAINT_RASTER_PARITY`
-- `P3_WORKER_TRANSFER_MEMORY_BOUNDED`
-- `P3_CANVASCLIP_DELETED`
-- `P3_CANVASCLIP_ADAPTER_REMOVED`
-- `P3_ADAPTER_DEBT_LEDGER_CLEARED`
+- `P3_PAINT_PACKET_ADOPTED`
+- `P3_CANVAS_CLIP_FIELD_COVERAGE_GREEN`
+- `P3_CANVAS_CLIP_DELETED`
+- `P3_INTERACTION_SHELL_CALLBACKS_NARROW`
+
+The former granular P3 checks for host packet adoption, paint-resource table
+joins, clone-safe resource resolution, transfer acknowledgement, worker parity,
+structural/raster parity, memory bounding, adapter removal, and adapter debt
+closure are covered by these registry gates plus the evidence matrix in
+`src/timeline/architecture/exitCriteriaCoverage.ts`.
 
 Expensive raster/memory gates are `phase-exit` and `change-triggered`, not
 required after every tiny edit.
@@ -379,6 +406,25 @@ Primary write scopes:
 - `src/components/timeline/hooks/useExternalDrop.ts`
 - runtime/project-load restore modules
 - runtime/resource helpers such as `src/stores/timeline/helpers/blobUrlManager.ts`
+
+## Phase 5: Test Migration, Dead Paths, Docs, And Final Checks
+
+Phase 5 closes the refactor after runtime/store/importer cleanup. It exists to
+make sure the new architecture is not forced to keep rejected legacy paths by
+old tests or stale docs.
+
+Phase 5 exits only when these gates are green:
+
+- `P5_TEST_MIGRATION_COMPLETE`
+- `P5_RETIRED_PATHS_DELETED`
+- `P5_DOCS_HANDOFF_COMPLETE`
+- `P5_FULL_CHECK_CHAIN_GREEN`
+
+The affected-test and retired-path ledgers are the source of truth for this
+phase. A test that protects user-visible behavior must be ported or replaced
+before old implementation assertions are deleted. A retired path must be
+deleted, quarantined at the importer boundary, or explicitly kept with a target
+architecture reason before the phase is complete.
 
 ## Parallel Agent Model
 
@@ -452,9 +498,9 @@ Not allowed:
 - old-project restore logic inside `src/timeline/**`, canvas hosts, worker draw
   code, runtime allocation, or editor interaction
 
-## Current Pre-Implementation Fixes
+## Historical Pre-Implementation Fixes
 
-Before large implementation lanes start:
+Before large implementation lanes started:
 
 1. Create architecture registry files and `P1_ARCHITECTURE_REGISTRY_COHERENT`.
 2. Decide the clean `src/types` / runtime-field split or narrowed schema view.

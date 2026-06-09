@@ -291,6 +291,10 @@ describe('thumbnailCacheService', () => {
       expect(usage.jobs).toBe(1);
       expect(usage.htmlMediaElements).toBe(1);
     });
+    expect(timelineRuntimeCoordinator.getBridgeStats().policies.thumbnail.resources.every((resource) =>
+      resource.tags?.includes('runtime-provider-demand') &&
+      resource.tags?.includes('background-cache')
+    )).toBe(true);
 
     resolveGeneration?.(true);
     await generatePromise;

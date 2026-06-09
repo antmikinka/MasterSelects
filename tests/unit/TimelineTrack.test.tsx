@@ -234,6 +234,10 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(shell?.dataset.clipId).toBe('clip-video');
     expect(shell?.dataset.mountReasons).toBe('hover');
     expect(shell?.dataset.activeSlots).toBe('trim fade');
+    expect(shell?.style.left).toBe('20px');
+    expect(shell?.style.top).toBe('4px');
+    expect(shell?.style.width).toBe('40px');
+    expect(shell?.style.height).toBe('56px');
     expect(shell?.style.pointerEvents).toBe('none');
     expect(legacyClip).toBeNull();
   });
@@ -333,6 +337,25 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(container.querySelector('.timeline-canvas-dom-overlay')).toBeNull();
   });
 
+  it('positions external drag previews from timeline geometry', () => {
+    const { container } = renderTimelineTrack({
+      externalDrag: {
+        trackId: 'track-video',
+        startTime: 3,
+        duration: 2,
+        x: 30,
+        y: 20,
+        label: 'Drop clip',
+      },
+    });
+
+    const preview = container.querySelector<HTMLElement>('.timeline-clip-preview');
+
+    expect(preview).toBeTruthy();
+    expect(preview?.style.left).toBe('30px');
+    expect(preview?.style.width).toBe('20px');
+  });
+
   it('marks keyframe property rows for data-driven marquee geometry', () => {
 
     const { container } = renderTimelineTrack({
@@ -362,6 +385,12 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(row).toBeTruthy();
     expect(row?.dataset.trackId).toBe('track-video');
     expect(row?.dataset.keyframeProperty).toBe('opacity');
+    expect(row?.dataset.geometryRowId).toBe('keyframe-row:track-video:opacity');
+    expect(row?.dataset.geometryX).toBe('0');
+    expect(row?.dataset.geometryY).toBe('0');
+    expect(row?.dataset.geometryWidth).toBe('1000');
+    expect(row?.dataset.geometryHeight).toBe('18');
+    expect(row?.dataset.geometryDiamondCount).toBe('1');
   });
 
   it('mounts a fade shell without the legacy overlay body for an active fade clip', () => {

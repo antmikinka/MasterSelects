@@ -247,31 +247,35 @@ describe('timeline edit operations kernel', () => {
 
     expect(videoParts).toHaveLength(3);
     expect(audioParts).toHaveLength(3);
-    expect(videoParts.every((clip) => !clip.source?.videoElement && !clip.source?.webCodecsPlayer && !clip.source?.nativeDecoder)).toBe(true);
-    expect(audioParts.every((clip) => !clip.source?.audioElement)).toBe(true);
+    expect(videoParts.every((clip) =>
+      !clip.source?.videoElement &&
+      !clip.source?.webCodecsPlayer &&
+      !clip.source?.nativeDecoder &&
+      !clip.source?.runtimeSourceId &&
+      !clip.source?.runtimeSessionKey
+    )).toBe(true);
+    expect(audioParts.every((clip) =>
+      !clip.source?.audioElement &&
+      !clip.source?.runtimeSourceId &&
+      !clip.source?.runtimeSessionKey
+    )).toBe(true);
     expect(videoParts.map((clip) => clip.source)).toEqual([
       {
         type: 'video',
         naturalDuration: 12,
         mediaFileId: 'media-video',
-        runtimeSourceId: 'runtime-video',
-        runtimeSessionKey: 'interactive:video-runtime',
         filePath: 'C:/media/video.mp4',
       },
       {
         type: 'video',
         naturalDuration: 12,
         mediaFileId: 'media-video',
-        runtimeSourceId: 'runtime-video',
-        runtimeSessionKey: 'interactive:video-runtime',
         filePath: 'C:/media/video.mp4',
       },
       {
         type: 'video',
         naturalDuration: 12,
         mediaFileId: 'media-video',
-        runtimeSourceId: 'runtime-video',
-        runtimeSessionKey: 'interactive:video-runtime',
         filePath: 'C:/media/video.mp4',
       },
     ]);

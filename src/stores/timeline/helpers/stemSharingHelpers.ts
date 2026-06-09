@@ -1,6 +1,9 @@
 import type { ClipAudioState, ClipAudioStemState, TimelineClip, TimelineTrack } from '../../../types';
 import { STEM_SOURCE_LAYER_ID } from '../../../services/audio/stemSeparation';
-import { isAudioCapableTimelineClip } from '../../../services/audio/audioClipResolution';
+import {
+  getTimelineClipAudioSourceFileKey,
+  isAudioCapableTimelineClip,
+} from '../../../services/audio/audioClipResolution';
 
 function compactAudioState(audioState: ClipAudioState): ClipAudioState | undefined {
   return Object.values(audioState).some(value => value !== undefined)
@@ -30,17 +33,6 @@ function getClipStemShareMediaFileId(clip: TimelineClip): string | null {
   return clip.source?.mediaFileId ?? clip.mediaFileId ?? null;
 }
 
-function getClipStemShareFileKey(clip: TimelineClip): string | null {
-  const file = clip.file ?? clip.source?.file;
-  if (!(file instanceof File)) return null;
-  return [
-    file.name,
-    file.type,
-    file.size,
-    file.lastModified,
-  ].join(':');
-}
-
 export function clipsShareStemSource(sourceClip: TimelineClip, candidate: TimelineClip): boolean {
   if (!isAudioCapableTimelineClip(candidate)) return false;
 
@@ -50,8 +42,8 @@ export function clipsShareStemSource(sourceClip: TimelineClip, candidate: Timeli
     return sourceMediaFileId === candidateMediaFileId;
   }
 
-  const sourceFileKey = getClipStemShareFileKey(sourceClip);
-  const candidateFileKey = getClipStemShareFileKey(candidate);
+  const sourceFileKey = getTimelineClipAudioSourceFileKey(sourceClip);
+  const candidateFileKey = getTimelineClipAudioSourceFileKey(candidate);
   return Boolean(sourceFileKey && candidateFileKey && sourceFileKey === candidateFileKey);
 }
 

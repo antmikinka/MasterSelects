@@ -8,6 +8,10 @@ import { proxyFrameCache } from '../../services/proxyFrameCache';
 import { videoBakeProxyCache } from '../../services/videoBakeProxyCache';
 import { useMediaStore } from '../mediaStore';
 import { resetVolatileVideoBakeRegionStatuses } from './videoBakeSlice';
+import {
+  collectTimelineProxyWarmupVideos,
+  getTimelineClipScrubCacheVideoSrc,
+} from '../../services/timeline/timelineProxyCacheRuntime';
 
 const log = Logger.create('ProxyCacheSlice');
 
@@ -132,7 +136,7 @@ export const createProxyCacheSlice: SliceCreator<ProxyCacheActions> = (set, get)
       clip: typeof clips[number],
       addTimelineRange: (start: number, end: number) => void
     ) => {
-      const videoSrc = clip.source?.videoElement?.src;
+      const videoSrc = getTimelineClipScrubCacheVideoSrc(clip);
       if (!videoSrc) return;
 
       const mediaCachedRanges = engine.getScrubbingCachedRanges(videoSrc);
@@ -230,26 +234,7 @@ export const createProxyCacheSlice: SliceCreator<ProxyCacheActions> = (set, get)
 
     if (isProxyCaching) return;
 
-    // Collect all video elements (including from nested compositions)
-    const videoClips: Array<{ video: HTMLVideoElement; duration: number; name: string }> = [];
-
-    const collectVideos = (clipList: typeof clips) => {
-      for (const clip of clipList) {
-        if (clip.source?.videoElement) {
-          videoClips.push({
-            video: clip.source.videoElement,
-            duration: clip.source.naturalDuration || clip.duration,
-            name: clip.name,
-          });
-        }
-        // Also collect from nested compositions
-        if (clip.isComposition && clip.nestedClips) {
-          collectVideos(clip.nestedClips);
-        }
-      }
-    };
-
-    collectVideos(clips);
+    const videoClips = collectTimelineProxyWarmupVideos(clips);
 
     if (videoClips.length === 0) {
       log.info('No video clips to warmup');

@@ -224,6 +224,13 @@ describe('layerPlaybackManager warm deck adoption', () => {
       'html-media',
       'runtime-binding',
     ]);
+    for (const resource of backgroundStats.resources) {
+      expect(resource.tags).toEqual(expect.arrayContaining([
+        'runtime-provider-demand',
+        'lease-visible',
+        'background-layer',
+      ]));
+    }
 
     layerPlaybackManager.deactivateLayer(2);
 
@@ -352,6 +359,14 @@ describe('layerPlaybackManager warm deck adoption', () => {
 
     layerPlaybackManager.activateLayer(3, 'comp-bg-image', 0, { slotIndex: 5 });
     expect(createdImages).toHaveLength(1);
+    const backgroundResources = timelineRuntimeCoordinator.getBridgeStats().policies.background.resources;
+    expect(backgroundResources).toHaveLength(1);
+    expect(backgroundResources[0]?.tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'lease-visible',
+      'background',
+      'image',
+    ]));
 
     layerPlaybackManager.deactivateLayer(3);
     createdImages[0].dispatchEvent(new Event('load'));

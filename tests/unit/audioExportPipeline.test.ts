@@ -573,7 +573,13 @@ describe('AudioExportPipeline audio preflight', () => {
         clipId: 'reported-audio',
         mediaFileId: 'media-audio',
       },
-      tags: ['export', 'audio', 'source-buffer'],
+      tags: expect.arrayContaining([
+        'runtime-provider-demand',
+        'retain-until-release',
+        'export',
+        'audio',
+        'source-buffer',
+      ]),
     });
   });
 

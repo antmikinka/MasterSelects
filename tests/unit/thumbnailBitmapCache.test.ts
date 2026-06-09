@@ -101,6 +101,8 @@ describe('thumbnailBitmapCache', () => {
     await vi.waitFor(() => {
       expect(timelineRuntimeCoordinator.getBridgeStats().policies.thumbnail.budgetReport.usage.jobs).toBe(1);
     });
+    expect(timelineRuntimeCoordinator.getBridgeStats().policies.thumbnail.resources[0]?.tags)
+      .toEqual(expect.arrayContaining(['runtime-provider-demand', 'background-cache', 'thumbnail']));
 
     resolveBitmap?.(bitmap);
     await vi.waitFor(() => expect(onReady).toHaveBeenCalledTimes(1));
@@ -108,6 +110,8 @@ describe('thumbnailBitmapCache', () => {
     let thumbnailUsage = timelineRuntimeCoordinator.getBridgeStats().policies.thumbnail.budgetReport.usage;
     expect(thumbnailUsage.jobs).toBe(0);
     expect(thumbnailUsage.imageBitmaps).toBe(1);
+    expect(timelineRuntimeCoordinator.getBridgeStats().policies.thumbnail.resources[0]?.tags)
+      .toEqual(expect.arrayContaining(['runtime-provider-demand', 'background-cache', 'image-bitmap']));
 
     closeSource('media-a');
 

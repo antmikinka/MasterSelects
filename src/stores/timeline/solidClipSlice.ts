@@ -5,10 +5,14 @@ import type { SolidClipActions, SliceCreator } from './types';
 import { DEFAULT_TRANSFORM } from './constants';
 import { engine } from '../../engine/WebGPUEngine';
 import { layerBuilder } from '../../services/layerBuilder';
-import { markDynamicCanvasUpdated } from '../../services/canvasVersion';
 import { generateSolidClipId } from './helpers/idGenerator';
 import { useMediaStore } from '../mediaStore';
 import { Logger } from '../../services/logger';
+import {
+  createTimelineSolidCanvasRuntime,
+  getTimelineGeneratedCanvasRuntime,
+  renderTimelineSolidCanvasRuntime,
+} from '../../services/timeline/timelineGeneratedCanvasRuntime';
 
 const log = Logger.create('SolidClipSlice');
 
@@ -28,13 +32,10 @@ export const createSolidClipSlice: SliceCreator<SolidClipActions> = (set, get) =
     const compWidth = activeComp?.width || 1920;
     const compHeight = activeComp?.height || 1080;
 
-    const canvas = document.createElement('canvas');
-    canvas.width = compWidth;
-    canvas.height = compHeight;
-    const ctx = canvas.getContext('2d')!;
-    ctx.fillStyle = color;
-    ctx.fillRect(0, 0, compWidth, compHeight);
-    markDynamicCanvasUpdated(canvas, 'solid');
+    const canvas = createTimelineSolidCanvasRuntime({
+      color,
+      dimensions: { width: compWidth, height: compHeight },
+    });
 
     const solidClip: TimelineClip = {
       id: clipId,
@@ -73,19 +74,14 @@ export const createSolidClipSlice: SliceCreator<SolidClipActions> = (set, get) =
     const clip = clips.find(c => c.id === clipId);
     if (!clip || clip.source?.type !== 'solid') return;
 
-    const canvas = clip.source.textCanvas;
-    if (canvas) {
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.fillStyle = color;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        markDynamicCanvasUpdated(canvas, 'solid');
-      }
+    const canvas = renderTimelineSolidCanvasRuntime({
+      color,
+      currentCanvas: getTimelineGeneratedCanvasRuntime(clip),
+    });
 
-      const texMgr = engine.getTextureManager();
-      if (texMgr) {
-        texMgr.updateCanvasTexture(canvas);
-      }
+    const texMgr = engine.getTextureManager();
+    if (texMgr) {
+      texMgr.updateCanvasTexture(canvas);
     }
 
     set({

@@ -7,9 +7,20 @@ import type { MarqueeState, ClipDragState, ClipTrimState, MarkerDragState } from
 import { useTimelineStore } from '../../../stores/timeline';
 import type { TimelineToolId } from '../../../stores/timeline/types';
 import { isTimelineActiveTarget } from '../utils/timelineActiveTargets';
+import {
+  buildTimelineTrackClipGeometryMap,
+  buildTimelineTrackHostGeometrySnapshot,
+} from '../utils/timelineTrackGeometryAdapter';
 
 const KEYFRAME_DIAMOND_HIT_SIZE_PX = 12;
 const KEYFRAME_DIAMOND_CENTER_OFFSET_X_PX = -3;
+
+function readFiniteDataNumber(element: HTMLElement, key: string): number | null {
+  const rawValue = element.dataset[key];
+  if (rawValue === undefined) return null;
+  const value = Number(rawValue);
+  return Number.isFinite(value) ? value : null;
+}
 
 interface UseMarqueeSelectionProps {
   // Refs
@@ -99,13 +110,32 @@ export function useMarqueeSelection({
     [getTimelineContentOriginX, pixelToTime],
   );
 
+  const buildTrackClipGeometryById = useCallback((
+    track: TimelineTrack,
+    trackClips: readonly TimelineClip[],
+    rowRect: DOMRect,
+  ) => {
+    const baseHeight = Math.max(1, rowRect.height || _getTrackBaseHeight(track));
+    const snapshot = buildTimelineTrackHostGeometrySnapshot({
+      track,
+      clips: trackClips,
+      baseHeight,
+      selectedClipIds,
+      hoveredClipId: null,
+      viewportWidth: Math.max(1, rowRect.width),
+      scrollX,
+      zoom: Math.max(0.001, timeToPixel(1)),
+      clipVerticalInsetPx: 0,
+    });
+    return buildTimelineTrackClipGeometryMap(snapshot);
+  }, [_getTrackBaseHeight, scrollX, selectedClipIds, timeToPixel]);
+
   // Helper: Calculate which clips intersect with a rectangle.
   //
   // Computed from clip DATA, not from clip DOM elements: in canvas mode (issue
-  // #228) clips are drawn on a canvas and have no per-clip DOM node. We take each
-  // clip's X from the same timeToPixel helper as the renderer and its Y from the
-  // track's still-DOM clip-row element. This also fixes the old DOM path, where
-  // viewport-culled off-screen clips couldn't be marquee-selected.
+  // #228) clips are drawn on a canvas and have no per-clip DOM node. We take clip
+  // X/width from the kernel geometry snapshot and its Y from the track's
+  // still-DOM clip-row element.
   const getClipsInRect = useCallback(
     (left: number, right: number, top: number, bottom: number): Set<string> => {
       const result = new Set<string>();
@@ -130,10 +160,13 @@ export function useMarqueeSelection({
         const rowContentLeft = rowRect.left - containerRect.left + scrollX;
         if (Math.min(rowBottom, bottom) - Math.max(rowTop, top) <= 1) return; // track outside vertical band
 
-        for (const clip of clips) {
-          if (clip.trackId !== trackId) continue;
-          const clipLeft = rowContentLeft + timeToPixel(clip.startTime);
-          const clipRight = rowContentLeft + timeToPixel(clip.startTime + clip.duration);
+        const trackClips = clips.filter((clip) => clip.trackId === trackId);
+        const clipGeometryById = buildTrackClipGeometryById(track, trackClips, rowRect);
+        for (const clip of trackClips) {
+          const clipGeometry = clipGeometryById.get(clip.id);
+          if (!clipGeometry) continue;
+          const clipLeft = rowContentLeft + clipGeometry.bodyRect.x;
+          const clipRight = rowContentLeft + clipGeometry.bodyRect.x + clipGeometry.bodyRect.width;
           if (Math.min(clipRight, right) - Math.max(clipLeft, left) > 1) {
             result.add(clip.id);
           }
@@ -142,7 +175,7 @@ export function useMarqueeSelection({
 
       return result;
     },
-    [timeToPixel, trackLanesRef, clips, _tracks, scrollX]
+    [buildTrackClipGeometryById, trackLanesRef, clips, _tracks, scrollX]
   );
 
   // Helper: Calculate which keyframes intersect with a rectangle
@@ -166,7 +199,8 @@ export function useMarqueeSelection({
         const rowBottom = keyframeTrackRect.bottom - containerRect.top;
         if (rowBottom <= top || rowTop >= bottom) return;
 
-        const rowContentLeft = keyframeTrackRect.left - containerRect.left + scrollX;
+        const rowContentLeft = readFiniteDataNumber(rowElement, 'geometryX') ??
+          (keyframeTrackRect.left - containerRect.left + scrollX);
         const centerY = rowTop + keyframeTrackRect.height / 2;
 
         for (const clip of clips) {

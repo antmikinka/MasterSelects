@@ -811,6 +811,7 @@ function doSetActiveComposition(
 
   if (skipAnimation) {
     // Skip exit/enter animations entirely
+    timelineStore.setCompositionSwitchSourceTracks(null);
     timelineStore.setCompositionSwitchTargetTracks(null);
     finishCompositionSwitch(set, get, newId, savedCompId, syncedPlayhead, options);
     return;
@@ -824,6 +825,7 @@ function doSetActiveComposition(
   const hasExistingClips = timelineStore.clips.length > 0;
   if (hasExistingClips && newId !== currentActiveId) {
     const targetComp = newId ? compositions.find((c) => c.id === newId) : null;
+    timelineStore.setCompositionSwitchSourceTracks(timelineStore.tracks);
     timelineStore.setCompositionSwitchTargetTracks(targetComp?.timelineData?.tracks ?? null);
 
     // Set exit animation phase
@@ -835,6 +837,7 @@ function doSetActiveComposition(
     }, 175); // Exit animation duration
   } else {
     // No existing clips or same comp, load immediately
+    timelineStore.setCompositionSwitchSourceTracks(null);
     timelineStore.setCompositionSwitchTargetTracks(null);
     finishCompositionSwitch(set, get, newId, savedCompId, syncedPlayhead, options);
   }
@@ -889,6 +892,7 @@ async function finishCompositionSwitch(
     if (skipAnimation) {
       // Skip entrance animation — go straight to idle
       timelineStore.setClipAnimationPhase('idle');
+      timelineStore.setCompositionSwitchSourceTracks(null);
     } else {
       // Trigger entrance animation for new clips
       timelineStore.setClipAnimationPhase('entering');
@@ -896,11 +900,13 @@ async function finishCompositionSwitch(
       // Reset to idle after entrance animation completes
       setTimeout(() => {
         timelineStore.setClipAnimationPhase('idle');
+        timelineStore.setCompositionSwitchSourceTracks(null);
         timelineStore.setCompositionSwitchTargetTracks(null);
       }, 350); // Entrance animation duration (0.3s + buffer)
     }
   } else {
     timelineStore.clearTimeline();
+    timelineStore.setCompositionSwitchSourceTracks(null);
     timelineStore.setCompositionSwitchTargetTracks(null);
     timelineStore.setClipAnimationPhase('idle');
   }

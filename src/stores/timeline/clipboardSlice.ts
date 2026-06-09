@@ -1,59 +1,36 @@
 // Clipboard-related actions slice for copy/paste functionality
 
 import type { ClipboardActions, SliceCreator, ClipboardClipData, ClipboardKeyframeData, Keyframe } from './types';
-import type { TimelineClip, EasingType, Effect, AnimatableProperty, EffectProperty } from '../../types';
+import type { EasingType, AnimatableProperty } from '../../types';
 import {
   createEffectProperty,
   ensureColorCorrectionState,
-  parseEffectProperty,
 } from '../../types';
 import { Logger } from '../../services/logger';
 import { captureSnapshot } from '../historyStore';
-import { DEFAULT_SCENE_CAMERA_SETTINGS } from '../mediaStore/types';
-import { DEFAULT_SPLAT_EFFECTOR_SETTINGS } from '../../types/splatEffector';
-import { isVectorAnimationSourceType } from '../../types/vectorAnimation';
-import { mathSceneRenderer } from '../../services/mathScene/MathSceneRenderer';
 import { generateEffectId } from './helpers/idGenerator';
 import { blobUrlManager } from './helpers/blobUrlManager';
-import { cloneClipNodeGraph, remapClipNodeGraphEffectIds } from '../../services/nodeGraph';
-import { createPrimaryMediaObjectUrl } from '../../services/project/mediaObjectUrlManager';
+import { cloneClipNodeGraph } from '../../services/nodeGraph';
+import { getDataOnlyTimelineSource } from './sourceRuntimeSanitizer';
+import {
+  createTimelineSolidCanvasRuntime,
+  createTimelineTextCanvasRuntime,
+} from '../../services/timeline/timelineGeneratedCanvasRuntime';
+import { createClipboardMediaReloadPatch } from '../../services/timeline/timelineMediaSourceRuntimeRestore';
+import { createPastedClipboardClipsPlan } from './clipboard/clipboardClipPastePlanner';
+import {
+  clampClipboardKeyframeTime,
+  cloneClipboardEffect,
+  cloneClipboardKeyframe,
+  generateClipboardKeyframeId,
+  getClipboardTargetClipIds,
+  parseClipboardEffectKeyframeProperty,
+} from './clipboard/clipboardEffectKeyframes';
 
 const log = Logger.create('Clipboard');
 
 function randomSuffix(): string {
   return Math.random().toString(36).substr(2, 5);
-}
-
-function generateKeyframeId(): string {
-  return `kf_${Date.now()}_${randomSuffix()}`;
-}
-
-function cloneEffect(effect: Effect): Effect {
-  return {
-    ...effect,
-    params: structuredClone(effect.params),
-  };
-}
-
-function cloneKeyframe(keyframe: Keyframe): Keyframe {
-  return structuredClone(keyframe);
-}
-
-function clampKeyframeTime(time: number, duration: number): number {
-  return Math.max(0, Math.min(duration, time));
-}
-
-function parseEffectKeyframeProperty(property: AnimatableProperty) {
-  return property.startsWith('effect.')
-    ? parseEffectProperty(property as EffectProperty)
-    : null;
-}
-
-function getTargetClipIds(explicitTargets: string[] | undefined, selectedClipIds: Set<string>): string[] {
-  const ids = explicitTargets && explicitTargets.length > 0
-    ? explicitTargets
-    : [...selectedClipIds];
-  return [...new Set(ids)];
 }
 
 export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) => ({
@@ -82,6 +59,7 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
 
     // Convert to clipboard format (serializable, without DOM elements)
     const clipboardData: ClipboardClipData[] = allClipsToCopy.map(clip => {
+      const dataOnlySource = getDataOnlyTimelineSource(clip);
       // Get track type for this clip
       const track = tracks.find(t => t.id === clip.trackId);
       const trackType = track?.type || 'video';
@@ -94,7 +72,7 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
         trackId: clip.trackId,
         trackType,
         name: clip.name,
-        mediaFileId: clip.source?.mediaFileId || clip.mediaFileId,
+        mediaFileId: dataOnlySource?.mediaFileId || clip.mediaFileId,
         signalAssetId: clip.signalAssetId,
         signalRefId: clip.signalRefId,
         signalRenderAdapterId: clip.signalRenderAdapterId,
@@ -102,18 +80,18 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
         duration: clip.duration,
         inPoint: clip.inPoint,
         outPoint: clip.outPoint,
-        sourceType: clip.source?.type || 'video',
-        naturalDuration: clip.source?.naturalDuration,
-        vectorAnimationSettings: clip.source?.vectorAnimationSettings
-          ? { ...clip.source.vectorAnimationSettings }
+        sourceType: dataOnlySource?.type || 'video',
+        naturalDuration: dataOnlySource?.naturalDuration,
+        vectorAnimationSettings: dataOnlySource?.vectorAnimationSettings
+          ? { ...dataOnlySource.vectorAnimationSettings }
           : undefined,
-        cameraSettings: clip.source?.type === 'camera' && clip.source.cameraSettings
-          ? { ...clip.source.cameraSettings }
+        cameraSettings: dataOnlySource?.type === 'camera' && dataOnlySource.cameraSettings
+          ? { ...dataOnlySource.cameraSettings }
           : undefined,
-        meshType: clip.meshType || clip.source?.meshType,
-        threeDEffectorsEnabled: clip.source?.threeDEffectorsEnabled,
-        splatEffectorSettings: clip.source?.type === 'splat-effector' && clip.source.splatEffectorSettings
-          ? { ...clip.source.splatEffectorSettings }
+        meshType: clip.meshType || dataOnlySource?.meshType,
+        threeDEffectorsEnabled: dataOnlySource?.threeDEffectorsEnabled,
+        splatEffectorSettings: dataOnlySource?.type === 'splat-effector' && dataOnlySource.splatEffectorSettings
+          ? { ...dataOnlySource.splatEffectorSettings }
           : undefined,
         transform: { ...clip.transform },
         effects: clip.effects.map(e => ({ ...e, params: { ...e.params } })),
@@ -134,8 +112,8 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
           : clip.source?.text3DProperties
             ? { ...clip.source.text3DProperties }
             : undefined,
-        solidColor: clip.source?.type === 'solid' ? (clip.solidColor || clip.name.replace('Solid ', '')) : undefined,
-        mathScene: clip.source?.type === 'math-scene' && clip.mathScene
+        solidColor: dataOnlySource?.type === 'solid' ? (clip.solidColor || clip.name.replace('Solid ', '')) : undefined,
+        mathScene: dataOnlySource?.type === 'math-scene' && clip.mathScene
           ? structuredClone(clip.mathScene)
           : undefined,
         motion: clip.motion ? structuredClone(clip.motion) : undefined,
@@ -175,208 +153,18 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
     // Capture snapshot for undo before making changes
     captureSnapshot('Paste clips');
 
-    const timestamp = Date.now();
-    const randomSuffix = () => Math.random().toString(36).substr(2, 5);
-
-    // Create ID mapping for linked clips (old ID -> new ID)
-    const idMapping = new Map<string, string>();
-    clipboardData.forEach(clipData => {
-      idMapping.set(clipData.id, `clip-${timestamp}-${randomSuffix()}`);
+    const { idMapping, newClips, newKeyframes } = createPastedClipboardClipsPlan({
+      clipboardData,
+      playheadPosition,
+      tracks,
+      clipKeyframes,
+      targetTrackIdByType,
+      timestamp: Date.now(),
+      createSuffix: randomSuffix,
+      onMissingTrack: (clipData) => {
+        log.warn('No suitable track found for clip', { clipName: clipData.name, trackType: clipData.trackType });
+      },
     });
-
-    // Find the earliest clip in clipboard to calculate offset
-    const earliestStartTime = Math.min(...clipboardData.map(c => c.startTime));
-    const timeOffset = playheadPosition - earliestStartTime;
-
-    const newClips: TimelineClip[] = [];
-    const newKeyframes = new Map<string, Keyframe[]>(clipKeyframes);
-
-    for (const clipData of clipboardData) {
-      const newId = idMapping.get(clipData.id)!;
-      const newStartTime = clipData.startTime + timeOffset;
-      const text3DProperties = clipData.text3DProperties ? { ...clipData.text3DProperties } : undefined;
-      const isPrimitiveMeshClip = clipData.sourceType === 'model' && !!clipData.meshType;
-      const isCameraClip = clipData.sourceType === 'camera';
-      const isSplatEffectorClip = clipData.sourceType === 'splat-effector';
-      const isMotionClip =
-        clipData.sourceType === 'motion-shape' ||
-        clipData.sourceType === 'motion-null' ||
-        clipData.sourceType === 'motion-adjustment';
-      const requiresAsyncMediaLoad =
-        !clipData.isComposition &&
-        clipData.sourceType !== 'text' &&
-        clipData.sourceType !== 'solid' &&
-        clipData.sourceType !== 'math-scene' &&
-        !isPrimitiveMeshClip &&
-        !isCameraClip &&
-        !isSplatEffectorClip &&
-        !isMotionClip;
-
-      // Find a track of the same type as the original
-      const originalTrack = tracks.find(t => t.id === clipData.trackId);
-      const requestedTargetTrackId = targetTrackIdByType?.[clipData.trackType];
-      const targetedTrack = requestedTargetTrackId
-        ? tracks.find(t => t.id === requestedTargetTrackId)
-        : undefined;
-      const usableTargetedTrack = targetedTrack && targetedTrack.locked !== true && (targetedTrack.type !== 'video' || targetedTrack.visible !== false)
-        ? targetedTrack
-        : undefined;
-      let targetTrackId = usableTargetedTrack?.id ?? clipData.trackId;
-
-      if (!usableTargetedTrack && !originalTrack) {
-        // Original track doesn't exist, find another track of same type
-        const sameTypeTrack = tracks.find(t => t.type === clipData.trackType && t.locked !== true && (t.type !== 'video' || t.visible !== false));
-        if (sameTypeTrack) {
-          targetTrackId = sameTypeTrack.id;
-        } else {
-          log.warn('No suitable track found for clip', { clipName: clipData.name, trackType: clipData.trackType });
-          continue;
-        }
-      }
-
-      // Handle linked clip ID mapping
-      let newLinkedClipId: string | undefined;
-      if (clipData.linkedClipId) {
-        newLinkedClipId = idMapping.get(clipData.linkedClipId);
-      }
-
-      const effectIdMap = new Map<string, string>();
-      const effects = clipData.effects.map(e => {
-        const nextEffectId = `effect-${timestamp}-${randomSuffix()}`;
-        effectIdMap.set(e.id, nextEffectId);
-        return {
-          ...e,
-          id: nextEffectId,
-          params: { ...e.params },
-        };
-      });
-
-      // Create the new clip
-      const newClip: TimelineClip = {
-        id: newId,
-        trackId: targetTrackId,
-        name: clipData.name,
-        file: new File([], clipData.name), // Placeholder file
-        mediaFileId: clipData.mediaFileId,
-        signalAssetId: clipData.signalAssetId,
-        signalRefId: clipData.signalRefId,
-        signalRenderAdapterId: clipData.signalRenderAdapterId,
-        startTime: Math.max(0, newStartTime),
-        duration: clipData.duration,
-        inPoint: clipData.inPoint,
-        outPoint: clipData.outPoint,
-        source: isPrimitiveMeshClip ? {
-          type: 'model' as const,
-          meshType: clipData.meshType,
-          mediaFileId: clipData.mediaFileId,
-          naturalDuration: clipData.naturalDuration ?? Number.MAX_SAFE_INTEGER,
-          threeDEffectorsEnabled: clipData.threeDEffectorsEnabled ?? true,
-          ...(text3DProperties ? { text3DProperties } : {}),
-        } : isCameraClip ? {
-          type: 'camera' as const,
-          mediaFileId: clipData.mediaFileId,
-          naturalDuration: clipData.naturalDuration ?? Number.MAX_SAFE_INTEGER,
-          cameraSettings: clipData.cameraSettings ? { ...clipData.cameraSettings } : { ...DEFAULT_SCENE_CAMERA_SETTINGS },
-        } : isSplatEffectorClip ? {
-          type: 'splat-effector' as const,
-          mediaFileId: clipData.mediaFileId,
-          naturalDuration: clipData.naturalDuration ?? Number.MAX_SAFE_INTEGER,
-          splatEffectorSettings: clipData.splatEffectorSettings
-            ? { ...clipData.splatEffectorSettings }
-            : { ...DEFAULT_SPLAT_EFFECTOR_SETTINGS },
-        } : clipData.sourceType === 'solid' ? {
-          type: 'solid' as const,
-          mediaFileId: clipData.mediaFileId,
-          naturalDuration: clipData.duration,
-        } : clipData.sourceType === 'text' ? {
-          type: 'text' as const,
-          mediaFileId: clipData.mediaFileId,
-          naturalDuration: clipData.naturalDuration ?? clipData.duration,
-        } : clipData.sourceType === 'math-scene' && clipData.mathScene ? {
-          type: 'math-scene' as const,
-          mediaFileId: clipData.mediaFileId,
-          naturalDuration: clipData.naturalDuration ?? clipData.duration,
-          textCanvas: (() => {
-            const canvas = mathSceneRenderer.createCanvas();
-            mathSceneRenderer.render(clipData.mathScene!, canvas, 0, clipData.duration);
-            return canvas;
-          })(),
-        } : isMotionClip && clipData.motion ? {
-          type: clipData.sourceType,
-          mediaFileId: clipData.mediaFileId,
-          naturalDuration: clipData.naturalDuration ?? clipData.duration,
-        } : isVectorAnimationSourceType(clipData.sourceType) && clipData.mediaFileId ? {
-          type: clipData.sourceType,
-          mediaFileId: clipData.mediaFileId,
-          naturalDuration: clipData.naturalDuration ?? clipData.duration,
-          vectorAnimationSettings: clipData.vectorAnimationSettings,
-        } : clipData.mediaFileId ? {
-          type: clipData.sourceType,
-          mediaFileId: clipData.mediaFileId,
-          naturalDuration: clipData.naturalDuration,
-          threeDEffectorsEnabled: clipData.threeDEffectorsEnabled ?? true,
-        } : null,
-        transform: {
-          ...clipData.transform,
-          position: { ...clipData.transform.position },
-          scale: { ...clipData.transform.scale },
-          rotation: { ...clipData.transform.rotation },
-        },
-        effects,
-        colorCorrection: clipData.colorCorrection ? structuredClone(clipData.colorCorrection) : undefined,
-        nodeGraph: remapClipNodeGraphEffectIds(clipData.nodeGraph, effectIdMap),
-        masks: clipData.masks?.map(m => ({
-          ...m,
-          id: `mask-${timestamp}-${randomSuffix()}`, // New mask IDs
-          vertices: m.vertices.map(v => ({
-            ...v,
-            id: `vertex-${timestamp}-${randomSuffix()}`, // New vertex IDs
-          })),
-        })),
-        linkedClipId: newLinkedClipId,
-        reversed: clipData.reversed,
-        speed: clipData.speed,
-        preservesPitch: clipData.preservesPitch,
-        textProperties: clipData.textProperties ? { ...clipData.textProperties } : undefined,
-        text3DProperties,
-        solidColor: clipData.solidColor,
-        mathScene: clipData.mathScene ? structuredClone(clipData.mathScene) : undefined,
-        motion: clipData.motion ? structuredClone(clipData.motion) : undefined,
-        // Reuse existing thumbnails and waveforms from copied clip
-        thumbnails: clipData.thumbnails ? [...clipData.thumbnails] : undefined,
-        waveform: clipData.waveform ? [...clipData.waveform] : undefined,
-        waveformChannels: clipData.waveformChannels?.map(channel => [...channel]),
-        audioState: clipData.audioAnalysisRefs
-          ? {
-              sourceAnalysisRefs: clipData.audioAnalysisRefs.sourceAnalysisRefs
-                ? structuredClone(clipData.audioAnalysisRefs.sourceAnalysisRefs)
-                : undefined,
-              processedAnalysisRefs: clipData.audioAnalysisRefs.processedAnalysisRefs
-                ? structuredClone(clipData.audioAnalysisRefs.processedAnalysisRefs)
-                : undefined,
-            }
-          : undefined,
-        isComposition: clipData.isComposition,
-        compositionId: clipData.compositionId,
-        is3D: clipData.is3D,
-        wireframe: clipData.wireframe,
-        meshType: clipData.meshType,
-        isLoading: clipData.isComposition || clipData.sourceType === 'text' || clipData.sourceType === 'solid' || requiresAsyncMediaLoad,
-        needsReload: requiresAsyncMediaLoad,
-      };
-
-      newClips.push(newClip);
-
-      // Copy keyframes with new IDs and mapped clipId
-      if (clipData.keyframes && clipData.keyframes.length > 0) {
-        const newClipKeyframes = clipData.keyframes.map(kf => ({
-          ...kf,
-          id: `kf_${timestamp}_${randomSuffix()}`,
-          clipId: newId,
-        }));
-        newKeyframes.set(newId, newClipKeyframes);
-      }
-    }
 
     if (newClips.length === 0) {
       log.warn('No clips could be pasted');
@@ -402,25 +190,19 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
       for (const newClip of newClips) {
         // Skip text clips - they need special handling
         if (newClip.textProperties) {
-          // Regenerate text canvas
-          Promise.all([
-            import('../../services/textRenderer'),
-            import('../../services/googleFontsService'),
-          ]).then(async ([{ textRenderer }, { googleFontsService }]) => {
-            await googleFontsService.loadFont(
-              newClip.textProperties!.fontFamily,
-              newClip.textProperties!.fontWeight
-            );
-            const textCanvas = textRenderer.render(newClip.textProperties!);
-
+          createTimelineTextCanvasRuntime({
+            textProperties: newClip.textProperties,
+          }).then(({ canvas: textCanvas, textProperties }) => {
             set(state => ({
               clips: state.clips.map(c =>
                 c.id === newClip.id
                   ? {
                       ...c,
+                      textProperties,
                       source: {
                         type: 'text' as const,
                         textCanvas,
+                        mediaFileId: c.source?.mediaFileId,
                         naturalDuration: c.duration,
                       },
                       isLoading: false,
@@ -457,12 +239,7 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
         if (newClip.source?.type === 'solid') {
           const originalClipData = clipboardData.find(cd => idMapping.get(cd.id) === newClip.id);
           const color = originalClipData?.solidColor || '#ffffff';
-          const canvas = document.createElement('canvas');
-          canvas.width = 1920;
-          canvas.height = 1080;
-          const ctx = canvas.getContext('2d')!;
-          ctx.fillStyle = color;
-          ctx.fillRect(0, 0, 1920, 1080);
+          const canvas = createTimelineSolidCanvasRuntime({ color });
 
           set(state => ({
             clips: state.clips.map(c =>
@@ -472,6 +249,7 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
                     source: {
                       type: 'solid' as const,
                       textCanvas: canvas,
+                      mediaFileId: c.source?.mediaFileId,
                       naturalDuration: c.duration,
                     },
                     isLoading: false,
@@ -506,104 +284,22 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
           continue;
         }
 
-        const sourceType = newClip.source?.type;
+        const reloadPatch = createClipboardMediaReloadPatch({
+          clipId: newClip.id,
+          duration: newClip.duration,
+          mediaFile,
+          mediaFileId,
+          source: newClip.source,
+          createImageUrl: ({ clipId, file }) => blobUrlManager.create(clipId, file, 'image'),
+        });
 
-        if (isVectorAnimationSourceType(sourceType)) {
-          set((state) => ({
-            clips: state.clips.map((c) =>
-              c.id === newClip.id
-                ? {
-                    ...c,
-                    file: mediaFile.file!,
-                    source: {
-                      type: sourceType,
-                      mediaFileId,
-                      naturalDuration: c.source?.naturalDuration ?? mediaFile.duration ?? c.duration,
-                      vectorAnimationSettings: c.source?.vectorAnimationSettings,
-                    },
-                    isLoading: false,
-                    needsReload: false,
-                  }
-                : c
-            ),
-          }));
-          continue;
-        }
-
-        if (sourceType === 'video') {
+        if (reloadPatch) {
           set(state => ({
             clips: state.clips.map(c =>
               c.id === newClip.id
                 ? {
                     ...c,
-                    file: mediaFile.file!,
-                    source: {
-                      type: 'video' as const,
-                      naturalDuration: c.source?.naturalDuration ?? mediaFile.duration ?? c.duration,
-                      mediaFileId,
-                    },
-                    isLoading: false,
-                    needsReload: false,
-                  }
-                : c
-            ),
-          }));
-        } else if (sourceType === 'audio') {
-          set(state => ({
-            clips: state.clips.map(c =>
-              c.id === newClip.id
-                ? {
-                    ...c,
-                    file: mediaFile.file!,
-                    source: {
-                      type: 'audio' as const,
-                      naturalDuration: c.source?.naturalDuration ?? mediaFile.duration ?? c.duration,
-                      mediaFileId,
-                    },
-                    isLoading: false,
-                    needsReload: false,
-                  }
-                : c
-            ),
-          }));
-        } else if (sourceType === 'image') {
-          const fileUrl = blobUrlManager.create(newClip.id, mediaFile.file, 'image');
-          set(state => ({
-            clips: state.clips.map(c =>
-              c.id === newClip.id
-                ? {
-                    ...c,
-                    file: mediaFile.file!,
-                    source: {
-                      type: 'image' as const,
-                      imageUrl: fileUrl,
-                      naturalDuration: c.source?.naturalDuration || c.duration,
-                      mediaFileId,
-                    },
-                    isLoading: false,
-                    needsReload: false,
-                  }
-                : c
-            ),
-          }));
-        } else if (sourceType === 'model') {
-          const fileUrl = mediaFile.url
-            ?? createPrimaryMediaObjectUrl(mediaFile.id, mediaFile.file, { revokeExisting: false });
-          set(state => ({
-            clips: state.clips.map(c =>
-              c.id === newClip.id
-                ? {
-                    ...c,
-                    file: mediaFile.file!,
-                    source: {
-                      type: 'model' as const,
-                      modelUrl: fileUrl,
-                      naturalDuration: c.source?.naturalDuration || 3600,
-                      mediaFileId,
-                    },
-                    is3D: true,
-                    isLoading: false,
-                    needsReload: false,
+                    ...reloadPatch,
                   }
                 : c
             ),
@@ -727,15 +423,15 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
     const effectIds = new Set((clip.effects || []).map(effect => effect.id));
     const keyframes = (clipKeyframes.get(clipId) || [])
       .filter(keyframe => {
-        const parsed = parseEffectKeyframeProperty(keyframe.property);
+        const parsed = parseClipboardEffectKeyframeProperty(keyframe.property);
         return !!parsed && effectIds.has(parsed.effectId);
       })
-      .map(cloneKeyframe);
+      .map(cloneClipboardKeyframe);
 
     set({
       clipboardEffects: {
         sourceClipId: clipId,
-        effects: (clip.effects || []).map(cloneEffect),
+        effects: (clip.effects || []).map(cloneClipboardEffect),
         keyframes,
       },
     });
@@ -763,7 +459,7 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
       return;
     }
 
-    const targetIds = getTargetClipIds(targetClipIds, selectedClipIds);
+    const targetIds = getClipboardTargetClipIds(targetClipIds, selectedClipIds);
     const targetIdSet = new Set(targetIds);
     const targetClips = clips.filter(clip => targetIdSet.has(clip.id));
 
@@ -786,7 +482,7 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
         const nextEffectId = generateEffectId();
         effectIdMap.set(effect.id, nextEffectId);
         return {
-          ...cloneEffect(effect),
+          ...cloneClipboardEffect(effect),
           id: nextEffectId,
         };
       });
@@ -801,17 +497,17 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
 
       const pastedKeyframes: Keyframe[] = clipboardEffects.keyframes
         .map(keyframe => {
-          const parsed = parseEffectKeyframeProperty(keyframe.property);
+          const parsed = parseClipboardEffectKeyframeProperty(keyframe.property);
           if (!parsed) return null;
 
           const mappedEffectId = effectIdMap.get(parsed.effectId);
           if (!mappedEffectId) return null;
 
           return {
-            ...cloneKeyframe(keyframe),
-            id: generateKeyframeId(),
+            ...cloneClipboardKeyframe(keyframe),
+            id: generateClipboardKeyframeId(),
             clipId: clip.id,
-            time: clampKeyframeTime(keyframe.time, clip.duration),
+            time: clampClipboardKeyframeTime(keyframe.time, clip.duration),
             property: createEffectProperty(mappedEffectId, parsed.paramName) as AnimatableProperty,
           };
         })
@@ -875,7 +571,7 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
 
     const keyframes = (clipKeyframes.get(clipId) || [])
       .filter(keyframe => keyframe.property.startsWith('color.'))
-      .map(cloneKeyframe);
+      .map(cloneClipboardKeyframe);
 
     set({
       clipboardColor: {
@@ -907,7 +603,7 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
       return;
     }
 
-    const targetIds = getTargetClipIds(targetClipIds, selectedClipIds);
+    const targetIds = getClipboardTargetClipIds(targetClipIds, selectedClipIds);
     const targetIdSet = new Set(targetIds);
     const targetClips = clips.filter(clip => targetIdSet.has(clip.id));
 
@@ -934,10 +630,10 @@ export const createClipboardSlice: SliceCreator<ClipboardActions> = (set, get) =
       });
 
       const pastedKeyframes = clipboardColor.keyframes.map(keyframe => ({
-        ...cloneKeyframe(keyframe),
-        id: generateKeyframeId(),
+        ...cloneClipboardKeyframe(keyframe),
+        id: generateClipboardKeyframeId(),
         clipId: clip.id,
-        time: clampKeyframeTime(keyframe.time, clip.duration),
+        time: clampClipboardKeyframeTime(keyframe.time, clip.duration),
       }));
 
       const clipKeyframesAfterPaste = [...retainedKeyframes, ...pastedKeyframes]

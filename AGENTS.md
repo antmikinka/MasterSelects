@@ -331,6 +331,11 @@ timeline implementation starts, the P1 suite must also include and pass:
 
 ### Parallel Agent Rules
 
+Coordination rule: do not use Doppelspitze for this timeline refactor unless
+the user explicitly re-enables it. Future agents must coordinate high-conflict
+ownership through this handoff file and normal chat updates instead of the
+Doppelspitze bus.
+
 Parallel agents are encouraged only when write sets are disjoint.
 
 - One owner per high-conflict file at a time:
@@ -374,6 +379,31 @@ allows an exception:
 
 When a file must exceed a target temporarily, record it in the adapter/debt
 ledger or handoff with owner, delete/split gate, and focused checks.
+
+LOC targets are a guardrail, not a success condition. A slice is not complete
+just because a large file was split below a line-count threshold. It must also
+reduce a real architectural coupling, such as moving timeline truth into the
+kernel, narrowing a host/service/store contract, deleting a legacy path,
+removing source-kind decisions from hosts, or replacing direct runtime handles
+with service-owned leases.
+
+Treat these as active debt, even when every file is under budget:
+
+- prop-funnel components or hooks that mostly pass a broad bag of state/actions
+  without owning a stable boundary
+- string-only architecture tests that prove a symbol moved but not that behavior
+  or dependency direction changed
+- wrapper modules that simply rename old logic without reducing imports,
+  mutation reach, runtime handle access, or source-kind branching
+- duplicated preview, geometry, paint, import, or resource logic split across
+  files instead of consolidated behind a contract
+- commented-out legacy blocks, flag-disabled fallback paths, or compatibility
+  branches left in editor/runtime paths after the new path owns behavior
+
+When closing a gate that involved splitting, the handoff must name the coupling
+that was actually reduced and the focused test or static guard that proves it.
+If the slice only reduced LOC, leave the gate active and record the remaining
+structural debt.
 
 ### Retired/Unused Code Rule
 

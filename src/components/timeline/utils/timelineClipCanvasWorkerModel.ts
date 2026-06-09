@@ -5,16 +5,51 @@ import type {
   TimelineClipCanvasWorkerFadeVisualsResource,
   TimelineClipCanvasWorkerMidiPreviewResource,
   TimelineClipCanvasWorkerPassiveDecorationsResource,
+  TimelineClipCanvasWorkerPaintPayloadTable,
   TimelineClipCanvasWorkerSpectrogramResource,
   TimelineClipCanvasWorkerThumbnailStripResource,
   TimelineClipCanvasWorkerTrimVisualsResource,
   TimelineClipCanvasWorkerWaveformResource,
 } from './timelineClipCanvasWorkerContract';
+import type {
+  TimelineClipCanvasWorkerPaintClipInput,
+} from './timelineClipCanvasWorkerPaintClip';
 import {
-  hasTimelineClipCanvasAudioAnalysisRef,
-  isTimelineClipCanvasAudioClip,
-  type TimelineClipCanvasAudioClipInput,
-} from './timelineClipCanvasAudio';
+  clonePassiveDecorationsResource,
+  clonePreparedCompositionVisualsResource,
+  clonePreparedFadeVisualsResource,
+  clonePreparedMidiPreviewResource,
+  clonePreparedSpectrogramResource,
+  clonePreparedWaveformResource,
+  cloneTrimVisualsResource,
+  getPreparedThumbnailStripResource,
+  type TimelineClipCanvasWorkerPreparedClipResources,
+} from './timelineClipCanvasWorkerPreparedResources';
+import {
+  buildTimelinePaintPacket,
+  buildTimelinePaintResourceTable,
+  createTimelineRect,
+  type BuildTimelinePaintPacketFacetInput,
+  type TimelinePaintResourceKind,
+  type TimelinePaintResourceRef,
+} from '../../../timeline';
+
+export type {
+  TimelineClipCanvasWorkerPaintClipInput,
+} from './timelineClipCanvasWorkerPaintClip';
+
+export {
+  createTimelineClipCanvasWorkerPaintClipInput,
+} from './timelineClipCanvasWorkerPaintClip';
+
+export type {
+  TimelineClipCanvasWorkerPreparedClipResources,
+  TimelineClipCanvasWorkerPreparedCompositionVisualsResource,
+  TimelineClipCanvasWorkerPreparedFadeVisualsResource,
+  TimelineClipCanvasWorkerPreparedSpectrogramResource,
+  TimelineClipCanvasWorkerPreparedThumbnailStripResource,
+  TimelineClipCanvasWorkerPreparedWaveformResource,
+} from './timelineClipCanvasWorkerPreparedResources';
 
 export type {
   TimelineClipCanvasWorkerAnalysisOverlayResource,
@@ -38,53 +73,8 @@ export type {
   TimelineClipCanvasWorkerWaveformResource,
 } from './timelineClipCanvasWorkerContract';
 
-export interface TimelineClipCanvasWorkerSourceClip {
-  id: string;
-  name: string;
-  startTime: number;
-  duration: number;
-  inPoint?: number;
-  outPoint?: number;
-  reversed?: boolean;
-  mediaFileId?: string;
-  thumbnails?: readonly string[];
-  trackType?: 'video' | 'audio' | 'midi';
-  isComposition?: boolean;
-  compositionId?: string;
-  nestedClipBoundaries?: readonly number[];
-  clipSegments?: readonly {
-    startNorm: number;
-    endNorm: number;
-    thumbnails?: readonly string[];
-  }[];
-  mixdownWaveform?: readonly number[];
-  mixdownGenerating?: boolean;
-  hasMixdownAudio?: boolean;
-  waveform?: readonly number[];
-  waveformChannels?: readonly (readonly number[])[];
-  waveformGenerating?: boolean;
-  waveformProgress?: number;
-  audioState?: TimelineClipCanvasAudioClipInput['audioState'];
-  midiData?: {
-    notes?: readonly {
-      pitch: number;
-      start: number;
-      duration: number;
-      velocity?: number;
-    }[];
-  };
-  fade?: {
-    keyframes?: readonly unknown[];
-  } | null;
-  source?: {
-    type?: string | null;
-    mediaFileId?: string;
-    naturalDuration?: number;
-  } | null;
-}
-
 export interface TimelineClipCanvasWorkerEligibilityInput {
-  clips: readonly TimelineClipCanvasWorkerSourceClip[];
+  clips: readonly TimelineClipCanvasWorkerPaintClipInput[];
   waveformsEnabled?: boolean;
   audioDisplayMode?: 'compact' | 'detailed' | 'spectral';
   preparedResourcesByClipId?: ReadonlyMap<string, TimelineClipCanvasWorkerPreparedClipResources>;
@@ -100,62 +90,8 @@ export interface TimelineClipCanvasWorkerEligibility {
   reasons: string[];
 }
 
-export interface TimelineClipCanvasWorkerPreparedThumbnailStripResource {
-  kind: 'thumbnail-strip';
-  bitmap: ImageBitmap;
-  x: number;
-  width: number;
-  height: number;
-  drawCount: number;
-}
-
-export interface TimelineClipCanvasWorkerPreparedCompositionVisualsResource {
-  kind: 'composition-visuals';
-  outline: boolean;
-  nestedBoundaries?: readonly number[] | Float32Array;
-  segmentRects?: readonly number[] | Float32Array;
-  segmentThumbnailStrip?: TimelineClipCanvasWorkerPreparedThumbnailStripResource;
-  mixdownWaveform?: TimelineClipCanvasWorkerPreparedWaveformResource;
-  mixdownGenerating?: boolean;
-}
-
-export interface TimelineClipCanvasWorkerPreparedWaveformResource {
-  kind: 'waveform';
-  columns: readonly number[] | Float32Array;
-  columnCount: number;
-  mode: 'compact' | 'detailed';
-}
-
-export interface TimelineClipCanvasWorkerPreparedSpectrogramResource {
-  kind: 'spectrogram';
-  values: readonly number[] | Float32Array;
-  rasterWidth: number;
-  rasterHeight: number;
-}
-
-export interface TimelineClipCanvasWorkerPreparedFadeVisualsResource {
-  kind: 'fade-visuals';
-  startX: number;
-  startY: number;
-  curves: readonly number[] | Float32Array;
-  curveCount: number;
-  points: readonly number[] | Float32Array;
-  pointCount: number;
-  isAudioClip: boolean;
-}
-
-export interface TimelineClipCanvasWorkerPreparedClipResources {
-  thumbnailStrip?: TimelineClipCanvasWorkerPreparedThumbnailStripResource;
-  passiveDecorations?: TimelineClipCanvasWorkerPassiveDecorationsResource;
-  waveform?: TimelineClipCanvasWorkerPreparedWaveformResource;
-  spectrogram?: TimelineClipCanvasWorkerPreparedSpectrogramResource;
-  midiPreview?: TimelineClipCanvasWorkerMidiPreviewResource;
-  compositionVisuals?: TimelineClipCanvasWorkerPreparedCompositionVisualsResource;
-  trimVisuals?: TimelineClipCanvasWorkerTrimVisualsResource;
-  fadeVisuals?: TimelineClipCanvasWorkerPreparedFadeVisualsResource;
-}
-
 export interface TimelineClipCanvasWorkerBuildInput extends TimelineClipCanvasWorkerEligibilityInput {
+  trackId?: string;
   height: number;
   cssWidth: number;
   canvasOffsetX: number;
@@ -175,65 +111,21 @@ export interface TimelineClipCanvasWorkerBuildResult {
   visibleClipCount: number;
 }
 
-const SOURCE_TIMING_EPSILON = 0.001;
-
 function addReason(reasons: Set<string>, reason: string): void {
   reasons.add(reason);
 }
 
-function hasThumbnailVisuals(clip: TimelineClipCanvasWorkerSourceClip): boolean {
-  if ((clip.thumbnails?.length ?? 0) > 0) return true;
-  if (clip.source?.type !== 'video') return false;
-  return Boolean(clip.source.mediaFileId ?? clip.mediaFileId);
-}
-
-function hasSourceTimingVisuals(clip: TimelineClipCanvasWorkerSourceClip): boolean {
-  if (clip.reversed) return true;
-  const inPoint = clip.inPoint ?? 0;
-  if (Math.abs(inPoint) > SOURCE_TIMING_EPSILON) return true;
-  if (typeof clip.outPoint !== 'number') return false;
-  return Math.abs((clip.outPoint - inPoint) - clip.duration) > SOURCE_TIMING_EPSILON;
-}
-
 function hasSourceTimingFallbackVisuals(
-  clip: TimelineClipCanvasWorkerSourceClip,
+  clip: TimelineClipCanvasWorkerPaintClipInput,
   input: TimelineClipCanvasWorkerEligibilityInput,
   preparedResources: TimelineClipCanvasWorkerPreparedClipResources | undefined,
 ): boolean {
-  if (!hasSourceTimingVisuals(clip)) return false;
-  if (clip.reversed && hasThumbnailVisuals(clip)) {
-    return !hasPreparedThumbnailVisuals(clip, input, preparedResources);
-  }
-  if (clip.reversed) return false;
-  if (hasThumbnailVisuals(clip)) {
-    return !hasPreparedThumbnailVisuals(clip, input, preparedResources);
-  }
-  return false;
-}
-
-function hasCompositionVisuals(clip: TimelineClipCanvasWorkerSourceClip): boolean {
-  return Boolean(
-    clip.isComposition ||
-      clip.compositionId ||
-      (clip.clipSegments?.length ?? 0) > 0 ||
-      (clip.nestedClipBoundaries?.length ?? 0) > 0 ||
-      (clip.mixdownWaveform?.length ?? 0) > 0 ||
-      clip.mixdownGenerating ||
-      clip.hasMixdownAudio,
-  );
-}
-
-function isWorkerAudioClip(clip: TimelineClipCanvasWorkerSourceClip): boolean {
-  return isTimelineClipCanvasAudioClip(clip);
-}
-
-function hasMidiPreviewVisuals(clip: TimelineClipCanvasWorkerSourceClip): boolean {
-  return (clip.source?.type === 'midi' || clip.trackType === 'midi') &&
-    (clip.midiData?.notes?.length ?? 0) > 0;
+  if (!clip.visuals.sourceTimingNeedsThumbnail) return false;
+  return !hasPreparedThumbnailVisuals(clip, input, preparedResources);
 }
 
 function hasPreparedThumbnailVisuals(
-  clip: TimelineClipCanvasWorkerSourceClip,
+  clip: TimelineClipCanvasWorkerPaintClipInput,
   input: TimelineClipCanvasWorkerEligibilityInput,
   preparedResources: TimelineClipCanvasWorkerPreparedClipResources | undefined,
 ): boolean {
@@ -244,146 +136,213 @@ function hasPreparedThumbnailVisuals(
 }
 
 function hasAudioResourceVisuals(
-  clip: TimelineClipCanvasWorkerSourceClip,
+  clip: TimelineClipCanvasWorkerPaintClipInput,
   input: TimelineClipCanvasWorkerEligibilityInput,
   preparedResources: TimelineClipCanvasWorkerPreparedClipResources | undefined,
 ): boolean {
   const hasPreparedWaveform = Boolean(preparedResources?.waveform);
   const hasPreparedSpectrogram = Boolean(preparedResources?.spectrogram);
-  const needsSpectrogram = input.waveformsEnabled && input.audioDisplayMode === 'spectral' && isWorkerAudioClip(clip);
-  const hasAudioAnalysisRef = hasTimelineClipCanvasAudioAnalysisRef(clip);
+  const needsSpectrogram = input.waveformsEnabled && input.audioDisplayMode === 'spectral' && clip.isAudio;
   return Boolean(
-    ((clip.waveform?.length ?? 0) > 0 && !hasPreparedWaveform && !needsSpectrogram) ||
-      ((clip.waveformChannels?.length ?? 0) > 0 && !hasPreparedWaveform && !needsSpectrogram) ||
-      clip.waveformGenerating ||
-      clip.waveformProgress !== undefined ||
-      (hasAudioAnalysisRef && !hasPreparedSpectrogram && !hasPreparedWaveform),
+    (clip.visuals.audioResource.waveformLike && !hasPreparedWaveform && !needsSpectrogram) ||
+      (clip.visuals.audioResource.analysisRef && !hasPreparedSpectrogram && !hasPreparedWaveform),
   );
 }
 
-function clonePreparedWaveformResource(
-  waveform: TimelineClipCanvasWorkerPreparedWaveformResource,
-): TimelineClipCanvasWorkerWaveformResource {
+function createTimelinePaintResourceRef(
+  clipId: string,
+  kind: TimelinePaintResourceKind,
+  transferMode: TimelinePaintResourceRef['transferMode'],
+  options: {
+    idSuffix?: string;
+    byteEstimate?: number;
+  } = {},
+): TimelinePaintResourceRef {
   return {
-    kind: 'waveform',
-    columns: waveform.columns instanceof Float32Array
-      ? new Float32Array(waveform.columns)
-      : Float32Array.from(waveform.columns),
-    columnCount: waveform.columnCount,
-    mode: waveform.mode,
+    id: `${clipId}:${options.idSuffix ?? kind}`,
+    kind,
+    ownerClipId: clipId,
+    byteEstimate: options.byteEstimate,
+    transferMode,
   };
 }
 
-function clonePreparedSpectrogramResource(
-  spectrogram: TimelineClipCanvasWorkerPreparedSpectrogramResource,
-): TimelineClipCanvasWorkerSpectrogramResource {
-  return {
-    kind: 'spectrogram',
-    values: spectrogram.values instanceof Float32Array
-      ? new Float32Array(spectrogram.values)
-      : Float32Array.from(spectrogram.values),
-    rasterWidth: spectrogram.rasterWidth,
-    rasterHeight: spectrogram.rasterHeight,
-  };
+interface WorkerClipPaintPacketResult {
+  paintPacket: TimelineClipCanvasWorkerClip['paintPacket'];
+  resources: TimelinePaintResourceRef[];
 }
 
-function clonePreparedMidiPreviewResource(
-  midiPreview: TimelineClipCanvasWorkerMidiPreviewResource,
-): TimelineClipCanvasWorkerMidiPreviewResource {
-  return {
-    kind: 'midi-preview',
-    bars: new Float32Array(midiPreview.bars),
-    barCount: midiPreview.barCount,
-    mode: midiPreview.mode,
-  };
-}
-
-function clonePreparedCompositionVisualsResource(
-  compositionVisuals: TimelineClipCanvasWorkerPreparedCompositionVisualsResource,
-): TimelineClipCanvasWorkerCompositionVisualsResource {
-  return {
-    kind: 'composition-visuals',
-    outline: compositionVisuals.outline,
-    nestedBoundaries: compositionVisuals.nestedBoundaries
-      ? compositionVisuals.nestedBoundaries instanceof Float32Array
-        ? new Float32Array(compositionVisuals.nestedBoundaries)
-        : Float32Array.from(compositionVisuals.nestedBoundaries)
-      : undefined,
-    segmentRects: compositionVisuals.segmentRects
-      ? compositionVisuals.segmentRects instanceof Float32Array
-        ? new Float32Array(compositionVisuals.segmentRects)
-        : Float32Array.from(compositionVisuals.segmentRects)
-      : undefined,
-    segmentThumbnailStrip: compositionVisuals.segmentThumbnailStrip
-      ? getPreparedThumbnailStripResource(compositionVisuals.segmentThumbnailStrip)
-      : undefined,
-    mixdownWaveform: compositionVisuals.mixdownWaveform
-      ? clonePreparedWaveformResource(compositionVisuals.mixdownWaveform)
-      : undefined,
-    mixdownGenerating: compositionVisuals.mixdownGenerating,
-  };
-}
-
-function clonePassiveDecorationsResource(
-  passiveDecorations: TimelineClipCanvasWorkerPassiveDecorationsResource,
-): TimelineClipCanvasWorkerPassiveDecorationsResource {
-  return {
-    kind: 'passive-decorations',
-    badges: passiveDecorations.badges,
-    progressBars: passiveDecorations.progressBars,
-    transcriptMarkers: passiveDecorations.transcriptMarkers
-      ? new Float32Array(passiveDecorations.transcriptMarkers)
-      : undefined,
-    analysisOverlay: passiveDecorations.analysisOverlay
-      ? {
-        kind: 'analysis-overlay',
-        points: new Float32Array(passiveDecorations.analysisOverlay.points),
-        pointCount: passiveDecorations.analysisOverlay.pointCount,
-      }
-      : undefined,
-  };
-}
-
-function getPreparedThumbnailStripResource(
-  thumbnailStrip: TimelineClipCanvasWorkerPreparedThumbnailStripResource,
-): TimelineClipCanvasWorkerThumbnailStripResource {
-  return thumbnailStrip;
-}
-
-function cloneTrimVisualsResource(
-  trimVisuals: TimelineClipCanvasWorkerTrimVisualsResource,
-): TimelineClipCanvasWorkerTrimVisualsResource {
-  return {
-    kind: 'trim-visuals',
-    body: {
-      x: trimVisuals.body.x,
-      width: trimVisuals.body.width,
+function createWorkerClipPaintPacket(input: {
+  clip: TimelineClipCanvasWorkerPaintClipInput;
+  trackId: string;
+  geometryEpoch: string;
+  x: number;
+  width: number;
+  height: number;
+  selected: boolean;
+  hovered: boolean;
+  isAudio: boolean;
+  waveformsEnabled?: boolean;
+  thumbnailStrip?: TimelineClipCanvasWorkerThumbnailStripResource;
+  compositionVisuals?: TimelineClipCanvasWorkerCompositionVisualsResource;
+  trimVisuals?: TimelineClipCanvasWorkerTrimVisualsResource;
+  fadeVisuals?: TimelineClipCanvasWorkerFadeVisualsResource;
+  passiveDecorations?: TimelineClipCanvasWorkerPassiveDecorationsResource;
+  waveform?: TimelineClipCanvasWorkerWaveformResource;
+  spectrogram?: TimelineClipCanvasWorkerSpectrogramResource;
+  midiPreview?: TimelineClipCanvasWorkerMidiPreviewResource;
+}): WorkerClipPaintPacketResult {
+  const resources: TimelinePaintResourceRef[] = [];
+  const facets: BuildTimelinePaintPacketFacetInput[] = [
+    { kind: 'body' },
+    { kind: 'label' },
+  ];
+  const addResource = (
+    kind: TimelinePaintResourceKind,
+    transferMode: TimelinePaintResourceRef['transferMode'],
+    options?: {
+      idSuffix?: string;
+      byteEstimate?: number;
     },
-    sourceExtensionGhosts: trimVisuals.sourceExtensionGhosts?.map((ghost) => ({
-      edge: ghost.edge,
-      x: ghost.x,
-      width: ghost.width,
-    })),
+  ) => {
+    const resource = createTimelinePaintResourceRef(input.clip.id, kind, transferMode, options);
+    resources.push(resource);
+    return resource.id;
+  };
+  const addFacet = (
+    kind: BuildTimelinePaintPacketFacetInput['kind'],
+    resourceRefIds: readonly string[] = [],
+  ) => facets.push({ kind, resourceRefIds });
+
+  if (input.thumbnailStrip) {
+    addFacet('thumbnail-strip', [
+      addResource('thumbnail-bitmap', 'transfer', {
+        byteEstimate: input.thumbnailStrip.bitmap.width * input.thumbnailStrip.bitmap.height * 4,
+      }),
+    ]);
+  }
+  if (input.waveformsEnabled && input.isAudio) {
+    addFacet('waveform', input.waveform
+      ? [addResource('waveform-columns', 'transfer', { byteEstimate: input.waveform.columns.byteLength })]
+      : []);
+  }
+  if (input.spectrogram) {
+    addFacet('spectrogram', [
+      addResource('spectrogram-raster', 'transfer', { byteEstimate: input.spectrogram.values.byteLength }),
+    ]);
+  }
+  if (input.midiPreview) {
+    addFacet('midi-preview', [
+      addResource('midi-bars', 'transfer', { byteEstimate: input.midiPreview.bars.byteLength }),
+    ]);
+  }
+  if (input.compositionVisuals) {
+    const refs = [
+      input.compositionVisuals.nestedBoundaries || input.compositionVisuals.segmentRects
+        ? addResource('composition-segments', 'transfer', {
+          byteEstimate: (input.compositionVisuals.nestedBoundaries?.byteLength ?? 0) +
+            (input.compositionVisuals.segmentRects?.byteLength ?? 0),
+        })
+        : null,
+      input.compositionVisuals.segmentThumbnailStrip
+        ? addResource('thumbnail-bitmap', 'transfer', {
+          idSuffix: 'composition-thumbnail-bitmap',
+          byteEstimate: input.compositionVisuals.segmentThumbnailStrip.bitmap.width *
+            input.compositionVisuals.segmentThumbnailStrip.bitmap.height *
+            4,
+        })
+        : null,
+      input.compositionVisuals.mixdownWaveform
+        ? addResource('waveform-columns', 'transfer', {
+          idSuffix: 'composition-mixdown-waveform-columns',
+          byteEstimate: input.compositionVisuals.mixdownWaveform.columns.byteLength,
+        })
+        : null,
+    ].filter((ref): ref is string => Boolean(ref));
+    addFacet('composition-visuals', refs);
+  }
+  if (input.passiveDecorations) {
+    const refs = [
+      input.passiveDecorations.transcriptMarkers
+        ? addResource('transcript-markers', 'transfer', {
+          byteEstimate: input.passiveDecorations.transcriptMarkers.byteLength,
+        })
+        : null,
+      input.passiveDecorations.analysisOverlay
+        ? addResource('analysis-overlay', 'transfer', {
+          byteEstimate: input.passiveDecorations.analysisOverlay.points.byteLength,
+        })
+        : null,
+    ].filter((ref): ref is string => Boolean(ref));
+    addFacet('passive-decorations', refs);
+  }
+  if (input.trimVisuals) {
+    addFacet('trim-visuals', input.trimVisuals.sourceExtensionGhosts ? [addResource('trim-ghosts', 'copy')] : []);
+  }
+  if (input.fadeVisuals) {
+    addFacet('fade-visuals', [
+      addResource('fade-curve-points', 'transfer', {
+        byteEstimate: input.fadeVisuals.curves.byteLength + input.fadeVisuals.points.byteLength,
+      }),
+    ]);
+  }
+
+  return {
+    paintPacket: buildTimelinePaintPacket({
+      clipId: input.clip.id,
+      trackId: input.trackId,
+      geometryEpoch: input.geometryEpoch,
+      bodyRect: createTimelineRect(input.x, 0, input.width, input.height),
+      label: input.clip.label,
+      state: {
+        selected: input.selected,
+        hovered: input.hovered,
+        muted: false,
+        disabled: false,
+        pending: false,
+      },
+      facets,
+      resources,
+    }),
+    resources,
   };
 }
 
-function clonePreparedFadeVisualsResource(
-  fadeVisuals: TimelineClipCanvasWorkerPreparedFadeVisualsResource,
-): TimelineClipCanvasWorkerFadeVisualsResource {
+function createEmptyWorkerPaintPayloadTable(): {
+  thumbnailStrips: TimelineClipCanvasWorkerPaintPayloadTable['thumbnailStrips'][number][];
+  waveforms: TimelineClipCanvasWorkerPaintPayloadTable['waveforms'][number][];
+  spectrograms: TimelineClipCanvasWorkerPaintPayloadTable['spectrograms'][number][];
+  midiPreviews: TimelineClipCanvasWorkerPaintPayloadTable['midiPreviews'][number][];
+  fadeVisuals: TimelineClipCanvasWorkerPaintPayloadTable['fadeVisuals'][number][];
+  trimVisuals: TimelineClipCanvasWorkerPaintPayloadTable['trimVisuals'][number][];
+  passiveDecorations: TimelineClipCanvasWorkerPaintPayloadTable['passiveDecorations'][number][];
+  compositionVisuals: TimelineClipCanvasWorkerPaintPayloadTable['compositionVisuals'][number][];
+} {
   return {
-    kind: 'fade-visuals',
-    startX: fadeVisuals.startX,
-    startY: fadeVisuals.startY,
-    curves: fadeVisuals.curves instanceof Float32Array
-      ? new Float32Array(fadeVisuals.curves)
-      : Float32Array.from(fadeVisuals.curves),
-    curveCount: fadeVisuals.curveCount,
-    points: fadeVisuals.points instanceof Float32Array
-      ? new Float32Array(fadeVisuals.points)
-      : Float32Array.from(fadeVisuals.points),
-    pointCount: fadeVisuals.pointCount,
-    isAudioClip: fadeVisuals.isAudioClip,
+    thumbnailStrips: [],
+    waveforms: [],
+    spectrograms: [],
+    midiPreviews: [],
+    fadeVisuals: [],
+    trimVisuals: [],
+    passiveDecorations: [],
+    compositionVisuals: [],
   };
+}
+
+function findPaintResourceId(
+  resources: readonly TimelinePaintResourceRef[],
+  kind: TimelinePaintResourceKind,
+  idSuffix: string,
+): string | undefined {
+  return resources.find((resource) => resource.kind === kind && resource.id.endsWith(`:${idSuffix}`))?.id;
+}
+
+function findPaintFacetId(
+  paintPacket: TimelineClipCanvasWorkerClip['paintPacket'],
+  kind: BuildTimelinePaintPacketFacetInput['kind'],
+): string | undefined {
+  return paintPacket.facets.find((facet) => facet.kind === kind)?.id;
 }
 
 export function getTimelineClipCanvasWorkerEligibility(
@@ -413,19 +372,19 @@ export function getTimelineClipCanvasWorkerEligibility(
     if (hasPassiveDecorationsForClip && !preparedResources?.passiveDecorations) {
       addReason(reasons, 'passive-decorations');
     }
-    if (hasThumbnailVisuals(clip) && !hasPreparedThumbnailVisuals(clip, input, preparedResources)) {
+    if (clip.visuals.thumbnail && !hasPreparedThumbnailVisuals(clip, input, preparedResources)) {
       addReason(reasons, 'thumbnail-visuals');
     }
     if (hasSourceTimingFallbackVisuals(clip, input, preparedResources)) addReason(reasons, 'source-timing-visuals');
-    if (hasCompositionVisuals(clip) && !preparedResources?.compositionVisuals) addReason(reasons, 'composition-visuals');
+    if (clip.visuals.composition && !preparedResources?.compositionVisuals) addReason(reasons, 'composition-visuals');
     if (hasAudioResourceVisuals(clip, input, preparedResources)) addReason(reasons, 'audio-resource-visuals');
-    if (input.waveformsEnabled && input.audioDisplayMode === 'spectral' && isWorkerAudioClip(clip) && !preparedResources?.spectrogram) {
+    if (input.waveformsEnabled && input.audioDisplayMode === 'spectral' && clip.isAudio && !preparedResources?.spectrogram) {
       addReason(reasons, 'spectrogram-resource-missing');
     }
-    if (hasMidiPreviewVisuals(clip) && !preparedResources?.midiPreview) {
+    if (clip.visuals.midiPreview && !preparedResources?.midiPreview) {
       addReason(reasons, 'midi-preview');
     }
-    if ((clip.fade?.keyframes?.length ?? 0) >= 2 && !preparedResources?.fadeVisuals) {
+    if (clip.visuals.fade && !preparedResources?.fadeVisuals) {
       addReason(reasons, 'fade-visuals');
     }
   }
@@ -451,7 +410,10 @@ export function buildTimelineClipCanvasWorkerDrawMessage(
   }
 
   const workerClips: TimelineClipCanvasWorkerClip[] = [];
+  const paintResources: TimelinePaintResourceRef[] = [];
+  const paintPayloads = createEmptyWorkerPaintPayloadTable();
   const transferables: Transferable[] = [];
+  const geometryEpoch = `worker-draw:${input.requestId ?? 0}:${input.canvasOffsetX}:${input.cssWidth}:${input.height}`;
   for (const clip of input.clips) {
     const preparedResources = input.preparedResourcesByClipId?.get(clip.id);
     const trimVisuals = preparedResources?.trimVisuals
@@ -526,25 +488,77 @@ export function buildTimelineClipCanvasWorkerDrawMessage(
     if (thumbnailStrip) {
       transferables.push(thumbnailStrip.bitmap);
     }
-    const isAudio = isWorkerAudioClip(clip);
-    const workerClip: TimelineClipCanvasWorkerClip = {
-      id: clip.id,
-      name: clip.name,
+    const paint = createWorkerClipPaintPacket({
+      clip,
+      trackId: clip.trackId ?? input.trackId ?? 'unknown-track',
+      geometryEpoch,
       x,
       width,
+      height: input.height,
       selected: input.selectedClipIds.has(clip.id),
       hovered: input.hoveredClipId === clip.id,
+      isAudio: clip.isAudio,
+      waveformsEnabled: input.waveformsEnabled,
+      thumbnailStrip,
+      compositionVisuals,
+      trimVisuals,
+      fadeVisuals,
+      passiveDecorations,
+      waveform,
+      spectrogram,
+      midiPreview,
+    });
+    paintResources.push(...paint.resources);
+    const thumbnailResourceId = thumbnailStrip
+      ? findPaintResourceId(paint.resources, 'thumbnail-bitmap', 'thumbnail-bitmap')
+      : undefined;
+    if (thumbnailStrip && thumbnailResourceId) {
+      paintPayloads.thumbnailStrips.push({ resourceId: thumbnailResourceId, resource: thumbnailStrip });
+    }
+    const waveformResourceId = waveform
+      ? findPaintResourceId(paint.resources, 'waveform-columns', 'waveform-columns')
+      : undefined;
+    if (waveform && waveformResourceId) {
+      paintPayloads.waveforms.push({ resourceId: waveformResourceId, resource: waveform });
+    }
+    const spectrogramResourceId = spectrogram
+      ? findPaintResourceId(paint.resources, 'spectrogram-raster', 'spectrogram-raster')
+      : undefined;
+    if (spectrogram && spectrogramResourceId) {
+      paintPayloads.spectrograms.push({ resourceId: spectrogramResourceId, resource: spectrogram });
+    }
+    const midiPreviewResourceId = midiPreview
+      ? findPaintResourceId(paint.resources, 'midi-bars', 'midi-bars')
+      : undefined;
+    if (midiPreview && midiPreviewResourceId) {
+      paintPayloads.midiPreviews.push({ resourceId: midiPreviewResourceId, resource: midiPreview });
+    }
+    const fadeVisualsResourceId = fadeVisuals
+      ? findPaintResourceId(paint.resources, 'fade-curve-points', 'fade-curve-points')
+      : undefined;
+    if (fadeVisuals && fadeVisualsResourceId) {
+      paintPayloads.fadeVisuals.push({ resourceId: fadeVisualsResourceId, resource: fadeVisuals });
+    }
+    const trimFacetId = trimVisuals ? findPaintFacetId(paint.paintPacket, 'trim-visuals') : undefined;
+    if (trimVisuals && trimFacetId) {
+      paintPayloads.trimVisuals.push({ facetId: trimFacetId, resource: trimVisuals });
+    }
+    const passiveDecorationsFacetId = passiveDecorations
+      ? findPaintFacetId(paint.paintPacket, 'passive-decorations')
+      : undefined;
+    if (passiveDecorations && passiveDecorationsFacetId) {
+      paintPayloads.passiveDecorations.push({ facetId: passiveDecorationsFacetId, resource: passiveDecorations });
+    }
+    const compositionVisualsFacetId = compositionVisuals
+      ? findPaintFacetId(paint.paintPacket, 'composition-visuals')
+      : undefined;
+    if (compositionVisuals && compositionVisualsFacetId) {
+      paintPayloads.compositionVisuals.push({ facetId: compositionVisualsFacetId, resource: compositionVisuals });
+    }
+    const workerClip: TimelineClipCanvasWorkerClip = {
+      id: clip.id,
+      paintPacket: paint.paintPacket,
     };
-    if (isAudio) workerClip.isAudio = true;
-    if (input.waveformsEnabled && isAudio) workerClip.waveformEnabled = true;
-    if (thumbnailStrip) workerClip.thumbnailStrip = thumbnailStrip;
-    if (compositionVisuals) workerClip.compositionVisuals = compositionVisuals;
-    if (trimVisuals) workerClip.trimVisuals = trimVisuals;
-    if (fadeVisuals) workerClip.fadeVisuals = fadeVisuals;
-    if (passiveDecorations) workerClip.passiveDecorations = passiveDecorations;
-    if (waveform) workerClip.waveform = waveform;
-    if (spectrogram) workerClip.spectrogram = spectrogram;
-    if (midiPreview) workerClip.midiPreview = midiPreview;
     workerClips.push(workerClip);
   }
 
@@ -554,6 +568,8 @@ export function buildTimelineClipCanvasWorkerDrawMessage(
       type: 'draw',
       requestId: input.requestId ?? 0,
       clips: workerClips,
+      paintResources: buildTimelinePaintResourceTable(paintResources),
+      paintPayloads,
       height: input.height,
       cssWidth: input.cssWidth,
       dpr: input.dpr,

@@ -83,6 +83,37 @@ describe('ramPreviewRuntimeReporting', () => {
       'runtime-binding',
       'video-frame-provider',
     ]);
+    const resourcesByKind = new Map(stats.resources.map((resource) => [resource.kind, resource]));
+    expect(resourcesByKind.get('job')?.tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'background-cache',
+      'ram-preview',
+      'render-job',
+    ]));
+    expect(resourcesByKind.get('runtime-binding')?.tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'background-cache',
+      'ram-preview',
+      'video',
+    ]));
+    expect(resourcesByKind.get('video-frame-provider')).toMatchObject({
+      runtime: {
+        runtimeSourceId: 'runtime-source',
+        runtimeSessionKey: 'ram-preview:clip-video:runtime-source',
+      },
+      tags: expect.arrayContaining([
+        'runtime-provider-demand',
+        'background-cache',
+        'ram-preview',
+        'video',
+      ]),
+    });
+    expect(resourcesByKind.get('html-media')?.tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'background-cache',
+      'ram-preview',
+      'video',
+    ]));
 
     releaseRamPreviewRunResources('run-1');
     expect(timelineRuntimeCoordinator.getBridgeStats().policies['ram-preview'].resources).toHaveLength(0);
@@ -152,6 +183,21 @@ describe('ramPreviewRuntimeReporting', () => {
       heapBytes: 3 * 100 * 50 * 4,
       gpuBytes: 100 * 50 * 4,
     });
+    const compositeResource = stats.resources.find((resource) => resource.id === 'ram-preview:composite-cache:image-data');
+    const gpuResource = stats.resources.find((resource) => resource.id === 'ram-preview:gpu-frame-cache:1.000');
+    expect(compositeResource?.tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'background-cache',
+      'ram-preview',
+      'composite-cache',
+      'cpu',
+    ]));
+    expect(gpuResource?.tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'background-cache',
+      'ram-preview',
+      'gpu-frame-cache',
+    ]));
 
     releaseRamPreviewCompositeCacheResource();
     expect(timelineRuntimeCoordinator.getBridgeStats().policies['ram-preview'].resources).toHaveLength(1);
@@ -203,6 +249,16 @@ describe('ramPreviewRuntimeReporting', () => {
 
     expect(deniedImage.admitted).toBe(false);
     expect(timelineRuntimeCoordinator.getBridgeStats().policies['ram-preview'].budgetReport.usage.resources).toBe(96);
+    const retainedImage = timelineRuntimeCoordinator
+      .getBridgeStats()
+      .policies['ram-preview']
+      .resources.find((resource) => resource.owner.ownerId === 'ram-preview:run:image-run-0');
+    expect(retainedImage?.tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'background-cache',
+      'ram-preview',
+      'image',
+    ]));
 
     releaseReservedRamPreviewImageElement({
       runId: 'image-run-0',

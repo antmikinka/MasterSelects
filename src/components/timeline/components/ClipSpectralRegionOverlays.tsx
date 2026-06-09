@@ -1,7 +1,7 @@
 import { memo } from 'react';
-import type { MediaFile } from '../../../stores/mediaStore/types';
 import type { TimelineSpectralRegionEditType } from '../../../stores/timeline/types';
 import type {
+  SpectralImageMediaRef,
   SpectralImageLayerOverlay,
   SpectralRegionOverlay,
 } from '../utils/spectralRegionOverlays';
@@ -15,7 +15,7 @@ interface ClipSpectralRegionOverlaysProps {
   selectionMode?: 'rectangle' | 'brush';
   imageLayerOverlays: readonly SpectralImageLayerOverlay[];
   canSelectSpectralRegion: boolean;
-  selectedSpectralImageFile: MediaFile | null;
+  selectedSpectralImageFile: SpectralImageMediaRef | null;
   onToolbarMouseDown: (e: React.MouseEvent) => void;
   onApplySpectralRegionEdit: (type: TimelineSpectralRegionEditType) => (e: React.MouseEvent) => void;
   onAddSelectedImageSpectralLayer: (e: React.MouseEvent<HTMLButtonElement>) => void;

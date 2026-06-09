@@ -262,7 +262,11 @@ describe('ScrubbingCache background preload runtime reporting', () => {
         policyId: 'background',
         mediaElementKind: 'video',
         srcKind: 'blob-url',
-        tags: expect.arrayContaining(['background-preload']),
+        tags: expect.arrayContaining([
+          'runtime-provider-demand',
+          'background-cache',
+          'background-preload',
+        ]),
       }),
     ]));
 

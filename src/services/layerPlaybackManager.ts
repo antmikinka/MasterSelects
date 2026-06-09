@@ -8,6 +8,7 @@ import type { Composition, SlotClipEndBehavior } from '../stores/mediaStore/type
 import { useMediaStore } from '../stores/mediaStore';
 import { useTimelineStore } from '../stores/timeline';
 import { DEFAULT_TRANSFORM } from '../stores/timeline/constants';
+import type { RuntimeProviderDemand } from '../timeline';
 import {
   bindSourceRuntimeForOwner,
   planSourceRuntimeBindingForOwner,
@@ -41,6 +42,12 @@ function getRuntimeSrcKind(url: string): 'blob-url' | 'remote-url' | 'media-sour
   if (url.startsWith('http')) return 'remote-url';
   if (url.startsWith('mediastream:')) return 'media-source';
   return 'unknown';
+}
+
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T;
 }
 
 interface LayerCompState {
@@ -961,22 +968,7 @@ class LayerPlaybackManager {
     const handle = startTimelineImageHydration({
       url,
       resource: {
-        id: `timeline-runtime:background:${ownerId}:image-canvas:image`,
-        policyId: 'background',
-        owner: {
-          ownerId,
-          ownerType: 'clip',
-          clipId: clip.id,
-          trackId: clip.trackId,
-          mediaFileId: clip.mediaFileId,
-        },
-        source: {
-          sourceId: clip.mediaFileId,
-          mediaFileId: clip.mediaFileId,
-          clipId: clip.id,
-          trackId: clip.trackId,
-          previewPath: url,
-        },
+        demand: this.createBackgroundImageDemand(layerIndex, clip, ownerId, url),
         imageId: `${ownerId}:image`,
         label: 'Background image hydration',
         tags: ['background', 'image'],
@@ -1024,6 +1016,41 @@ class LayerPlaybackManager {
       return;
     }
     this.pendingImageHydrations.set(ownerId, handle);
+  }
+
+  private createBackgroundImageDemand(
+    layerIndex: number,
+    clip: TimelineClip,
+    ownerId: string,
+    url: string
+  ): RuntimeProviderDemand {
+    const resourceId = `timeline-runtime:background:${ownerId}:image-canvas:image`;
+    return {
+      id: resourceId,
+      facetId: `${resourceId}:facet`,
+      resourceKind: 'image-canvas',
+      policyId: 'background',
+      leasePolicy: 'lease-visible',
+      owner: removeUndefinedValues({
+        ownerId,
+        ownerType: 'clip' as const,
+        clipId: clip.id,
+        trackId: clip.trackId,
+        mediaFileId: clip.mediaFileId,
+      }),
+      source: removeUndefinedValues({
+        sourceId: clip.mediaFileId,
+        mediaFileId: clip.mediaFileId,
+        clipId: clip.id,
+        trackId: clip.trackId,
+        previewPath: url,
+      }),
+      dimensions: {
+        durationSeconds: clip.duration,
+      },
+      priority: 'background',
+      tags: ['background', 'image', `layer-${layerIndex}`],
+    };
   }
 
   private loadVectorAnimationForClip(

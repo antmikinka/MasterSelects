@@ -57,19 +57,19 @@ function renderBuiltInModule(
   }
 
   if (slot === 'audio-region') {
-    return <ClipAudioRegionControls key={slot} context={context} />;
+    return <ClipAudioRegionControls key={slot} context={context} commands={commands} />;
   }
 
   if (slot === 'spectral-region') {
-    return <ClipSpectralRegionControls key={slot} context={context} />;
+    return <ClipSpectralRegionControls key={slot} context={context} commands={commands} />;
   }
 
   if (slot === 'stem') {
-    return <ClipStemControls key={slot} context={context} />;
+    return <ClipStemControls key={slot} context={context} commands={commands} />;
   }
 
   if (slot === 'video-bake') {
-    return <ClipVideoBakeControls key={slot} context={context} />;
+    return <ClipVideoBakeControls key={slot} context={context} commands={commands} />;
   }
 
   return defaultRenderModule(slot);

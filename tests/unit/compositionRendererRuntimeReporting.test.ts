@@ -271,6 +271,10 @@ describe('compositionRenderer runtime reporting', () => {
       compositionId: 'comp-render',
       mediaFileId: 'media-video',
     });
+    expect(stats.resources.every((resource) =>
+      resource.tags?.includes('runtime-provider-demand') &&
+      resource.tags?.includes('background-cache')
+    )).toBe(true);
 
     compositionRenderer.disposeComposition('comp-render');
 
@@ -451,6 +455,20 @@ describe('compositionRenderer runtime reporting', () => {
     const prepare = compositionRenderer.prepareComposition('comp-render');
     await vi.waitFor(() => expect(createdImages).toHaveLength(1));
     expect(createdImages[0].src).toBe('blob:active-image');
+    expect(timelineRuntimeCoordinator.getBridgeStats().policies['composition-render'].resources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'composition-render:comp-render:clip-image:image-canvas:image',
+          kind: 'image-canvas',
+          tags: expect.arrayContaining([
+            'runtime-provider-demand',
+            'background-cache',
+            'composition-render',
+            'image',
+          ]),
+        }),
+      ])
+    );
 
     createdImages[0].dispatchEvent(new Event('load'));
     await expect(prepare).resolves.toBe(true);
@@ -470,6 +488,11 @@ describe('compositionRenderer runtime reporting', () => {
         expect.objectContaining({
           kind: 'image-canvas',
           imageKind: 'html-image',
+          tags: expect.arrayContaining([
+            'runtime-provider-demand',
+            'background-cache',
+            'composition-render',
+          ]),
           owner: expect.objectContaining({
             clipId: 'clip-image',
             compositionId: 'comp-render',

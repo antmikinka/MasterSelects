@@ -1,4 +1,5 @@
 import type { TimelineClip, TimelineTrack } from '../../../types';
+import { stripTimelineSourceRuntimeHandles } from '../sourceRuntimeSanitizer';
 import type { SplitAtTimesOperation, TimelineEditWarning } from './types';
 
 const SPLIT_EPSILON = 0.001;
@@ -15,9 +16,7 @@ export function isCompositionAudioClip(clip: Pick<TimelineClip, 'isComposition' 
 }
 
 export function stripCompositionAudioRuntimeSource(source: TimelineClip['source']): TimelineClip['source'] {
-  if (!source || source.type !== 'audio') return source;
-  const { audioElement: _audioElement, ...dataOnlySource } = source;
-  return dataOnlySource;
+  return stripTimelineMediaRuntimeSource(source);
 }
 
 export function stripTimelineMediaRuntimeSource(source: TimelineClip['source']): TimelineClip['source'] {
@@ -25,14 +24,7 @@ export function stripTimelineMediaRuntimeSource(source: TimelineClip['source']):
     return source;
   }
 
-  const {
-    videoElement: _videoElement,
-    audioElement: _audioElement,
-    webCodecsPlayer: _webCodecsPlayer,
-    nativeDecoder: _nativeDecoder,
-    ...dataOnlySource
-  } = source;
-  return dataOnlySource;
+  return stripTimelineSourceRuntimeHandles(source);
 }
 
 export function getSourceForFirstSplitPart(clip: TimelineClip): TimelineClip['source'] {

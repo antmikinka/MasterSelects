@@ -1,9 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AudioSyncHandler } from '../../src/services/layerBuilder/AudioSyncHandler';
 import { AudioTrackSyncManager } from '../../src/services/layerBuilder/AudioTrackSyncManager';
+import type { AudioTrackRuntimeElementManager } from '../../src/services/layerBuilder/audioTrackRuntimeElements';
+import type { AudioTrackStemLayerBufferCache } from '../../src/services/layerBuilder/audioTrackStemLayerBuffers';
+import type { AudioTrackStemPreviewElementManager } from '../../src/services/layerBuilder/audioTrackStemPreviewElements';
 import { audioRoutingManager } from '../../src/services/audioRoutingManager';
 import { proxyFrameCache } from '../../src/services/proxyFrameCache';
 import { clearCompositionAudioMixdownCache } from '../../src/services/timeline/compositionAudioMixdownCache';
+import {
+  getLazyTimelineAudioElementForClip,
+  getLazyTimelineVideoElementForClip,
+  hydrateTimelineMediaWindow,
+  releaseAllLazyTimelineMediaElements,
+} from '../../src/services/timeline/lazyMediaElements';
 import { timelineRuntimeCoordinator } from '../../src/services/timeline/timelineRuntimeCoordinator';
 import { useTimelineStore } from '../../src/stores/timeline';
 import { useMediaStore } from '../../src/stores/mediaStore';
@@ -38,36 +47,9 @@ type AudioTrackSyncManagerTestAccess = {
   syncVideoClipAudio: (ctx: FrameContext, state: AudioSyncState) => void;
 };
 type AudioTrackSyncManagerRuntimeTestAccess = AudioTrackSyncManagerTestAccess & {
-  activeAudioTrackProxies: Map<string, HTMLAudioElement>;
-  activeAudioTrackProxyMediaFileIds: Map<string, string>;
-  retainedAudioElementResourceIds: WeakMap<HTMLAudioElement, string>;
-  stemAudioElements: Map<string, {
-    key: string;
-    entries: Map<string, {
-      key: string;
-      element: HTMLAudioElement | null;
-      loading: boolean;
-      error?: string;
-      url?: string;
-      resourceId?: string;
-    }>;
-  }>;
-  stemLayerBufferCache: Map<string, AudioBuffer>;
-  getAudioProxyInstanceForClip: (
-    mediaFileId: string,
-    clipId: string,
-    activeMap: Map<string, HTMLAudioElement>,
-    activeMediaFileIds: Map<string, string>,
-  ) => HTMLAudioElement | null;
-  removeActiveAudioProxy: (
-    clipId: string,
-    activeMap: Map<string, HTMLAudioElement>,
-    mediaFileIds: Map<string, string>,
-  ) => void;
-  loadStemAudioElement: (clipId: string, key: string, stem: ClipAudioStemLayer) => Promise<void>;
-  disposeStemAudioSet: (clipId: string) => void;
-  cacheStemLayerBuffer: (layer: ClipAudioStemLayer, key: string, buffer: AudioBuffer) => boolean;
-  clearStemLayerBufferCache: () => void;
+  runtimeElements: AudioTrackRuntimeElementManager;
+  stemLayerBuffers: AudioTrackStemLayerBufferCache;
+  stemPreviewElements: AudioTrackStemPreviewElementManager;
 };
 
 const testProxyFrameCache = proxyFrameCache as ProxyFrameCacheTestAccess;
@@ -267,11 +249,14 @@ function stubProxyFrameCache(overrides: { hasAudioBuffer?: boolean } = {}) {
 describe('scrub audio sync', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
+    releaseAllLazyTimelineMediaElements();
     vi.restoreAllMocks();
     useTimelineStore.setState({ audioRegionGainPreview: null });
     clearCompositionAudioMixdownCache();
@@ -478,25 +463,19 @@ describe('scrub audio sync', () => {
 
     const cacheStub = stubProxyFrameCache();
 
-    const videoElement = {
-      muted: false,
-      currentSrc: 'blob:video-src',
-      src: 'blob:video-src',
-    } as unknown as HTMLAudioElement;
-
     const videoClip = makeClip({
       id: 'video-1',
       trackId: 'video-track',
       linkedClipId: 'audio-1',
       mediaFileId: 'media-1',
-      source: { type: 'video', videoElement: videoElement as unknown as HTMLVideoElement },
+      source: { type: 'video', mediaFileId: 'media-1' },
     });
 
     const linkedAudioClip = makeClip({
       id: 'audio-1',
       trackId: 'audio-track',
       linkedClipId: 'video-1',
-      source: { type: 'audio', audioElement: { paused: true, src: 'blob:audio-src', readyState: 4 } as unknown as HTMLAudioElement },
+      source: { type: 'audio', mediaFileId: 'audio-1' },
     });
 
     const ctx = makeFrameContext({
@@ -507,7 +486,10 @@ describe('scrub audio sync', () => {
       visibleVideoTrackIds: new Set(['video-track']),
       unmutedAudioTrackIds: new Set(['audio-track']),
       proxyEnabled: true,
-      mediaFiles: [{ id: 'media-1', name: 'clip.mp4', hasProxyAudio: true, proxyStatus: 'ready' }],
+      mediaFiles: [
+        { id: 'media-1', name: 'clip.mp4', url: 'blob:video-src', hasProxyAudio: true, proxyStatus: 'ready' },
+        { id: 'audio-1', name: 'clip-audio.wav', url: 'blob:audio-src' },
+      ],
       getInterpolatedEffects: (clipId: string) => clipId === 'audio-1'
         ? [
             { id: 'vol-1', type: 'audio-volume', params: { volume: 0.25 } },
@@ -515,6 +497,10 @@ describe('scrub audio sync', () => {
           ]
         : [],
     });
+
+    hydrateTimelineMediaWindow(ctx);
+    const videoElement = getLazyTimelineVideoElementForClip(videoClip);
+    expect(videoElement).toBeInstanceOf(HTMLVideoElement);
 
     manager.syncVideoClipAudio(
       ctx,
@@ -532,7 +518,7 @@ describe('scrub audio sync', () => {
       })
     );
     expect(syncAudioElement).not.toHaveBeenCalled();
-    expect(videoElement.muted).toBe(true);
+    expect(videoElement?.muted).toBe(true);
 
     cacheStub.restore();
   });
@@ -590,15 +576,10 @@ describe('scrub audio sync', () => {
     const syncAudioElement = vi.fn();
     manager.audioSyncHandler = { syncAudioElement, stopScrubAudio: vi.fn() };
 
-    const audioElement = {
-      paused: true,
-      src: 'blob:audio-src',
-      readyState: 4,
-    } as unknown as HTMLAudioElement;
     const audioClip = makeClip({
       id: 'audio-1',
       trackId: 'audio-track',
-      source: { type: 'audio', audioElement },
+      source: { type: 'audio', mediaFileId: 'media-audio-1' },
       audioState: {
         editStack: [{
           id: 'old-gain',
@@ -628,11 +609,16 @@ describe('scrub audio sync', () => {
       clipsAtTime: [audioClip],
       audioTracks: [{ id: 'audio-track', type: 'audio', muted: false }],
       unmutedAudioTrackIds: new Set(['audio-track']),
+      mediaFiles: [{ id: 'media-audio-1', name: 'audio-1.wav', url: 'blob:audio-src' }],
       isDraggingPlayhead: false,
       isPlaying: true,
       playheadPosition: 5,
       frameNumber: 150,
     });
+
+    hydrateTimelineMediaWindow(ctx);
+    const audioElement = getLazyTimelineAudioElementForClip(audioClip);
+    expect(audioElement).toBeInstanceOf(HTMLAudioElement);
 
     manager.syncAudioTrackClips(
       ctx,
@@ -787,7 +773,7 @@ describe('AudioTrackSyncManager stem layer buffer runtime reporting', () => {
     const layer = makeStemLayer();
     const buffer = makeAudioBuffer(2, 48_000, 2);
 
-    expect(manager.cacheStemLayerBuffer(layer, 'stem-cache-key', buffer)).toBe(true);
+    expect(manager.stemLayerBuffers.cacheStemLayerBuffer(layer, 'stem-cache-key', buffer)).toBe(true);
 
     const stats = timelineRuntimeCoordinator.getBridgeStats().policies.interactive;
     const resource = stats.resources.find((entry) =>
@@ -817,12 +803,17 @@ describe('AudioTrackSyncManager stem layer buffer runtime reporting', () => {
         heapBytes: 2 * 48_000 * 2 * 4,
       },
     });
+    expect(resource?.tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'lease-visible',
+      'stem-layer-buffer',
+    ]));
     expect(stats.budgetReport.usage.audioSources).toBe(1);
-    expect(manager.stemLayerBufferCache.has('stem-cache-key')).toBe(true);
+    expect(manager.stemLayerBuffers.has('stem-cache-key')).toBe(true);
 
-    manager.clearStemLayerBufferCache();
+    manager.stemLayerBuffers.clear();
 
-    expect(manager.stemLayerBufferCache.has('stem-cache-key')).toBe(false);
+    expect(manager.stemLayerBuffers.has('stem-cache-key')).toBe(false);
     expect(timelineRuntimeCoordinator.getBridgeStats().policies.interactive.resources)
       .not.toEqual(expect.arrayContaining([expect.objectContaining({ id: resource?.id })]));
   });
@@ -843,9 +834,13 @@ describe('AudioTrackSyncManager stem layer buffer runtime reporting', () => {
     });
     const manager = new AudioTrackSyncManager() as unknown as AudioTrackSyncManagerRuntimeTestAccess;
 
-    expect(manager.cacheStemLayerBuffer(makeStemLayer(), 'denied-stem-cache-key', makeAudioBuffer())).toBe(false);
+    expect(manager.stemLayerBuffers.cacheStemLayerBuffer(
+      makeStemLayer(),
+      'denied-stem-cache-key',
+      makeAudioBuffer(),
+    )).toBe(false);
 
-    expect(manager.stemLayerBufferCache.has('denied-stem-cache-key')).toBe(false);
+    expect(manager.stemLayerBuffers.has('denied-stem-cache-key')).toBe(false);
     expect(timelineRuntimeCoordinator.getBridgeStats().policies.interactive.resources)
       .not.toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -868,11 +863,9 @@ describe('AudioTrackSyncManager stem layer buffer runtime reporting', () => {
       audioProxyStatus: 'ready',
     }]);
 
-    const proxy = manager.getAudioProxyInstanceForClip(
+    const proxy = manager.runtimeElements.getAudioTrackProxyForClip(
       'media-audio-proxy',
       'clip-audio-proxy',
-      manager.activeAudioTrackProxies,
-      manager.activeAudioTrackProxyMediaFileIds,
     );
 
     expect(proxy).not.toBeNull();
@@ -897,13 +890,14 @@ describe('AudioTrackSyncManager stem layer buffer runtime reporting', () => {
         mediaFileId: 'media-audio-proxy',
       },
     });
+    expect(resource?.tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'lease-visible',
+      'active-audio-proxy',
+    ]));
     expect(timelineRuntimeCoordinator.getBridgeStats().policies.interactive.budgetReport.usage.htmlMediaElements).toBe(1);
 
-    manager.removeActiveAudioProxy(
-      'clip-audio-proxy',
-      manager.activeAudioTrackProxies,
-      manager.activeAudioTrackProxyMediaFileIds,
-    );
+    manager.runtimeElements.removeAudioTrackProxy('clip-audio-proxy');
 
     expect(timelineRuntimeCoordinator.getBridgeStats().policies.interactive.resources)
       .not.toEqual(expect.arrayContaining([expect.objectContaining({ id: resource?.id })]));
@@ -916,17 +910,13 @@ describe('AudioTrackSyncManager stem layer buffer runtime reporting', () => {
     const key = 'stem-preview-set';
     const buffer = makeAudioBuffer(1.5, 44_100, 2);
     const objectUrls = installObjectUrlMocks('blob:stem-preview-buffer');
-    manager.stemAudioElements.set('clip-stem-preview', {
-      key,
-      entries: new Map([[layer.id, { key, element: null, loading: true }]]),
-    });
     vi.spyOn(StemAudioSourceResolver.prototype, 'resolveStemLayerBuffer').mockResolvedValue(buffer);
 
     try {
-      await manager.loadStemAudioElement('clip-stem-preview', key, layer);
+      await manager.stemPreviewElements.loadStemAudioElement('clip-stem-preview', key, layer);
 
       expect(objectUrls.createObjectURL).toHaveBeenCalledOnce();
-      const entry = manager.stemAudioElements.get('clip-stem-preview')?.entries.get(layer.id);
+      const entry = manager.stemPreviewElements.getStemAudioElementEntry('clip-stem-preview', layer.id);
       expect(entry?.element).toBeInstanceOf(HTMLAudioElement);
       expect(entry?.url).toBe('blob:stem-preview-buffer');
       const resource = timelineRuntimeCoordinator
@@ -955,8 +945,13 @@ describe('AudioTrackSyncManager stem layer buffer runtime reporting', () => {
           channelCount: 2,
         },
       });
+      expect(resource?.tags).toEqual(expect.arrayContaining([
+        'runtime-provider-demand',
+        'lease-visible',
+        'stem-audio-element',
+      ]));
 
-      manager.disposeStemAudioSet('clip-stem-preview');
+      manager.stemPreviewElements.disposeStemAudioSet('clip-stem-preview');
 
       expect(objectUrls.revokeObjectURL).toHaveBeenCalledWith('blob:stem-preview-buffer');
       expect(timelineRuntimeCoordinator.getBridgeStats().policies.interactive.resources)
@@ -975,16 +970,12 @@ describe('AudioTrackSyncManager stem layer buffer runtime reporting', () => {
     const key = 'stem-preview-denied-set';
     const objectUrls = installObjectUrlMocks('blob:should-not-exist');
     const createElement = vi.spyOn(document, 'createElement');
-    manager.stemAudioElements.set('clip-stem-denied', {
-      key,
-      entries: new Map([[layer.id, { key, element: null, loading: true }]]),
-    });
     vi.spyOn(StemAudioSourceResolver.prototype, 'resolveStemLayerBuffer').mockResolvedValue(makeAudioBuffer());
 
     try {
-      await manager.loadStemAudioElement('clip-stem-denied', key, layer);
+      await manager.stemPreviewElements.loadStemAudioElement('clip-stem-denied', key, layer);
 
-      const entry = manager.stemAudioElements.get('clip-stem-denied')?.entries.get(layer.id);
+      const entry = manager.stemPreviewElements.getStemAudioElementEntry('clip-stem-denied', layer.id);
       expect(entry).toMatchObject({
         key,
         element: null,

@@ -1,6 +1,7 @@
 import { act, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TimelineClipCanvas, type CanvasClip } from '../../src/components/timeline/TimelineClipCanvas';
+import { TimelineClipCanvas } from '../../src/components/timeline/TimelineClipCanvas';
+import type { TimelinePaintSourceClip } from '../../src/timeline';
 import type { ClipDragState, ClipTrimState } from '../../src/components/timeline/types';
 import { flags } from '../../src/engine/featureFlags';
 import {
@@ -31,13 +32,97 @@ interface WorkerTotals {
 interface PostedWorkerMessage {
   type: string;
   requestId?: number;
+  paintResources?: {
+    schemaVersion?: number;
+    resources?: Array<{ id?: string; kind?: string; ownerClipId?: string }>;
+  };
+  paintPayloads?: {
+    thumbnailStrips?: Array<{
+      resourceId?: string;
+      resource: {
+        bitmap?: ImageBitmap;
+        drawCount?: number;
+      };
+    }>;
+    waveforms?: Array<{
+      resourceId?: string;
+      resource: {
+        columns?: Float32Array;
+      };
+    }>;
+    spectrograms?: Array<{
+      resourceId?: string;
+      resource: {
+        values?: Float32Array;
+        rasterWidth?: number;
+        rasterHeight?: number;
+      };
+    }>;
+    midiPreviews?: Array<{
+      resourceId?: string;
+      resource: {
+        bars?: Float32Array;
+      };
+    }>;
+    fadeVisuals?: Array<{
+      resourceId?: string;
+      resource: {
+        curves?: Float32Array;
+        curveCount?: number;
+        points?: Float32Array;
+        pointCount?: number;
+        isAudioClip?: boolean;
+      };
+    }>;
+    trimVisuals?: Array<{
+      facetId?: string;
+      resource: {
+        body?: { x?: number; width?: number };
+        sourceExtensionGhosts?: Array<{ edge?: 'left' | 'right'; x?: number; width?: number }>;
+      };
+    }>;
+    passiveDecorations?: Array<{
+      facetId?: string;
+      resource: {
+        kind?: string;
+        badges?: Array<{ label?: string }>;
+        progressBars?: Array<{ progress?: number }>;
+        transcriptMarkers?: Float32Array;
+        analysisOverlay?: {
+          points?: Float32Array;
+          pointCount?: number;
+        };
+      };
+    }>;
+    compositionVisuals?: Array<{
+      facetId?: string;
+      resource: {
+        outline?: boolean;
+        nestedBoundaries?: Float32Array;
+        segmentRects?: Float32Array;
+        segmentThumbnailStrip?: {
+          bitmap?: ImageBitmap;
+          width?: number;
+          height?: number;
+          drawCount?: number;
+        };
+        mixdownWaveform?: { columns?: Float32Array; columnCount?: number };
+        mixdownGenerating?: boolean;
+      };
+    }>;
+  };
   clips?: Array<{
     id?: string;
-    name?: string;
-    x?: number;
-    width?: number;
-    selected?: boolean;
-    hovered?: boolean;
+    paintPacket?: {
+      clipId?: string;
+      trackId?: string;
+      bodyRect?: { x?: number; width?: number };
+      label?: string;
+      state?: {
+        selected?: boolean;
+        hovered?: boolean;
+      };
+    };
     thumbnailStrip?: {
       bitmap?: ImageBitmap;
       x?: number;
@@ -45,31 +130,9 @@ interface PostedWorkerMessage {
       height?: number;
       drawCount?: number;
     };
-    passiveDecorations?: {
-      badges?: Array<{ label?: string }>;
-      progressBars?: Array<{ progress?: number }>;
-      transcriptMarkers?: Float32Array;
-      analysisOverlay?: {
-        points?: Float32Array;
-        pointCount?: number;
-      };
-    };
     trimVisuals?: {
       body?: { x?: number; width?: number };
       sourceExtensionGhosts?: Array<{ edge?: 'left' | 'right'; x?: number; width?: number }>;
-    };
-    compositionVisuals?: {
-      outline?: boolean;
-      nestedBoundaries?: Float32Array;
-      segmentRects?: Float32Array;
-      segmentThumbnailStrip?: {
-        bitmap?: ImageBitmap;
-        width?: number;
-        height?: number;
-        drawCount?: number;
-      };
-      mixdownWaveform?: { columns?: Float32Array; columnCount?: number };
-      mixdownGenerating?: boolean;
     };
     fadeVisuals?: {
       curves?: Float32Array;
@@ -107,7 +170,7 @@ const originalTransferDescriptor = Object.getOwnPropertyDescriptor(
 );
 let workers: FakeTimelineCanvasWorker[] = [];
 
-function createClip(overrides: Partial<CanvasClip> = {}): CanvasClip {
+function createClip(overrides: Partial<TimelinePaintSourceClip> = {}): TimelinePaintSourceClip {
   return {
     id: 'clip-solid',
     trackId: 'track-worker',
@@ -180,7 +243,7 @@ function installFakeOffscreenCanvas(createdBitmaps: ImageBitmap[]): void {
 }
 
 function renderWorkerCanvas(options: {
-  clips?: readonly CanvasClip[];
+  clips?: readonly TimelinePaintSourceClip[];
   selectedClipIds?: ReadonlySet<string>;
   hoveredClipId?: string | null;
   waveformsEnabled?: boolean;
@@ -275,13 +338,32 @@ describe('TimelineClipCanvas worker runtime', () => {
     expect(drawMessage).toMatchObject({
       type: 'draw',
       requestId: 1,
+      paintResources: {
+        schemaVersion: 1,
+        resources: [],
+      },
+      paintPayloads: {
+        thumbnailStrips: [],
+        waveforms: [],
+        spectrograms: [],
+        midiPreviews: [],
+        fadeVisuals: [],
+        trimVisuals: [],
+        passiveDecorations: [],
+        compositionVisuals: [],
+      },
       clips: [{
         id: 'clip-solid',
-        name: 'Solid Clip',
-        x: 10,
-        width: 30,
-        selected: true,
-        hovered: true,
+        paintPacket: {
+          clipId: 'clip-solid',
+          trackId: 'track-worker',
+          bodyRect: { x: 10, width: 30 },
+          label: 'Solid Clip',
+          state: {
+            selected: true,
+            hovered: true,
+          },
+        },
       }],
       height: 48,
       cssWidth: 2600,
@@ -348,7 +430,7 @@ describe('TimelineClipCanvas worker runtime', () => {
     });
     const drawIndex = worker.postedMessages.findIndex((message) => message.type === 'draw');
     const drawMessage = worker.postedMessages[drawIndex];
-    const waveform = drawMessage.clips?.[0]?.waveform;
+    const waveform = drawMessage.paintPayloads?.waveforms?.[0]?.resource;
     expect(waveform?.columns).toBeInstanceOf(Float32Array);
     expect(waveform?.columns?.length).toBeGreaterThan(0);
     expect(worker.postedTransferables[drawIndex]).toHaveLength(1);
@@ -399,9 +481,8 @@ describe('TimelineClipCanvas worker runtime', () => {
     const drawMessage = worker.postedMessages[drawIndex];
     const postedClip = drawMessage.clips?.[0];
 
-    expect(postedClip?.x).toBe(10);
-    expect(postedClip?.width).toBe(50);
-    expect(postedClip?.trimVisuals).toMatchObject({
+    expect(postedClip?.paintPacket?.bodyRect).toMatchObject({ x: 10, width: 50 });
+    expect(drawMessage.paintPayloads?.trimVisuals?.[0]?.resource).toMatchObject({
       kind: 'trim-visuals',
       body: {
         x: 10,
@@ -458,9 +539,10 @@ describe('TimelineClipCanvas worker runtime', () => {
     const drawMessage = worker.postedMessages.find((message) => message.type === 'draw');
     expect(drawMessage?.clips).toEqual([expect.objectContaining({
       id: 'clip-drag',
-      x: 50,
-      width: 30,
-      selected: true,
+      paintPacket: expect.objectContaining({
+        bodyRect: expect.objectContaining({ x: 50, width: 30 }),
+        state: expect.objectContaining({ selected: true }),
+      }),
     })]);
   });
 
@@ -507,9 +589,10 @@ describe('TimelineClipCanvas worker runtime', () => {
     const drawMessage = worker.postedMessages.find((message) => message.type === 'draw');
     expect(drawMessage?.clips).toEqual([expect.objectContaining({
       id: 'clip-slide',
-      x: 40,
-      width: 30,
-      selected: true,
+      paintPacket: expect.objectContaining({
+        bodyRect: expect.objectContaining({ x: 40, width: 30 }),
+        state: expect.objectContaining({ selected: true }),
+      }),
     })]);
   });
 
@@ -570,7 +653,7 @@ describe('TimelineClipCanvas worker runtime', () => {
     });
     const drawIndex = worker.postedMessages.findIndex((message) => message.type === 'draw');
     const drawMessage = worker.postedMessages[drawIndex];
-    const thumbnailStrip = drawMessage.clips?.[0]?.thumbnailStrip;
+    const thumbnailStrip = drawMessage.paintPayloads?.thumbnailStrips?.[0]?.resource;
     const thumbnailArgs = getThumbnailsForRangeSpy.mock.calls[0];
 
     expect(thumbnailArgs?.[0]).toBe('media-slip');
@@ -579,9 +662,10 @@ describe('TimelineClipCanvas worker runtime', () => {
     expect(thumbnailStrip?.bitmap).toBe(createdStripBitmaps[0]);
     expect(drawMessage.clips).toEqual([expect.objectContaining({
       id: 'clip-slip',
-      x: 10,
-      width: 40,
-      selected: true,
+      paintPacket: expect.objectContaining({
+        bodyRect: expect.objectContaining({ x: 10, width: 40 }),
+        state: expect.objectContaining({ selected: true }),
+      }),
     })]);
     expect(worker.postedTransferables[drawIndex]).toEqual([thumbnailStrip?.bitmap]);
     expect(worker.postedTransferables[drawIndex]).not.toContain(cacheBitmap);
@@ -621,8 +705,9 @@ describe('TimelineClipCanvas worker runtime', () => {
     const drawMessage = worker.postedMessages.find((message) => message.type === 'draw');
     expect(drawMessage?.clips).toEqual([expect.objectContaining({
       id: 'clip-preview',
-      x: 60,
-      width: 30,
+      paintPacket: expect.objectContaining({
+        bodyRect: expect.objectContaining({ x: 60, width: 30 }),
+      }),
     })]);
   });
 
@@ -659,7 +744,7 @@ describe('TimelineClipCanvas worker runtime', () => {
     });
     const drawIndex = worker.postedMessages.findIndex((message) => message.type === 'draw');
     const drawMessage = worker.postedMessages[drawIndex];
-    const fadeVisuals = drawMessage.clips?.[0]?.fadeVisuals;
+    const fadeVisuals = drawMessage.paintPayloads?.fadeVisuals?.[0]?.resource;
 
     expect(fadeVisuals?.curves).toBeInstanceOf(Float32Array);
     expect(fadeVisuals?.points).toBeInstanceOf(Float32Array);
@@ -717,9 +802,10 @@ describe('TimelineClipCanvas worker runtime', () => {
     });
     const drawIndex = worker.postedMessages.findIndex((message) => message.type === 'draw');
     const drawMessage = worker.postedMessages[drawIndex];
-    const compositionVisuals = drawMessage.clips?.[0]?.compositionVisuals;
+    const compositionVisuals = drawMessage.paintPayloads?.compositionVisuals?.[0]?.resource;
 
     expect(createdStripBitmaps).toHaveLength(1);
+    expect('compositionVisuals' in (drawMessage.clips?.[0] ?? {})).toBe(false);
     expect(compositionVisuals?.outline).toBe(true);
     expect(Array.from(compositionVisuals?.nestedBoundaries ?? [])).toEqual([
       expect.closeTo(0.25),
@@ -778,11 +864,12 @@ describe('TimelineClipCanvas worker runtime', () => {
     });
     const drawIndex = worker.postedMessages.findIndex((message) => message.type === 'draw');
     const drawMessage = worker.postedMessages[drawIndex];
-    const thumbnailStrip = drawMessage.clips?.[0]?.thumbnailStrip;
+    const thumbnailStrip = drawMessage.paintPayloads?.thumbnailStrips?.[0]?.resource;
+    const passiveDecorations = drawMessage.paintPayloads?.passiveDecorations?.[0]?.resource;
     expect(createdStripBitmaps).toHaveLength(1);
     expect(thumbnailStrip?.bitmap).toBe(createdStripBitmaps[0]);
     expect(thumbnailStrip?.drawCount).toBe(2);
-    expect(drawMessage.clips?.[0]?.passiveDecorations?.badges?.map((badge) => badge.label)).toContain('R');
+    expect(passiveDecorations?.badges?.map((badge) => badge.label)).toContain('R');
     expect(getThumbnailsForRangeSpy).toHaveBeenCalledWith(
       'media-1',
       expect.any(Number),
@@ -822,10 +909,11 @@ describe('TimelineClipCanvas worker runtime', () => {
       expect(worker.postedMessages.some((message) => message.type === 'draw')).toBe(true);
     });
     const drawMessage = worker.postedMessages.find((message) => message.type === 'draw');
-    expect(drawMessage?.clips?.[0]?.passiveDecorations?.kind).toBe('passive-decorations');
-    expect(drawMessage?.clips?.[0]?.passiveDecorations?.badges?.map((badge) => badge.label)).toContain('L');
-    expect(drawMessage?.clips?.[0]?.passiveDecorations?.badges?.map((badge) => badge.label)).toContain('R');
-    const markers = drawMessage?.clips?.[0]?.passiveDecorations?.transcriptMarkers;
+    const passiveDecorations = drawMessage?.paintPayloads?.passiveDecorations?.[0]?.resource;
+    expect(passiveDecorations?.kind).toBe('passive-decorations');
+    expect(passiveDecorations?.badges?.map((badge) => badge.label)).toContain('L');
+    expect(passiveDecorations?.badges?.map((badge) => badge.label)).toContain('R');
+    const markers = passiveDecorations?.transcriptMarkers;
     expect(markers).toBeInstanceOf(Float32Array);
     expect(markers?.length).toBe(4);
     expect(Array.from(markers ?? [])).toEqual([
@@ -850,7 +938,7 @@ describe('TimelineClipCanvas worker runtime', () => {
             { timestamp: 4, focus: 0.9, globalMotion: 0.2, faceCount: 0 },
             { timestamp: 7, focus: 0.4, motion: 0.1, faceCount: 2 },
           ],
-        } as CanvasClip['analysis'],
+        } as TimelinePaintSourceClip['analysis'],
       })],
       selectedClipIds: new Set(),
       hoveredClipId: null,
@@ -868,7 +956,7 @@ describe('TimelineClipCanvas worker runtime', () => {
     });
     const drawIndex = worker.postedMessages.findIndex((message) => message.type === 'draw');
     const drawMessage = worker.postedMessages[drawIndex];
-    const passiveDecorations = drawMessage.clips?.[0]?.passiveDecorations;
+    const passiveDecorations = drawMessage.paintPayloads?.passiveDecorations?.[0]?.resource;
     const analysisOverlay = passiveDecorations?.analysisOverlay;
     expect(passiveDecorations?.badges?.map((badge) => badge.label)).toContain('AN');
     expect(passiveDecorations?.badges?.map((badge) => badge.label)).toContain('R');
@@ -930,7 +1018,7 @@ describe('TimelineClipCanvas worker runtime', () => {
     });
     const drawIndex = worker.postedMessages.findIndex((message) => message.type === 'draw');
     const drawMessage = worker.postedMessages[drawIndex];
-    const spectrogram = drawMessage.clips?.[0]?.spectrogram;
+    const spectrogram = drawMessage.paintPayloads?.spectrograms?.[0]?.resource;
     expect(spectrogram?.values).toBeInstanceOf(Float32Array);
     expect(spectrogram?.values?.length).toBeGreaterThan(0);
     expect(spectrogram?.rasterWidth).toBeGreaterThan(0);

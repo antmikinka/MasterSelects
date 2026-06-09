@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LayerBuilderService } from '../../src/services/layerBuilder/LayerBuilderService';
+import { canUseHeldLayerBuilderProxyFrame } from '../../src/services/layerBuilder/layerBuilderProxyFrames';
 import { flags } from '../../src/engine/featureFlags';
 import { useTimelineStore } from '../../src/stores/timeline';
 import { useMediaStore } from '../../src/stores/mediaStore';
@@ -33,12 +34,6 @@ type LayerBuilderServiceTestAccess = {
   buildLayersFromStore: LayerBuilderService['buildLayersFromStore'];
   getPausedVisualProvider: (...args: unknown[]) => unknown;
   hasRenderableVideoSource: (...args: unknown[]) => boolean;
-  canUseHeldProxyFrame: (
-    heldFrameIndex: number,
-    targetMediaTime: number,
-    proxyFps: number,
-    isDraggingPlayhead: boolean
-  ) => boolean;
 };
 type NestedCompositionSource = {
   nestedComposition?: {
@@ -278,17 +273,13 @@ describe('LayerBuilderService paused visual provider selection', () => {
   });
 
   it('rejects stale held proxy frames during drag scrubs after large time jumps', () => {
-    const service = createService();
-
-    expect(service.canUseHeldProxyFrame(576, 4.8, 30, true)).toBe(false);
-    expect(service.canUseHeldProxyFrame(147, 4.85, 30, true)).toBe(true);
+    expect(canUseHeldLayerBuilderProxyFrame(576, 4.8, 30, true)).toBe(false);
+    expect(canUseHeldLayerBuilderProxyFrame(147, 4.85, 30, true)).toBe(true);
   });
 
   it('allows a wider held proxy tolerance for paused non-drag refreshes', () => {
-    const service = createService();
-
-    expect(service.canUseHeldProxyFrame(150, 5.35, 30, false)).toBe(true);
-    expect(service.canUseHeldProxyFrame(150, 5.75, 30, false)).toBe(false);
+    expect(canUseHeldLayerBuilderProxyFrame(150, 5.35, 30, false)).toBe(true);
+    expect(canUseHeldLayerBuilderProxyFrame(150, 5.75, 30, false)).toBe(false);
   });
 
   it('keeps the clip player when the scrub runtime is near the target but has no frame', () => {

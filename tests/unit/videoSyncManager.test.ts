@@ -1,8 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { engine } from '../../src/engine/WebGPUEngine';
 import { flags } from '../../src/engine/featureFlags';
 import { VideoSyncManager } from '../../src/services/layerBuilder/VideoSyncManager';
+import { VideoSyncHandoffManager } from '../../src/services/layerBuilder/videoSyncHandoffs';
+import type { VideoSyncHtmlSeekState } from '../../src/services/layerBuilder/videoSyncHtmlSeekState';
+import type { VideoSyncWarmupState } from '../../src/services/layerBuilder/videoSyncWarmupState';
+import type { VideoSyncWebCodecsSeekState } from '../../src/services/layerBuilder/videoSyncWebCodecsSeekState';
 import { scrubSettleState } from '../../src/services/scrubSettleState';
+import {
+  getLazyTimelineVideoElementForClip,
+  hydrateTimelineMediaWindow,
+  releaseAllLazyTimelineMediaElements,
+} from '../../src/services/timeline/lazyMediaElements';
+import type { FrameContext } from '../../src/services/layerBuilder/types';
+import type { TimelineClip } from '../../src/types';
 
 type EngineTestAccess = typeof engine & {
   ensureVideoFrameCached: ReturnType<typeof vi.fn>;
@@ -18,10 +29,7 @@ type EngineTestAccess = typeof engine & {
 
 type VideoSyncManagerTestAccess = {
   canStartLiveHtmlPlaybackFallback: (...args: unknown[]) => boolean;
-  computeHandoffs: (...args: unknown[]) => unknown;
-  getHandoffVideoElement: (...args: unknown[]) => unknown;
   getPausedWebCodecsProvider: (...args: unknown[]) => unknown;
-  getPreviewContinuationVideoElement: (...args: unknown[]) => unknown;
   isPlaybackProviderReadyForAudioStart: (...args: unknown[]) => boolean;
   isVideoWarmingUp: (...args: unknown[]) => boolean;
   maybeRetargetActiveWarmup: (...args: unknown[]) => void;
@@ -36,30 +44,88 @@ type VideoSyncManagerTestAccess = {
   syncFullWebCodecs: (...args: unknown[]) => void;
   syncPausedWebCodecsProvider: (...args: unknown[]) => void;
   throttledSeek: (...args: unknown[]) => void;
-  lastTrackState: Map<string, unknown>;
-  lastWcFastSeekAt: Record<string, number>;
-  lastWcFastSeekTarget: Record<string, number>;
-  lastWcPreciseSeekAt: Record<string, number>;
-  latestSeekTargets: Record<string, number>;
-  pendingSeekStartedAt: Record<string, number>;
-  pendingSeekTargets: Record<string, number>;
-  preciseSeekTimers: Record<string, ReturnType<typeof setTimeout>>;
-  queuedSeekTargets: Record<string, number>;
-  rvfcHandles: Record<string, number>;
-  seekedFlushArmed: Set<string>;
-  warmingUpVideos: WeakSet<object>;
-  warmupClipIds: WeakMap<object, string>;
-  warmupTargetTimes: WeakMap<object, number>;
+  htmlSeeks: VideoSyncHtmlSeekState;
+  warmups: VideoSyncWarmupState;
+  wcSeeks: VideoSyncWebCodecsSeekState;
 };
 
 const testEngine = engine as EngineTestAccess;
 const createManager = (): VideoSyncManagerTestAccess => new VideoSyncManager() as unknown as VideoSyncManagerTestAccess;
+const createHandoffs = (): VideoSyncHandoffManager => new VideoSyncHandoffManager();
+const getTestClipVideo = (clip: unknown): HTMLVideoElement | null =>
+  (clip as { source?: { videoElement?: HTMLVideoElement } }).source?.videoElement ?? null;
+
+function setVideoState(video: HTMLVideoElement, state: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(state)) {
+    Object.defineProperty(video, key, {
+      configurable: true,
+      value,
+      writable: true,
+    });
+  }
+}
+
+function createLazyVideoClip(
+  id: string,
+  state: Record<string, unknown> = {},
+  sourceExtras: Record<string, unknown> = {},
+): { clip: TimelineClip; ctx: FrameContext; video: HTMLVideoElement } {
+  const mediaFileId = `${id}-media`;
+  const clip = {
+    id,
+    trackId: 'track-v1',
+    startTime: 0,
+    inPoint: 0,
+    outPoint: 10,
+    duration: 10,
+    reversed: false,
+    source: {
+      type: 'video',
+      mediaFileId,
+      naturalDuration: 10,
+      ...sourceExtras,
+    },
+    mediaFileId,
+  } as unknown as TimelineClip;
+  const mediaFile = { id: mediaFileId, name: `${id}.mp4`, url: `blob:${id}`, duration: 10 };
+  const ctx = {
+    isPlaying: false,
+    isDraggingPlayhead: false,
+    hasClipDragPreview: false,
+    proxyEnabled: false,
+    playbackSpeed: 1,
+    now: 1000,
+    playheadPosition: 1.5,
+    clips: [clip],
+    clipsAtTime: [clip],
+    tracks: [{ id: 'track-v1', type: 'video', visible: true }],
+    videoTracks: [{ id: 'track-v1', type: 'video', visible: true }],
+    audioTracks: [],
+    visibleVideoTrackIds: new Set(['track-v1']),
+    unmutedAudioTrackIds: new Set<string>(),
+    clipsByTrackId: new Map([['track-v1', clip]]),
+    mediaFiles: [mediaFile],
+    mediaFileById: new Map([[mediaFileId, mediaFile]]),
+    mediaFileByName: new Map([[mediaFile.name, mediaFile]]),
+    compositionById: new Map(),
+    hasKeyframes: () => false,
+    getInterpolatedSpeed: () => 1,
+    getSourceTimeForClip: () => 1.5,
+  } as unknown as FrameContext;
+  hydrateTimelineMediaWindow(ctx);
+  const video = getLazyTimelineVideoElementForClip(clip);
+  if (!video) throw new Error(`Missing lazy video element for ${id}`);
+  setVideoState(video, state);
+  return { clip, ctx, video };
+}
 
 describe('VideoSyncManager paused WebCodecs provider selection', () => {
   beforeEach(() => {
     vi.useRealTimers();
     flags.useFullWebCodecsPlayback = true;
     scrubSettleState.clear();
+    vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
     testEngine.ensureVideoFrameCached = vi.fn();
     testEngine.getLastPresentedVideoTime = vi.fn(() => undefined);
     testEngine.requestNewFrameRender = vi.fn();
@@ -69,6 +135,11 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     testEngine.markVideoGpuReady = vi.fn();
     testEngine.requestRender = vi.fn();
     testEngine.preCacheVideoFrame = vi.fn(() => Promise.resolve(true));
+  });
+
+  afterEach(() => {
+    releaseAllLazyTimelineMediaElements();
+    vi.restoreAllMocks();
   });
 
   it('keeps driving the clip player while the scrub runtime is still cold', () => {
@@ -88,7 +159,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     };
 
     const provider = manager.getPausedWebCodecsProvider(
-      { webCodecsPlayer: clipPlayer },
+      clipPlayer,
       scrubProvider,
       1.01
     );
@@ -113,7 +184,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     };
 
     const provider = manager.getPausedWebCodecsProvider(
-      { webCodecsPlayer: clipPlayer },
+      clipPlayer,
       scrubProvider,
       1.01
     );
@@ -138,7 +209,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     };
 
     const provider = manager.getPausedWebCodecsProvider(
-      { webCodecsPlayer: clipPlayer },
+      clipPlayer,
       sharedRuntimeProvider,
       8.68
     );
@@ -244,7 +315,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
       isDecodePending: () => false,
     };
 
-    manager.lastWcPreciseSeekAt['clip:fallback'] = performance.now();
+    manager.wcSeeks.setLastPreciseSeekAt('clip:fallback', performance.now());
 
     expect(manager.shouldSeekPausedWebCodecsProvider(provider, 1, 'clip:fallback')).toBe(false);
   });
@@ -319,8 +390,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
       isDecodePending: () => true,
     };
 
-    manager.lastWcFastSeekTarget['clip:scrub'] = 1;
-    manager.lastWcFastSeekAt['clip:scrub'] = performance.now() - 220;
+    manager.wcSeeks.setFastSeek('clip:scrub', 1, performance.now() - 220);
 
     expect(manager.shouldFastSeekPausedWebCodecsProvider(provider, 'clip:scrub', 1.4)).toBe(true);
   });
@@ -335,8 +405,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
       isDecodePending: () => true,
     };
 
-    manager.lastWcFastSeekTarget['clip:scrub'] = 1;
-    manager.lastWcFastSeekAt['clip:scrub'] = performance.now() - 20;
+    manager.wcSeeks.setFastSeek('clip:scrub', 1, performance.now() - 20);
 
     expect(manager.shouldFastSeekPausedWebCodecsProvider(provider, 'clip:scrub', 1.4)).toBe(false);
   });
@@ -435,7 +504,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
       isDecodePending: () => true,
     };
 
-    manager.lastWcPreciseSeekAt['clip:scrub'] = performance.now() - 120;
+    manager.wcSeeks.setLastPreciseSeekAt('clip:scrub', performance.now() - 120);
 
     manager.syncPausedWebCodecsProvider(provider, 'clip:scrub', 34.4, true, false);
 
@@ -457,7 +526,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
       isDecodePending: () => true,
     };
 
-    manager.lastWcPreciseSeekAt['clip:scrub'] = performance.now() - 20;
+    manager.wcSeeks.setLastPreciseSeekAt('clip:scrub', performance.now() - 20);
 
     manager.syncPausedWebCodecsProvider(provider, 'clip:scrub', 34.4, true, false);
 
@@ -608,40 +677,22 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     const syncFullWebCodecs = vi.spyOn(manager, 'syncFullWebCodecs');
     const throttledSeek = vi.spyOn(manager, 'throttledSeek').mockImplementation(() => {});
 
-    const video = {
+    const { clip, ctx } = createLazyVideoClip('clip-2', {
       currentTime: 0,
       paused: true,
       seeking: false,
       readyState: 4,
-      played: { length: 1 },
-      pause: vi.fn(),
+      played: { length: 1 } as TimeRanges,
+      pause: vi.fn() as HTMLVideoElement['pause'],
       playbackRate: 1,
-    };
-
-    manager.syncClipVideo({
-      id: 'clip-2',
-      trackId: 'track-v1',
-      startTime: 0,
-      inPoint: 0,
-      outPoint: 10,
-      duration: 10,
-      reversed: false,
-      source: {
-        videoElement: video,
-        webCodecsPlayer: {
-          isFullMode: () => true,
-        },
-      },
     }, {
-      isPlaying: false,
-      isDraggingPlayhead: false,
-      playbackSpeed: 1,
-      now: 1000,
-      playheadPosition: 1.5,
-      hasKeyframes: () => false,
-      getInterpolatedSpeed: () => 1,
-      getSourceTimeForClip: () => 1.5,
+      webCodecsPlayer: {
+        isFullMode: () => true,
+      },
     });
+    ctx.isDraggingPlayhead = true;
+
+    manager.syncClipVideo(clip, ctx);
 
     expect(syncFullWebCodecs).not.toHaveBeenCalled();
     expect(throttledSeek).toHaveBeenCalled();
@@ -653,37 +704,18 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     const manager = createManager();
     const ensureVideoFrameCached = testEngine.ensureVideoFrameCached;
 
-    const video = {
+    const { clip, ctx, video } = createLazyVideoClip('clip-owner', {
       currentTime: 1.5,
       paused: true,
       seeking: false,
       readyState: 4,
-      played: { length: 1 },
-      pause: vi.fn(),
+      played: { length: 1 } as TimeRanges,
+      pause: vi.fn() as HTMLVideoElement['pause'],
       playbackRate: 1,
-    };
-
-    manager.syncClipVideo({
-      id: 'clip-owner',
-      trackId: 'track-v1',
-      startTime: 0,
-      inPoint: 0,
-      outPoint: 10,
-      duration: 10,
-      reversed: false,
-      source: {
-        videoElement: video,
-      },
-    }, {
-      isPlaying: false,
-      isDraggingPlayhead: true,
-      playbackSpeed: 1,
-      now: 1000,
-      playheadPosition: 1.5,
-      hasKeyframes: () => false,
-      getInterpolatedSpeed: () => 1,
-      getSourceTimeForClip: () => 1.5,
     });
+    ctx.isDraggingPlayhead = true;
+
+    manager.syncClipVideo(clip, ctx);
 
     expect(ensureVideoFrameCached).toHaveBeenCalledWith(video, 'clip-owner');
   });
@@ -692,58 +724,38 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     flags.useFullWebCodecsPlayback = false;
 
     const manager = createManager();
-    let currentTime = 1.5;
-    const video = {
+    const { clip, ctx, video } = createLazyVideoClip('clip-cold', {
+      currentTime: 1.5,
       src: 'blob:cold-clip',
       paused: true,
       seeking: false,
       readyState: 4,
-      played: { length: 0 }, // never played â€” cold GPU surface
+      played: { length: 0 },
       pause: vi.fn(),
       play: vi.fn(() => Promise.resolve()),
       playbackRate: 1,
       addEventListener: vi.fn(),
-    };
-    Object.defineProperty(video, 'currentTime', {
-      configurable: true,
-      get: () => currentTime,
-      set: (value: number) => { currentTime = value; },
     });
-
-    const ctx = {
-      isPlaying: false,
-      isDraggingPlayhead: true,
-      proxyEnabled: false,
-      playbackSpeed: 1,
-      now: 1000,
-      playheadPosition: 1.5,
-      hasKeyframes: () => false,
-      getInterpolatedSpeed: () => 1,
-      getSourceTimeForClip: () => 1.5,
-    };
-    const clip = {
-      id: 'clip-cold',
-      trackId: 'track-v1',
-      startTime: 0,
-      inPoint: 0,
-      outPoint: 10,
-      duration: 10,
-      reversed: false,
-      source: { videoElement: video },
-    };
+    ctx.isDraggingPlayhead = true;
 
     manager.syncClipVideo(clip, ctx);
     expect(testEngine.preCacheVideoFrame).toHaveBeenCalledWith(video, 'clip-cold');
 
-    // A clip that has already played is warm â€” no redundant force-decode.
     testEngine.preCacheVideoFrame.mockClear();
-    const warmVideo = { ...video, played: { length: 1 } };
-    Object.defineProperty(warmVideo, 'currentTime', {
-      configurable: true,
-      get: () => currentTime,
-      set: (value: number) => { currentTime = value; },
+    const { clip: warmClip, ctx: warmCtx } = createLazyVideoClip('clip-warm', {
+      currentTime: 1.5,
+      src: 'blob:warm-clip',
+      paused: true,
+      seeking: false,
+      readyState: 4,
+      played: { length: 1 },
+      pause: vi.fn(),
+      play: vi.fn(() => Promise.resolve()),
+      playbackRate: 1,
+      addEventListener: vi.fn(),
     });
-    manager.syncClipVideo({ ...clip, id: 'clip-warm', source: { videoElement: warmVideo } }, ctx);
+    warmCtx.isDraggingPlayhead = true;
+    manager.syncClipVideo(warmClip, warmCtx);
     expect(testEngine.preCacheVideoFrame).not.toHaveBeenCalled();
   });
 
@@ -788,44 +800,20 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
       .spyOn(manager, 'startTargetedWarmup')
       .mockImplementation(() => {});
 
-    const video = {
+    const { clip, ctx, video } = createLazyVideoClip('clip-jump', {
       currentTime: 0,
       readyState: 4,
       seeking: false,
       preload: 'metadata',
       src: 'file:///jump.mp4',
       currentSrc: 'file:///jump.mp4',
-    };
-
-    manager.preloadPausedJumpNeighborhood({
-      isPlaying: false,
-      isDraggingPlayhead: false,
-      playheadPosition: 5,
-      clips: [{
-        id: 'clip-jump',
-        trackId: 'track-v1',
-        startTime: 0,
-        inPoint: 0,
-        outPoint: 10,
-        duration: 10,
-        source: {
-          videoElement: video,
-        },
-      }],
-      clipsAtTime: [{
-        id: 'clip-jump',
-        trackId: 'track-v1',
-        startTime: 0,
-        inPoint: 0,
-        outPoint: 10,
-        duration: 10,
-        source: {
-          videoElement: video,
-        },
-      }],
-      getInterpolatedSpeed: () => 1,
-      getSourceTimeForClip: () => 5,
     });
+    ctx.playheadPosition = 5;
+    ctx.clips = [clip];
+    ctx.clipsAtTime = [clip];
+    ctx.getSourceTimeForClip = () => 5;
+
+    manager.preloadPausedJumpNeighborhood(ctx);
 
     expect(startTargetedWarmup).toHaveBeenCalledWith('clip-jump', video, 5, {
       proactive: true,
@@ -841,44 +829,18 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
       .spyOn(manager, 'startTargetedWarmup')
       .mockImplementation(() => {});
 
-    const video = {
+    const { clip, ctx } = createLazyVideoClip('clip-jump', {
       currentTime: 0,
       readyState: 4,
       seeking: false,
       preload: 'metadata',
       src: 'file:///jump.mp4',
       currentSrc: 'file:///jump.mp4',
-    };
-
-    const ctx = {
-      isPlaying: false,
-      isDraggingPlayhead: false,
-      playheadPosition: 5,
-      clips: [{
-        id: 'clip-jump',
-        trackId: 'track-v1',
-        startTime: 0,
-        inPoint: 0,
-        outPoint: 10,
-        duration: 10,
-        source: {
-          videoElement: video,
-        },
-      }],
-      clipsAtTime: [{
-        id: 'clip-jump',
-        trackId: 'track-v1',
-        startTime: 0,
-        inPoint: 0,
-        outPoint: 10,
-        duration: 10,
-        source: {
-          videoElement: video,
-        },
-      }],
-      getInterpolatedSpeed: () => 1,
-      getSourceTimeForClip: () => 5,
-    };
+    });
+    ctx.playheadPosition = 5;
+    ctx.clips = [clip];
+    ctx.clipsAtTime = [clip];
+    ctx.getSourceTimeForClip = () => 5;
 
     manager.preloadPausedJumpNeighborhood(ctx);
     manager.preloadPausedJumpNeighborhood(ctx);
@@ -950,24 +912,23 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
       cancelVideoFrameCallback: vi.fn(),
     };
 
-    manager.rvfcHandles['clip-warm'] = 7;
-    manager.pendingSeekTargets['clip-warm'] = 2.4;
-    manager.pendingSeekStartedAt['clip-warm'] = 123;
-    manager.queuedSeekTargets['clip-warm'] = 2.8;
-    manager.latestSeekTargets['clip-warm'] = 3.1;
-    manager.seekedFlushArmed.add('clip-warm');
-    manager.preciseSeekTimers['clip-warm'] = setTimeout(() => {}, 5000);
+    manager.htmlSeeks.setRvfcHandle('clip-warm', 7);
+    manager.htmlSeeks.setPendingTarget('clip-warm', 2.4, 123);
+    manager.htmlSeeks.setQueuedTarget('clip-warm', 2.8);
+    manager.htmlSeeks.setLatestTarget('clip-warm', 3.1);
+    manager.htmlSeeks.armSeekedFlush('clip-warm');
+    manager.htmlSeeks.replacePreciseSeekTimer('clip-warm', setTimeout(() => {}, 5000));
 
     manager.startTargetedWarmup('clip-warm', video, 1.5);
     await vi.runAllTicks();
 
     expect(video.cancelVideoFrameCallback).toHaveBeenCalledWith(7);
-    expect(manager.pendingSeekTargets['clip-warm']).toBeUndefined();
-    expect(manager.pendingSeekStartedAt['clip-warm']).toBeUndefined();
-    expect(manager.queuedSeekTargets['clip-warm']).toBeUndefined();
-    expect(manager.latestSeekTargets['clip-warm']).toBeUndefined();
-    expect(manager.preciseSeekTimers['clip-warm']).toBeUndefined();
-    expect(manager.seekedFlushArmed.has('clip-warm')).toBe(false);
+    expect(manager.htmlSeeks.getPendingTarget('clip-warm')).toBeUndefined();
+    expect(manager.htmlSeeks.getPendingStartedAt('clip-warm')).toBeUndefined();
+    expect(manager.htmlSeeks.getQueuedTarget('clip-warm')).toBeUndefined();
+    expect(manager.htmlSeeks.getLatestTarget('clip-warm')).toBeUndefined();
+    expect(manager.htmlSeeks.hasPreciseSeekTimer('clip-warm')).toBe(false);
+    expect(manager.htmlSeeks.hasSeekedFlushArmed('clip-warm')).toBe(false);
   });
 
   it('retargets an active warmup when the paused scrub target jumps far away', () => {
@@ -976,9 +937,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
       pause: vi.fn(),
     };
 
-    manager.warmingUpVideos.add(video);
-    manager.warmupClipIds.set(video, 'clip-warm');
-    manager.warmupTargetTimes.set(video, 1);
+    manager.warmups.beginAttempt(video as HTMLVideoElement, 'clip-warm', 1);
 
     const clearWarmupState = vi
       .spyOn(manager, 'clearWarmupState')
@@ -1004,7 +963,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
   it('does not reuse the previous HTML video element across same-source reordered cuts when preview WebCodecs is disabled', () => {
     flags.useFullWebCodecsPlayback = false;
 
-    const manager = createManager();
+    const handoffs = createHandoffs();
     const previousVideo = {
       currentTime: 6.35,
     } as HTMLVideoElement;
@@ -1013,7 +972,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     } as HTMLVideoElement;
     const file = new File(['video'], 'reordered.mp4', { type: 'video/mp4' });
 
-    manager.lastTrackState.set('track-v1', {
+    handoffs.setTrackState('track-v1', {
       clipId: 'clip-prev',
       fileId: 'media-1',
       file,
@@ -1021,29 +980,30 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
       outPoint: 1.4,
     });
 
-    manager.computeHandoffs({
+    const clip = {
+      id: 'clip-next',
+      trackId: 'track-v1',
+      file,
+      inPoint: 6.8,
+      outPoint: 8.4,
+      source: {
+        mediaFileId: 'media-1',
+        videoElement: nextVideo,
+      },
+    };
+
+    handoffs.compute({
       isPlaying: true,
       isDraggingPlayhead: false,
-      clipsAtTime: [{
-        id: 'clip-next',
-        trackId: 'track-v1',
-        file,
-        inPoint: 6.8,
-        outPoint: 8.4,
-        source: {
-          mediaFileId: 'media-1',
-          videoElement: nextVideo,
-        },
-      }],
-    });
+    } as never, [clip] as never, getTestClipVideo);
 
-    expect(manager.getHandoffVideoElement('clip-next')).toBeNull();
+    expect(handoffs.getHandoffVideoElement('clip-next')).toBeNull();
   });
 
   it('does not reuse the previous HTML video element across same-source reordered cuts when the source-time jump is too large', () => {
     flags.useFullWebCodecsPlayback = false;
 
-    const manager = createManager();
+    const handoffs = createHandoffs();
     const previousVideo = {
       currentTime: 4.2,
     } as HTMLVideoElement;
@@ -1052,7 +1012,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     } as HTMLVideoElement;
     const file = new File(['video'], 'reordered-large-jump.mp4', { type: 'video/mp4' });
 
-    manager.lastTrackState.set('track-v1', {
+    handoffs.setTrackState('track-v1', {
       clipId: 'clip-prev',
       fileId: 'media-1',
       file,
@@ -1060,29 +1020,30 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
       outPoint: 1.4,
     });
 
-    manager.computeHandoffs({
+    const clip = {
+      id: 'clip-next',
+      trackId: 'track-v1',
+      file,
+      inPoint: 6.8,
+      outPoint: 8.4,
+      source: {
+        mediaFileId: 'media-1',
+        videoElement: nextVideo,
+      },
+    };
+
+    handoffs.compute({
       isPlaying: true,
       isDraggingPlayhead: false,
-      clipsAtTime: [{
-        id: 'clip-next',
-        trackId: 'track-v1',
-        file,
-        inPoint: 6.8,
-        outPoint: 8.4,
-        source: {
-          mediaFileId: 'media-1',
-          videoElement: nextVideo,
-        },
-      }],
-    });
+    } as never, [clip] as never, getTestClipVideo);
 
-    expect(manager.getHandoffVideoElement('clip-next')).toBeNull();
+    expect(handoffs.getHandoffVideoElement('clip-next')).toBeNull();
   });
 
   it('keeps the outgoing HTML video element across a real same-source cut even when playback drift is larger than 0.5s', () => {
     flags.useFullWebCodecsPlayback = false;
 
-    const manager = createManager();
+    const handoffs = createHandoffs();
     const previousVideo = {
       currentTime: 5.2,
     } as HTMLVideoElement;
@@ -1091,7 +1052,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     } as HTMLVideoElement;
     const file = new File(['video'], 'continuous-cut.mp4', { type: 'video/mp4' });
 
-    manager.lastTrackState.set('track-v1', {
+    handoffs.setTrackState('track-v1', {
       clipId: 'clip-prev',
       fileId: 'media-1',
       file,
@@ -1099,23 +1060,24 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
       outPoint: 6.04,
     });
 
-    manager.computeHandoffs({
+    const clip = {
+      id: 'clip-next',
+      trackId: 'track-v1',
+      file,
+      inPoint: 6.04,
+      outPoint: 9.26,
+      source: {
+        mediaFileId: 'media-1',
+        videoElement: nextVideo,
+      },
+    };
+
+    handoffs.compute({
       isPlaying: true,
       isDraggingPlayhead: false,
-      clipsAtTime: [{
-        id: 'clip-next',
-        trackId: 'track-v1',
-        file,
-        inPoint: 6.04,
-        outPoint: 9.26,
-        source: {
-          mediaFileId: 'media-1',
-          videoElement: nextVideo,
-        },
-      }],
-    });
+    } as never, [clip] as never, getTestClipVideo);
 
-    expect(manager.getHandoffVideoElement('clip-next')).toBe(previousVideo);
+    expect(handoffs.getHandoffVideoElement('clip-next')).toBe(previousVideo);
     expect(engine.markVideoFramePresented).toHaveBeenCalledWith(previousVideo, 5.2, 'clip-next');
     expect(engine.captureVideoFrameAtTime).toHaveBeenCalledWith(previousVideo, 5.2, 'clip-next');
   });
@@ -1124,7 +1086,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     vi.useFakeTimers();
     flags.useFullWebCodecsPlayback = false;
 
-    const manager = createManager();
+    const handoffs = createHandoffs();
     const previousVideo = {
       currentTime: 6.08,
       readyState: 4,
@@ -1139,7 +1101,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     } as HTMLVideoElement;
     const file = new File(['video'], 'split-cut.mp4', { type: 'video/mp4' });
 
-    manager.lastTrackState.set('track-v1', {
+    handoffs.setTrackState('track-v1', {
       clipId: 'clip-prev',
       fileId: 'media-1',
       file,
@@ -1159,21 +1121,21 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
       },
     };
 
-    expect(manager.getPreviewContinuationVideoElement(clip, 6.08)).toBe(previousVideo);
+    expect(handoffs.getPreviewContinuationVideoElement(clip as never, 6.08, nextVideo)).toBe(previousVideo);
 
     nextVideo.readyState = 4;
     nextVideo.seeking = false;
     nextVideo.played = { length: 1 };
     nextVideo.currentTime = 6.08;
 
-    expect(manager.getPreviewContinuationVideoElement(clip, 6.08)).toBeNull();
+    expect(handoffs.getPreviewContinuationVideoElement(clip as never, 6.08, nextVideo)).toBeNull();
     vi.useRealTimers();
   });
 
   it('does not reuse the previous element as a paused preview continuation when it is too far from the cut target', () => {
     flags.useFullWebCodecsPlayback = false;
 
-    const manager = createManager();
+    const handoffs = createHandoffs();
     const previousVideo = {
       currentTime: 5.1,
       readyState: 4,
@@ -1188,7 +1150,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     } as HTMLVideoElement;
     const file = new File(['video'], 'split-cut-far.mp4', { type: 'video/mp4' });
 
-    manager.lastTrackState.set('track-v1', {
+    handoffs.setTrackState('track-v1', {
       clipId: 'clip-prev',
       fileId: 'media-1',
       file,
@@ -1208,6 +1170,6 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
       },
     };
 
-    expect(manager.getPreviewContinuationVideoElement(clip, 6.08)).toBeNull();
+    expect(handoffs.getPreviewContinuationVideoElement(clip as never, 6.08, nextVideo)).toBeNull();
   });
 });

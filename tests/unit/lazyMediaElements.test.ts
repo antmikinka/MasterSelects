@@ -3,7 +3,9 @@ import { engine } from '../../src/engine/WebGPUEngine';
 import type { TimelineClip, TimelineTrack } from '../../src/types';
 import type { FrameContext } from '../../src/services/layerBuilder/types';
 import {
+  getLazyTimelineAudioElementForClip,
   getLazyTimelineMediaElementCount,
+  getLazyTimelineVideoElementForClip,
   hydrateTimelineMediaWindow,
   releaseAllLazyTimelineMediaElements,
 } from '../../src/services/timeline/lazyMediaElements';
@@ -235,6 +237,8 @@ describe('lazy timeline media elements', () => {
     expect(getLazyTimelineMediaElementCount()).toBe(2);
     expect(videoClip.source?.videoElement).toBeInstanceOf(HTMLVideoElement);
     expect(audioClip.source?.audioElement).toBeInstanceOf(HTMLAudioElement);
+    expect(getLazyTimelineVideoElementForClip(videoClip)).toBe(videoClip.source?.videoElement);
+    expect(getLazyTimelineAudioElementForClip(audioClip)).toBe(audioClip.source?.audioElement);
     expect(videoClip.source?.videoElement?.preload).toBe('metadata');
     expect(audioClip.source?.audioElement?.preload).toBe('metadata');
     expect(stats.totals.resources).toBe(2);
@@ -244,6 +248,8 @@ describe('lazy timeline media elements', () => {
       'timeline-lazy-media:audio:clip-a1',
       'timeline-lazy-media:video:clip-v1',
     ]);
+    expect(stats.policies.interactive.resources[0].tags).toContain('runtime-provider-demand');
+    expect(stats.policies.interactive.resources[0].tags).toContain('lease-visible');
     expect(stats.policies.interactive.resources[0].tags).toContain('primary-lazy-media');
   });
 
@@ -395,6 +401,8 @@ describe('lazy timeline media elements', () => {
     expect(getLazyTimelineMediaElementCount()).toBe(0);
     expect(videoClip.source?.videoElement).toBeUndefined();
     expect(audioClip.source?.audioElement).toBeUndefined();
+    expect(getLazyTimelineVideoElementForClip(videoClip)).toBeNull();
+    expect(getLazyTimelineAudioElementForClip(audioClip)).toBeNull();
     expect(cleanupVideo).toHaveBeenCalledTimes(1);
     expect(timelineRuntimeCoordinator.getBridgeStats().totals.resources).toBe(0);
   });
@@ -508,6 +516,8 @@ describe('lazy timeline image elements', () => {
     expect(createdImages[0]?.src).toBe('blob:image-source');
     expect(imageClip.source?.imageElement).toBeUndefined();
     expect(timelineRuntimeCoordinator.getBridgeStats().totals.resources).toBe(1);
+    expect(timelineRuntimeCoordinator.getBridgeStats().policies.interactive.resources[0]?.tags)
+      .toEqual(expect.arrayContaining(['runtime-provider-demand', 'lease-visible', 'primary-lazy-image']));
 
     createdImages[0].dispatchEvent(new Event('load'));
 

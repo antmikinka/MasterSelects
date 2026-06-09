@@ -706,6 +706,45 @@ export interface ClipVideoState {
   bakeRegions?: VideoBakeRegion[];
 }
 
+export interface TimelineClipDataSource {
+  type: TimelineSourceType;
+  modelUrl?: string;
+  modelFileName?: string;
+  modelSequence?: ModelSequenceData;
+  gaussianSplatSequence?: GaussianSplatSequenceData;
+  threeDEffectorsEnabled?: boolean;
+  meshType?: import('../stores/mediaStore/types').MeshPrimitiveType;
+  text3DProperties?: Text3DProperties;
+  cameraSettings?: import('../stores/mediaStore/types').SceneCameraSettings;
+  splatEffectorSettings?: import('./splatEffector').SplatEffectorSettings;
+  gaussianAvatarUrl?: string;
+  gaussianBlendshapes?: Record<string, number>;
+  gaussianSplatUrl?: string;
+  gaussianSplatFileName?: string;
+  gaussianSplatFileHash?: string;
+  gaussianSplatRuntimeKey?: string;
+  gaussianSplatSettings?: import('../engine/gaussian/types').GaussianSplatSettings;
+  imageUrl?: string;
+  naturalDuration?: number;
+  mediaFileId?: string;
+  vectorAnimationSettings?: VectorAnimationClipSettings;
+  filePath?: string;
+}
+
+export interface TimelineClipSourceRuntimeHandles {
+  videoElement?: HTMLVideoElement;
+  audioElement?: HTMLAudioElement;
+  imageElement?: HTMLImageElement;
+  webCodecsPlayer?: import('../engine/WebCodecsPlayer').WebCodecsPlayer;
+  nativeDecoder?: import('../services/nativeHelper/NativeDecoder').NativeDecoder;
+  file?: File;
+  textCanvas?: HTMLCanvasElement;
+  runtimeSourceId?: string;
+  runtimeSessionKey?: string;
+}
+
+export type TimelineClipSource = TimelineClipDataSource & TimelineClipSourceRuntimeHandles;
+
 export interface TimelineClip {
   id: string;
   trackId: string;
@@ -715,39 +754,7 @@ export interface TimelineClip {
   duration: number;       // Clip duration (seconds)
   inPoint: number;        // Trim in point within source (seconds)
   outPoint: number;       // Trim out point within source (seconds)
-  source: {
-    type: TimelineSourceType;
-    modelUrl?: string;  // Blob URL to 3D model file
-    modelFileName?: string;
-    modelSequence?: ModelSequenceData;
-    gaussianSplatSequence?: GaussianSplatSequenceData;
-    threeDEffectorsEnabled?: boolean;  // Whether shared-scene 3D effectors can affect this clip
-    meshType?: import('../stores/mediaStore/types').MeshPrimitiveType;  // Primitive mesh type
-    text3DProperties?: Text3DProperties;
-    cameraSettings?: import('../stores/mediaStore/types').SceneCameraSettings;  // Shared-scene camera settings
-    splatEffectorSettings?: import('./splatEffector').SplatEffectorSettings;  // Shared-scene splat effector settings
-    gaussianAvatarUrl?: string;  // URL to gaussian splat avatar file
-    gaussianBlendshapes?: Record<string, number>;  // ARKit blendshape weights
-    gaussianSplatUrl?: string;  // URL to gaussian splat scene file
-    gaussianSplatFileName?: string;  // Original filename for format detection after blob URL conversion
-    gaussianSplatFileHash?: string;  // Stable content hash for cached/exported splat runtimes
-    gaussianSplatRuntimeKey?: string;  // Stable per-frame cache key for splat sequences
-    gaussianSplatSettings?: import('../engine/gaussian/types').GaussianSplatSettings;  // Gaussian splat render settings
-    videoElement?: HTMLVideoElement;
-    audioElement?: HTMLAudioElement;
-    imageElement?: HTMLImageElement;
-    imageUrl?: string;
-    webCodecsPlayer?: import('../engine/WebCodecsPlayer').WebCodecsPlayer;
-    nativeDecoder?: import('../services/nativeHelper/NativeDecoder').NativeDecoder;
-    naturalDuration?: number;
-    mediaFileId?: string;  // Reference to MediaFile for proxy lookup
-    file?: File;
-    textCanvas?: HTMLCanvasElement;  // Pre-rendered text/solid canvas for text and solid clips
-    vectorAnimationSettings?: VectorAnimationClipSettings;
-    filePath?: string;  // Path to original file (for native helper to access directly)
-    runtimeSourceId?: string;
-    runtimeSessionKey?: string;
-  } | null;
+  source: TimelineClipSource | null;
   mathScene?: MathSceneDefinition;
   motion?: MotionLayerDefinition;
   thumbnails?: string[];  // Array of data URLs for filmstrip preview

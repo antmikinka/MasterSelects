@@ -1,4 +1,9 @@
+import type {
+  RuntimeProviderDemand,
+  TimelineRuntimeResourceKind,
+} from '../../timeline';
 import type { RenderResourceDescriptor } from './runtimeCoordinatorTypes';
+import { createRenderResourceDescriptorFromDemand } from './runtimeProviderDemandBridge';
 import { timelineRuntimeCoordinator } from './timelineRuntimeCoordinator';
 
 export interface CompositionRenderSourceResource {
@@ -39,34 +44,46 @@ function getSrcKind(
   return 'project-path';
 }
 
-function getBaseDescriptor(entry: CompositionRenderSourceResource) {
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T;
+}
+
+function createCompositionRenderDemand(
+  entry: CompositionRenderSourceResource,
+  resourceKind: TimelineRuntimeResourceKind,
+  resourceId: string
+): RuntimeProviderDemand {
   const ownerId = getCompositionSourceOwnerId(entry.compositionId, entry.clipId);
-  return {
+  const demand: RuntimeProviderDemand = {
+    id: resourceId,
+    facetId: `${resourceId}:facet`,
+    resourceKind,
     policyId: 'composition-render' as const,
-    owner: {
+    leasePolicy: 'background-cache',
+    owner: removeUndefinedValues({
       ownerId,
       ownerType: 'composition' as const,
       clipId: entry.clipId,
       compositionId: entry.compositionId,
       mediaFileId: entry.mediaFileId,
-    },
-    source: {
+    }),
+    source: removeUndefinedValues({
       sourceId: entry.runtimeSourceId,
       mediaFileId: entry.mediaFileId,
       clipId: entry.clipId,
       compositionId: entry.compositionId,
-    },
-    runtime: entry.runtimeSourceId && entry.runtimeSessionKey
-      ? {
-          runtimeSourceId: entry.runtimeSourceId,
-          runtimeSessionKey: entry.runtimeSessionKey,
-        }
-      : undefined,
-    dimensions: {
-      durationSeconds: entry.naturalDuration,
-    },
+    }),
+    priority: 'background',
     tags: ['composition-render', entry.type],
   };
+  if (entry.naturalDuration !== undefined) {
+    demand.dimensions = {
+      durationSeconds: entry.naturalDuration,
+    };
+  }
+  return demand;
 }
 
 function reportResource(resource: RenderResourceDescriptor): void {
@@ -76,72 +93,77 @@ function reportResource(resource: RenderResourceDescriptor): void {
 export function reportCompositionRenderSource(entry: CompositionRenderSourceResource): void {
   releaseCompositionRenderSourceResource(entry.compositionId, entry.clipId);
 
-  const base = getBaseDescriptor(entry);
   const ownerId = getCompositionSourceOwnerId(entry.compositionId, entry.clipId);
 
   if (entry.runtimeSourceId && entry.runtimeSessionKey) {
-    reportResource({
-      ...base,
-      id: getResourceId(entry, `runtime-binding:${entry.runtimeSourceId}:${entry.runtimeSessionKey}`),
-      kind: 'runtime-binding',
-      runtime: {
+    const resourceId = getResourceId(entry, `runtime-binding:${entry.runtimeSourceId}:${entry.runtimeSessionKey}`);
+    reportResource(createRenderResourceDescriptorFromDemand(
+      createCompositionRenderDemand(entry, 'runtime-binding', resourceId),
+      {
+        resourceKind: 'runtime-binding',
         runtimeSourceId: entry.runtimeSourceId,
         runtimeSessionKey: entry.runtimeSessionKey,
-      },
-      label: 'Composition render runtime binding',
-    });
+        label: 'Composition render runtime binding',
+      }
+    ));
   }
 
   if (entry.videoElement) {
     const element = entry.videoElement;
     const src = element.currentSrc || element.src;
     const status = getMediaStatus(element);
-    reportResource({
-      ...base,
-      id: getResourceId(entry, 'html-media:video'),
-      kind: 'html-media',
-      mediaElementKind: 'video',
-      elementId: `${ownerId}:video`,
-      srcKind: getSrcKind(src),
-      diagnostics: {
-        status,
-        provider: {
-          providerId: `${ownerId}:video`,
-          providerKind: 'html-video',
+    const resourceId = getResourceId(entry, 'html-media:video');
+    reportResource(createRenderResourceDescriptorFromDemand(
+      createCompositionRenderDemand(entry, 'html-media', resourceId),
+      {
+        resourceKind: 'html-media',
+        mediaElementKind: 'video',
+        elementId: `${ownerId}:video`,
+        srcKind: getSrcKind(src),
+        diagnostics: {
           status,
-          isReady: element.readyState >= HTMLMediaElement.HAVE_METADATA,
-          isPlaying: !element.paused,
-          isSeeking: element.seeking,
-          currentTimeSeconds: element.currentTime,
-          readyState: element.readyState,
-          networkState: element.networkState,
-          errorCode: element.error ? String(element.error.code) : undefined,
+          provider: {
+            providerId: `${ownerId}:video`,
+            providerKind: 'html-video',
+            status,
+            isReady: element.readyState >= HTMLMediaElement.HAVE_METADATA,
+            isPlaying: !element.paused,
+            isSeeking: element.seeking,
+            currentTimeSeconds: element.currentTime,
+            readyState: element.readyState,
+            networkState: element.networkState,
+            errorCode: element.error ? String(element.error.code) : undefined,
+          },
         },
-      },
-      label: 'Composition render video element',
-    });
+        label: 'Composition render video element',
+      }
+    ));
   }
 
   if (entry.imageElement) {
-    reportResource({
-      ...base,
-      id: getResourceId(entry, 'image-canvas:image'),
-      kind: 'image-canvas',
-      imageKind: 'html-image',
-      imageId: `${ownerId}:image`,
-      label: 'Composition render image element',
-    });
+    const resourceId = getResourceId(entry, 'image-canvas:image');
+    reportResource(createRenderResourceDescriptorFromDemand(
+      createCompositionRenderDemand(entry, 'image-canvas', resourceId),
+      {
+        resourceKind: 'image-canvas',
+        imageKind: 'html-image',
+        imageId: `${ownerId}:image`,
+        label: 'Composition render image element',
+      }
+    ));
   }
 
   if (entry.textCanvas) {
-    reportResource({
-      ...base,
-      id: getResourceId(entry, 'image-canvas:text-canvas'),
-      kind: 'image-canvas',
-      imageKind: 'html-canvas',
-      imageId: `${ownerId}:text-canvas`,
-      label: 'Composition render text canvas',
-    });
+    const resourceId = getResourceId(entry, 'image-canvas:text-canvas');
+    reportResource(createRenderResourceDescriptorFromDemand(
+      createCompositionRenderDemand(entry, 'image-canvas', resourceId),
+      {
+        resourceKind: 'image-canvas',
+        imageKind: 'html-canvas',
+        imageId: `${ownerId}:text-canvas`,
+        label: 'Composition render text canvas',
+      }
+    ));
   }
 }
 

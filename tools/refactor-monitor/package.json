@@ -1,0 +1,15 @@
+{
+  "name": "masterselects-refactor-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone desktop monitor for refactor file trees, LOC, and live changes.",
+  "main": "src/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "check": "node src/scanner.js ..\\.."
+  },
+  "devDependencies": {
+    "electron": "^39.8.5"
+  }
+}

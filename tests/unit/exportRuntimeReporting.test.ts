@@ -47,6 +47,13 @@ function createAudioBufferLike(
   } as unknown as AudioBuffer;
 }
 
+function expectExportDemandTags(resources: readonly { tags?: readonly string[] }[]): void {
+  expect(resources.every((resource) =>
+    resource.tags?.includes('runtime-provider-demand') &&
+    resource.tags.includes('retain-until-release')
+  )).toBe(true);
+}
+
 describe('exportRuntimeReporting', () => {
   beforeEach(() => {
     timelineRuntimeCoordinator.clearResources();
@@ -93,6 +100,7 @@ describe('exportRuntimeReporting', () => {
       'image-canvas',
       'job',
     ]);
+    expectExportDemandTags(stats.resources);
 
     releaseExportRunResources('run-export');
     expect(timelineRuntimeCoordinator.getBridgeStats().policies.export.resources).toHaveLength(0);
@@ -140,6 +148,7 @@ describe('exportRuntimeReporting', () => {
       'runtime-binding',
       'video-frame-provider',
     ]);
+    expectExportDemandTags(stats.resources);
     expect(stats.resources[0].owner).toMatchObject({
       ownerId: 'export:run:run-export',
       ownerType: 'export',
@@ -178,6 +187,7 @@ describe('exportRuntimeReporting', () => {
       'image-canvas',
       'runtime-binding',
     ]);
+    expectExportDemandTags(stats.resources);
     expect(stats.resources.find((resource) => resource.kind === 'image-canvas')).toMatchObject({
       owner: {
         ownerId: 'export:run:run-export',
@@ -257,6 +267,7 @@ describe('exportRuntimeReporting', () => {
       'native-decoder',
       'video-frame-provider',
     ]);
+    expectExportDemandTags(stats.resources);
     expect(stats.resources[0].owner).toMatchObject({
       ownerId: 'export:run:run-export',
       ownerType: 'export',
@@ -294,8 +305,15 @@ describe('exportRuntimeReporting', () => {
         clipId: 'clip-audio',
         mediaFileId: 'media-audio',
       },
-      tags: ['export', 'audio', 'master-buffer'],
+      tags: expect.arrayContaining([
+        'runtime-provider-demand',
+        'retain-until-release',
+        'export',
+        'audio',
+        'master-buffer',
+      ]),
     });
+    expectExportDemandTags(stats.resources);
 
     releaseExportRunResources('run-export');
     expect(timelineRuntimeCoordinator.getBridgeStats().policies.export.resources).toHaveLength(0);
@@ -443,6 +461,7 @@ describe('exportRuntimeReporting', () => {
       'export:planned-run:parallel:clip-parallel:decoder',
       'export:planned-run:parallel:clip-parallel:frame-buffer',
     ]);
+    expectExportDemandTags(stats.resources);
 
     releaseExportRunResources('planned-run');
     expect(timelineRuntimeCoordinator.getBridgeStats().policies.export.resources).toHaveLength(0);

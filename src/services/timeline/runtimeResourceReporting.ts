@@ -1,11 +1,15 @@
 import type { TimelineClip } from '../../types';
 import type {
+  RuntimeProviderDemand,
+  TimelineRuntimeResourceKind,
+} from '../../timeline';
+import type {
   RenderResourceDescriptor,
-  RenderRuntimeBindingDescriptor,
   RuntimeResourceOwnerDescriptor,
   TimelineRuntimeAdmissionDecision,
   TimelineRuntimePolicyId,
 } from './runtimeCoordinatorTypes';
+import { createRenderResourceDescriptorFromDemand } from './runtimeProviderDemandBridge';
 import { timelineRuntimeCoordinator } from './timelineRuntimeCoordinator';
 
 type ClipSource = NonNullable<TimelineClip['source']>;
@@ -47,16 +51,6 @@ interface ReportClipRuntimeResourcesParams {
   tags?: readonly string[];
 }
 
-function getRuntimeBinding(source: ClipSource): RenderRuntimeBindingDescriptor | undefined {
-  if (!source.runtimeSourceId || !source.runtimeSessionKey) {
-    return undefined;
-  }
-  return {
-    runtimeSourceId: source.runtimeSourceId,
-    runtimeSessionKey: source.runtimeSessionKey,
-  };
-}
-
 function getSourceId(source: ClipSource): string | undefined {
   return source.runtimeSourceId ?? source.mediaFileId ?? undefined;
 }
@@ -77,98 +71,128 @@ function getMediaProviderStatus(element: HTMLMediaElement): 'ok' | 'warning' | '
 
 function getOwner(params: ReportClipRuntimeResourcesParams): RuntimeResourceOwnerDescriptor {
   const mediaFileId = params.clip.source?.mediaFileId ?? params.clip.mediaFileId;
-  return {
+  return removeUndefinedValues({
     ownerId: params.ownerId,
     ownerType: params.ownerType ?? 'clip',
     clipId: params.clip.id,
     trackId: params.clip.trackId,
     compositionId: params.compositionId ?? params.clip.compositionId,
     mediaFileId,
-  };
+  });
 }
 
 function getPlannedOwner(params: ReservePlannedClipRuntimeResourcesParams): RuntimeResourceOwnerDescriptor {
   const mediaFileId = params.source.mediaFileId ?? params.clip.source?.mediaFileId ?? params.clip.mediaFileId;
-  return {
+  return removeUndefinedValues({
     ownerId: params.ownerId,
     ownerType: params.ownerType ?? 'clip',
     clipId: params.clip.id,
     trackId: params.clip.trackId,
     compositionId: params.compositionId ?? params.clip.compositionId,
     mediaFileId,
-  };
+  });
 }
 
-function getResourceBase(params: ReportClipRuntimeResourcesParams, source: ClipSource) {
-  return {
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T;
+}
+
+function createReportedClipRuntimeDemand(
+  params: ReportClipRuntimeResourcesParams,
+  source: ClipSource,
+  resourceKind: TimelineRuntimeResourceKind,
+  resourceId: string
+): RuntimeProviderDemand {
+  const demand: RuntimeProviderDemand = {
+    id: resourceId,
+    facetId: `${resourceId}:facet`,
+    resourceKind,
     policyId: params.policyId,
+    leasePolicy: 'lease-visible',
     owner: getOwner(params),
-    source: {
+    source: removeUndefinedValues({
       sourceId: getSourceId(source),
       clipId: params.clip.id,
       trackId: params.clip.trackId,
       compositionId: params.compositionId ?? params.clip.compositionId,
       mediaFileId: source.mediaFileId ?? params.clip.mediaFileId,
       projectPath: source.filePath,
-    },
-    runtime: getRuntimeBinding(source),
+    }),
     dimensions: {
       durationSeconds: source.naturalDuration ?? params.clip.duration,
     },
-    tags: params.tags,
+    priority: params.policyId === 'interactive' ? 'visible' : 'background',
   };
+  if (params.tags) {
+    demand.tags = params.tags;
+  }
+  return demand;
 }
 
-function getPlannedResourceBase(params: ReservePlannedClipRuntimeResourcesParams) {
-  return {
+function createPlannedClipRuntimeDemand(
+  params: ReservePlannedClipRuntimeResourcesParams,
+  resourceKind: TimelineRuntimeResourceKind,
+  resourceId: string
+): RuntimeProviderDemand {
+  const demand: RuntimeProviderDemand = {
+    id: resourceId,
+    facetId: `${resourceId}:facet`,
+    resourceKind,
     policyId: params.policyId,
+    leasePolicy: 'lease-visible',
     owner: getPlannedOwner(params),
-    source: {
+    source: removeUndefinedValues({
       sourceId: params.source.runtimeSourceId ?? params.source.mediaFileId ?? undefined,
       clipId: params.clip.id,
       trackId: params.clip.trackId,
       compositionId: params.compositionId ?? params.clip.compositionId,
       mediaFileId: params.source.mediaFileId ?? params.clip.mediaFileId,
       projectPath: params.source.filePath,
-    },
-    runtime: getRuntimeBinding(params.source as ClipSource),
+    }),
     dimensions: {
       durationSeconds: params.dimensions?.durationSeconds ?? params.source.naturalDuration ?? params.clip.duration,
     },
-    tags: params.tags,
+    priority: params.policyId === 'interactive' ? 'visible' : 'background',
   };
+  if (params.tags) {
+    demand.tags = params.tags;
+  }
+  return demand;
 }
 
 function createPlannedClipRuntimeResources(
   params: ReservePlannedClipRuntimeResourcesParams
 ): RenderResourceDescriptor[] {
-  const base = getPlannedResourceBase(params);
   const idBase = `timeline-runtime:${params.policyId}:${params.ownerId}`;
   const resources: RenderResourceDescriptor[] = [];
 
   if (params.source.runtimeSourceId && params.source.runtimeSessionKey) {
-    resources.push({
-      ...base,
-      id: `${idBase}:runtime-binding:${params.source.runtimeSourceId}:${params.source.runtimeSessionKey}`,
-      kind: 'runtime-binding',
-      runtime: {
+    const resourceId = `${idBase}:runtime-binding:${params.source.runtimeSourceId}:${params.source.runtimeSessionKey}`;
+    resources.push(createRenderResourceDescriptorFromDemand(
+      createPlannedClipRuntimeDemand(params, 'runtime-binding', resourceId),
+      {
+        resourceKind: 'runtime-binding',
         runtimeSourceId: params.source.runtimeSourceId,
         runtimeSessionKey: params.source.runtimeSessionKey,
-      },
-      label: params.label ?? 'Runtime binding',
-    });
+        label: params.label ?? 'Runtime binding',
+      }
+    ));
   }
 
   if (params.mediaElementKind) {
-    resources.push({
-      ...base,
-      id: `${idBase}:html-media:${params.mediaElementKind}`,
-      kind: 'html-media',
-      mediaElementKind: params.mediaElementKind,
-      elementId: `${params.ownerId}:${params.mediaElementKind}`,
-      srcKind: params.srcKind,
-      label: params.label ?? `${params.mediaElementKind === 'video' ? 'Video' : 'Audio'} media element`,
-    });
+    const resourceId = `${idBase}:html-media:${params.mediaElementKind}`;
+    resources.push(createRenderResourceDescriptorFromDemand(
+      createPlannedClipRuntimeDemand(params, 'html-media', resourceId),
+      {
+        resourceKind: 'html-media',
+        mediaElementKind: params.mediaElementKind,
+        elementId: `${params.ownerId}:${params.mediaElementKind}`,
+        srcKind: params.srcKind,
+        label: params.label ?? `${params.mediaElementKind === 'video' ? 'Video' : 'Audio'} media element`,
+      }
+    ));
   }
 
   return resources;
@@ -216,100 +240,107 @@ export function reportClipRuntimeResources(params: ReportClipRuntimeResourcesPar
     return;
   }
 
-  const base = getResourceBase(params, source);
   const idBase = `timeline-runtime:${params.policyId}:${params.ownerId}`;
 
   if (source.runtimeSourceId && source.runtimeSessionKey) {
-    reportResource({
-      ...base,
-      id: `${idBase}:runtime-binding:${source.runtimeSourceId}:${source.runtimeSessionKey}`,
-      kind: 'runtime-binding',
-      runtime: {
+    const resourceId = `${idBase}:runtime-binding:${source.runtimeSourceId}:${source.runtimeSessionKey}`;
+    reportResource(createRenderResourceDescriptorFromDemand(
+      createReportedClipRuntimeDemand(params, source, 'runtime-binding', resourceId),
+      {
+        resourceKind: 'runtime-binding',
         runtimeSourceId: source.runtimeSourceId,
         runtimeSessionKey: source.runtimeSessionKey,
-      },
-      label: params.label ?? 'Runtime binding',
-    });
+        label: params.label ?? 'Runtime binding',
+      }
+    ));
   }
 
   if (source.videoElement) {
     const element = source.videoElement;
     const status = getMediaProviderStatus(element);
-    reportResource({
-      ...base,
-      id: `${idBase}:html-media:video`,
-      kind: 'html-media',
-      mediaElementKind: 'video',
-      elementId: `${params.ownerId}:video`,
-      srcKind: getSrcKind(element),
-      diagnostics: {
-        status,
-        provider: {
-          providerId: `${params.ownerId}:video`,
-          providerKind: 'html-video',
+    const resourceId = `${idBase}:html-media:video`;
+    reportResource(createRenderResourceDescriptorFromDemand(
+      createReportedClipRuntimeDemand(params, source, 'html-media', resourceId),
+      {
+        resourceKind: 'html-media',
+        mediaElementKind: 'video',
+        elementId: `${params.ownerId}:video`,
+        srcKind: getSrcKind(element),
+        diagnostics: {
           status,
-          isReady: element.readyState >= HTMLMediaElement.HAVE_METADATA,
-          isPlaying: !element.paused,
-          isSeeking: element.seeking,
-          currentTimeSeconds: element.currentTime,
-          readyState: element.readyState,
-          networkState: element.networkState,
-          errorCode: element.error ? String(element.error.code) : undefined,
+          provider: {
+            providerId: `${params.ownerId}:video`,
+            providerKind: 'html-video',
+            status,
+            isReady: element.readyState >= HTMLMediaElement.HAVE_METADATA,
+            isPlaying: !element.paused,
+            isSeeking: element.seeking,
+            currentTimeSeconds: element.currentTime,
+            readyState: element.readyState,
+            networkState: element.networkState,
+            errorCode: element.error ? String(element.error.code) : undefined,
+          },
         },
-      },
-      label: params.label ?? 'Video media element',
-    });
+        label: params.label ?? 'Video media element',
+      }
+    ));
   }
 
   if (source.audioElement) {
     const element = source.audioElement;
     const status = getMediaProviderStatus(element);
-    reportResource({
-      ...base,
-      id: `${idBase}:html-media:audio`,
-      kind: 'html-media',
-      mediaElementKind: 'audio',
-      elementId: `${params.ownerId}:audio`,
-      srcKind: getSrcKind(element),
-      diagnostics: {
-        status,
-        provider: {
-          providerId: `${params.ownerId}:audio`,
-          providerKind: 'html-audio',
+    const resourceId = `${idBase}:html-media:audio`;
+    reportResource(createRenderResourceDescriptorFromDemand(
+      createReportedClipRuntimeDemand(params, source, 'html-media', resourceId),
+      {
+        resourceKind: 'html-media',
+        mediaElementKind: 'audio',
+        elementId: `${params.ownerId}:audio`,
+        srcKind: getSrcKind(element),
+        diagnostics: {
           status,
-          isReady: element.readyState >= HTMLMediaElement.HAVE_METADATA,
-          isPlaying: !element.paused,
-          isSeeking: element.seeking,
-          currentTimeSeconds: element.currentTime,
-          readyState: element.readyState,
-          networkState: element.networkState,
-          errorCode: element.error ? String(element.error.code) : undefined,
+          provider: {
+            providerId: `${params.ownerId}:audio`,
+            providerKind: 'html-audio',
+            status,
+            isReady: element.readyState >= HTMLMediaElement.HAVE_METADATA,
+            isPlaying: !element.paused,
+            isSeeking: element.seeking,
+            currentTimeSeconds: element.currentTime,
+            readyState: element.readyState,
+            networkState: element.networkState,
+            errorCode: element.error ? String(element.error.code) : undefined,
+          },
         },
-      },
-      label: params.label ?? 'Audio media element',
-    });
+        label: params.label ?? 'Audio media element',
+      }
+    ));
   }
 
   if (source.imageElement) {
-    reportResource({
-      ...base,
-      id: `${idBase}:image-canvas:image`,
-      kind: 'image-canvas',
-      imageKind: 'html-image',
-      imageId: `${params.ownerId}:image`,
-      label: params.label ?? 'Image element',
-    });
+    const resourceId = `${idBase}:image-canvas:image`;
+    reportResource(createRenderResourceDescriptorFromDemand(
+      createReportedClipRuntimeDemand(params, source, 'image-canvas', resourceId),
+      {
+        resourceKind: 'image-canvas',
+        imageKind: 'html-image',
+        imageId: `${params.ownerId}:image`,
+        label: params.label ?? 'Image element',
+      }
+    ));
   }
 
   if (source.textCanvas) {
-    reportResource({
-      ...base,
-      id: `${idBase}:image-canvas:text-canvas`,
-      kind: 'image-canvas',
-      imageKind: 'html-canvas',
-      imageId: `${params.ownerId}:text-canvas`,
-      label: params.label ?? 'Text canvas',
-    });
+    const resourceId = `${idBase}:image-canvas:text-canvas`;
+    reportResource(createRenderResourceDescriptorFromDemand(
+      createReportedClipRuntimeDemand(params, source, 'image-canvas', resourceId),
+      {
+        resourceKind: 'image-canvas',
+        imageKind: 'html-canvas',
+        imageId: `${params.ownerId}:text-canvas`,
+        label: params.label ?? 'Text canvas',
+      }
+    ));
   }
 }
 

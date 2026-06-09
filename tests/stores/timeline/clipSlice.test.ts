@@ -688,23 +688,29 @@ describe('clipSlice', () => {
       expect(createElementSpy).not.toHaveBeenCalledWith('audio');
       expect(videoParts).toHaveLength(2);
       expect(audioParts).toHaveLength(2);
-      expect(videoParts.every(c => !c.source?.videoElement && !c.source?.webCodecsPlayer && !c.source?.nativeDecoder)).toBe(true);
-      expect(audioParts.every(c => !c.source?.audioElement)).toBe(true);
+      expect(videoParts.every(c =>
+        !c.source?.videoElement &&
+        !c.source?.webCodecsPlayer &&
+        !c.source?.nativeDecoder &&
+        !c.source?.runtimeSourceId &&
+        !c.source?.runtimeSessionKey
+      )).toBe(true);
+      expect(audioParts.every(c =>
+        !c.source?.audioElement &&
+        !c.source?.runtimeSourceId &&
+        !c.source?.runtimeSessionKey
+      )).toBe(true);
       expect(videoParts.map(c => c.source)).toEqual([
         {
           type: 'video',
           naturalDuration: 10,
           mediaFileId: 'media-video',
-          runtimeSourceId: 'runtime-video',
-          runtimeSessionKey: 'interactive:clip-v-runtime',
           filePath: 'C:/media/video.mp4',
         },
         {
           type: 'video',
           naturalDuration: 10,
           mediaFileId: 'media-video',
-          runtimeSourceId: 'runtime-video',
-          runtimeSessionKey: 'interactive:clip-v-runtime',
           filePath: 'C:/media/video.mp4',
         },
       ]);

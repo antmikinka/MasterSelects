@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { fireEvent, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -10,7 +12,40 @@ import {
   type ClipInteractionShellProps,
   type ClipInteractionShellRect,
 } from '../../src/components/timeline/interactionShell';
-import { useTimelineStore } from '../../src/stores/timeline';
+
+const repoRoot = process.cwd();
+const videoBakeControlsPath = path.join(
+  repoRoot,
+  'src',
+  'components',
+  'timeline',
+  'interactionShell',
+  'ClipVideoBakeControls.tsx',
+);
+const stemControlsPath = path.join(
+  repoRoot,
+  'src',
+  'components',
+  'timeline',
+  'interactionShell',
+  'ClipStemControls.tsx',
+);
+const spectralRegionControlsPath = path.join(
+  repoRoot,
+  'src',
+  'components',
+  'timeline',
+  'interactionShell',
+  'ClipSpectralRegionControls.tsx',
+);
+const audioRegionControlsPath = path.join(
+  repoRoot,
+  'src',
+  'components',
+  'timeline',
+  'interactionShell',
+  'ClipAudioRegionControls.tsx',
+);
 
 const rect = (overrides: Partial<ClipInteractionShellRect> = {}): ClipInteractionShellRect => ({
   x: 0,
@@ -91,6 +126,50 @@ function createShellProps(overrides: Partial<ClipInteractionShellProps> = {}): C
 }
 
 describe('ClipInteractionShell contract', () => {
+  it('keeps video-bake shell controls routed through module command descriptors', () => {
+    const source = readFileSync(videoBakeControlsPath, 'utf8');
+
+    expect(source).toContain("'video-bake:bake-region'");
+    expect(source).toContain("'video-bake:unbake-region'");
+    expect(source).toContain("'video-bake:remove-region'");
+    expect(source).not.toContain("from '../../../stores/timeline'");
+    expect(source).not.toContain('useTimelineStore');
+  });
+
+  it('keeps stem shell controls routed through module command descriptors', () => {
+    const source = readFileSync(stemControlsPath, 'utf8');
+
+    expect(source).toContain("'stem:prewarm-source-media-files'");
+    expect(source).toContain("'stem:set-clip-source'");
+    expect(source).not.toContain("from '../../../stores/timeline'");
+    expect(source).not.toContain("from '../../../stores/mediaStore'");
+    expect(source).not.toContain('useTimelineStore');
+    expect(source).not.toContain('useMediaStore');
+  });
+
+  it('keeps spectral-region shell controls routed through module command descriptors', () => {
+    const source = readFileSync(spectralRegionControlsPath, 'utf8');
+
+    expect(source).toContain("'spectral-region:set-selection'");
+    expect(source).toContain("'spectral-region:clear-selection'");
+    expect(source).toContain("'spectral-region:apply-edit'");
+    expect(source).toContain("'spectral-region:add-image-layer'");
+    expect(source).not.toContain('stores/timeline');
+    expect(source).not.toContain('stores/mediaStore');
+    expect(source).not.toContain('useTimelineStore');
+    expect(source).not.toContain('useMediaStore');
+  });
+
+  it('keeps audio-region shell controls routed through module command descriptors', () => {
+    const source = readFileSync(audioRegionControlsPath, 'utf8');
+
+    expect(source).toContain("'audio-region:set-selection'");
+    expect(source).toContain("'audio-region:apply-edit'");
+    expect(source).toContain("'audio-region:bake-stack'");
+    expect(source).not.toContain("from '../../../stores/timeline'");
+    expect(source).not.toContain('useTimelineStore');
+  });
+
   it('defines the Phase 0 active module slots in stable render order', () => {
     expect(CLIP_INTERACTION_SHELL_MODULE_SLOTS).toEqual([
       'trim',
@@ -414,10 +493,7 @@ describe('ClipInteractionShell contract', () => {
   });
 
   it('moves active audio regions from the shell selection geometry', () => {
-    const setAudioRegionSelectionSpy = vi.spyOn(
-      useTimelineStore.getState(),
-      'setAudioRegionSelection',
-    );
+    const onModuleCommand = vi.fn();
     const props = createShellProps({
       clip: {
         ...createShellProps().clip,
@@ -444,6 +520,7 @@ describe('ClipInteractionShell contract', () => {
           mode: 'select',
         },
       },
+      commands: { onModuleCommand },
     });
 
     const { container } = render(<ClipInteractionShell {...props} />);
@@ -453,23 +530,22 @@ describe('ClipInteractionShell contract', () => {
     fireEvent.mouseMove(document, { clientX: 80 });
     fireEvent.mouseUp(document, { clientX: 80 });
 
-    expect(setAudioRegionSelectionSpy).toHaveBeenCalled();
-    expect(setAudioRegionSelectionSpy.mock.calls.at(-1)?.[0]).toMatchObject({
-      clipId: 'clip-a',
-      startTime: 3,
-      endTime: 5,
-      sourceInPoint: 2,
-      sourceOutPoint: 4,
+    expect(onModuleCommand).toHaveBeenCalled();
+    const [, command] = onModuleCommand.mock.calls.at(-1) ?? [];
+    expect(command).toMatchObject({
+      type: 'audio-region:set-selection',
+      selection: {
+        clipId: 'clip-a',
+        startTime: 3,
+        endTime: 5,
+        sourceInPoint: 2,
+        sourceOutPoint: 4,
+      },
     });
-
-    setAudioRegionSelectionSpy.mockRestore();
   });
 
   it('runs audio-region context menu commands from the shell portal', () => {
-    const applyAudioRegionEditSpy = vi.spyOn(
-      useTimelineStore.getState(),
-      'applyAudioRegionEdit',
-    ).mockReturnValue('operation-a');
+    const onModuleCommand = vi.fn();
     const props = createShellProps({
       clip: {
         ...createShellProps().clip,
@@ -497,37 +573,37 @@ describe('ClipInteractionShell contract', () => {
           mode: 'select',
         },
       },
+      commands: { onModuleCommand },
     });
 
-    try {
-      const { container } = render(<ClipInteractionShell {...props} />);
-      const selection = container.querySelector<HTMLElement>('.clip-audio-region-selection');
+    const { container } = render(<ClipInteractionShell {...props} />);
+    const selection = container.querySelector<HTMLElement>('.clip-audio-region-selection');
 
-      fireEvent.contextMenu(selection as HTMLElement, { clientX: 96, clientY: 48 });
+    fireEvent.contextMenu(selection as HTMLElement, { clientX: 96, clientY: 48 });
 
-      const menu = document.body.querySelector<HTMLElement>('.clip-audio-region-context-menu');
-      const silenceCommand = document.body.querySelector<HTMLElement>('[data-audio-region-command="silence"]');
+    const menu = document.body.querySelector<HTMLElement>('.clip-audio-region-context-menu');
+    const silenceCommand = document.body.querySelector<HTMLElement>('[data-audio-region-command="silence"]');
 
-      expect(menu).toBeTruthy();
-      expect(silenceCommand).toBeTruthy();
+    expect(menu).toBeTruthy();
+    expect(silenceCommand).toBeTruthy();
 
-      fireEvent.pointerDown(silenceCommand as HTMLElement, { button: 0 });
+    fireEvent.pointerDown(silenceCommand as HTMLElement, { button: 0 });
 
-      expect(applyAudioRegionEditSpy).toHaveBeenCalledWith('silence', { keepSelection: true });
-      expect(document.body.querySelector('.clip-audio-region-context-menu')).toBeNull();
-    } finally {
-      applyAudioRegionEditSpy.mockRestore();
-    }
+    const applyCall = onModuleCommand.mock.calls.find(([, command]) =>
+      command.type === 'audio-region:apply-edit'
+    );
+    expect(applyCall?.[0]).toBe('audio-region');
+    expect(applyCall?.[1]).toMatchObject({
+      type: 'audio-region:apply-edit',
+      editType: 'silence',
+      options: { keepSelection: true },
+    });
+    expect(document.body.querySelector('.clip-audio-region-context-menu')).toBeNull();
   });
 
   it('renders audio edit stack controls in the audio-region shell', () => {
-    const previousAudioFocusMode = useTimelineStore.getState().audioFocusMode;
-    const toggleOperationSpy = vi.spyOn(
-      useTimelineStore.getState(),
-      'setClipAudioEditOperationEnabled',
-    );
+    const onModuleCommand = vi.fn();
     let unmount: (() => void) | undefined;
-    useTimelineStore.setState({ audioFocusMode: true });
     const props = createShellProps({
       clip: {
         ...createShellProps().clip,
@@ -565,8 +641,10 @@ describe('ClipInteractionShell contract', () => {
             sourceOutPoint: 3,
           },
           mode: 'select',
+          audioFocusMode: true,
         },
       },
+      commands: { onModuleCommand },
     });
 
     try {
@@ -582,26 +660,23 @@ describe('ClipInteractionShell contract', () => {
 
       fireEvent.click(operationButton as HTMLElement);
 
-      expect(toggleOperationSpy).toHaveBeenCalledWith('clip-a', 'gain-op', false);
+      const toggleCall = onModuleCommand.mock.calls.find(([, command]) =>
+        command.type === 'audio-region:toggle-operation'
+      );
+      expect(toggleCall?.[0]).toBe('audio-region');
+      expect(toggleCall?.[1]).toMatchObject({
+        type: 'audio-region:toggle-operation',
+        operationId: 'gain-op',
+        disabled: false,
+      });
     } finally {
       unmount?.();
-      toggleOperationSpy.mockRestore();
-      useTimelineStore.setState({ audioFocusMode: previousAudioFocusMode });
     }
   });
 
   it('selects existing audio edit operation overlays from the shell', () => {
-    const previousAudioFocusMode = useTimelineStore.getState().audioFocusMode;
-    const previousShowMarkers = useTimelineStore.getState().showAudioRegionEditMarkers;
-    const setAudioRegionSelectionSpy = vi.spyOn(
-      useTimelineStore.getState(),
-      'setAudioRegionSelection',
-    );
+    const onModuleCommand = vi.fn();
     let unmount: (() => void) | undefined;
-    useTimelineStore.setState({
-      audioFocusMode: true,
-      showAudioRegionEditMarkers: true,
-    });
     const props = createShellProps({
       clip: {
         ...createShellProps().clip,
@@ -639,8 +714,11 @@ describe('ClipInteractionShell contract', () => {
             sourceOutPoint: 3,
           },
           mode: 'select',
+          audioFocusMode: true,
+          showEditMarkers: true,
         },
       },
+      commands: { onModuleCommand },
     });
 
     try {
@@ -654,26 +732,25 @@ describe('ClipInteractionShell contract', () => {
 
       fireEvent.mouseDown(operationOverlay as HTMLElement, { button: 0 });
 
-      expect(setAudioRegionSelectionSpy).toHaveBeenCalledWith(expect.objectContaining({
-        clipId: 'clip-a',
-        sourceInPoint: 0.25,
-        sourceOutPoint: 0.75,
-      }));
+      const selectionCall = onModuleCommand.mock.calls.find(([, command]) =>
+        command.type === 'audio-region:set-selection'
+      );
+      expect(selectionCall?.[0]).toBe('audio-region');
+      expect(selectionCall?.[1]).toMatchObject({
+        type: 'audio-region:set-selection',
+        selection: {
+          clipId: 'clip-a',
+          sourceInPoint: 0.25,
+          sourceOutPoint: 0.75,
+        },
+      });
     } finally {
       unmount?.();
-      setAudioRegionSelectionSpy.mockRestore();
-      useTimelineStore.setState({
-        audioFocusMode: previousAudioFocusMode,
-        showAudioRegionEditMarkers: previousShowMarkers,
-      });
     }
   });
 
   it('renders clip video-bake controls through the shell module', () => {
-    const bakeRegionSpy = vi.spyOn(
-      useTimelineStore.getState(),
-      'bakeClipVideoBakeRegion',
-    ).mockResolvedValue(true);
+    const onModuleCommand = vi.fn();
     const props = createShellProps({
       mountState: {
         clipId: 'clip-a',
@@ -702,50 +779,41 @@ describe('ClipInteractionShell contract', () => {
           ],
         },
       },
+      commands: { onModuleCommand },
     });
 
-    try {
-      const { container } = render(<ClipInteractionShell {...props} />);
-      const module = container.querySelector<HTMLElement>('.shell-video-bake-module');
-      const region = container.querySelector<HTMLElement>('.clip-video-bake-region');
-      const bakeButton = container.querySelector<HTMLElement>('.clip-video-bake-btn:not(.remove)');
+    const { container } = render(<ClipInteractionShell {...props} />);
+    const module = container.querySelector<HTMLElement>('.shell-video-bake-module');
+    const region = container.querySelector<HTMLElement>('.clip-video-bake-region');
+    const bakeButton = container.querySelector<HTMLElement>('.clip-video-bake-btn:not(.remove)');
 
-      expect(module?.dataset.clipInteractionSlot).toBe('video-bake');
-      expect(region).toBeTruthy();
-      expect(region?.style.left).toBe('40px');
-      expect(region?.style.width).toBe('80px');
-      expect(bakeButton?.textContent).toBe('Bake');
+    expect(module?.dataset.clipInteractionSlot).toBe('video-bake');
+    expect(region).toBeTruthy();
+    expect(region?.style.left).toBe('40px');
+    expect(region?.style.width).toBe('80px');
+    expect(bakeButton?.textContent).toBe('Bake');
 
-      fireEvent.click(bakeButton as HTMLElement);
+    fireEvent.click(bakeButton as HTMLElement);
 
-      expect(bakeRegionSpy).toHaveBeenCalledWith('clip-a', 'region-a');
-    } finally {
-      bakeRegionSpy.mockRestore();
-    }
+    expect(onModuleCommand).toHaveBeenCalledWith(
+      'video-bake',
+      { type: 'video-bake:bake-region', regionId: 'region-a' },
+      expect.objectContaining({ clip: expect.objectContaining({ id: 'clip-a' }) }),
+    );
   });
 
   it('renders spectral region controls through the shell module', () => {
-    const previousTimelineState = useTimelineStore.getState();
-    const applySpectralRegionEditSpy = vi.spyOn(
-      useTimelineStore.getState(),
-      'applySpectralRegionEdit',
-    ).mockReturnValue('operation-a');
-
-    useTimelineStore.setState({
-      audioFocusMode: true,
-      audioDisplayMode: 'spectral',
-      activeTimelineToolId: 'select',
-      audioSpectralRegionSelection: {
-        clipId: 'clip-a',
-        trackId: 'track-audio',
-        startTime: 2,
-        endTime: 4,
-        sourceInPoint: 1,
-        sourceOutPoint: 3,
-        frequencyMinHz: 120,
-        frequencyMaxHz: 2400,
-      },
-    });
+    const onModuleCommand = vi.fn();
+    const selection = {
+      clipId: 'clip-a',
+      trackId: 'track-audio',
+      startTime: 2,
+      endTime: 4,
+      sourceInPoint: 1,
+      sourceOutPoint: 3,
+      frequencyMinHz: 120,
+      frequencyMaxHz: 2400,
+    };
 
     const props = createShellProps({
       clip: {
@@ -770,40 +838,34 @@ describe('ClipInteractionShell contract', () => {
         spectralRegion: {
           slot: 'spectral-region',
           enabled: true,
-          selection: useTimelineStore.getState().audioSpectralRegionSelection,
+          selection,
           imageLayers: [],
+          imageMediaFiles: [],
+          selectedImageFile: null,
+          canSelectRegion: true,
         },
       },
+      commands: { onModuleCommand },
     });
 
-    let unmount: (() => void) | undefined;
+    const { container } = render(<ClipInteractionShell {...props} />);
+    const module = container.querySelector<HTMLElement>('.shell-spectral-region-module');
+    const region = container.querySelector<HTMLElement>('.clip-spectral-region-selection');
+    const maskButton = Array.from(container.querySelectorAll<HTMLButtonElement>('.clip-spectral-region-toolbar button'))
+      .find(button => button.textContent === 'Mask');
 
-    try {
-      const rendered = render(<ClipInteractionShell {...props} />);
-      unmount = rendered.unmount;
-      const { container } = rendered;
-      const module = container.querySelector<HTMLElement>('.shell-spectral-region-module');
-      const region = container.querySelector<HTMLElement>('.clip-spectral-region-selection');
-      const maskButton = Array.from(container.querySelectorAll<HTMLButtonElement>('.clip-spectral-region-toolbar button'))
-        .find(button => button.textContent === 'Mask');
+    expect(module?.dataset.clipInteractionSlot).toBe('spectral-region');
+    expect(region).toBeTruthy();
+    expect(maskButton).toBeTruthy();
 
-      expect(module?.dataset.clipInteractionSlot).toBe('spectral-region');
-      expect(region).toBeTruthy();
-      expect(maskButton).toBeTruthy();
+    fireEvent.click(maskButton as HTMLButtonElement);
 
-      fireEvent.click(maskButton as HTMLButtonElement);
-
-      expect(applySpectralRegionEditSpy).toHaveBeenCalledWith('spectral-mask');
-    } finally {
-      unmount?.();
-      applySpectralRegionEditSpy.mockRestore();
-      useTimelineStore.setState({
-        audioFocusMode: previousTimelineState.audioFocusMode,
-        audioDisplayMode: previousTimelineState.audioDisplayMode,
-        activeTimelineToolId: previousTimelineState.activeTimelineToolId,
-        audioSpectralRegionSelection: previousTimelineState.audioSpectralRegionSelection,
-      });
-    }
+    expect(onModuleCommand).toHaveBeenCalledWith(
+      'spectral-region',
+      { type: 'spectral-region:apply-edit', editType: 'spectral-mask' },
+      expect.objectContaining({ clip: expect.objectContaining({ id: 'clip-a' }) }),
+      expect.any(Object),
+    );
   });
 
   it('renders active stem progress through the shell module', () => {
@@ -845,6 +907,7 @@ describe('ClipInteractionShell contract', () => {
   });
 
   it('renders completed stem choices through the shell switcher', () => {
+    const onModuleCommand = vi.fn();
     const props = createShellProps({
       clip: {
         ...createShellProps().clip,
@@ -860,6 +923,7 @@ describe('ClipInteractionShell contract', () => {
         stem: {
           slot: 'stem',
           enabled: true,
+          sourceMediaFileId: 'source-audio',
           stemState: {
             activeSetId: 'set-a',
             modelId: 'htdemucs',
@@ -889,6 +953,7 @@ describe('ClipInteractionShell contract', () => {
           },
         },
       },
+      commands: { onModuleCommand },
     });
 
     const { container } = render(<ClipInteractionShell {...props} />);
@@ -898,7 +963,23 @@ describe('ClipInteractionShell contract', () => {
     fireEvent.click(badge as HTMLElement);
 
     expect(container.querySelector('.clip-stem-menu')).toBeTruthy();
-    expect(container.querySelector('[aria-label="Use Vocals stem"]')).toBeTruthy();
+    expect(onModuleCommand).toHaveBeenCalledWith(
+      'stem',
+      { type: 'stem:prewarm-source-media-files', mediaFileIds: ['source-audio', 'stem-vocals-media'] },
+      expect.objectContaining({ clip: expect.objectContaining({ id: 'clip-a' }) }),
+    );
+
+    const stemChoice = container.querySelector<HTMLElement>('[aria-label="Use Vocals stem"]');
+    expect(stemChoice).toBeTruthy();
+
+    fireEvent.click(stemChoice as HTMLElement);
+
+    expect(onModuleCommand).toHaveBeenCalledWith(
+      'stem',
+      { type: 'stem:set-clip-source', stemMediaFileId: 'stem-vocals-media' },
+      expect.objectContaining({ clip: expect.objectContaining({ id: 'clip-a' }) }),
+      expect.any(Object),
+    );
   });
 
   it('does not render when mount state says the shell is not active', () => {

@@ -71,6 +71,11 @@ describe('renderTargetStore runtime reporting', () => {
         compositionId: 'comp-a',
       },
     });
+    expect(stats.resources[0].tags).toEqual(expect.arrayContaining([
+      'runtime-provider-demand',
+      'retain-until-release',
+      'render-target',
+    ]));
 
     store.updateTargetSource('target-a', { type: 'composition', compositionId: 'comp-b' });
     stats = timelineRuntimeCoordinator.getBridgeStats().policies['render-target'];

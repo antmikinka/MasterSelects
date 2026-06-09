@@ -19,6 +19,8 @@ import type {
   TimelineRuntimeAdmissionDecision,
   TimelineRuntimePolicyId,
 } from './timeline/runtimeCoordinatorTypes';
+import type { RuntimeProviderDemand } from '../timeline';
+import { createRenderResourceDescriptorFromDemand } from './timeline/runtimeProviderDemandBridge';
 import {
   createSpectralGateState,
   processSpectralGateBlock,
@@ -72,6 +74,12 @@ const MP4Box = MP4BoxModule as unknown as {
     BIG_ENDIAN: number;
   };
 };
+
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T;
+}
 
 // Frame cache entry
 interface CachedFrame {
@@ -981,30 +989,37 @@ class ProxyFrameCache {
     stats: LegacyProxyFrameCacheStats
   ): RenderResourceDescriptor {
     const resourceId = this.getLegacyProxyFrameResourceId(mediaFileId);
-    return {
+    const demand: RuntimeProviderDemand = {
       id: resourceId,
-      kind: 'image-canvas',
+      facetId: `${resourceId}:facet`,
+      resourceKind: 'image-canvas',
       policyId: LEGACY_PROXY_FRAME_RUNTIME_POLICY_ID,
+      leasePolicy: 'background-cache',
       owner: {
         ownerId: `proxy-frame-cache:${mediaFileId}`,
         ownerType: 'timeline',
         mediaFileId,
       },
       source: {
+        sourceId: mediaFileId,
         mediaFileId,
       },
-      dimensions: {
-        ...(stats.width ? { width: stats.width } : {}),
-        ...(stats.height ? { height: stats.height } : {}),
-      },
+      dimensions: removeUndefinedValues({
+        width: stats.width,
+        height: stats.height,
+      }),
+      priority: 'background',
+      tags: ['proxy-frame-cache', 'jpeg-proxy-frame'],
+    };
+    return createRenderResourceDescriptorFromDemand(demand, {
+      resourceKind: 'image-canvas',
       memoryCost: {
         heapBytes: stats.heapBytes,
       },
       imageKind: 'html-image',
       imageId: resourceId,
       label: `JPEG proxy frame cache (${stats.frameCount} frames)`,
-      tags: ['proxy-frame-cache', 'jpeg-proxy-frame'],
-    };
+    });
   }
 
   private canRetainLegacyFrame(
@@ -1034,16 +1049,19 @@ class ProxyFrameCache {
 
   private createAudioBufferResource(mediaFileId: string, buffer: AudioBuffer): RenderResourceDescriptor {
     const resourceId = this.getAudioBufferResourceId(mediaFileId);
-    return {
+    const demand: RuntimeProviderDemand = {
       id: resourceId,
-      kind: 'audio-source-clock',
+      facetId: `${resourceId}:facet`,
+      resourceKind: 'audio-source-clock',
       policyId: INTERACTIVE_PROXY_CACHE_RUNTIME_POLICY_ID,
+      leasePolicy: 'background-cache',
       owner: {
         ownerId: `proxy-frame-cache:${mediaFileId}`,
         ownerType: 'timeline',
         mediaFileId,
       },
       source: {
+        sourceId: mediaFileId,
         mediaFileId,
       },
       dimensions: {
@@ -1051,14 +1069,18 @@ class ProxyFrameCache {
         sampleRate: buffer.sampleRate,
         channelCount: buffer.numberOfChannels,
       },
+      priority: 'background',
+      tags: ['proxy-frame-cache', 'decoded-audio-buffer', 'scrub-audio'],
+    };
+    return createRenderResourceDescriptorFromDemand(demand, {
+      resourceKind: 'audio-source-clock',
       memoryCost: {
         heapBytes: estimateAudioBufferBytes(buffer),
       },
       audioSourceId: mediaFileId,
       clockId: resourceId,
       label: 'Decoded proxy audio buffer',
-      tags: ['proxy-frame-cache', 'decoded-audio-buffer', 'scrub-audio'],
-    };
+    });
   }
 
   private cacheDecodedAudioBuffer(mediaFileId: string, buffer: AudioBuffer): boolean {
@@ -1093,18 +1115,26 @@ class ProxyFrameCache {
     const readyState = audio?.readyState ?? 0;
     const networkState = audio?.networkState ?? 0;
     const status = audio?.error ? 'warning' : readyState >= HTMLMediaElement.HAVE_METADATA ? 'ok' : 'unknown';
-    return {
+    const demand: RuntimeProviderDemand = {
       id: resourceId,
-      kind: 'html-media',
+      facetId: `${resourceId}:facet`,
+      resourceKind: 'html-media',
       policyId: INTERACTIVE_PROXY_CACHE_RUNTIME_POLICY_ID,
+      leasePolicy: 'lease-visible',
       owner: {
         ownerId: `proxy-frame-cache:${mediaFileId}`,
         ownerType: 'timeline',
         mediaFileId,
       },
       source: {
+        sourceId: mediaFileId,
         mediaFileId,
       },
+      priority: 'visible',
+      tags: ['proxy-frame-cache', 'audio-proxy', 'html-audio'],
+    };
+    return createRenderResourceDescriptorFromDemand(demand, {
+      resourceKind: 'html-media',
       mediaElementKind: 'audio',
       elementId: resourceId,
       srcKind: this.getAudioProxySrcKind(audioSrc),
@@ -1124,8 +1154,7 @@ class ProxyFrameCache {
         },
       },
       label: 'Proxy audio element',
-      tags: ['proxy-frame-cache', 'audio-proxy', 'html-audio'],
-    };
+    });
   }
 
   private canRetainAudioProxyElement(mediaFileId: string, audioSrc: string): TimelineRuntimeAdmissionDecision {
@@ -1196,22 +1225,30 @@ class ProxyFrameCache {
     stats: ProxyVideoFrameCacheStats
   ): RenderResourceDescriptor {
     const resourceId = this.getVideoFrameResourceId(mediaFileId);
-    return {
+    const demand: RuntimeProviderDemand = {
       id: resourceId,
-      kind: 'video-frame-provider',
+      facetId: `${resourceId}:facet`,
+      resourceKind: 'video-frame-provider',
       policyId: INTERACTIVE_PROXY_CACHE_RUNTIME_POLICY_ID,
+      leasePolicy: 'background-cache',
       owner: {
         ownerId: `proxy-frame-cache:${mediaFileId}`,
         ownerType: 'timeline',
         mediaFileId,
       },
       source: {
+        sourceId: mediaFileId,
         mediaFileId,
       },
-      dimensions: {
-        ...(stats.width ? { width: stats.width } : {}),
-        ...(stats.height ? { height: stats.height } : {}),
-      },
+      dimensions: removeUndefinedValues({
+        width: stats.width,
+        height: stats.height,
+      }),
+      priority: 'background',
+      tags: ['proxy-frame-cache', 'webcodecs-video-frame'],
+    };
+    return createRenderResourceDescriptorFromDemand(demand, {
+      resourceKind: 'video-frame-provider',
       memoryCost: {
         heapBytes: stats.decodedFrameBytes,
         decodedFrameBytes: stats.decodedFrameBytes,
@@ -1222,8 +1259,7 @@ class ProxyFrameCache {
       canProvideStaleFrame: true,
       frameFormat: 'video-frame',
       label: `Proxy WebCodecs frame cache (${stats.frameCount} frames)`,
-      tags: ['proxy-frame-cache', 'webcodecs-video-frame'],
-    };
+    });
   }
 
   private canRetainVideoFrame(

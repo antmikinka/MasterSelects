@@ -2,27 +2,27 @@
 // Extracted from Timeline.tsx for better maintainability
 
 import { useEffect, useRef, useCallback } from 'react';
-import type { TimelineClip, TimelineTrack, Layer, Effect, NestedCompositionData, AnimatableProperty, ClipTransform } from '../../../types';
+import type { TimelineClip, TimelineTrack, Layer, Effect, NestedCompositionData, Keyframe, ClipTransform } from '../../../types';
 import type { VectorAnimationClipSettings } from '../../../types/vectorAnimation';
 import type { ClipDragState } from '../types';
 import { useTimelineStore } from '../../../stores/timeline';
 import { useMediaStore } from '../../../stores/mediaStore';
 import { engine } from '../../../engine/WebGPUEngine';
-import { proxyFrameCache } from '../../../services/proxyFrameCache';
-import { audioManager, audioStatusTracker } from '../../../services/audioManager';
 import { ensureMidiPlaybackScheduler } from '../../../services/audio/midiPlaybackScheduler';
-import { Logger } from '../../../services/logger';
-import { getInterpolatedClipTransform } from '../../../utils/keyframeInterpolation';
 import { getEffectiveScale } from '../../../utils/transformScale';
-import { DEFAULT_TRANSFORM } from '../../../stores/timeline/constants';
 import { vectorAnimationRuntimeManager } from '../../../services/vectorAnimation/VectorAnimationRuntimeManager';
 import { isVectorAnimationSourceType } from '../../../types/vectorAnimation';
 import {
   getLazyImageElementForClip,
   type LazyImageLookupContext,
 } from '../../../services/timeline/lazyImageElements';
-
-const log = Logger.create('useLayerSync');
+import { getNativeDecoderForTimelineClip } from '../../../services/timeline/nativeDecoderRuntimeRegistry';
+import { syncLayerAudioPlayback } from '../utils/layerSyncAudioPlayback';
+import { buildLayerSyncNestedLayers } from '../utils/layerSyncNestedLayers';
+import {
+  syncLayerProxyFrame,
+  type LayerSyncProxyFrameCacheEntry,
+} from '../utils/layerSyncProxyFrames';
 
 function isLayerScaleChanged(layerScale: Layer['scale'] | undefined, transformScale: ClipTransform['scale']): boolean {
   const renderScale = getEffectiveScale(transformScale);
@@ -63,7 +63,7 @@ interface UseLayerSyncProps {
   isDraggingPlayhead: boolean;
   ramPreviewRange: { start: number; end: number } | null;
   isRamPreviewing: boolean;
-  clipKeyframes: Map<string, Array<{ id: string; clipId: string; time: number; property: AnimatableProperty; value: number; easing: string }>>;
+  clipKeyframes: Map<string, Keyframe[]>;
   clipDrag: ClipDragState | null;
 
   // Derived state
@@ -109,7 +109,7 @@ export function useLayerSync({
 
   // Track current proxy frames for each clip (for smooth proxy playback)
   const proxyFramesRef = useRef<
-    Map<string, { frameIndex: number; image: HTMLImageElement }>
+    Map<string, LayerSyncProxyFrameCacheEntry>
   >(new Map());
   const proxyLoadingRef = useRef<Set<string>>(new Set());
 
@@ -140,196 +140,6 @@ export function useLayerSync({
       return false;
     },
     []
-  );
-
-  // Build Layer objects from nested clips for pre-rendering
-  const buildNestedLayers = useCallback(
-    (clip: TimelineClip, clipTime: number, imageLookupContext: LazyImageLookupContext): Layer[] => {
-      if (!clip.nestedClips || !clip.nestedTracks) return [];
-
-      const nestedVideoTracks = clip.nestedTracks.filter(
-        (t) => t.type === 'video' && t.visible
-      );
-
-      const layers: Layer[] = [];
-
-      // Iterate forwards to maintain correct layer order (track 0 = bottom, track N = top)
-      for (let i = 0; i < nestedVideoTracks.length; i++) {
-        const nestedTrack = nestedVideoTracks[i];
-        const nestedClip = clip.nestedClips.find(
-          (nc) =>
-            nc.trackId === nestedTrack.id &&
-            clipTime >= nc.startTime &&
-            clipTime < nc.startTime + nc.duration
-        );
-
-        if (!nestedClip) continue;
-
-        const nestedLocalTime = clipTime - nestedClip.startTime;
-        // Video sync for nested clips handled by LayerBuilderService.syncNestedCompVideos()
-
-        // Get keyframes for the nested clip from store
-        const { clipKeyframes: storeClipKeyframes } = useTimelineStore.getState();
-        const keyframes = storeClipKeyframes.get(nestedClip.id) || [];
-
-        // Build base transform from the nested clip's static transform
-        const baseTransform: ClipTransform = {
-          opacity: nestedClip.transform?.opacity ?? DEFAULT_TRANSFORM.opacity,
-          blendMode: nestedClip.transform?.blendMode ?? DEFAULT_TRANSFORM.blendMode,
-          position: {
-            x: nestedClip.transform?.position?.x ?? DEFAULT_TRANSFORM.position.x,
-            y: nestedClip.transform?.position?.y ?? DEFAULT_TRANSFORM.position.y,
-            z: nestedClip.transform?.position?.z ?? DEFAULT_TRANSFORM.position.z,
-          },
-          scale: {
-            ...(nestedClip.transform?.scale?.all !== undefined ? { all: nestedClip.transform.scale.all } : {}),
-            x: nestedClip.transform?.scale?.x ?? DEFAULT_TRANSFORM.scale.x,
-            y: nestedClip.transform?.scale?.y ?? DEFAULT_TRANSFORM.scale.y,
-            ...(nestedClip.transform?.scale?.z !== undefined ? { z: nestedClip.transform.scale.z } : {}),
-          },
-          rotation: {
-            x: nestedClip.transform?.rotation?.x ?? DEFAULT_TRANSFORM.rotation.x,
-            y: nestedClip.transform?.rotation?.y ?? DEFAULT_TRANSFORM.rotation.y,
-            z: nestedClip.transform?.rotation?.z ?? DEFAULT_TRANSFORM.rotation.z,
-          },
-        };
-
-        // Interpolate transform using keyframes (supports opacity fades, position animations, etc.)
-        const transform = keyframes.length > 0
-          ? getInterpolatedClipTransform(keyframes, nestedLocalTime, baseTransform, {
-              rotationMode: nestedClip.source?.type === 'camera' ? 'shortest' : 'linear',
-            })
-          : baseTransform;
-
-        // Interpolate effect parameters if there are effect keyframes
-        const effectKeyframes = keyframes.filter(k => k.property.startsWith('effect.'));
-        let effects = nestedClip.effects || [];
-        if (effectKeyframes.length > 0 && effects.length > 0) {
-          effects = effects.map(effect => {
-            const newParams = { ...effect.params };
-            Object.keys(effect.params).forEach(paramName => {
-              if (typeof effect.params[paramName] !== 'number') return;
-              const propertyKey = `effect.${effect.id}.${paramName}`;
-              const paramKeyframes = effectKeyframes.filter(k => k.property === propertyKey);
-              if (paramKeyframes.length > 0) {
-                // Simple linear interpolation for effect params
-                const sorted = [...paramKeyframes].sort((a, b) => a.time - b.time);
-                if (nestedLocalTime <= sorted[0].time) {
-                  newParams[paramName] = sorted[0].value;
-                } else if (nestedLocalTime >= sorted[sorted.length - 1].time) {
-                  newParams[paramName] = sorted[sorted.length - 1].value;
-                } else {
-                  for (let i = 0; i < sorted.length - 1; i++) {
-                    if (nestedLocalTime >= sorted[i].time && nestedLocalTime <= sorted[i + 1].time) {
-                      const t = (nestedLocalTime - sorted[i].time) / (sorted[i + 1].time - sorted[i].time);
-                      newParams[paramName] = sorted[i].value + t * (sorted[i + 1].value - sorted[i].value);
-                      break;
-                    }
-                  }
-                }
-              }
-            });
-            return { ...effect, params: newParams };
-          });
-        }
-
-        const renderScale = getEffectiveScale(transform.scale);
-
-        if (nestedClip.source?.videoElement) {
-          layers.push({
-            id: `nested-layer-${nestedClip.id}`,
-            name: nestedClip.name,
-            sourceClipId: nestedClip.id,
-            visible: true,
-            opacity: transform.opacity ?? 1,
-            blendMode: transform.blendMode || 'normal',
-            source: {
-              type: 'video',
-              videoElement: nestedClip.source.videoElement,
-              webCodecsPlayer: nestedClip.source.webCodecsPlayer,
-            },
-            effects,
-            position: {
-              x: transform.position?.x || 0,
-              y: transform.position?.y || 0,
-              z: transform.position?.z || 0,
-            },
-            scale: renderScale,
-            rotation: {
-              x: ((transform.rotation?.x || 0) * Math.PI) / 180,
-              y: ((transform.rotation?.y || 0) * Math.PI) / 180,
-              z: ((transform.rotation?.z || 0) * Math.PI) / 180,
-            },
-          });
-        } else if (nestedClip.source?.type === 'image') {
-          const imageElement = getLazyImageElementForClip(imageLookupContext, nestedClip);
-          if (!imageElement) {
-            continue;
-          }
-
-          layers.push({
-            id: `nested-layer-${nestedClip.id}`,
-            name: nestedClip.name,
-            sourceClipId: nestedClip.id,
-            visible: true,
-            opacity: transform.opacity ?? 1,
-            blendMode: transform.blendMode || 'normal',
-            source: {
-              type: 'image',
-              imageElement,
-            },
-            effects,
-            position: {
-              x: transform.position?.x || 0,
-              y: transform.position?.y || 0,
-              z: transform.position?.z || 0,
-            },
-            scale: renderScale,
-            rotation: {
-              x: ((transform.rotation?.x || 0) * Math.PI) / 180,
-              y: ((transform.rotation?.y || 0) * Math.PI) / 180,
-              z: ((transform.rotation?.z || 0) * Math.PI) / 180,
-            },
-          });
-        } else if (nestedClip.source?.textCanvas) {
-          if (isVectorAnimationSourceType(nestedClip.source.type)) {
-            vectorAnimationRuntimeManager.renderClipAtTime(
-              nestedClip,
-              nestedClip.startTime + nestedLocalTime,
-              getInterpolatedVectorAnimationSettings(nestedClip.id, nestedLocalTime),
-            );
-          }
-
-          layers.push({
-            id: `nested-layer-${nestedClip.id}`,
-            name: nestedClip.name,
-            sourceClipId: nestedClip.id,
-            visible: true,
-            opacity: transform.opacity ?? 1,
-            blendMode: transform.blendMode || 'normal',
-            source: {
-              type: 'text',
-              textCanvas: nestedClip.source.textCanvas,
-            },
-            effects,
-            position: {
-              x: transform.position?.x || 0,
-              y: transform.position?.y || 0,
-              z: transform.position?.z || 0,
-            },
-            scale: renderScale,
-            rotation: {
-              x: ((transform.rotation?.x || 0) * Math.PI) / 180,
-              y: ((transform.rotation?.y || 0) * Math.PI) / 180,
-              z: ((transform.rotation?.z || 0) * Math.PI) / 180,
-            },
-          });
-        }
-      }
-
-      return layers;
-    },
-    [getInterpolatedVectorAnimationSettings]
   );
 
   // Cleanup pending RAF on unmount
@@ -424,7 +234,13 @@ export function useLayerSync({
         const clipTime = playheadPosition - clip.startTime + clip.inPoint;
 
         // Build all nested layers for pre-rendering
-        const nestedLayers = buildNestedLayers(clip, clipTime, imageLookupContext);
+        const nestedLayers = buildLayerSyncNestedLayers({
+          clip,
+          clipKeyframes,
+          clipTime,
+          getInterpolatedVectorAnimationSettings,
+          imageLookupContext,
+        });
 
         // Get parent clip transform
         const interpolatedTransform = getInterpolatedTransform(clip.id, clipTime);
@@ -475,9 +291,9 @@ export function useLayerSync({
             layersChanged = true;
           }
         }
-      } else if (clip?.source?.nativeDecoder) {
+      } else if (clip && getNativeDecoderForTimelineClip(clip)) {
         // Native Helper decoder for ProRes/DNxHD (turbo mode)
-        const nativeDecoder = clip.source.nativeDecoder;
+        const nativeDecoder = getNativeDecoderForTimelineClip(clip)!;
         const clipLocalTime = playheadPosition - clip.startTime;
         const keyframeLocalTime = clipLocalTime;
 
@@ -529,218 +345,28 @@ export function useLayerSync({
         const clipLocalTime = playheadPosition - clip.startTime;
         // Keyframe interpolation uses timeline-local time
         const keyframeLocalTime = clipLocalTime;
-        // Calculate source time using speed integration (handles keyframes)
-        const sourceTime = getSourceTimeForClip(clip.id, clipLocalTime);
-        // Determine start point based on INITIAL speed (speed at t=0), not clip.speed
-        const initialSpeed = getInterpolatedSpeed(clip.id, 0);
-        const startPoint = initialSpeed >= 0 ? clip.inPoint : clip.outPoint;
-        const clipTime = Math.max(clip.inPoint, Math.min(clip.outPoint, startPoint + sourceTime));
         const video = clip.source.videoElement;
         const webCodecsPlayer = clip.source.webCodecsPlayer;
+        const proxyFrameResult = syncLayerProxyFrame({
+          clip,
+          effectsChanged,
+          getInterpolatedEffects,
+          getInterpolatedSpeed,
+          getInterpolatedTransform,
+          getSourceTimeForClip,
+          isDraggingPlayhead,
+          isVideoTrackVisible,
+          layer,
+          layerIndex,
+          newLayers,
+          playheadPosition,
+          proxyFrames: proxyFramesRef.current,
+          proxyLoading: proxyLoadingRef.current,
+          track,
+        });
 
-        const mediaStore = useMediaStore.getState();
-        const mediaFile = mediaStore.files.find(
-          (f) => f.name === clip.name || clip.mediaFileId === f.id
-        );
-        const proxyFps = mediaFile?.proxyFps || 30;
-
-        const frameIndex = Math.floor(clipTime * proxyFps);
-        let useProxy = false;
-
-        if (
-          mediaStore.proxyEnabled &&
-          mediaFile?.proxyFps &&
-          mediaFile.proxyFormat !== 'mp4-all-intra'
-        ) {
-          if (mediaFile.proxyStatus === 'ready') {
-            useProxy = true;
-          } else if (
-            mediaFile.proxyStatus === 'generating' &&
-            (mediaFile.proxyProgress || 0) > 0
-          ) {
-            const totalFrames = Math.ceil(
-              (mediaFile.duration || 10) * proxyFps
-            );
-            const maxGeneratedFrame = Math.floor(
-              totalFrames * ((mediaFile.proxyProgress || 0) / 100)
-            );
-            useProxy = frameIndex < maxGeneratedFrame;
-          }
-        }
-
-        if (useProxy && mediaFile) {
-          const cacheKey = `${mediaFile.id}_${clip.id}`;
-          const cached = proxyFramesRef.current.get(cacheKey);
-
-          // Video element sync (mute/play/pause/seek) handled by LayerBuilderService
-
-          const loadKey = `${mediaFile.id}_${frameIndex}`;
-          const cachedInService = proxyFrameCache.getCachedFrame(mediaFile.id, frameIndex, proxyFps);
-          const interpolatedEffectsForProxy = getInterpolatedEffects(
-            clip.id,
-            keyframeLocalTime
-          );
-
-          if (cachedInService) {
-            proxyFramesRef.current.set(cacheKey, {
-              frameIndex,
-              image: cachedInService,
-            });
-
-            const transform = getInterpolatedTransform(clip.id, keyframeLocalTime);
-            newLayers[layerIndex] = {
-              id: `timeline_layer_${layerIndex}`,
-              name: clip.name,
-              sourceClipId: clip.id,
-              visible: isVideoTrackVisible(track),
-              opacity: transform.opacity,
-              blendMode: transform.blendMode,
-              source: {
-                type: 'image',
-                imageElement: cachedInService,
-                mediaTime: frameIndex / proxyFps,
-                targetMediaTime: clipTime,
-                previewPath: 'proxy-image-frame',
-                proxyFrameIndex: frameIndex,
-              },
-              effects: interpolatedEffectsForProxy,
-              position: { x: transform.position.x, y: transform.position.y, z: transform.position.z },
-              scale: getEffectiveScale(transform.scale),
-              rotation: {
-                x: (transform.rotation.x * Math.PI) / 180,
-                y: (transform.rotation.y * Math.PI) / 180,
-                z: (transform.rotation.z * Math.PI) / 180,
-              },
-            };
-            layersChanged = true;
-          } else if (!cached || cached.frameIndex !== frameIndex) {
-            if (!proxyLoadingRef.current.has(loadKey)) {
-              proxyLoadingRef.current.add(loadKey);
-
-              const capturedLayerIndex = layerIndex;
-              const capturedTransform = getInterpolatedTransform(
-                clip.id,
-                keyframeLocalTime
-              );
-              const capturedTrackVisible = isVideoTrackVisible(track);
-              const capturedClipId = clip.id;
-              const capturedClipName = clip.name;
-              const capturedEffects = interpolatedEffectsForProxy;
-
-              proxyFrameCache
-                .getFrame(mediaFile.id, clipTime, proxyFps)
-                .then((image) => {
-                  proxyLoadingRef.current.delete(loadKey);
-                  if (image) {
-                    proxyFramesRef.current.set(cacheKey, { frameIndex, image });
-
-                    const currentLayers2 = useTimelineStore.getState().layers;
-                    const updatedLayers = [...currentLayers2];
-                    updatedLayers[capturedLayerIndex] = {
-                      id: `timeline_layer_${capturedLayerIndex}`,
-                      name: capturedClipName,
-                      sourceClipId: capturedClipId,
-                      visible: capturedTrackVisible,
-                      opacity: capturedTransform.opacity,
-                      blendMode: capturedTransform.blendMode,
-                      source: {
-                        type: 'image',
-                        imageElement: image,
-                        mediaTime: frameIndex / proxyFps,
-                        targetMediaTime: clipTime,
-                        previewPath: 'proxy-image-frame',
-                        proxyFrameIndex: frameIndex,
-                      },
-                      effects: capturedEffects,
-                      position: {
-                        x: capturedTransform.position.x,
-                        y: capturedTransform.position.y,
-                        z: capturedTransform.position.z,
-                      },
-                      scale: getEffectiveScale(capturedTransform.scale),
-                      rotation: {
-                        x: (capturedTransform.rotation.x * Math.PI) / 180,
-                        y: (capturedTransform.rotation.y * Math.PI) / 180,
-                        z: (capturedTransform.rotation.z * Math.PI) / 180,
-                      },
-                    };
-                    useTimelineStore.setState({ layers: updatedLayers });
-                  }
-                });
-            }
-
-            // Try nearest cached frame for smooth scrubbing, then fall back to previous frame.
-            // While dragging the playhead, reach as far as the preloader fetches ahead (±90 ≈ 3s,
-            // matching proxyFrameCache SCRUB_PRELOAD_RANGE) so cold-region scrubs use a preloaded
-            // frame instead of holding stale; paused keeps the tight ±30 default.
-            const nearestSearchDistance = isDraggingPlayhead ? 90 : 30;
-            const nearestFrame = proxyFrameCache.getNearestCachedFrameEntry(mediaFile.id, frameIndex, nearestSearchDistance)?.image || cached?.image;
-            if (nearestFrame) {
-              const transform = getInterpolatedTransform(clip.id, keyframeLocalTime);
-              newLayers[layerIndex] = {
-                id: `timeline_layer_${layerIndex}`,
-                name: clip.name,
-                sourceClipId: clip.id,
-                visible: isVideoTrackVisible(track),
-                opacity: transform.opacity,
-                blendMode: transform.blendMode,
-                source: {
-                  type: 'image',
-                  imageElement: nearestFrame,
-                  mediaTime: frameIndex / proxyFps,
-                  targetMediaTime: clipTime,
-                  previewPath: 'proxy-image-frame-nearest',
-                  proxyFrameIndex: frameIndex,
-                },
-                effects: interpolatedEffectsForProxy,
-                position: { x: transform.position.x, y: transform.position.y, z: transform.position.z },
-                scale: getEffectiveScale(transform.scale),
-                rotation: {
-                  x: (transform.rotation.x * Math.PI) / 180,
-                  y: (transform.rotation.y * Math.PI) / 180,
-                  z: (transform.rotation.z * Math.PI) / 180,
-                },
-              };
-              layersChanged = true;
-            }
-          } else if (cached?.image) {
-            const transform = getInterpolatedTransform(clip.id, keyframeLocalTime);
-            const trackVisible = isVideoTrackVisible(track);
-            const needsUpdate =
-              !layer ||
-              layer.visible !== trackVisible ||
-              layer.source?.imageElement !== cached.image ||
-              layer.source?.type !== 'image' ||
-              effectsChanged(layer.effects, interpolatedEffectsForProxy);
-
-            if (needsUpdate) {
-              newLayers[layerIndex] = {
-                id: `timeline_layer_${layerIndex}`,
-                name: clip.name,
-                sourceClipId: clip.id,
-                visible: trackVisible,
-                opacity: transform.opacity,
-                blendMode: transform.blendMode,
-                source: {
-                  type: 'image',
-                  imageElement: cached.image,
-                  mediaTime: cached.frameIndex / proxyFps,
-                  targetMediaTime: clipTime,
-                  previewPath: 'proxy-image-frame-hold',
-                  proxyFrameIndex: cached.frameIndex,
-                },
-                effects: interpolatedEffectsForProxy,
-                position: { x: transform.position.x, y: transform.position.y, z: transform.position.z },
-                scale: getEffectiveScale(transform.scale),
-                rotation: {
-                  x: (transform.rotation.x * Math.PI) / 180,
-                  y: (transform.rotation.y * Math.PI) / 180,
-                  z: (transform.rotation.z * Math.PI) / 180,
-                },
-              };
-              layersChanged = true;
-            }
-          }
+        if (proxyFrameResult.handled) {
+          layersChanged = layersChanged || proxyFrameResult.layersChanged;
         } else {
           // Video element sync (play/pause/seek/WebCodecs) handled by LayerBuilderService
 
@@ -926,169 +552,19 @@ export function useLayerSync({
       engine.requestRender();
     }
 
-    // Audio sync with status tracking
-    let audioPlayingCount = 0;
-    let maxAudioDrift = 0;
-    let hasAudioError = false;
-
-    // Resume audio context if needed (browser autoplay policy)
-    if (isPlaying && !isDraggingPlayhead) {
-      audioManager.resume().catch(() => {});
-    }
-
-    audioTracks.forEach((track) => {
-      const clip = clipsAtTime.find((c) => c.trackId === track.id);
-
-      if (clip?.source?.audioElement) {
-        const audio = clip.source.audioElement;
-        const clipLocalTime = playheadPosition - clip.startTime;
-
-        // Get current speed for this clip (accounts for keyframes)
-        const currentSpeed = getInterpolatedSpeed(clip.id, clipLocalTime);
-        const absSpeed = Math.abs(currentSpeed);
-
-        // Calculate source time using speed integration
-        const sourceTime = getSourceTimeForClip(clip.id, clipLocalTime);
-        const initialSpeed = getInterpolatedSpeed(clip.id, 0);
-        const startPoint = initialSpeed >= 0 ? clip.inPoint : clip.outPoint;
-        const clipTime = Math.max(clip.inPoint, Math.min(clip.outPoint, startPoint + sourceTime));
-
-        const timeDiff = audio.currentTime - clipTime;
-
-        // Track drift for stats
-        if (Math.abs(timeDiff) > maxAudioDrift) {
-          maxAudioDrift = Math.abs(timeDiff);
-        }
-
-        const effectivelyMuted = isAudioTrackMuted(track);
-        audio.muted = effectivelyMuted;
-
-        // Set playback rate for speed effect (use absolute value, negative speed not supported for audio)
-        const targetRate = absSpeed > 0.1 ? absSpeed : 1;
-        if (Math.abs(audio.playbackRate - targetRate) > 0.01) {
-          audio.playbackRate = Math.max(0.25, Math.min(4, targetRate));
-        }
-
-        // Set preservesPitch based on clip setting (default true)
-        const shouldPreservePitch = clip.preservesPitch !== false;
-        if ((audio as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch !== shouldPreservePitch) {
-          (audio as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = shouldPreservePitch;
-        }
-
-        const shouldPlay = isPlaying && !effectivelyMuted && !isDraggingPlayhead && absSpeed > 0.1;
-
-        if (shouldPlay) {
-          // Only sync audio on significant drift (>200ms) to avoid constant glitches
-          if (Math.abs(timeDiff) > 0.2) {
-            audio.currentTime = clipTime;
-          }
-
-          // Ensure audio is playing - sync on start
-          if (audio.paused) {
-            audio.currentTime = clipTime;
-            audio.play().catch((err) => {
-              log.warn('Audio failed to play:', err.message);
-              hasAudioError = true;
-            });
-          }
-
-          if (!audio.paused && !effectivelyMuted) {
-            audioPlayingCount++;
-          }
-        } else {
-          if (!audio.paused) {
-            audio.pause();
-          }
-        }
-      }
+    syncLayerAudioPlayback({
+      audioTracks,
+      clips,
+      clipsAtTime,
+      getInterpolatedSpeed,
+      getSourceTimeForClip,
+      isAudioTrackMuted,
+      isDraggingPlayhead,
+      isPlaying,
+      isVideoTrackVisible,
+      playheadPosition,
+      videoTracks,
     });
-
-    // Pause audio clips that are no longer at playhead
-    clips.forEach((clip) => {
-      if (clip.source?.audioElement) {
-        const isAtPlayhead = clipsAtTime.some((c) => c.id === clip.id);
-        if (!isAtPlayhead && !clip.source.audioElement.paused) {
-          clip.source.audioElement.pause();
-        }
-      }
-      // Also pause nested composition mixdown audio
-      if (clip.mixdownAudio) {
-        const isAtPlayhead = clipsAtTime.some((c) => c.id === clip.id);
-        if (!isAtPlayhead && !clip.mixdownAudio.paused) {
-          clip.mixdownAudio.pause();
-        }
-      }
-    });
-
-    // Play nested composition mixdown audio for clips at playhead
-    clipsAtTime.forEach((clip) => {
-      if (clip.isComposition && clip.mixdownAudio && clip.hasMixdownAudio) {
-        const audio = clip.mixdownAudio;
-        const clipLocalTime = playheadPosition - clip.startTime;
-
-        // Get current speed for this clip (accounts for keyframes)
-        const currentSpeed = getInterpolatedSpeed(clip.id, clipLocalTime);
-        const absSpeed = Math.abs(currentSpeed);
-
-        // Calculate source time using speed integration
-        const sourceTime = getSourceTimeForClip(clip.id, clipLocalTime);
-        const initialSpeed = getInterpolatedSpeed(clip.id, 0);
-        const startPoint = initialSpeed >= 0 ? clip.inPoint : clip.outPoint;
-        const clipTime = Math.max(clip.inPoint, Math.min(clip.outPoint, startPoint + sourceTime));
-
-        // Find the track this clip is on
-        const track = videoTracks.find(t => t.id === clip.trackId);
-        const effectivelyMuted = track ? !isVideoTrackVisible(track) : false;
-        audio.muted = effectivelyMuted;
-
-        // Set playback rate for speed effect
-        const targetRate = absSpeed > 0.1 ? absSpeed : 1;
-        if (Math.abs(audio.playbackRate - targetRate) > 0.01) {
-          audio.playbackRate = Math.max(0.25, Math.min(4, targetRate));
-        }
-
-        // Set preservesPitch based on clip setting
-        const shouldPreservePitch = clip.preservesPitch !== false;
-        if ((audio as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch !== shouldPreservePitch) {
-          (audio as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = shouldPreservePitch;
-        }
-
-        const timeDiff = audio.currentTime - clipTime;
-
-        // Track drift for stats
-        if (Math.abs(timeDiff) > maxAudioDrift) {
-          maxAudioDrift = Math.abs(timeDiff);
-        }
-
-        const shouldPlay = isPlaying && !effectivelyMuted && !isDraggingPlayhead && absSpeed > 0.1;
-
-        if (shouldPlay) {
-          // Only sync audio on significant drift to avoid pops
-          if (Math.abs(timeDiff) > 0.2) {
-            audio.currentTime = clipTime;
-          }
-
-          // Ensure audio is playing
-          if (audio.paused) {
-            audio.currentTime = clipTime;
-            audio.play().catch((err) => {
-              log.warn('Nested Comp Audio failed to play:', err.message);
-            });
-          }
-
-          if (!audio.paused && !effectivelyMuted) {
-            audioPlayingCount++;
-          }
-        } else {
-          if (!audio.paused) {
-            audio.pause();
-          }
-        }
-      }
-    });
-
-    // Update audio status for stats display
-    audioStatusTracker.updateStatus(audioPlayingCount, maxAudioDrift, hasAudioError);
 
     }; // end runLayerSync
 
@@ -1113,7 +589,6 @@ export function useLayerSync({
     audioTracks,
     isVideoTrackVisible,
     isAudioTrackMuted,
-    buildNestedLayers,
     effectsChanged,
     clipMap,
   ]);

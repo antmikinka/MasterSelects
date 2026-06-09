@@ -2,10 +2,12 @@ import type { LayerSource, TimelineClip } from '../../types';
 import { engine } from '../../engine/WebGPUEngine';
 import { WebCodecsPlayer } from '../../engine/WebCodecsPlayer';
 import { useMediaStore } from '../../stores/mediaStore';
+import type { RuntimeProviderDemand } from '../../timeline';
 import type {
   RenderResourceDescriptor,
   TimelineRuntimeAdmissionDecision,
 } from '../timeline/runtimeCoordinatorTypes';
+import { createRenderResourceDescriptorFromDemand } from '../timeline/runtimeProviderDemandBridge';
 import { timelineRuntimeCoordinator } from '../timeline/timelineRuntimeCoordinator';
 import { mediaRuntimeRegistry } from './registry';
 import type {
@@ -113,6 +115,52 @@ function getRuntimeProviderResourceId(
   return `runtime-playback:${policy}:${sourceId}:${sessionKey}:${suffix}`;
 }
 
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T;
+}
+
+function getRuntimePlaybackLeasePolicy(
+  policy: DecodeSessionPolicy
+): RuntimeProviderDemand['leasePolicy'] {
+  if (policy === 'interactive') return 'lease-visible';
+  if (policy === 'export') return 'retain-until-release';
+  return 'background-cache';
+}
+
+function createRuntimePlaybackDemand(params: {
+  policy: DecodeSessionPolicy;
+  runtime: MediaSourceRuntime;
+  sessionKey: string;
+  resourceId: string;
+  resourceKind: RuntimeProviderDemand['resourceKind'];
+  ownerId: string;
+}): RuntimeProviderDemand {
+  return {
+    id: params.resourceId,
+    facetId: `${params.resourceId}:facet`,
+    resourceKind: params.resourceKind,
+    policyId: params.policy,
+    leasePolicy: getRuntimePlaybackLeasePolicy(params.policy),
+    owner: removeUndefinedValues({
+      ownerId: params.ownerId,
+      ownerType: params.policy === 'ram-preview' ? 'ram-preview' as const : 'timeline' as const,
+      mediaFileId: params.runtime.descriptor.mediaFileId,
+    }),
+    source: removeUndefinedValues({
+      sourceId: params.runtime.sourceId,
+      mediaFileId: params.runtime.descriptor.mediaFileId,
+      projectPath: params.runtime.descriptor.filePath,
+    }),
+    dimensions: removeUndefinedValues({
+      durationSeconds: params.runtime.metadata.duration,
+    }),
+    priority: params.policy === 'interactive' ? 'visible' : 'background',
+    tags: ['runtime-playback', params.policy],
+  };
+}
+
 function createRuntimeProviderAdmissionResources(
   policy: DecodeSessionPolicy,
   runtime: MediaSourceRuntime,
@@ -120,49 +168,54 @@ function createRuntimeProviderAdmissionResources(
   file: File
 ): RenderResourceDescriptor[] {
   const ownerId = `runtime-playback:${policy}:${runtime.sourceId}:${sessionKey}`;
-  const base = {
-    policyId: policy,
-    owner: {
-      ownerId,
-      ownerType: policy === 'ram-preview' ? 'ram-preview' : 'timeline',
-      mediaFileId: runtime.descriptor.mediaFileId,
-    },
-    source: {
-      sourceId: runtime.sourceId,
-      mediaFileId: runtime.descriptor.mediaFileId,
-      projectPath: runtime.descriptor.filePath,
-    },
-    runtime: {
-      runtimeSourceId: runtime.sourceId,
-      runtimeSessionKey: sessionKey,
-    },
-    dimensions: {
-      durationSeconds: runtime.metadata.duration,
-    },
-    tags: ['runtime-playback', policy],
-  } satisfies Omit<RenderResourceDescriptor, 'id' | 'kind'>;
+  const runtimeBindingResourceId = getRuntimeProviderResourceId(
+    policy,
+    runtime.sourceId,
+    sessionKey,
+    'runtime-binding'
+  );
+  const frameProviderResourceId = getRuntimeProviderResourceId(
+    policy,
+    runtime.sourceId,
+    sessionKey,
+    'frame-provider'
+  );
 
   return [
-    {
-      ...base,
-      id: getRuntimeProviderResourceId(policy, runtime.sourceId, sessionKey, 'runtime-binding'),
-      kind: 'runtime-binding',
+    createRenderResourceDescriptorFromDemand(createRuntimePlaybackDemand({
+      policy,
+      runtime,
+      sessionKey,
+      ownerId,
+      resourceId: runtimeBindingResourceId,
+      resourceKind: 'runtime-binding',
+    }), {
+      resourceKind: 'runtime-binding',
+      runtimeSourceId: runtime.sourceId,
+      runtimeSessionKey: sessionKey,
       label: 'Runtime playback binding',
-    },
-    {
-      ...base,
-      id: getRuntimeProviderResourceId(policy, runtime.sourceId, sessionKey, 'frame-provider'),
-      kind: 'video-frame-provider',
+    }),
+    createRenderResourceDescriptorFromDemand(createRuntimePlaybackDemand({
+      policy,
+      runtime,
+      sessionKey,
+      ownerId,
+      resourceId: frameProviderResourceId,
+      resourceKind: 'video-frame-provider',
+    }), {
+      resourceKind: 'video-frame-provider',
       providerId: `${ownerId}:provider`,
       providerKind: 'webcodecs',
       canSeek: true,
       canProvideStaleFrame: false,
       frameFormat: 'video-frame',
+      runtimeSourceId: runtime.sourceId,
+      runtimeSessionKey: sessionKey,
       memoryCost: {
         heapBytes: file.size,
       },
       label: 'Runtime playback frame provider',
-    },
+    }),
   ];
 }
 

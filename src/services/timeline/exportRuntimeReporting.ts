@@ -4,10 +4,15 @@ import type {
   ParallelDecodeRuntimeSnapshot,
 } from '../../engine/ParallelDecodeManager';
 import type {
+  RuntimeProviderDemand,
+  TimelineRuntimeResourceKind,
+} from '../../timeline';
+import type {
   RenderResourceDescriptor,
   RuntimeHealthStatus,
   TimelineRuntimeAdmissionDecision,
 } from './runtimeCoordinatorTypes';
+import { createRenderResourceDescriptorFromDemand } from './runtimeProviderDemandBridge';
 import { timelineRuntimeCoordinator } from './timelineRuntimeCoordinator';
 
 const EXPORT_POLICY_ID = 'export' as const;
@@ -144,13 +149,59 @@ function getRunResourceId(runId: string, suffix: string): string {
   return `export:${runId}:${suffix}`;
 }
 
-function getRunOwner(runId: string, clipId?: string, mediaFileId?: string) {
-  return {
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T;
+}
+
+function hasDefinedEntries(value: object): boolean {
+  return Object.keys(value).length > 0;
+}
+
+function getRunOwner(
+  runId: string,
+  clipId?: string,
+  mediaFileId?: string
+): RuntimeProviderDemand['owner'] {
+  return removeUndefinedValues({
     ownerId: getExportRunOwnerId(runId),
     ownerType: 'export' as const,
     clipId,
     mediaFileId,
+  });
+}
+
+function createExportDemand(params: {
+  id: string;
+  resourceKind: TimelineRuntimeResourceKind;
+  owner: RuntimeProviderDemand['owner'];
+  source?: RuntimeProviderDemand['source'];
+  dimensions?: RuntimeProviderDemand['dimensions'];
+  priority?: RuntimeProviderDemand['priority'];
+  cacheKey?: string;
+  tags: readonly string[];
+}): RuntimeProviderDemand {
+  const demand: RuntimeProviderDemand = {
+    id: params.id,
+    facetId: `${params.id}:facet`,
+    resourceKind: params.resourceKind,
+    policyId: EXPORT_POLICY_ID,
+    leasePolicy: 'retain-until-release',
+    owner: params.owner,
+    priority: params.priority ?? 'background',
+    tags: params.tags,
   };
+  if (params.source && hasDefinedEntries(params.source)) {
+    demand.source = params.source;
+  }
+  if (params.dimensions && hasDefinedEntries(params.dimensions)) {
+    demand.dimensions = params.dimensions;
+  }
+  if (params.cacheKey) {
+    demand.cacheKey = params.cacheKey;
+  }
+  return demand;
 }
 
 function getClipElementMediaFileId(report: ExportClipElementAdmissionReport): string | undefined {
@@ -184,14 +235,11 @@ function getSrcKind(
 }
 
 function createExportRunJobResource(report: ExportRunReport): RenderResourceDescriptor {
-  return {
-    id: getRunResourceId(report.runId, 'job:render'),
-    kind: 'job',
-    policyId: EXPORT_POLICY_ID,
+  const resourceId = getRunResourceId(report.runId, 'job:render');
+  return createRenderResourceDescriptorFromDemand(createExportDemand({
+    id: resourceId,
+    resourceKind: 'job',
     owner: getRunOwner(report.runId),
-    jobId: report.runId,
-    jobKind: 'export-render',
-    startedAtMs: report.startedAtMs,
     dimensions: {
       width: report.settings.width,
       height: report.settings.stackedAlpha ? report.settings.height * 2 : report.settings.height,
@@ -201,6 +249,17 @@ function createExportRunJobResource(report: ExportRunReport): RenderResourceDesc
     source: {
       previewPath: `${report.settings.startTime.toFixed(3)}-${report.settings.endTime.toFixed(3)}`,
     },
+    tags: [
+      'export',
+      report.exportMode ?? report.settings.exportMode ?? 'unknown',
+      report.requestedAudio ? 'audio-requested' : 'video-only',
+      report.effectiveAudio ? 'audio-effective' : 'no-audio',
+    ],
+  }), {
+    resourceKind: 'job',
+    jobId: report.runId,
+    jobKind: 'export-render',
+    startedAtMs: report.startedAtMs,
     diagnostics: {
       status: 'ok',
       messages: [
@@ -213,13 +272,7 @@ function createExportRunJobResource(report: ExportRunReport): RenderResourceDesc
       ],
     },
     label: 'Export render job',
-    tags: [
-      'export',
-      report.exportMode ?? report.settings.exportMode ?? 'unknown',
-      report.requestedAudio ? 'audio-requested' : 'video-only',
-      report.effectiveAudio ? 'audio-effective' : 'no-audio',
-    ],
-  };
+  });
 }
 
 export function canRetainExportRunJob(report: ExportRunReport): TimelineRuntimeAdmissionDecision {
@@ -234,32 +287,40 @@ function createExportOutputSurfaceResource(
   report: ExportOutputSurfaceReport
 ): RenderResourceDescriptor {
   const height = report.stackedAlpha ? report.height * 2 : report.height;
-  return {
-    id: getRunResourceId(report.runId, 'output-surface'),
-    kind: report.zeroCopy ? 'gpu-texture' : 'image-canvas',
-    policyId: EXPORT_POLICY_ID,
+  const resourceId = getRunResourceId(report.runId, 'output-surface');
+  const demand = createExportDemand({
+    id: resourceId,
+    resourceKind: report.zeroCopy ? 'gpu-texture' : 'image-canvas',
     owner: getRunOwner(report.runId),
-    ...(report.zeroCopy
-      ? {
-          textureId: getRunResourceId(report.runId, 'output-surface'),
-          textureKind: 'export-frame' as const,
-          format: 'rgba8unorm',
-        }
-      : {
-          imageKind: 'offscreen-canvas' as const,
-          imageId: getRunResourceId(report.runId, 'output-surface'),
-        }),
     dimensions: {
       width: report.width,
       height,
     },
-    memoryCost: {
-      gpuBytes: report.zeroCopy ? report.width * height * 4 : undefined,
-      heapBytes: report.zeroCopy ? undefined : report.width * height * 4,
-    },
-    label: report.zeroCopy ? 'Export zero-copy output surface' : 'Export readback output surface',
     tags: ['export', report.zeroCopy ? 'zero-copy' : 'readback', 'output-surface'],
-  } as RenderResourceDescriptor;
+  });
+
+  if (report.zeroCopy) {
+    return createRenderResourceDescriptorFromDemand(demand, {
+      resourceKind: 'gpu-texture',
+      textureId: resourceId,
+      textureKind: 'export-frame',
+      format: 'rgba8unorm',
+      memoryCost: {
+        gpuBytes: report.width * height * 4,
+      },
+      label: 'Export zero-copy output surface',
+    });
+  }
+
+  return createRenderResourceDescriptorFromDemand(demand, {
+    resourceKind: 'image-canvas',
+    imageKind: 'offscreen-canvas',
+    imageId: resourceId,
+    memoryCost: {
+      heapBytes: report.width * height * 4,
+    },
+    label: 'Export readback output surface',
+  });
 }
 
 export function canRetainExportOutputSurface(
@@ -276,28 +337,31 @@ function createExportRuntimeBindingResource(
   report: ExportRuntimeBindingAdmissionReport
 ): RenderResourceDescriptor {
   const mediaFileId = getRuntimeSourceMediaFileId(report);
-  return {
-    id: getRunResourceId(
-      report.runId,
-      `clip:${report.clip.id}:runtime-binding:${report.runtimeSource.runtimeSourceId}:${report.runtimeSource.runtimeSessionKey}`
-    ),
-    kind: 'runtime-binding',
-    policyId: EXPORT_POLICY_ID,
+  const resourceId = getRunResourceId(
+    report.runId,
+    `clip:${report.clip.id}:runtime-binding:${report.runtimeSource.runtimeSourceId}:${report.runtimeSource.runtimeSessionKey}`
+  );
+  return createRenderResourceDescriptorFromDemand(createExportDemand({
+    id: resourceId,
+    resourceKind: 'runtime-binding',
     owner: getRunOwner(report.runId, report.clip.id, mediaFileId),
-    source: {
+    source: removeUndefinedValues({
       sourceId: report.runtimeSource.runtimeSourceId,
       mediaFileId,
       clipId: report.clip.id,
       trackId: report.clip.trackId,
       projectPath: report.runtimeSource.filePath,
-    },
-    runtime: {
-      runtimeSourceId: report.runtimeSource.runtimeSourceId,
-      runtimeSessionKey: report.runtimeSource.runtimeSessionKey,
-    },
-    label: 'Export runtime binding',
+    }),
+    dimensions: removeUndefinedValues({
+      durationSeconds: report.clip.duration,
+    }),
     tags: ['export', 'clip-state', report.runtimeSource.type ?? 'unknown'],
-  };
+  }), {
+    resourceKind: 'runtime-binding',
+    runtimeSourceId: report.runtimeSource.runtimeSourceId,
+    runtimeSessionKey: report.runtimeSource.runtimeSessionKey,
+    label: 'Export runtime binding',
+  });
 }
 
 export function canRetainExportRuntimeBinding(
@@ -354,36 +418,34 @@ function createExportFrameProviderResource(
   report: ExportFrameProviderAdmissionReport
 ): RenderResourceDescriptor {
   const mediaFileId = getFrameProviderMediaFileId(report);
-  return {
-    id: getRunResourceId(report.runId, `clip:${report.clip.id}:frame-provider`),
-    kind: 'video-frame-provider',
-    policyId: EXPORT_POLICY_ID,
+  const resourceId = getRunResourceId(report.runId, `clip:${report.clip.id}:frame-provider`);
+  return createRenderResourceDescriptorFromDemand(createExportDemand({
+    id: resourceId,
+    resourceKind: 'video-frame-provider',
     owner: getRunOwner(report.runId, report.clip.id, mediaFileId),
-    source: {
+    source: removeUndefinedValues({
       sourceId: report.runtimeSource?.runtimeSourceId,
       mediaFileId,
       clipId: report.clip.id,
       trackId: report.clip.trackId,
-    },
-    providerId: getRunResourceId(report.runId, `clip:${report.clip.id}:frame-provider`),
+    }),
+    dimensions: removeUndefinedValues({
+      width: report.width,
+      height: report.height,
+      durationSeconds: report.clip.duration,
+    }),
+    tags: report.tags ?? ['export', 'clip-state', report.providerKind ?? 'webcodecs'],
+  }), {
+    resourceKind: 'video-frame-provider',
+    providerId: resourceId,
     providerKind: report.providerKind ?? 'webcodecs',
     canSeek: true,
     canProvideStaleFrame: false,
     frameFormat: report.frameFormat ?? 'video-frame',
-    dimensions: {
-      width: report.width,
-      height: report.height,
-      durationSeconds: report.clip.duration,
-    },
-    runtime: report.runtimeSource?.runtimeSourceId && report.runtimeSource.runtimeSessionKey
-      ? {
-          runtimeSourceId: report.runtimeSource.runtimeSourceId,
-          runtimeSessionKey: report.runtimeSource.runtimeSessionKey,
-        }
-      : undefined,
+    runtimeSourceId: report.runtimeSource?.runtimeSourceId,
+    runtimeSessionKey: report.runtimeSource?.runtimeSessionKey,
     label: report.label ?? 'Export WebCodecs frame provider',
-    tags: report.tags ?? ['export', 'clip-state', report.providerKind ?? 'webcodecs'],
-  };
+  });
 }
 
 export function canRetainExportFrameProvider(
@@ -460,23 +522,27 @@ function reportExportPreciseVideo(runId: string, state: ExportClipState): void {
 
   const runtimeSource = state.runtimeSource;
   const status = getMediaStatus(video);
-  retain({
-    id: getRunResourceId(runId, `clip:${state.clipId}:html-media:video`),
-    kind: 'html-media',
-    policyId: EXPORT_POLICY_ID,
+  const resourceId = getRunResourceId(runId, `clip:${state.clipId}:html-media:video`);
+  const elementId = getRunResourceId(runId, `clip:${state.clipId}:video`);
+  retain(createRenderResourceDescriptorFromDemand(createExportDemand({
+    id: resourceId,
+    resourceKind: 'html-media',
     owner: getRunOwner(runId, state.clipId, runtimeSource?.mediaFileId),
-    source: {
+    source: removeUndefinedValues({
       sourceId: runtimeSource?.runtimeSourceId,
       mediaFileId: runtimeSource?.mediaFileId,
       clipId: state.clipId,
-    },
+    }),
+    tags: ['export', 'clip-state', 'html-video'],
+  }), {
+    resourceKind: 'html-media',
     mediaElementKind: 'video',
-    elementId: getRunResourceId(runId, `clip:${state.clipId}:video`),
+    elementId,
     srcKind: getSrcKind(video.currentSrc || video.src),
     diagnostics: {
       status,
       provider: {
-        providerId: getRunResourceId(runId, `clip:${state.clipId}:video`),
+        providerId: elementId,
         providerKind: 'html-video',
         status,
         isReady: video.readyState >= HTMLMediaElement.HAVE_METADATA,
@@ -491,36 +557,37 @@ function reportExportPreciseVideo(runId: string, state: ExportClipState): void {
     label: state.hasDedicatedPreciseVideoElement
       ? 'Export dedicated precise video element'
       : 'Export shared precise video element',
-    tags: ['export', 'clip-state', 'html-video'],
-  });
+  }));
 }
 
 function createExportPreciseVideoElementResource(
   report: ExportClipElementAdmissionReport
 ): RenderResourceDescriptor {
   const mediaFileId = getClipElementMediaFileId(report);
-  return {
-    id: getRunResourceId(report.runId, `clip:${report.clip.id}:html-media:video`),
-    kind: 'html-media',
-    policyId: EXPORT_POLICY_ID,
+  const resourceId = getRunResourceId(report.runId, `clip:${report.clip.id}:html-media:video`);
+  return createRenderResourceDescriptorFromDemand(createExportDemand({
+    id: resourceId,
+    resourceKind: 'html-media',
     owner: getRunOwner(report.runId, report.clip.id, mediaFileId),
-    source: {
+    source: removeUndefinedValues({
       mediaFileId,
       clipId: report.clip.id,
       trackId: report.clip.trackId,
       previewPath: report.previewPath,
-    },
+    }),
+    dimensions: removeUndefinedValues({
+      durationSeconds: report.clip.duration,
+    }),
+    tags: ['export', 'clip-state', 'html-video'],
+  }), {
+    resourceKind: 'html-media',
     mediaElementKind: 'video',
     elementId: getRunResourceId(report.runId, `clip:${report.clip.id}:video`),
     srcKind: report.srcKind ?? 'unknown',
-    dimensions: {
-      durationSeconds: report.clip.duration,
-    },
     label: report.dedicated === false
       ? 'Export shared precise video element'
       : 'Export dedicated precise video element',
-    tags: ['export', 'clip-state', 'html-video'],
-  };
+  });
 }
 
 export function canRetainExportPreciseVideoElement(
@@ -557,17 +624,20 @@ function reportExportImage(runId: string, state: ExportClipState): void {
   const runtimeSource = state.runtimeSource;
   const src = image.currentSrc || image.src;
   const status: RuntimeHealthStatus = image.complete || image.naturalWidth > 0 ? 'ok' : 'unknown';
-  retain({
-    id: getRunResourceId(runId, `clip:${state.clipId}:image:html-image`),
-    kind: 'image-canvas',
-    policyId: EXPORT_POLICY_ID,
+  const resourceId = getRunResourceId(runId, `clip:${state.clipId}:image:html-image`);
+  retain(createRenderResourceDescriptorFromDemand(createExportDemand({
+    id: resourceId,
+    resourceKind: 'image-canvas',
     owner: getRunOwner(runId, state.clipId, runtimeSource?.mediaFileId),
-    source: {
+    source: removeUndefinedValues({
       sourceId: runtimeSource?.runtimeSourceId,
       mediaFileId: runtimeSource?.mediaFileId,
       clipId: state.clipId,
       previewPath: src || undefined,
-    },
+    }),
+    tags: ['export', 'clip-state', 'html-image', getSrcKind(src)],
+  }), {
+    resourceKind: 'image-canvas',
     imageKind: 'html-image',
     imageId: getRunResourceId(runId, `clip:${state.clipId}:image`),
     diagnostics: {
@@ -576,33 +646,34 @@ function reportExportImage(runId: string, state: ExportClipState): void {
     label: state.hasDedicatedExportImageElement
       ? 'Export dedicated image element'
       : 'Export shared image element',
-    tags: ['export', 'clip-state', 'html-image', getSrcKind(src)],
-  });
+  }));
 }
 
 function createExportImageElementResource(
   report: ExportClipElementAdmissionReport
 ): RenderResourceDescriptor {
   const mediaFileId = getClipElementMediaFileId(report);
-  return {
-    id: getRunResourceId(report.runId, `clip:${report.clip.id}:image:html-image`),
-    kind: 'image-canvas',
-    policyId: EXPORT_POLICY_ID,
+  const resourceId = getRunResourceId(report.runId, `clip:${report.clip.id}:image:html-image`);
+  return createRenderResourceDescriptorFromDemand(createExportDemand({
+    id: resourceId,
+    resourceKind: 'image-canvas',
     owner: getRunOwner(report.runId, report.clip.id, mediaFileId),
-    source: {
+    source: removeUndefinedValues({
       mediaFileId,
       clipId: report.clip.id,
       trackId: report.clip.trackId,
       previewPath: report.previewPath,
-    },
+    }),
+    dimensions: removeUndefinedValues({
+      durationSeconds: report.clip.duration,
+    }),
+    tags: ['export', 'clip-state', 'html-image', report.srcKind ?? 'unknown'],
+  }), {
+    resourceKind: 'image-canvas',
     imageKind: 'html-image',
     imageId: getRunResourceId(report.runId, `clip:${report.clip.id}:image`),
-    dimensions: {
-      durationSeconds: report.clip.duration,
-    },
     label: report.dedicated === false ? 'Export shared image element' : 'Export dedicated image element',
-    tags: ['export', 'clip-state', 'html-image', report.srcKind ?? 'unknown'],
-  };
+  });
 }
 
 export function canRetainExportImageElement(
@@ -677,31 +748,32 @@ function createExportParallelDecoderResource(
 ): RenderResourceDescriptor {
   const mediaFileId = getParallelDecodeMediaFileId(report);
   const decoderId = getRunResourceId(report.runId, `parallel:${report.clip.id}:decoder`);
-  return {
+  return createRenderResourceDescriptorFromDemand(createExportDemand({
     id: decoderId,
-    kind: 'native-decoder',
-    policyId: EXPORT_POLICY_ID,
+    resourceKind: 'native-decoder',
     owner: getRunOwner(report.runId, report.clip.id, mediaFileId),
-    source: {
+    source: removeUndefinedValues({
       sourceId: report.runtimeSource?.runtimeSourceId,
       mediaFileId,
       clipId: report.clip.id,
       trackId: report.clip.trackId,
-    },
-    decoderId,
-    codec: report.codec,
-    container: 'mp4',
-    dimensions: {
+    }),
+    dimensions: removeUndefinedValues({
       width: report.width,
       height: report.height,
       durationSeconds: report.clip.duration,
-    },
+    }),
+    tags: getParallelDecodeTags(report, hardwareAcceleration),
+  }), {
+    resourceKind: 'native-decoder',
+    decoderId,
+    codec: report.codec,
+    container: 'mp4',
     diagnostics: {
       status,
     },
     label: 'Export parallel VideoDecoder',
-    tags: getParallelDecodeTags(report, hardwareAcceleration),
-  };
+  });
 }
 
 function createExportParallelFrameBufferResource(
@@ -711,37 +783,38 @@ function createExportParallelFrameBufferResource(
 ): RenderResourceDescriptor {
   const mediaFileId = getParallelDecodeMediaFileId(report);
   const providerId = getRunResourceId(report.runId, `parallel:${report.clip.id}:frame-buffer`);
-  return {
+  return createRenderResourceDescriptorFromDemand(createExportDemand({
     id: providerId,
-    kind: 'video-frame-provider',
-    policyId: EXPORT_POLICY_ID,
+    resourceKind: 'video-frame-provider',
     owner: getRunOwner(report.runId, report.clip.id, mediaFileId),
-    source: {
+    source: removeUndefinedValues({
       sourceId: report.runtimeSource?.runtimeSourceId,
       mediaFileId,
       clipId: report.clip.id,
       trackId: report.clip.trackId,
-    },
+    }),
+    dimensions: removeUndefinedValues({
+      width: report.width,
+      height: report.height,
+      durationSeconds: report.clip.duration,
+    }),
+    tags: [...getParallelDecodeTags(report, hardwareAcceleration), 'decoded-frame-buffer'],
+  }), {
+    resourceKind: 'video-frame-provider',
     providerId,
     providerKind: 'webcodecs',
     canSeek: true,
     canProvideStaleFrame: false,
     frameFormat: 'video-frame',
-    dimensions: {
-      width: report.width,
-      height: report.height,
-      durationSeconds: report.clip.duration,
-    },
-    memoryCost: {
+    memoryCost: removeUndefinedValues({
       heapBytes: report.estimatedBufferedFrameBytes,
       decodedFrameBytes: report.estimatedBufferedFrameBytes,
-    },
+    }),
     diagnostics: {
       status,
     },
     label: 'Export parallel decoded VideoFrame buffer',
-    tags: [...getParallelDecodeTags(report, hardwareAcceleration), 'decoded-frame-buffer'],
-  };
+  });
 }
 
 export function canRetainExportParallelDecoder(
@@ -884,23 +957,25 @@ function createExportAudioBufferResource(report: ExportAudioBufferReport): Rende
     report.buffer.length * report.buffer.numberOfChannels * Float32Array.BYTES_PER_ELEMENT
   );
 
-  return {
+  return createRenderResourceDescriptorFromDemand(createExportDemand({
     id: audioSourceId,
-    kind: 'audio-source-clock',
-    policyId: EXPORT_POLICY_ID,
+    resourceKind: 'audio-source-clock',
     owner: getRunOwner(report.runId, report.clipId, report.mediaFileId),
-    source: {
+    source: removeUndefinedValues({
       mediaFileId: report.mediaFileId,
       clipId: report.clipId,
       trackId: report.trackId,
-    },
-    audioSourceId,
-    clockId: audioSourceId,
+    }),
     dimensions: {
       sampleRate: report.buffer.sampleRate,
       channelCount: report.buffer.numberOfChannels,
       durationSeconds: report.buffer.duration,
     },
+    tags: ['export', 'audio', report.stage],
+  }), {
+    resourceKind: 'audio-source-clock',
+    audioSourceId,
+    clockId: audioSourceId,
     memoryCost: {
       heapBytes,
       decodedFrameBytes: heapBytes,
@@ -915,8 +990,7 @@ function createExportAudioBufferResource(report: ExportAudioBufferReport): Rende
       },
     },
     label: `Export audio ${report.stage}`,
-    tags: ['export', 'audio', report.stage],
-  };
+  });
 }
 
 export function canRetainExportAudioBuffer(
@@ -930,26 +1004,28 @@ export function reportExportAudioBuffer(report: ExportAudioBufferReport): void {
 }
 
 function createExportPreviewFrameResource(report: ExportPreviewFrameReport): RenderResourceDescriptor {
-  return {
-    id: getRunResourceId(report.runId, 'preview-frame:image-bitmap'),
-    kind: 'image-canvas',
-    policyId: EXPORT_POLICY_ID,
+  const resourceId = getRunResourceId(report.runId, 'preview-frame:image-bitmap');
+  return createRenderResourceDescriptorFromDemand(createExportDemand({
+    id: resourceId,
+    resourceKind: 'image-canvas',
     owner: getRunOwner(report.runId),
-    imageKind: 'image-bitmap',
-    imageId: getRunResourceId(report.runId, 'preview-frame'),
     dimensions: {
       width: report.width,
       height: report.height,
     },
-    memoryCost: {
-      heapBytes: report.width * report.height * 4,
-    },
     source: {
       previewPath: report.currentTime.toFixed(3),
     },
-    label: 'Export preview frame bitmap',
     tags: ['export', 'preview-frame'],
-  };
+  }), {
+    resourceKind: 'image-canvas',
+    imageKind: 'image-bitmap',
+    imageId: getRunResourceId(report.runId, 'preview-frame'),
+    memoryCost: {
+      heapBytes: report.width * report.height * 4,
+    },
+    label: 'Export preview frame bitmap',
+  });
 }
 
 export function canRetainExportPreviewFrame(

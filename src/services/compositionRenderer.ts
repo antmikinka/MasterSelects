@@ -10,6 +10,7 @@ import type {
   TimelineClip,
   NestedCompositionData,
 } from '../types';
+import type { RuntimeProviderDemand } from '../timeline';
 
 const log = Logger.create('CompositionRenderer');
 import { useMediaStore } from '../stores/mediaStore';
@@ -74,6 +75,12 @@ type CompositionLoadClip = {
   naturalDuration?: number;
 };
 
+function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T;
+}
+
 // Source cache entry for a composition
 interface CompositionSources {
   compositionId: string;
@@ -122,6 +129,41 @@ class CompositionRendererService {
       mediaFileId: clip.mediaFileId,
       compositionId,
     } as TimelineClip;
+  }
+
+  private createImageHydrationDemand(
+    sources: CompositionSources,
+    clip: CompositionLoadClip,
+    imageSource: CompositionImageSource,
+    runtimeOwnerId: string
+  ): RuntimeProviderDemand {
+    const resourceId = `composition-render:${sources.compositionId}:${clip.id}:image-canvas:image`;
+    return {
+      id: resourceId,
+      facetId: `${resourceId}:facet`,
+      resourceKind: 'image-canvas',
+      policyId: 'composition-render',
+      leasePolicy: 'background-cache',
+      owner: removeUndefinedValues({
+        ownerId: runtimeOwnerId,
+        ownerType: 'composition' as const,
+        clipId: clip.id,
+        compositionId: sources.compositionId,
+        mediaFileId: clip.mediaFileId,
+      }),
+      source: removeUndefinedValues({
+        sourceId: clip.mediaFileId,
+        mediaFileId: clip.mediaFileId,
+        clipId: clip.id,
+        compositionId: sources.compositionId,
+        previewPath: imageSource.url,
+      }),
+      dimensions: {
+        durationSeconds: clip.naturalDuration || 5,
+      },
+      priority: 'background',
+      tags: ['composition-render', 'image'],
+    };
   }
 
   private getBackgroundSessionKey(
@@ -936,27 +978,13 @@ class CompositionRendererService {
       };
 
       sources.pendingSourceDisposers.set(pendingKey, cleanupPendingSource);
+      const runtimeOwnerId = this.getRuntimeOwnerId(sources.compositionId, clip.id);
 
       handle = startTimelineImageHydration({
         url: imageSource.url,
         resource: {
-          id: `composition-render:${sources.compositionId}:${clip.id}:image-canvas:image`,
-          policyId: 'composition-render',
-          owner: {
-            ownerId: this.getRuntimeOwnerId(sources.compositionId, clip.id),
-            ownerType: 'composition',
-            clipId: clip.id,
-            compositionId: sources.compositionId,
-            mediaFileId: clip.mediaFileId,
-          },
-          source: {
-            sourceId: clip.mediaFileId,
-            mediaFileId: clip.mediaFileId,
-            clipId: clip.id,
-            compositionId: sources.compositionId,
-            previewPath: imageSource.url,
-          },
-          imageId: `${this.getRuntimeOwnerId(sources.compositionId, clip.id)}:image`,
+          demand: this.createImageHydrationDemand(sources, clip, imageSource, runtimeOwnerId),
+          imageId: `${runtimeOwnerId}:image`,
           label: 'Composition render image hydration',
           tags: ['composition-render', 'image'],
         },
@@ -966,7 +994,6 @@ class CompositionRendererService {
             sources.pendingSourceDisposers.delete(pendingKey);
           }
 
-          const runtimeOwnerId = this.getRuntimeOwnerId(sources.compositionId, clip.id);
           const runtimeSource = bindSourceRuntimeForOwner({
             ownerId: runtimeOwnerId,
             sessionOwnerId: runtimeOwnerId,

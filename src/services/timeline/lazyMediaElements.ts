@@ -7,8 +7,11 @@ import {
   getLazyMediaElementObjectUrlKey,
   mediaObjectUrlManager,
 } from '../project/mediaObjectUrlManager';
+import type { RuntimeProviderDemand } from '../../timeline';
 import type { HtmlMediaResourceDescriptor, RenderResourceDescriptor } from './runtimeCoordinatorTypes';
+import { createRenderResourceDescriptorFromDemand } from './runtimeProviderDemandBridge';
 import { timelineRuntimeCoordinator } from './timelineRuntimeCoordinator';
+import { hasNativeDecoderForTimelineClip } from './nativeDecoderRuntimeRegistry';
 
 type LazyMediaKind = 'video' | 'audio';
 
@@ -150,6 +153,43 @@ function createAudioElement(url: string, preload: HTMLMediaElement['preload']): 
   return audio;
 }
 
+function createLazyMediaDemand(params: {
+  clip: TimelineClip;
+  kind: LazyMediaKind;
+  trackId: string;
+  mediaFileId?: string;
+}): RuntimeProviderDemand {
+  const owner: RuntimeProviderDemand['owner'] = {
+    ownerId: params.clip.id,
+    ownerType: 'clip',
+    clipId: params.clip.id,
+    trackId: params.trackId,
+  };
+  const source: RuntimeProviderDemand['source'] = {
+    clipId: params.clip.id,
+    trackId: params.trackId,
+  };
+  if (params.mediaFileId) {
+    owner.mediaFileId = params.mediaFileId;
+    source.mediaFileId = params.mediaFileId;
+  }
+
+  return {
+    id: getResourceId({ kind: params.kind, clipId: params.clip.id }),
+    facetId: `lazy-media:${params.kind}:${params.clip.id}`,
+    resourceKind: 'html-media',
+    policyId: 'interactive',
+    leasePolicy: 'lease-visible',
+    owner,
+    source,
+    dimensions: {
+      durationSeconds: params.clip.source?.naturalDuration ?? params.clip.duration,
+    },
+    priority: 'visible',
+    tags: ['primary-lazy-media', params.kind],
+  };
+}
+
 function createLazyMediaDescriptor(params: {
   clip: TimelineClip;
   kind: LazyMediaKind;
@@ -159,25 +199,12 @@ function createLazyMediaDescriptor(params: {
   plannedSrcKind?: HtmlMediaResourceDescriptor['srcKind'];
   element?: HTMLVideoElement | HTMLAudioElement;
 }): RenderResourceDescriptor & { kind: 'html-media' } {
+  const demand = createLazyMediaDemand(params);
   const element = params.element;
   const providerKind = params.kind === 'video' ? 'html-video' : 'html-audio';
   const status = element?.error ? 'warning' : 'unknown';
-  return {
-    id: getResourceId({ kind: params.kind, clipId: params.clip.id }),
-    kind: 'html-media',
-    policyId: 'interactive',
-    owner: {
-      ownerId: params.clip.id,
-      ownerType: 'clip',
-      clipId: params.clip.id,
-      trackId: params.trackId,
-      mediaFileId: params.mediaFileId,
-    },
-    source: {
-      clipId: params.clip.id,
-      trackId: params.trackId,
-      mediaFileId: params.mediaFileId,
-    },
+  return createRenderResourceDescriptorFromDemand(demand, {
+    resourceKind: 'html-media',
     mediaElementKind: params.kind,
     elementId: getRecordKey(params.kind, params.clip.id),
     srcKind: params.plannedSrcKind ?? getSourceKindFromUrl(params.sourceUrl),
@@ -197,8 +224,7 @@ function createLazyMediaDescriptor(params: {
       },
     },
     label: `Lazy ${params.kind} element`,
-    tags: ['primary-lazy-media', params.kind],
-  };
+  }) as RenderResourceDescriptor & { kind: 'html-media' };
 }
 
 function classifyLazySource(record: LazyMediaRecord): RenderResourceDescriptor & { kind: 'html-media' } {
@@ -279,7 +305,7 @@ function replaceLazyRecord(key: string, record: LazyMediaRecord, ctx: FrameConte
 }
 
 function attachVideoElement(ctx: FrameContext, clip: TimelineClip, now: number): void {
-  if (!clip.source || clip.source.type !== 'video' || clip.source.videoElement || clip.source.nativeDecoder) return;
+  if (!clip.source || clip.source.type !== 'video' || clip.source.videoElement || hasNativeDecoderForTimelineClip(clip)) return;
   if (!canAttachLazyMedia(ctx, clip, 'video')) return;
 
   const source = getLazySource(ctx, clip, 'video');
@@ -594,6 +620,16 @@ export function hydrateTimelineMediaWindow(ctx: FrameContext): void {
 
 export function getLazyTimelineMediaElementCount(): number {
   return lazyMediaRecords.size;
+}
+
+export function getLazyTimelineAudioElementForClip(clip: TimelineClip): HTMLAudioElement | null {
+  const record = lazyMediaRecords.get(getRecordKey('audio', clip.id));
+  return record?.element instanceof HTMLAudioElement ? record.element : null;
+}
+
+export function getLazyTimelineVideoElementForClip(clip: TimelineClip): HTMLVideoElement | null {
+  const record = lazyMediaRecords.get(getRecordKey('video', clip.id));
+  return record?.element instanceof HTMLVideoElement ? record.element : null;
 }
 
 export function releaseAllLazyTimelineMediaElements(): void {
