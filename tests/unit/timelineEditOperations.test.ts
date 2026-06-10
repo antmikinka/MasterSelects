@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useTimelineStore } from '../../src/stores/timeline';
 import { DEFAULT_TRACKS } from '../../src/stores/timeline/constants';
-import { useHistoryStore } from '../../src/stores/historyStore';
 import {
   addClipCustomNodeDefinition,
   clearAINodeRuntimeCache,

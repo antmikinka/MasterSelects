@@ -1,6 +1,6 @@
 // External file drag & drop handling for timeline
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useMediaStore } from '../../../stores/mediaStore';
 import {
   isAudioFile,
@@ -15,9 +15,10 @@ import {
   initialVideoNewTrackGestureState,
   type VideoNewTrackGestureState,
 } from '../utils/externalDragNewTrackGesture';
-import { clearExternalDragPayload, getExternalDragPayload } from '../utils/externalDragSession';
+import { getExternalDragPayload } from '../utils/externalDragSession';
 import type { ExternalDragState } from '../types';
 import { useExternalDragBridgeRouting } from './useExternalDragBridgeRouting';
+import { useExternalDropSessionGuards } from './useExternalDropSessionGuards';
 import { resolveExternalDropImmediatePreview } from './externalDropImmediatePreview';
 import { useExternalDropTrackDragEnter } from './useExternalDropTrackDragEnter';
 import { useExternalDropTrackDragOver } from './useExternalDropTrackDragOver';
@@ -173,62 +174,7 @@ export function useExternalDrop({
     setExternalDrag(null);
   }, [resetVideoNewTrackGesture]);
 
-  const clearExternalDragSession = useCallback(() => {
-    dragCounterRef.current = 0;
-    clearExternalDragPayload();
-    clearExternalDragState();
-  }, [clearExternalDragState]);
-
-  useEffect(() => {
-    if (!externalDrag) return undefined;
-
-    let deferredDropCleanup: number | null = null;
-    const finishNow = () => {
-      if (deferredDropCleanup !== null) {
-        window.clearTimeout(deferredDropCleanup);
-        deferredDropCleanup = null;
-      }
-      clearExternalDragSession();
-    };
-    const finishAfterDropHandlers = () => {
-      if (deferredDropCleanup !== null) return;
-      deferredDropCleanup = window.setTimeout(() => {
-        deferredDropCleanup = null;
-        clearExternalDragSession();
-      }, 0);
-    };
-    const handleDocumentDragLeave = (event: DragEvent) => {
-      if (event.relatedTarget) return;
-      if (
-        event.clientX <= 0 ||
-        event.clientY <= 0 ||
-        event.clientX >= window.innerWidth ||
-        event.clientY >= window.innerHeight
-      ) {
-        finishNow();
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        finishNow();
-      }
-    };
-
-    document.addEventListener('drop', finishAfterDropHandlers, true);
-    document.addEventListener('dragend', finishNow, true);
-    document.addEventListener('dragleave', handleDocumentDragLeave, true);
-    document.addEventListener('keydown', handleKeyDown, true);
-
-    return () => {
-      if (deferredDropCleanup !== null) {
-        window.clearTimeout(deferredDropCleanup);
-      }
-      document.removeEventListener('drop', finishAfterDropHandlers, true);
-      document.removeEventListener('dragend', finishNow, true);
-      document.removeEventListener('dragleave', handleDocumentDragLeave, true);
-      document.removeEventListener('keydown', handleKeyDown, true);
-    };
-  }, [clearExternalDragSession, externalDrag]);
+  const clearExternalDragSession = useExternalDropSessionGuards({ active: Boolean(externalDrag), dragCounterRef, clearExternalDragState });
 
   const rejectDropDuringExport = useCallback((e: React.DragEvent) => {
     if (!isExporting) return false;
