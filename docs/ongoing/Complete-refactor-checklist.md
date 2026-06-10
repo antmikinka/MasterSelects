@@ -19,10 +19,10 @@ orchestrator or worker-agent execution run starts.
 - Source implementation: current bounded source packet has explicit write set,
   forbidden files, and gates
 - Current bounded packets:
-  Wave 21 source packets 230-234 are dispatched in parallel for
-  proxyFrameCache follow-up, RenderDispatcher, FlexEqualizerControl,
-  NodeWorkspacePanel, and AIChatPanel splits; docs closure packet
-  `DOCS-CLOSURE-235` is bookkeeping-only.
+  Wave 26 source packets 259-263 are dispatched in parallel for `SAM2Panel`,
+  `TextPreviewEditor`, `registerCoreProperties`, `exportRuntimeReporting`, and
+  the aiTools playback handler; docs closure packet `DOCS-CLOSURE-264` is
+  bookkeeping-only.
 - Completed source/tooling packet: `P0-REG-001`; focused registry checks passed.
 - Completed bounded packet: `P0-BASELINE-REFRESH-001`, read-only plus docs.
 - Completed bounded packet: `P1-CONTRACT-001`, contracts and focused boundary
@@ -2328,6 +2328,72 @@ orchestrator or worker-agent execution run starts.
   and `proxyFrameCache` remains a tracked follow-up at 2324.
 - Wave 20 verification:
   Orchestrator-verified: tsc clean; 10-suite net green (70 tests).
+- Wave 21 closure completed:
+  `P6-PROXYFRAMECACHE-FOLLOWUP-230` reduced `proxyFrameCache` from 2324 to
+  1545 raw lines; the remainder is tracked as a hard-case cache/decoder owner.
+  `P6-RENDERDISPATCHER-SPLIT-231` reduced `RenderDispatcher` from 2050 to 1266
+  raw lines; the remainder is tracked as a hard-case render lifecycle/facade
+  owner. `P5-FLEXEQUALIZERCONTROL-SPLIT-232` reduced
+  `FlexEqualizerControl` from 1831 to 653. `P5-NODEWORKSPACEPANEL-SPLIT-233`
+  reduced `NodeWorkspacePanel` from 1817 to 278. `P7-AICHATPANEL-SPLIT-234`
+  reduced `AIChatPanel` from 1677 to 691. `DOCS-CLOSURE-235` closed the wave
+  bookkeeping.
+- Wave 21 verification:
+  Orchestrator-verified: tsc clean; focused guard/render/persistence nets
+  green. Fix-forward resolved TS1294 in scrub audio playback.
+- Wave 22 closure completed:
+  `P6-SCRUBBINGCACHE-SPLIT-236` reduced `ScrubbingCache` from 1595 to 252 raw
+  lines. `P6-COMPOSITIONRENDERER-SPLIT-237` reduced `compositionRenderer` from
+  1591 to 625. `P7-NATIVEHELPERCLIENT-SPLIT-238` reduced
+  `NativeHelperClient` from 1573 to 679. `P6-LAYERCOLLECTOR-SPLIT-239`
+  reduced `LayerCollector` from 1553 to 140. `P6-PARALLELDECODEMANAGER-SPLIT-240`
+  reduced `ParallelDecodeManager` from 1512 to 1193; the remainder is tracked
+  as a hard-case decoder-ownership module.
+- Wave 22 verification:
+  Orchestrator-verified: tsc clean; focused guard/render/persistence nets
+  green.
+- Wave 23 closure completed:
+  `P6-CLIPPREPARATION-SPLIT-241` reduced `ClipPreparation` from 1437 to 145 raw
+  lines. `P6-PROXYGENERATOR-SPLIT-242` reduced `proxyGenerator` from 1427 to
+  698. `P7-TOOLCHOREOGRAPHIES-SPLIT-243` reduced `toolChoreographies` from
+  1379 to 36. `P6-CLIPGRAPHPROJECTION-SPLIT-244` reduced
+  `clipGraphProjection` from 1367 to 31. `P7-MODELRUNTIMECACHE-SPLIT-245`
+  reduced `ModelRuntimeCache` from 1295 to 141. `P6-NESTEDCOMPRENDERER-SPLIT-246`
+  reduced `NestedCompRenderer` from 1269 to 693.
+- Wave 23 verification:
+  Orchestrator-verified: tsc clean; focused guard/render/persistence nets
+  green.
+- Wave 24 closure completed:
+  `P6-GAUSSIANSPLATGPURENDERER-SPLIT-247` reduced
+  `GaussianSplatGpuRenderer` from 1272 to 699 raw lines. `P5-MASKOVERLAY-SPLIT-248`
+  reduced `MaskOverlay` from 1267 to 519. `P3-PROJECTFILESERVICE-SPLIT-249`
+  reduced `ProjectFileService` from 1264 to 667. `P5-AUDIOEDITSTACKTAB-SPLIT-250`
+  reduced `AudioEditStackTab` from 1230 to 609. `P5-TOOLBAR-SPLIT-251`
+  reduced `Toolbar` from 1213 to 457. `P6-NATIVESCENERENDERER-SPLIT-252`
+  reduced `NativeSceneRenderer` from 1208 to 646.
+- Wave 24 verification:
+  Orchestrator-verified: tsc clean; focused guard/render/persistence nets
+  green.
+- Wave 25 closure completed:
+  `P6-THUMBNAILRENDERER-SPLIT-253` reduced `thumbnailRenderer` from 1198 to 300
+  raw lines. `P6-WEBGPUENGINE-SPLIT-254` reduced `WebGPUEngine` from 1128 to
+  940 with a conservative lifecycle/facade remainder. `P6-LAYERPLAYBACKMANAGER-SPLIT-255`
+  reduced `layerPlaybackManager` from 1114 to 697. `P3-PROJECTDB-SPLIT-256`
+  reduced `projectDB` from 1108 to 414. `P6-LOUDNESSENVELOPEGENERATOR-SPLIT-257`
+  reduced `LoudnessEnvelopeGenerator` from 1076 to 644. `P5-COLOREDITOR-SPLIT-258`
+  reduced `ColorEditor` from 1070 to 542.
+- Wave 25 audit refresh:
+  Over-700 count is now 78, down from about 114 at goal start. The top tracked
+  remainders are `proxyFrameCache` 1545, `RenderDispatcher` 1266, and
+  `ParallelDecodeManager` 1193 as documented hard cases, followed by active
+  Wave 26 packets `SAM2Panel` 1065, `TextPreviewEditor` 1063,
+  `registerCoreProperties` 1056, `exportRuntimeReporting` 1046, and the
+  aiTools playback handler 1042. `getState` policy redistribution comments in
+  `src/architecture/getStateAccessPolicy.ts` are tracked at maxHits 658,
+  adapter paths 22, and fileCount 206.
+- Wave 25 verification:
+  Orchestrator-verified: tsc clean; focused guard/render/persistence nets
+  green.
 - Product source refactors remain bounded by approved packet write sets.
 
 ## Document Map

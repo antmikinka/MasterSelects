@@ -890,6 +890,21 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 - Wave 20 verification:
   Orchestrator-verified: tsc clean; 10-suite net green (70 tests). Over-700
   count is now 99.
+- Waves 21-25 closure completed:
+  packets 230-258 reduced or closed `proxyFrameCache`, `RenderDispatcher`,
+  `FlexEqualizerControl`, `NodeWorkspacePanel`, `AIChatPanel`,
+  `ScrubbingCache`, `compositionRenderer`, `NativeHelperClient`,
+  `LayerCollector`, `ParallelDecodeManager`, `ClipPreparation`,
+  `proxyGenerator`, `toolChoreographies`, `clipGraphProjection`,
+  `ModelRuntimeCache`, `NestedCompRenderer`, `GaussianSplatGpuRenderer`,
+  `MaskOverlay`, `ProjectFileService`, `AudioEditStackTab`, `Toolbar`,
+  `NativeSceneRenderer`, `thumbnailRenderer`, `WebGPUEngine`,
+  `layerPlaybackManager`, `projectDB`, `LoudnessEnvelopeGenerator`, and
+  `ColorEditor`; `proxyFrameCache`, `RenderDispatcher`, and
+  `ParallelDecodeManager` remain documented hard-case remainders.
+- Wave 25 verification:
+  Orchestrator-verified: tsc clean; focused guard/render/persistence nets
+  green. Over-700 count is now 78.
 
 ## High-Conflict Ownership Snapshot
 
@@ -908,42 +923,46 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 | `src/engine/**`, `src/components/preview/**`, `src/components/export/**` | later P5/P6 joint packets | read, smoke only | render snapshot/output-router contracts frozen |
 | `src/services/aiTools/**` | later P7 smoke quarantine packets | read, smoke inventory only | Phase 0 smoke thresholds accepted |
 
-## Active Wave 21
+## Active Wave 26
 
-Wave 21 packets are dispatched in parallel with docs-only
-`DOCS-CLOSURE-235`. Keep write sets disjoint and report any needed scope
+Wave 26 packets are dispatched in parallel with docs-only
+`DOCS-CLOSURE-264`. Keep write sets disjoint and report any needed scope
 extension instead of self-extending.
 
-- `P6-PROXYFRAMECACHE-FOLLOWUP-230`: continue `proxyFrameCache` split
-  (currently 2324 raw lines).
-- `P6-RENDERDISPATCHER-SPLIT-231`: split `RenderDispatcher` (currently 2050
+- `P7-SAM2PANEL-SPLIT-259`: split `SAM2Panel` (currently 1065 raw lines).
+- `P5-TEXTPREVIEWEDITOR-SPLIT-260`: split `TextPreviewEditor` (currently 1063
   raw lines).
-- `P5-FLEXEQUALIZERCONTROL-SPLIT-232`: split `FlexEqualizerControl`
-  (currently 1831 raw lines).
-- `P5-NODEWORKSPACEPANEL-SPLIT-233`: split `NodeWorkspacePanel` (currently
-  1817 raw lines).
-- `P7-AICHATPANEL-SPLIT-234`: split `AIChatPanel` (currently 1677 raw lines).
+- `P5-REGISTERCOREPROPERTIES-SPLIT-261`: split `registerCoreProperties`
+  (currently 1056 raw lines).
+- `P5-EXPORTRUNTIMEREPORTING-SPLIT-262`: split `exportRuntimeReporting`
+  (currently 1046 raw lines).
+- `P7-AITOOLS-PLAYBACK-HANDLER-SPLIT-263`: split the aiTools playback handler
+  (currently 1042 raw lines).
 
 ## Queued Packets
 
-- `P6-SCRUBBINGCACHE-SPLIT`: split `ScrubbingCache` (currently 1595 raw
+- `P6-FREQUENCYPHASEANALYSISGENERATOR-SPLIT`: split
+  `FrequencyPhaseAnalysisGenerator` (currently 1040 raw lines).
+- `P7-KIEAISERVICE-SPLIT`: split `kieAiService` (currently 1032 raw lines).
+- `P6-CLIPTRANSCRIBER-SPLIT`: split `clipTranscriber` (currently 1018 raw
   lines).
-- `P6-COMPOSITIONRENDERER-SPLIT`: split `compositionRenderer` (currently 1591
-  raw lines).
-- `P7-NATIVEHELPERCLIENT-SPLIT`: split `NativeHelperClient` (currently 1573
-  raw lines).
-- `P6-LAYERCOLLECTOR-SPLIT`: split `LayerCollector` (currently 1553 raw
-  lines).
-- `P6-PARALLELDECODEMANAGER-SPLIT`: split `ParallelDecodeManager` (currently
-  1512 raw lines).
-- `P5-EXPORTPANEL-FOLLOWUP`: continue `ExportPanel` split (currently 984 raw
-  lines), including advanced sections.
-- `P5-SCENE-OBJECT-OVERLAY-FOLLOWUP`: extract pointer-lock/listener
-  orchestration from `SceneObjectOverlay` (currently 814 raw lines).
+- `P5-TRANSFORMTAB-SPLIT`: split `TransformTab` (currently 1015 raw lines).
+- `P5-LEGALDIALOG-SPLIT`: split `LegalDialog` (currently 1009 raw lines).
+- `P6-WAVEFORMPYRAMIDGENERATOR-SPLIT`: split `WaveformPyramidGenerator`
+  (currently 1006 raw lines).
+- `P6-PROXYFRAMECACHE-HARD-CASE-FOLLOWUP`: revisit `proxyFrameCache` remainder
+  (currently 1545 raw lines) only with cache/decoder ownership write set.
+- `P6-RENDERDISPATCHER-HARD-CASE-FOLLOWUP`: revisit `RenderDispatcher`
+  remainder (currently 1266 raw lines) only with lifecycle/facade write set.
+- `P6-PARALLELDECODEMANAGER-HARD-CASE-FOLLOWUP`: revisit
+  `ParallelDecodeManager` remainder (currently 1193 raw lines) only with
+  decoder-ownership write set.
 - `P8-RETIRED-PATH-LEDGER-PASS`: refresh retired-path ledger status.
 - `P8-FINAL-FULL-CHAIN`: run final full chain when the refactor wave is ready.
+- `P8-CLOSING-SUMMARY`: write the closing summary after final verification.
 
 ## Immediate Next Step
 
-Track wave 21 packet reports and keep this file to the active wave plus the
-next queued packets. Do not reopen completed wave 19-20 packets.
+Track wave 26 packet reports and keep this file to the active wave plus the
+next queued packets. Do not reopen completed wave 21-25 packets except through
+the named hard-case follow-ups.

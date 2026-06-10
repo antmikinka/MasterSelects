@@ -1,0 +1,105 @@
+import type {
+  RenderResourceDescriptor,
+  TimelineRuntimeAdmissionDecision,
+} from '../runtimeCoordinatorTypes';
+import { createRenderResourceDescriptorFromDemand } from '../runtimeProviderDemandBridge';
+import {
+  canRetainExportResource,
+  createExportDemand,
+  getRunOwner,
+  getRunResourceId,
+  removeUndefinedValues,
+  retainExportResource,
+} from './core';
+import type { ExportAudioBufferReport, ExportPreviewFrameReport } from './types';
+
+function createExportAudioBufferResource(report: ExportAudioBufferReport): RenderResourceDescriptor {
+  const audioSourceId = getRunResourceId(
+    report.runId,
+    `audio:${report.stage}:${report.clipId ?? report.trackId ?? 'timeline'}`
+  );
+  const heapBytes = Math.max(
+    0,
+    report.buffer.length * report.buffer.numberOfChannels * Float32Array.BYTES_PER_ELEMENT
+  );
+
+  return createRenderResourceDescriptorFromDemand(createExportDemand({
+    id: audioSourceId,
+    resourceKind: 'audio-source-clock',
+    owner: getRunOwner(report.runId, report.clipId, report.mediaFileId),
+    source: removeUndefinedValues({
+      mediaFileId: report.mediaFileId,
+      clipId: report.clipId,
+      trackId: report.trackId,
+    }),
+    dimensions: {
+      sampleRate: report.buffer.sampleRate,
+      channelCount: report.buffer.numberOfChannels,
+      durationSeconds: report.buffer.duration,
+    },
+    tags: ['export', 'audio', report.stage],
+  }), {
+    resourceKind: 'audio-source-clock',
+    audioSourceId,
+    clockId: audioSourceId,
+    memoryCost: {
+      heapBytes,
+      decodedFrameBytes: heapBytes,
+    },
+    diagnostics: {
+      status: 'ok',
+      audioClock: {
+        clockId: audioSourceId,
+        status: 'ok',
+        sampleRate: report.buffer.sampleRate,
+        channelCount: report.buffer.numberOfChannels,
+      },
+    },
+    label: `Export audio ${report.stage}`,
+  });
+}
+
+export function canRetainExportAudioBuffer(
+  report: ExportAudioBufferReport
+): TimelineRuntimeAdmissionDecision {
+  return canRetainExportResource(createExportAudioBufferResource(report));
+}
+
+export function reportExportAudioBuffer(report: ExportAudioBufferReport): void {
+  retainExportResource(createExportAudioBufferResource(report));
+}
+
+function createExportPreviewFrameResource(report: ExportPreviewFrameReport): RenderResourceDescriptor {
+  const resourceId = getRunResourceId(report.runId, 'preview-frame:image-bitmap');
+  return createRenderResourceDescriptorFromDemand(createExportDemand({
+    id: resourceId,
+    resourceKind: 'image-canvas',
+    owner: getRunOwner(report.runId),
+    dimensions: {
+      width: report.width,
+      height: report.height,
+    },
+    source: {
+      previewPath: report.currentTime.toFixed(3),
+    },
+    tags: ['export', 'preview-frame'],
+  }), {
+    resourceKind: 'image-canvas',
+    imageKind: 'image-bitmap',
+    imageId: getRunResourceId(report.runId, 'preview-frame'),
+    memoryCost: {
+      heapBytes: report.width * report.height * 4,
+    },
+    label: 'Export preview frame bitmap',
+  });
+}
+
+export function canRetainExportPreviewFrame(
+  report: ExportPreviewFrameReport
+): TimelineRuntimeAdmissionDecision {
+  return canRetainExportResource(createExportPreviewFrameResource(report));
+}
+
+export function reportExportPreviewFrame(report: ExportPreviewFrameReport): void {
+  retainExportResource(createExportPreviewFrameResource(report));
+}

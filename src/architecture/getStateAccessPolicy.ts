@@ -74,7 +74,10 @@ export const classCHardTargets = [
   { path: 'src/components/panels/properties/TranscriptTab.tsx', maxCurrentHits: 3 },
   { path: 'src/components/panels/properties/TransformTab.tsx', maxCurrentHits: 2 },
   { path: 'src/components/panels/properties/VolumeTab.tsx', maxCurrentHits: 2 },
-  { path: 'src/components/panels/SAM2Panel.tsx', maxCurrentHits: 32 },
+  // Packet 259 split: 4 path-mapping reads moved into the MatAnyone file
+  // helpers (32 -> 28 + 4, cluster total conserved).
+  { path: 'src/components/panels/SAM2Panel.tsx', maxCurrentHits: 28 },
+  { path: 'src/components/panels/sam2/MatAnyoneFileHelpers.ts', maxCurrentHits: 4 },
   { path: 'src/components/panels/TextTab.tsx', maxCurrentHits: 2 },
   { path: 'src/components/pianoRoll/PianoRoll.tsx', maxCurrentHits: 4 },
   { path: 'src/components/pianoRoll/PianoRollBoot.ts', maxCurrentHits: 1 },
@@ -193,7 +196,9 @@ export const classCHardTargets = [
   { path: 'src/services/multicamAnalyzer.ts', maxCurrentHits: 1 },
   { path: 'src/services/performanceMonitor.ts', maxCurrentHits: 1 },
   { path: 'src/services/playbackHealthMonitor.ts', maxCurrentHits: 7 },
-  { path: 'src/services/properties/registerCoreProperties.ts', maxCurrentHits: 1 },
+  // Packet 261 split: the single hit moved into the vector-animation
+  // property module (registrar is getState-free).
+  { path: 'src/services/properties/vectorAnimationProperties.ts', maxCurrentHits: 1 },
   { path: 'src/services/proxyFrameCache.ts', maxCurrentHits: 4 },
   { path: 'src/services/renderScheduler.ts', maxCurrentHits: 12 },
   { path: 'src/services/sceneDescriber.ts', maxCurrentHits: 5 },
@@ -285,7 +290,8 @@ export const getStateAccessPolicyBaselines = {
   // 203 -> 205: packet-246 nestedComp modules (10 -> 1+8+1, total conserved).
   // 205 -> 206: packet-254 output-window controller entry (12 -> 5+7);
   // packet-253 thumbnail entry replaced by sampling module (1 -> 1).
-  classCHardTargetFileCount: 206,
+  // 206 -> 207: packet-259 MatAnyone file helpers (32 -> 28+4).
+  classCHardTargetFileCount: 207,
   // 669 -> 665 (packet 188 Preview cut) -> 664 (packet 209 retired one hit)
   // -> 659 (packet 231 retired the dispatcher ceiling slack: 16 -> 11 actual)
   // -> 658 (packet 237 retired one compositionRenderer hit).

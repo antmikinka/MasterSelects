@@ -4,230 +4,37 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type ChangeEvent,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import {
-  createTextBoundsNumericProperty,
-  type Layer,
-  type MaskVertex,
-  type TextBoundsPath,
-  type TextClipProperties,
-  type TimelineClip,
-} from '../../types';
+import { createTextBoundsNumericProperty } from "../../types/animationProperties";
+import type { MaskVertex } from "../../types/masks";
 import {
   createTextBoundsFromRect,
-  cloneTextBoundsPath,
-  measureTextWithLetterSpacing,
-  resolveTextBoundsPath,
-  resolveTextBoxRect,
-  wrapTextToShapeLines,
-  wrapTextToLines,
 } from '../../services/textLayout';
+import type { OverlayPoint } from './editModeOverlayMath';
+import { TextPreviewChrome } from './textPreview/TextPreviewChrome';
 import {
-  projectLayerUvToCanvas,
-  unprojectCanvasToLayerUv,
-  type OverlayPoint,
-} from './editModeOverlayMath';
-
-interface TextPreviewEditorProps {
-  clip: TimelineClip;
-  layer: Layer;
-  effectiveResolution: { width: number; height: number };
-  canvasSize: { width: number; height: number };
-  canvasInContainer: { x: number; y: number; width: number; height: number };
-  viewZoom: number;
-  enabled: boolean;
-  activeTextBounds?: TextBoundsPath;
-  updateTextProperties: (clipId: string, props: Partial<TextClipProperties>) => void;
-  updateTextBoundsVertex: (clipId: string, vertexId: string, updates: Partial<MaskVertex>, recordKeyframe?: boolean) => void;
-  updateTextBoundsVertices: (clipId: string, vertexUpdates: Array<{ vertexId: string; updates: Partial<MaskVertex> }>, recordKeyframe?: boolean) => void;
-  setPropertyValue: (clipId: string, property: ReturnType<typeof createTextBoundsNumericProperty>, value: number) => void;
-}
-
-type DragKind = 'create' | 'move' | 'vertex' | 'edge';
-
-interface DragState {
-  kind: DragKind;
-  pointerId: number;
-  start: OverlayPoint;
-  current: OverlayPoint;
-  startBounds: TextBoundsPath;
-  startSourcePoint?: OverlayPoint;
-  vertexId?: string;
-  edgeVertexIds?: [string, string];
-}
-
-interface ProjectedVertex {
-  vertex: MaskVertex;
-  point: OverlayPoint;
-}
-
-interface ProjectedEdge {
-  id: string;
-  fromVertexId: string;
-  toVertexId: string;
-  pathD: string;
-  midpoint: OverlayPoint;
-}
-
-interface EditorGeometry {
-  sourceWidth: number;
-  sourceHeight: number;
-  bounds: TextBoundsPath;
-  box: ReturnType<typeof resolveTextBoxRect>;
-  vertices: ProjectedVertex[];
-  edges: ProjectedEdge[];
-  pathD: string;
-  corners: {
-    tl: OverlayPoint;
-    tr: OverlayPoint;
-    bl: OverlayPoint;
-  };
-  width: number;
-  height: number;
-  rotation: number;
-  scaleX: number;
-  scaleY: number;
-  projectSourcePoint: (sourceX: number, sourceY: number) => OverlayPoint;
-}
-
-interface SelectionPolygon {
-  id: string;
-  points: string;
-}
-
-function distance(a: OverlayPoint, b: OverlayPoint): number {
-  return Math.hypot(b.x - a.x, b.y - a.y);
-}
-
-function atLeast(value: number, minimum: number): number {
-  return value < minimum ? minimum : value;
-}
-
-function roundNormalizedToPixel(value: number, dimension: number): number {
-  return Math.round(value * Math.max(1, dimension)) / Math.max(1, dimension);
-}
-
-function getFontCss(props: TextClipProperties): string {
-  const fontStyle = props.fontStyle === 'italic' ? 'italic' : 'normal';
-  return `${fontStyle} ${props.fontWeight} ${props.fontSize}px "${props.fontFamily}"`;
-}
-
-function getSourceDimensions(
-  clip: TimelineClip,
-  layer: Layer,
-  fallback: { width: number; height: number },
-): { width: number; height: number } {
-  const sourceCanvas = clip.source?.textCanvas ?? layer.source?.textCanvas;
-  return {
-    width: sourceCanvas?.width || fallback.width,
-    height: sourceCanvas?.height || fallback.height,
-  };
-}
-
-function selectionRect(start: OverlayPoint, end: OverlayPoint): CSSProperties {
-  const left = Math.min(start.x, end.x);
-  const top = Math.min(start.y, end.y);
-  return {
-    left,
-    top,
-    width: Math.abs(end.x - start.x),
-    height: Math.abs(end.y - start.y),
-  };
-}
-
-function hasVisibleSelectionRect(start: OverlayPoint, end: OverlayPoint): boolean {
-  return Math.abs(end.x - start.x) >= 6 && Math.abs(end.y - start.y) >= 6;
-}
+  buildTextEditorGeometry,
+  roundNormalizedToPixel,
+  sourcePointFromContainer as resolveSourcePointFromContainer,
+} from './textPreview/textPreviewGeometry';
+import {
+  buildSelectionPolygons,
+  buildTextEditorStyle,
+} from './textPreview/textPreviewLayout';
+import type {
+  DragKind,
+  DragState,
+  EditorGeometry,
+  TextPreviewEditorProps,
+} from './textPreview/textPreviewTypes';
+import { useTextSelectionState } from './textPreview/useTextSelectionState';
 
 function shouldMoveWholeText(event: Pick<ReactPointerEvent, 'ctrlKey' | 'metaKey'>): boolean {
   return event.ctrlKey || event.metaKey;
-}
-
-function selectionLineLeft(
-  ctx: Pick<CanvasRenderingContext2D, 'measureText'>,
-  lineText: string,
-  lineLeft: number,
-  lineRight: number,
-  lineWidth: number,
-  props: TextClipProperties,
-): number {
-  const textWidth = measureTextWithLetterSpacing(ctx, lineText, props.letterSpacing);
-  if (props.textAlign === 'center') {
-    return lineLeft + lineWidth / 2 - textWidth / 2;
-  }
-  if (props.textAlign === 'right') {
-    return lineRight - textWidth;
-  }
-  return lineLeft;
-}
-
-function pointString(points: OverlayPoint[]): string {
-  return points.map(point => `${point.x},${point.y}`).join(' ');
-}
-
-function buildSvgPath(
-  bounds: TextBoundsPath,
-  sourceWidth: number,
-  sourceHeight: number,
-  projectSourcePoint: (sourceX: number, sourceY: number) => OverlayPoint,
-): string {
-  const vertices = bounds.vertices;
-  if (vertices.length === 0) return '';
-
-  const projectVertex = (vertex: MaskVertex, handle?: 'in' | 'out') => {
-    const handleOffset = handle === 'in'
-      ? vertex.handleIn
-      : handle === 'out'
-        ? vertex.handleOut
-        : { x: 0, y: 0 };
-    return projectSourcePoint(
-      (vertex.x + bounds.position.x + handleOffset.x) * sourceWidth,
-      (vertex.y + bounds.position.y + handleOffset.y) * sourceHeight,
-    );
-  };
-
-  const first = projectVertex(vertices[0]);
-  const commands = [`M ${first.x} ${first.y}`];
-  for (let index = 1; index < vertices.length; index += 1) {
-    const previous = vertices[index - 1];
-    const current = vertices[index];
-    const end = projectVertex(current);
-    if (
-      previous.handleOut.x === 0 &&
-      previous.handleOut.y === 0 &&
-      current.handleIn.x === 0 &&
-      current.handleIn.y === 0
-    ) {
-      commands.push(`L ${end.x} ${end.y}`);
-    } else {
-      const cp1 = projectVertex(previous, 'out');
-      const cp2 = projectVertex(current, 'in');
-      commands.push(`C ${cp1.x} ${cp1.y} ${cp2.x} ${cp2.y} ${end.x} ${end.y}`);
-    }
-  }
-
-  if (bounds.closed && vertices.length > 1) {
-    const previous = vertices[vertices.length - 1];
-    const current = vertices[0];
-    if (
-      previous.handleOut.x !== 0 ||
-      previous.handleOut.y !== 0 ||
-      current.handleIn.x !== 0 ||
-      current.handleIn.y !== 0
-    ) {
-      const cp1 = projectVertex(previous, 'out');
-      const cp2 = projectVertex(current, 'in');
-      commands.push(`C ${cp1.x} ${cp1.y} ${cp2.x} ${cp2.y} ${first.x} ${first.y}`);
-    }
-    commands.push('Z');
-  }
-
-  return commands.join(' ');
 }
 
 export function TextPreviewEditor({
@@ -252,7 +59,11 @@ export function TextPreviewEditor({
   const [draftText, setDraftText] = useState(textProperties?.text ?? '');
   const [isEditing, setIsEditing] = useState(false);
   const [dragSelection, setDragSelection] = useState<{ start: OverlayPoint; current: OverlayPoint } | null>(null);
-  const [textSelection, setTextSelection] = useState({ start: 0, end: 0 });
+  const {
+    textSelection,
+    setTextSelection,
+    syncTextSelection,
+  } = useTextSelectionState({ textareaRef, isEditing });
 
   useEffect(() => {
     if (!isEditing) {
@@ -284,73 +95,16 @@ export function TextPreviewEditor({
 
   const geometry = useMemo<EditorGeometry | null>(() => {
     if (!textProperties) return null;
-    const { width: sourceWidth, height: sourceHeight } = getSourceDimensions(clip, layer, effectiveResolution);
-    const bounds = activeTextBounds
-      ? cloneTextBoundsPath(activeTextBounds)
-      : resolveTextBoundsPath(textProperties, sourceWidth, sourceHeight);
-    const box = resolveTextBoxRect({ ...textProperties, textBounds: bounds }, sourceWidth, sourceHeight);
-    const params = {
-      sourceWidth,
-      sourceHeight,
-      outputWidth: effectiveResolution.width,
-      outputHeight: effectiveResolution.height,
-      canvasWidth: canvasSize.width,
-      canvasHeight: canvasSize.height,
-      position: layer.position,
-      scale: layer.scale,
-      rotation: layer.rotation,
-    };
-    const toContainer = (point: OverlayPoint): OverlayPoint => ({
-      x: canvasInContainer.x + point.x * viewZoom,
-      y: canvasInContainer.y + point.y * viewZoom,
+    return buildTextEditorGeometry({
+      clip,
+      layer,
+      textProperties,
+      activeTextBounds,
+      effectiveResolution,
+      canvasSize,
+      canvasInContainer,
+      viewZoom,
     });
-    const projectSourcePoint = (sourceX: number, sourceY: number): OverlayPoint => toContainer(projectLayerUvToCanvas({
-      x: sourceX / sourceWidth,
-      y: sourceY / sourceHeight,
-    }, params));
-
-    const tl = projectSourcePoint(box.x, box.y);
-    const tr = projectSourcePoint(box.x + box.width, box.y);
-    const bl = projectSourcePoint(box.x, box.y + box.height);
-    const width = atLeast(distance(tl, tr), 1);
-    const height = atLeast(distance(tl, bl), 1);
-    const vertices = bounds.vertices.map(vertex => ({
-      vertex,
-      point: projectSourcePoint(
-        (vertex.x + bounds.position.x) * sourceWidth,
-        (vertex.y + bounds.position.y) * sourceHeight,
-      ),
-    }));
-    const edges = vertices.map((current, index) => {
-      const next = vertices[(index + 1) % vertices.length];
-      return {
-        id: `${current.vertex.id}-${next.vertex.id}`,
-        fromVertexId: current.vertex.id,
-        toVertexId: next.vertex.id,
-        pathD: `M ${current.point.x} ${current.point.y} L ${next.point.x} ${next.point.y}`,
-        midpoint: {
-          x: (current.point.x + next.point.x) / 2,
-          y: (current.point.y + next.point.y) / 2,
-        },
-      };
-    });
-
-    return {
-      sourceWidth,
-      sourceHeight,
-      bounds,
-      box,
-      vertices,
-      edges,
-      pathD: buildSvgPath(bounds, sourceWidth, sourceHeight, projectSourcePoint),
-      corners: { tl, tr, bl },
-      width,
-      height,
-      rotation: Math.atan2(tr.y - tl.y, tr.x - tl.x),
-      scaleX: width / Math.max(1, box.width),
-      scaleY: height / Math.max(1, box.height),
-      projectSourcePoint,
-    };
   }, [
     canvasInContainer.x,
     canvasInContainer.y,
@@ -363,31 +117,6 @@ export function TextPreviewEditor({
     activeTextBounds,
     viewZoom,
   ]);
-
-  const syncTextSelection = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    const start = Math.min(textarea.selectionStart, textarea.selectionEnd);
-    const end = Math.max(textarea.selectionStart, textarea.selectionEnd);
-    setTextSelection(previous => (
-      previous.start === start && previous.end === end
-        ? previous
-        : { start, end }
-    ));
-  }, []);
-
-  // Update the selection highlight live while dragging (the textarea's onSelect
-  // doesn't fire reliably mid-drag). `selectionchange` fires continuously.
-  useEffect(() => {
-    if (!isEditing) return undefined;
-    const handleSelectionChange = () => {
-      if (document.activeElement === textareaRef.current) {
-        syncTextSelection();
-      }
-    };
-    document.addEventListener('selectionchange', handleSelectionChange);
-    return () => document.removeEventListener('selectionchange', handleSelectionChange);
-  }, [isEditing, syncTextSelection]);
 
   const focusEditor = useCallback((selectAll = false) => {
     selectAllOnFocusRef.current = selectAll;
@@ -406,39 +135,21 @@ export function TextPreviewEditor({
 
   const sourcePointFromContainer = useCallback((point: OverlayPoint): OverlayPoint | null => {
     if (!geometry) return null;
-    const canvasPoint = {
-      x: (point.x - canvasInContainer.x) / Math.max(0.0001, viewZoom),
-      y: (point.y - canvasInContainer.y) / Math.max(0.0001, viewZoom),
-    };
-    const uv = unprojectCanvasToLayerUv(canvasPoint, {
-      sourceWidth: geometry.sourceWidth,
-      sourceHeight: geometry.sourceHeight,
-      outputWidth: effectiveResolution.width,
-      outputHeight: effectiveResolution.height,
-      canvasWidth: canvasSize.width,
-      canvasHeight: canvasSize.height,
-      position: layer.position,
-      scale: layer.scale,
-      rotation: layer.rotation,
-      uvClampMin: -1000,
-      uvClampMax: 1001,
+    return resolveSourcePointFromContainer({
+      point,
+      geometry,
+      canvasInContainer,
+      canvasSize,
+      effectiveResolution,
+      layer,
+      viewZoom,
     });
-
-    return {
-      x: uv.x * geometry.sourceWidth,
-      y: uv.y * geometry.sourceHeight,
-    };
   }, [
-    canvasInContainer.x,
-    canvasInContainer.y,
-    canvasSize.height,
-    canvasSize.width,
-    effectiveResolution.height,
-    effectiveResolution.width,
+    canvasInContainer,
+    canvasSize,
+    effectiveResolution,
     geometry,
-    layer.position,
-    layer.rotation,
-    layer.scale,
+    layer,
     viewZoom,
   ]);
 
@@ -827,133 +538,39 @@ export function TextPreviewEditor({
     }
   }, []);
 
-  const editorStyle = useMemo<CSSProperties | null>(() => {
-    if (!geometry || !textProperties) return null;
-    const fontSize = Math.max(1, textProperties.fontSize * geometry.scaleY);
-    const wrapWidth = Math.max(1, geometry.box.width);
-    const lineCount = (() => {
-      if (typeof document === 'undefined') {
-        return Math.max(1, textProperties.text.split('\n').length);
-      }
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        return Math.max(1, textProperties.text.split('\n').length);
-      }
-      ctx.font = getFontCss(textProperties);
-      return wrapTextToLines(ctx, draftText, wrapWidth, textProperties.letterSpacing).length;
-    })();
-    const contentHeight = lineCount * textProperties.fontSize * textProperties.lineHeight;
-    const verticalInsetSource = textProperties.verticalAlign === 'bottom'
-      ? Math.max(0, geometry.box.height - contentHeight)
-      : textProperties.verticalAlign === 'middle'
-        ? Math.max(0, (geometry.box.height - contentHeight) / 2)
-        : 0;
+  const handleTextFocus = useCallback(() => {
+    setIsEditing(true);
+    syncTextSelection();
+  }, [syncTextSelection]);
 
-    return {
-      left: geometry.corners.tl.x,
-      top: geometry.corners.tl.y,
-      width: geometry.width,
-      height: geometry.height,
-      transform: `rotate(${geometry.rotation}rad)`,
-      fontFamily: textProperties.fontFamily,
-      fontSize,
-      fontStyle: textProperties.fontStyle,
-      fontWeight: textProperties.fontWeight,
-      lineHeight: textProperties.lineHeight,
-      letterSpacing: textProperties.letterSpacing * geometry.scaleX,
-      textAlign: textProperties.textAlign,
-      color: 'transparent',
-      caretColor: isEditing ? textProperties.color : 'transparent',
-      paddingTop: verticalInsetSource * geometry.scaleY,
-    } as CSSProperties;
+  const handleTextBlur = useCallback(() => {
+    setIsEditing(false);
+    setTextSelection({ start: 0, end: 0 });
+  }, [setTextSelection]);
+
+  const handlePointerCancel = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    finishDrag(event.currentTarget, event.pointerId);
+  }, [finishDrag]);
+
+  const editorStyle = useMemo(() => {
+    if (!geometry || !textProperties) return null;
+    return buildTextEditorStyle({
+      geometry,
+      textProperties,
+      draftText,
+      isEditing,
+    });
   }, [draftText, geometry, isEditing, textProperties]);
 
-  const selectionPolygons = useMemo<SelectionPolygon[]>(() => {
-    if (!isEditing || !geometry || !textProperties || textSelection.start === textSelection.end) {
-      return [];
-    }
-    if (typeof document === 'undefined') return [];
-
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return [];
-
-    ctx.font = getFontCss(textProperties);
-    const lineHeightPx = textProperties.fontSize * textProperties.lineHeight;
-    const topBaseline = geometry.box.y + textProperties.fontSize;
-    const firstPassLines = wrapTextToShapeLines(
-      ctx,
+  const selectionPolygons = useMemo(() => {
+    if (!geometry || !textProperties) return [];
+    return buildSelectionPolygons({
+      geometry,
+      textProperties,
       draftText,
-      geometry.bounds,
-      geometry.box,
-      geometry.sourceWidth,
-      geometry.sourceHeight,
-      textProperties.fontSize,
-      textProperties.lineHeight,
-      textProperties.letterSpacing,
-      topBaseline,
-    );
-    const totalHeight = firstPassLines.length * lineHeightPx;
-    const startY = textProperties.verticalAlign === 'bottom'
-      ? geometry.box.y + Math.max(0, geometry.box.height - totalHeight) + textProperties.fontSize
-      : textProperties.verticalAlign === 'middle'
-        ? geometry.box.y + Math.max(0, (geometry.box.height - totalHeight) / 2) + textProperties.fontSize
-        : topBaseline;
-    const lines = wrapTextToShapeLines(
-      ctx,
-      draftText,
-      geometry.bounds,
-      geometry.box,
-      geometry.sourceWidth,
-      geometry.sourceHeight,
-      textProperties.fontSize,
-      textProperties.lineHeight,
-      textProperties.letterSpacing,
-      startY,
-    );
-
-    const selectionStart = Math.min(textSelection.start, textSelection.end);
-    const selectionEnd = Math.max(textSelection.start, textSelection.end);
-    const polygons: SelectionPolygon[] = [];
-
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index]!;
-      const start = Math.max(selectionStart, line.start);
-      const end = Math.min(selectionEnd, line.end);
-      if (end <= start || line.text.length === 0) continue;
-
-      const visualStart = Math.max(0, Math.min(line.text.length, start - line.start));
-      const visualEnd = Math.max(visualStart, Math.min(line.text.length, end - line.start));
-      if (visualEnd <= visualStart) continue;
-
-      const leftEdge = selectionLineLeft(ctx, line.text, line.left, line.right, line.width, textProperties);
-      const selectedLeft = leftEdge + measureTextWithLetterSpacing(
-        ctx,
-        line.text.slice(0, visualStart),
-        textProperties.letterSpacing,
-      );
-      const selectedRight = leftEdge + measureTextWithLetterSpacing(
-        ctx,
-        line.text.slice(0, visualEnd),
-        textProperties.letterSpacing,
-      );
-      if (selectedRight <= selectedLeft) continue;
-
-      const yTop = line.y - textProperties.fontSize;
-      const yBottom = yTop + lineHeightPx;
-      polygons.push({
-        id: `selection-${index}-${start}-${end}`,
-        points: pointString([
-          geometry.projectSourcePoint(selectedLeft, yTop),
-          geometry.projectSourcePoint(selectedRight, yTop),
-          geometry.projectSourcePoint(selectedRight, yBottom),
-          geometry.projectSourcePoint(selectedLeft, yBottom),
-        ]),
-      });
-    }
-
-    return polygons;
+      isEditing,
+      textSelection,
+    });
   }, [draftText, geometry, isEditing, textProperties, textSelection.end, textSelection.start]);
 
   const selectionClipPathId = `preview-text-selection-clip-${clip.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
@@ -963,101 +580,29 @@ export function TextPreviewEditor({
   }
 
   return (
-    <div
-      ref={layerRef}
-      className="preview-text-editor-layer"
+    <TextPreviewChrome
+      layerRef={layerRef}
+      textareaRef={textareaRef}
+      isEditing={isEditing}
+      draftText={draftText}
+      editorStyle={editorStyle}
+      geometry={geometry}
+      dragSelection={dragSelection}
+      selectionPolygons={selectionPolygons}
+      selectionClipPathId={selectionClipPathId}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
-      onPointerCancel={(event) => finishDrag(event.currentTarget, event.pointerId)}
-    >
-      <div
-        className="preview-text-area-capture"
-        onPointerDown={handleCapturePointerDown}
-      />
-      {dragSelection && hasVisibleSelectionRect(dragSelection.start, dragSelection.current) && (
-        <div
-          className="preview-text-draft-box"
-          style={selectionRect(dragSelection.start, dragSelection.current)}
-        />
-      )}
-      <textarea
-        ref={textareaRef}
-        className={`preview-text-editor-input ${isEditing ? 'editing' : ''}`}
-        value={draftText}
-        onChange={handleTextChange}
-        onFocus={() => {
-          setIsEditing(true);
-          syncTextSelection();
-        }}
-        onBlur={() => {
-          setIsEditing(false);
-          setTextSelection({ start: 0, end: 0 });
-        }}
-        onKeyDown={handleTextKeyDown}
-        onKeyUp={syncTextSelection}
-        onMouseDown={(event) => event.stopPropagation()}
-        onMouseUp={syncTextSelection}
-        onPointerDown={handleInputPointerDown}
-        onSelect={syncTextSelection}
-        spellCheck={false}
-        style={editorStyle}
-      />
-      <svg className="preview-text-bounds-svg" width="100%" height="100%">
-        {geometry.pathD && (
-          <defs>
-            <clipPath id={selectionClipPathId}>
-              <path d={geometry.pathD} />
-            </clipPath>
-          </defs>
-        )}
-        {selectionPolygons.map(polygon => (
-          <polygon
-            key={polygon.id}
-            className="preview-text-selection-highlight"
-            points={polygon.points}
-            clipPath={geometry.pathD ? `url(#${selectionClipPathId})` : undefined}
-          />
-        ))}
-        {geometry.pathD && (
-          <path className="preview-text-bounds-outline" d={geometry.pathD} />
-        )}
-        {geometry.edges.map(edge => (
-          <path
-            key={edge.id}
-            className="preview-text-bounds-edge-hit"
-            d={edge.pathD}
-            onPointerDown={(event) => handleEdgePointerDown(event, edge.fromVertexId, edge.toVertexId)}
-            onDoubleClick={(event) => handleEdgeDoubleClick(event, edge.fromVertexId, edge.toVertexId)}
-          >
-            <title>Drag edge to resize. Ctrl-drag for free edge. Double-click to straighten.</title>
-          </path>
-        ))}
-        {geometry.edges.map(edge => (
-          <rect
-            key={`${edge.id}-handle`}
-            className="preview-text-bounds-edge-handle"
-            x={edge.midpoint.x - 3}
-            y={edge.midpoint.y - 3}
-            width={6}
-            height={6}
-            onPointerDown={(event) => handleEdgePointerDown(event, edge.fromVertexId, edge.toVertexId)}
-            onDoubleClick={(event) => handleEdgeDoubleClick(event, edge.fromVertexId, edge.toVertexId)}
-          >
-            <title>Drag edge to resize. Ctrl-drag for free edge. Double-click to straighten.</title>
-          </rect>
-        ))}
-        {geometry.vertices.map(({ vertex, point }) => (
-          <rect
-            key={vertex.id}
-            className="preview-text-bounds-vertex"
-            x={point.x - 4}
-            y={point.y - 4}
-            width={8}
-            height={8}
-            onPointerDown={(event) => handleVertexPointerDown(event, vertex.id)}
-          />
-        ))}
-      </svg>
-    </div>
+      onPointerCancel={handlePointerCancel}
+      onCapturePointerDown={handleCapturePointerDown}
+      onTextChange={handleTextChange}
+      onTextFocus={handleTextFocus}
+      onTextBlur={handleTextBlur}
+      onTextKeyDown={handleTextKeyDown}
+      onTextSelectionSync={syncTextSelection}
+      onInputPointerDown={handleInputPointerDown}
+      onEdgePointerDown={handleEdgePointerDown}
+      onEdgeDoubleClick={handleEdgeDoubleClick}
+      onVertexPointerDown={handleVertexPointerDown}
+    />
   );
 }

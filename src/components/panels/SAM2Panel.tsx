@@ -10,243 +10,19 @@ import { useTimelineStore } from '../../stores/timeline';
 import { useMediaStore } from '../../stores/mediaStore';
 import { requireMediaFileImportResult } from '../../stores/mediaStore/helpers/importResult';
 import { MatAnyoneSetupDialog } from '../common/MatAnyoneSetupDialog';
-import type { TimelineClip } from '../../types';
+import {
+  buildMatAnyoneProjectFileName,
+  createMatAnyoneJobDir,
+  getMatAnyoneFrameRange,
+  getOrCreateMattingMediaFolder,
+  joinNativePath,
+  readNativeFileAsFile,
+  resolveMatAnyoneVideoPath,
+} from './sam2/MatAnyoneFileHelpers';
+import { MaskCreationSection, type MaskMode } from './sam2/MaskCreationSection';
+import { MatAnyoneRunSection } from './sam2/MatAnyoneRunSection';
+import { MatAnyoneOverlays, MatAnyoneStatusBar } from './sam2/MatAnyoneStatusViews';
 import './SAM2Panel.css';
-
-type MaskMode = 'paint' | 'sam2';
-type FileWithPath = File & { path?: string };
-type MatAnyoneClipSource = NonNullable<TimelineClip['source']> & {
-  file?: File;
-  filePath?: string;
-  mediaFileId?: string;
-};
-type MatAnyoneResult = NonNullable<ReturnType<typeof useMatAnyoneStore.getState>['lastResult']>;
-type MatAnyoneFileClient = {
-  getProjectRoot(timeoutMs?: number): Promise<string | null>;
-  createDir(path: string, recursive?: boolean): Promise<boolean>;
-};
-type MatAnyoneImportFileClient = {
-  getDownloadedFile(path: string): Promise<ArrayBuffer | null>;
-};
-
-const VIDEO_EXTENSION_CANDIDATES = ['.mp4', '.mov', '.mkv', '.webm', '.avi', '.m4v'];
-const INVALID_NATIVE_FILE_NAME_CHARS = new Set(['<', '>', ':', '"', '/', '\\', '|', '?', '*']);
-const MATANYONE_PROJECT_OUTPUT_FOLDER = 'MatAnyone2';
-const MATANYONE_MEDIA_ROOT_FOLDER = 'AI Gen';
-const MATANYONE_MEDIA_SUBFOLDER = 'Matting';
-
-function isAbsolutePath(path: string | null | undefined): path is string {
-  if (!path) return false;
-  if (/^[A-Za-z]:[\\/]fakepath[\\/]/i.test(path)) return false;
-  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('/') || path.startsWith('\\\\');
-}
-
-function getBaseName(path: string | null | undefined): string {
-  const trimmed = path?.trim();
-  if (!trimmed) return '';
-  const parts = trimmed.split(/[\\/]/);
-  return parts[parts.length - 1] || '';
-}
-
-function guessMimeTypeFromPath(path: string): string {
-  const extension = getBaseName(path).toLowerCase().split('.').pop();
-  switch (extension) {
-    case 'mp4':
-    case 'm4v':
-      return 'video/mp4';
-    case 'mov':
-      return 'video/quicktime';
-    case 'webm':
-      return 'video/webm';
-    case 'mkv':
-      return 'video/x-matroska';
-    case 'png':
-      return 'image/png';
-    case 'jpg':
-    case 'jpeg':
-      return 'image/jpeg';
-    default:
-      return 'application/octet-stream';
-  }
-}
-
-function hasFileExtension(name: string): boolean {
-  return /\.[^./\\]+$/.test(getBaseName(name));
-}
-
-function sanitizeNativeFileName(name: string): string {
-  const cleaned = Array.from(name, char =>
-    char.charCodeAt(0) < 32 || INVALID_NATIVE_FILE_NAME_CHARS.has(char) ? '_' : char
-  )
-    .join('')
-    .replace(/\s+/g, ' ')
-    .trim();
-  const fallback = cleaned || 'video.mp4';
-  if (fallback.length <= 180) return fallback;
-
-  const dotIndex = fallback.lastIndexOf('.');
-  const extension = dotIndex > 0 ? fallback.slice(dotIndex, Math.min(fallback.length, dotIndex + 16)) : '';
-  return `${fallback.slice(0, 180 - extension.length)}${extension}`;
-}
-
-function joinNativePath(root: string, ...parts: string[]): string {
-  const separator = root.includes('\\') ? '\\' : '/';
-  const base = root.replace(/[\\/]+$/, '');
-  const cleanedParts = parts.map(part => part.replace(/^[\\/]+|[\\/]+$/g, ''));
-  return [base || root, ...cleanedParts].filter(Boolean).join(separator);
-}
-
-function getOrCreateMattingMediaFolder(): string {
-  const mediaStore = useMediaStore.getState();
-  let rootFolder = mediaStore.folders.find(folder => folder.name === MATANYONE_MEDIA_ROOT_FOLDER && !folder.parentId);
-  if (!rootFolder) {
-    rootFolder = mediaStore.createFolder(MATANYONE_MEDIA_ROOT_FOLDER);
-  }
-
-  const latestMediaStore = useMediaStore.getState();
-  let mattingFolder = latestMediaStore.folders.find(folder =>
-    folder.name === MATANYONE_MEDIA_SUBFOLDER && folder.parentId === rootFolder.id
-  );
-  if (!mattingFolder) {
-    mattingFolder = latestMediaStore.createFolder(MATANYONE_MEDIA_SUBFOLDER, rootFolder.id);
-  }
-
-  return mattingFolder.id;
-}
-
-function buildMatAnyoneProjectFileName(result: MatAnyoneResult, filePath: string): string {
-  const safeClipId = sanitizeNativeFileName(result.sourceClipId || 'clip');
-  const fileName = sanitizeNativeFileName(getBaseName(filePath) || 'matanyone-result.mp4');
-  return `${MATANYONE_PROJECT_OUTPUT_FOLDER}/${safeClipId}/${fileName}`;
-}
-
-async function readNativeFileAsFile(nativeHelper: MatAnyoneImportFileClient, path: string): Promise<File> {
-  const buffer = await nativeHelper.getDownloadedFile(path);
-  if (!buffer) {
-    throw new Error(`Could not read MatAnyone2 output: ${path}`);
-  }
-
-  const fileName = getBaseName(path) || 'matanyone-result.mp4';
-  return new File([buffer], fileName, {
-    type: guessMimeTypeFromPath(path),
-    lastModified: Date.now(),
-  });
-}
-
-function getMatAnyoneFrameRange(clip: TimelineClip): { startFrame?: number; endFrame?: number } {
-  const source = clip.source as MatAnyoneClipSource | null;
-  if (!source || source.type !== 'video') return {};
-
-  const mediaFileId = source.mediaFileId ?? clip.mediaFileId;
-  const mediaFile = mediaFileId
-    ? useMediaStore.getState().files.find(file => file.id === mediaFileId)
-    : undefined;
-  const fps =
-    source.nativeDecoder?.fps ??
-    mediaFile?.fps ??
-    30;
-  const safeFps = Number.isFinite(fps) && fps > 0 ? fps : 30;
-  const naturalDuration = source.naturalDuration ?? mediaFile?.duration ?? clip.outPoint;
-  const frameToleranceSeconds = 0.5 / safeFps;
-
-  const hasTrimIn = clip.inPoint > frameToleranceSeconds;
-  const hasTrimOut = Number.isFinite(naturalDuration)
-    && naturalDuration > 0
-    && clip.outPoint < naturalDuration - frameToleranceSeconds;
-
-  if (!hasTrimIn && !hasTrimOut) {
-    return {};
-  }
-
-  const startFrame = Math.max(0, Math.floor(clip.inPoint * safeFps));
-  const endFrame = Math.max(startFrame + 1, Math.ceil(clip.outPoint * safeFps));
-  return { startFrame, endFrame };
-}
-
-async function resolveMatAnyoneVideoPath(selectedClip: TimelineClip): Promise<string | null> {
-  const source = selectedClip.source as MatAnyoneClipSource | null;
-  if (!source) return null;
-
-  const [{ useMediaStore }, { NativeHelperClient }] = await Promise.all([
-    import('../../stores/mediaStore'),
-    import('../../services/nativeHelper/NativeHelperClient'),
-  ]);
-
-  const mediaFileId = source.mediaFileId ?? selectedClip.mediaFileId;
-  const mediaFile = mediaFileId
-    ? useMediaStore.getState().files.find(file => file.id === mediaFileId)
-    : undefined;
-  const sourceFile = source.file as FileWithPath | undefined;
-  const clipFile = selectedClip.file as FileWithPath | undefined;
-  const mediaStoreFile = mediaFile?.file as FileWithPath | undefined;
-
-  const directCandidates = [
-    source.filePath,
-    mediaFile?.absolutePath,
-    mediaFile?.filePath,
-    sourceFile?.path,
-    clipFile?.path,
-    mediaStoreFile?.path,
-  ];
-
-  for (const candidate of directCandidates) {
-    if (isAbsolutePath(candidate)) return candidate;
-  }
-
-  const locateCandidates = new Set<string>();
-  const addLocateCandidate = (value: string | null | undefined) => {
-    const name = getBaseName(value);
-    if (name && name !== '.' && name !== '..') {
-      locateCandidates.add(name);
-    }
-  };
-
-  addLocateCandidate(source.filePath);
-  addLocateCandidate(mediaFile?.filePath);
-  addLocateCandidate(mediaFile?.name);
-  addLocateCandidate(sourceFile?.name);
-  addLocateCandidate(clipFile?.name);
-  addLocateCandidate(mediaStoreFile?.name);
-  addLocateCandidate(selectedClip.name);
-
-  for (const candidate of [...locateCandidates]) {
-    if (!hasFileExtension(candidate)) {
-      VIDEO_EXTENSION_CANDIDATES.forEach(extension => locateCandidates.add(`${candidate}${extension}`));
-    }
-  }
-
-  for (const candidate of locateCandidates) {
-    const located = await NativeHelperClient.locateFile(candidate).catch(() => null);
-    if (located) return located;
-  }
-
-  const fileForUpload = sourceFile ?? clipFile ?? mediaStoreFile;
-  if (!fileForUpload) return null;
-
-  const projectRoot = await NativeHelperClient.getProjectRoot().catch(() => null);
-  if (!projectRoot) return null;
-
-  const tempDir = joinNativePath(projectRoot, 'matanyone-temp');
-  const tempDirReady = await NativeHelperClient.createDir(tempDir, true).catch(() => false);
-  if (!tempDirReady) return null;
-
-  const safeClipId = sanitizeNativeFileName(selectedClip.id || 'clip');
-  const safeFileName = sanitizeNativeFileName(fileForUpload.name || selectedClip.name || 'video.mp4');
-  const stagedPath = joinNativePath(tempDir, `${safeClipId}-${safeFileName}`);
-  const uploaded = await NativeHelperClient.writeFileBinary(stagedPath, fileForUpload).catch(() => false);
-  return uploaded ? stagedPath : null;
-}
-
-async function createMatAnyoneJobDir(nativeHelper: MatAnyoneFileClient, clipId: string): Promise<string | null> {
-  const projectRoot = await nativeHelper.getProjectRoot().catch(() => null);
-  if (!projectRoot) return null;
-
-  const safeClipId = sanitizeNativeFileName(clipId || 'clip');
-  const jobName = sanitizeNativeFileName(`job-${safeClipId}-${Date.now().toString(36)}`);
-  const jobDir = joinNativePath(projectRoot, MATANYONE_PROJECT_OUTPUT_FOLDER, jobName);
-  const created = await nativeHelper.createDir(jobDir, true).catch(() => false);
-  return created ? jobDir : null;
-}
 
 export function SAM2Panel() {
   const [showSetup, setShowSetup] = useState(false);
@@ -475,6 +251,21 @@ export function SAM2Panel() {
     setHasPaintedMask(false);
   }, []);
 
+  const refreshPaintOverlay = useCallback((delayMs: number) => {
+    document.getElementById('mask-paint-overlay')?.remove();
+    setTimeout(() => addPaintOverlay(), delayMs);
+  }, [addPaintOverlay]);
+
+  const handleBrushSizeChange = useCallback((value: number) => {
+    setBrushSize(value);
+    refreshPaintOverlay(10);
+  }, [refreshPaintOverlay]);
+
+  const handleEraserChange = useCallback((enabled: boolean) => {
+    setIsEraser(enabled);
+    refreshPaintOverlay(10);
+  }, [refreshPaintOverlay]);
+
   // --- SAM2 handlers ---
   const handleSam2Toggle = useCallback(() => {
     const { setActive, clearPoints } = useSAM2Store.getState();
@@ -514,6 +305,10 @@ export function SAM2Panel() {
     useSAM2Store.getState().clearPoints();
     useSAM2Store.getState().setLiveMask(null);
     useSAM2Store.getState().clearFrameMasks();
+  }, []);
+
+  const handleMaskOpacityChange = useCallback((value: number) => {
+    useSAM2Store.getState().setMaskOpacity(value);
   }, []);
 
   // --- MatAnyone2 handler ---
@@ -704,6 +499,14 @@ export function SAM2Panel() {
     getMatAnyoneService().startServer().catch(() => {});
   }, []);
 
+  const handleCancelJob = useCallback(() => {
+    getMatAnyoneService().cancelJob();
+  }, []);
+
+  const handleRetryConnection = useCallback(() => {
+    getMatAnyoneService().checkStatus().catch(() => {});
+  }, []);
+
   // Cleanup paint overlay on unmount
   useEffect(() => {
     return () => {
@@ -714,66 +517,14 @@ export function SAM2Panel() {
   // --- Render ---
   return (
     <div className="sam2-panel">
-      {/* Native helper unavailable */}
-      {showHelperOverlay && (
-        <div className="sam2-overlay">
-          <div className="sam2-overlay-content">
-            <span className="sam2-icon" style={{ fontSize: 32 }}>&#x26A1;</span>
-            <p style={{ fontWeight: 600, fontSize: 14, margin: '8px 0 4px' }}>Native Helper Required</p>
-            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px', lineHeight: 1.5 }}>
-              MatAnyone2 is installed, but the Native Helper is not connected right now.
-            </p>
-            <button className="sam2-download-btn" onClick={() => getMatAnyoneService().checkStatus().catch(() => {})}>
-              Retry Connection
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Not installed / setup error */}
-      {showSetupOverlay && (
-        <div className="sam2-overlay">
-          <div className="sam2-overlay-content">
-            <span className="sam2-icon" style={{ fontSize: 32 }}>&#x2726;</span>
-            <p style={{ fontWeight: 600, fontSize: 14, margin: '8px 0 4px' }}>
-              {matStatus === 'error' ? 'MatAnyone2 Setup Error' : 'AI Video Matting'}
-            </p>
-            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px', lineHeight: 1.5 }}>
-              {matStatus === 'error'
-                ? (matError || 'The MatAnyone2 setup needs attention.')
-                : 'Extract people from video with precise alpha mattes.'}
-            </p>
-            <button className="sam2-download-btn" onClick={() => setShowSetup(true)}>
-              {matStatus === 'error' ? 'Open Setup' : 'Set Up MatAnyone2'}
-            </button>
-            {matStatus !== 'error' && (
-              <span className="sam2-size-hint" style={{ marginTop: 8 }}>
-                Requires NVIDIA GPU + ~4 GB disk space
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Installing */}
-      {matStatus === 'installing' && (
-        <div className="sam2-overlay">
-          <div className="sam2-overlay-content">
-            <div className="sam2-spinner" />
-            <p>Installing MatAnyone2...</p>
-          </div>
-        </div>
-      )}
-
-      {/* Checking */}
-      {matStatus === 'not-checked' && (
-        <div className="sam2-overlay">
-          <div className="sam2-loading">
-            <div className="sam2-spinner" />
-            <span className="sam2-progress-text">Checking...</span>
-          </div>
-        </div>
-      )}
+      <MatAnyoneOverlays
+        matStatus={matStatus}
+        matError={matError}
+        showHelperOverlay={showHelperOverlay}
+        showSetupOverlay={showSetupOverlay}
+        onOpenSetup={() => setShowSetup(true)}
+        onRetryConnection={handleRetryConnection}
+      />
 
       {/* Main content */}
       {isMatInstalled && (
@@ -786,278 +537,60 @@ export function SAM2Panel() {
 
           {selectedClip && (
             <>
-              {/* Step 1: Create Mask */}
-              <div className="sam2-section">
-                <div className="sam2-section-title">Step 1: Create Mask</div>
+              <MaskCreationSection
+                maskMode={maskMode}
+                setMaskMode={setMaskMode}
+                isPainting={isPainting}
+                brushSize={brushSize}
+                isEraser={isEraser}
+                hasPaintedMask={hasPaintedMask}
+                sam2Status={sam2Status}
+                sam2Active={sam2Active}
+                sam2Processing={sam2Processing}
+                sam2PointCount={sam2Points.length}
+                hasLiveMask={!!liveMask}
+                maskOpacity={maskOpacity}
+                sam2DownloadProgress={sam2DownloadProgress}
+                onPaintToggle={handlePaintToggle}
+                onClearPaint={handleClearPaint}
+                onBrushSizeChange={handleBrushSizeChange}
+                onEraserChange={handleEraserChange}
+                onSam2Toggle={handleSam2Toggle}
+                onSam2AutoDetect={handleSam2AutoDetect}
+                onSam2Download={handleSam2Download}
+                onClearMask={handleClearMask}
+                onMaskOpacityChange={handleMaskOpacityChange}
+              />
 
-                {/* Mode tabs */}
-                <div style={{ display: 'flex', gap: 2, marginBottom: 8 }}>
-                  <button
-                    className={`sam2-btn ${maskMode === 'paint' ? 'active' : ''}`}
-                    onClick={() => setMaskMode('paint')}
-                    style={{ flex: 1, fontSize: 11 }}
-                  >
-                    Paint (no download)
-                  </button>
-                  <button
-                    className={`sam2-btn ${maskMode === 'sam2' ? 'active' : ''}`}
-                    onClick={() => setMaskMode('sam2')}
-                    style={{ flex: 1, fontSize: 11 }}
-                  >
-                    SAM2 (auto)
-                  </button>
-                </div>
-
-                {maskMode === 'paint' ? (
-                  <>
-                    <p style={{ margin: '0 0 6px', fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                      Paint roughly over the subject. MatAnyone2 will refine the edges.
-                    </p>
-
-                    <div className="sam2-actions">
-                      <button
-                        className={`sam2-btn ${isPainting ? 'active' : ''}`}
-                        onClick={handlePaintToggle}
-                        style={{ flex: 1 }}
-                      >
-                        {isPainting ? 'Stop Painting' : 'Start Painting'}
-                      </button>
-                      {hasPaintedMask && (
-                        <button className="sam2-btn danger" onClick={handleClearPaint} style={{ flex: 'none' }}>
-                          Clear
-                        </button>
-                      )}
-                    </div>
-
-                    {isPainting && (
-                      <div style={{ marginTop: 6 }}>
-                        <div className="sam2-slider-row">
-                          <span className="sam2-slider-label">Brush</span>
-                          <input
-                            type="range" min={5} max={150} step={1}
-                            value={brushSize}
-                            onChange={e => {
-                              setBrushSize(parseInt(e.target.value));
-                              // Re-add overlay with new brush size
-                              document.getElementById('mask-paint-overlay')?.remove();
-                              setTimeout(() => addPaintOverlay(), 10);
-                            }}
-                          />
-                          <span className="sam2-slider-value">{brushSize}px</span>
-                        </div>
-
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-secondary)', marginTop: 4, cursor: 'pointer' }}>
-                          <input
-                            type="checkbox"
-                            checked={isEraser}
-                            onChange={e => {
-                              setIsEraser(e.target.checked);
-                              document.getElementById('mask-paint-overlay')?.remove();
-                              setTimeout(() => addPaintOverlay(), 10);
-                            }}
-                          />
-                          Eraser mode
-                        </label>
-                      </div>
-                    )}
-
-                    {hasPaintedMask && !isPainting && (
-                      <span style={{ fontSize: 11, color: 'var(--success)', marginTop: 4, display: 'block' }}>
-                        Mask ready
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  /* SAM2 mode */
-                  <>
-                    {sam2Status === 'ready' ? (
-                      <>
-                        <div className="sam2-actions">
-                          <button
-                            className={`sam2-btn ${sam2Active ? 'active' : ''}`}
-                            onClick={handleSam2Toggle}
-                          >
-                            {sam2Active ? 'Active' : 'Activate'}
-                          </button>
-                          <button
-                            className="sam2-btn primary"
-                            onClick={handleSam2AutoDetect}
-                            disabled={sam2Processing}
-                          >
-                            {sam2Processing ? '...' : 'Auto-Detect'}
-                          </button>
-                        </div>
-
-                        {sam2Points.length > 0 && (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                              {sam2Points.length} point{sam2Points.length !== 1 ? 's' : ''}
-                            </span>
-                            <button className="sam2-btn danger" onClick={handleClearMask} style={{ flex: 'none', padding: '2px 8px', fontSize: 11 }}>
-                              Clear
-                            </button>
-                          </div>
-                        )}
-
-                        {liveMask && (
-                          <div className="sam2-slider-row" style={{ marginTop: 4 }}>
-                            <span className="sam2-slider-label">Opacity</span>
-                            <input
-                              type="range" min={0} max={1} step={0.05}
-                              value={maskOpacity}
-                              onChange={e => useSAM2Store.getState().setMaskOpacity(parseFloat(e.target.value))}
-                            />
-                            <span className="sam2-slider-value">{Math.round(maskOpacity * 100)}%</span>
-                          </div>
-                        )}
-                      </>
-                    ) : sam2Status === 'downloading' ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        <div className="sam2-progress-bar">
-                          <div className="sam2-progress-fill" style={{ width: `${sam2DownloadProgress}%` }} />
-                        </div>
-                        <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Downloading SAM2... {Math.round(sam2DownloadProgress)}%</span>
-                      </div>
-                    ) : (
-                      <>
-                        <p style={{ margin: '0 0 6px', fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                          Click to place points on the subject. More precise than paint but requires model download.
-                        </p>
-                        <button className="sam2-btn" onClick={handleSam2Download} style={{ fontSize: 11 }}>
-                          Download SAM2 Model (~103 MB)
-                        </button>
-                      </>
-                    )}
-                  </>
-                )}
-              </div>
-
-              {/* Step 2: Run MatAnyone2 */}
-              <div className="sam2-section" style={{
-                background: 'var(--bg-tertiary)',
-                borderRadius: 6,
-                padding: 8,
-                border: '1px solid var(--border-color)',
-              }}>
-                <div className="sam2-section-title">Step 2: Run MatAnyone2</div>
-
-                {!isMatReady ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                      Server not running{matGpu && <> &mdash; {matGpu}</>}
-                    </span>
-                    <button className="sam2-btn primary" onClick={handleStartServer}>
-                      Start Server
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <p style={{ margin: '0 0 6px', fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                      Extracts the masked subject with alpha for the selected clip segment.
-                      {matCuda && matGpu && <> Using {matGpu}.</>}
-                    </p>
-
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <button
-                        className="sam2-btn primary"
-                        onClick={handleRunMatAnyone}
-                        disabled={matProcessing || !hasMask}
-                        style={{ flex: 1 }}
-                      >
-                        {matProcessing ? 'Processing...' : !hasMask ? 'Create mask first' : 'Run MatAnyone2'}
-                      </button>
-                      {matProcessing && (
-                        <button
-                          className="sam2-btn danger"
-                          onClick={() => getMatAnyoneService().cancelJob()}
-                          style={{ flex: 'none' }}
-                        >
-                          Cancel
-                        </button>
-                      )}
-                    </div>
-
-                    {matProcessing && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
-                        <div className="sam2-progress-bar">
-                          <div className="sam2-progress-fill" style={{ width: `${matProgress}%` }} />
-                        </div>
-                        <span style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
-                          {Math.round(matProgress)}%
-                          {matTotalFrames > 0 && <> &mdash; Frame {matCurrentFrame}/{matTotalFrames}</>}
-                        </span>
-                      </div>
-                    )}
-
-                    {matError && !matProcessing && (
-                      <div style={{
-                        padding: '6px 8px', marginTop: 4,
-                        background: 'rgba(231, 76, 60, 0.1)',
-                        border: '1px solid var(--danger)',
-                        borderRadius: 4, fontSize: 11, color: 'var(--danger)',
-                      }}>
-                        {matError}
-                      </div>
-                    )}
-
-                    {matResult && !matProcessing && (
-                      <div style={{
-                        display: 'flex', flexDirection: 'column', gap: 4,
-                        paddingTop: 6, marginTop: 4,
-                        borderTop: '1px solid var(--border-color)',
-                      }}>
-                        <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--success)' }}>
-                          Matting complete
-                        </span>
-                        <div style={{ fontSize: 10, color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
-                          <div>{matResult.foregroundPath.split(/[/\\]/).pop()}</div>
-                          <div>{matResult.alphaPath.split(/[/\\]/).pop()}</div>
-                        </div>
-                        <button
-                          className="sam2-btn"
-                          onClick={handleImportMattingResult}
-                          disabled={isImportingMatte}
-                          style={{ marginTop: 2, fontSize: 11 }}
-                        >
-                          {isImportingMatte ? 'Importing...' : 'Import to Timeline'}
-                        </button>
-                        {matImportError && (
-                          <div style={{
-                            padding: '6px 8px',
-                            marginTop: 2,
-                            background: 'rgba(231, 76, 60, 0.1)',
-                            border: '1px solid var(--danger)',
-                            borderRadius: 4,
-                            fontSize: 11,
-                            color: 'var(--danger)',
-                          }}>
-                            {matImportError}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
+              <MatAnyoneRunSection
+                isMatReady={isMatReady}
+                matGpu={matGpu}
+                matCuda={matCuda}
+                matProcessing={matProcessing}
+                matProgress={matProgress}
+                matCurrentFrame={matCurrentFrame}
+                matTotalFrames={matTotalFrames}
+                matError={matError}
+                matResult={matResult}
+                hasMask={hasMask}
+                isImportingMatte={isImportingMatte}
+                matImportError={matImportError}
+                onStartServer={handleStartServer}
+                onRunMatAnyone={handleRunMatAnyone}
+                onCancelJob={handleCancelJob}
+                onImportMattingResult={handleImportMattingResult}
+              />
             </>
           )}
         </div>
       )}
 
-      {/* Status bar */}
-      <div className="sam2-status">
-        <span className={`sam2-status-dot ${isMatReady ? 'ready' : isMatInstalled ? 'processing' : ''}`} />
-        {matStatus === 'not-checked' && 'Checking...'}
-        {matStatus === 'not-available' && 'Native Helper required'}
-        {matStatus === 'not-installed' && 'Not installed'}
-        {matStatus === 'installing' && 'Installing...'}
-        {matStatus === 'model-needed' && 'Model download needed'}
-        {matStatus === 'downloading-model' && 'Downloading model...'}
-        {matStatus === 'installed' && 'Installed (server stopped)'}
-        {matStatus === 'starting' && 'Starting server...'}
-        {matStatus === 'ready' && (matProcessing ? 'Processing...' : 'Ready')}
-        {matStatus === 'error' && 'Error'}
-      </div>
+      <MatAnyoneStatusBar
+        matStatus={matStatus}
+        isMatReady={isMatReady}
+        isMatInstalled={isMatInstalled}
+        matProcessing={matProcessing}
+      />
 
       {showSetup && <MatAnyoneSetupDialog onClose={() => setShowSetup(false)} />}
     </div>
