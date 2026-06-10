@@ -22,6 +22,9 @@ export const allowedAdapterPaths = [
   'src/services/timeline/runtimeCoordinatorTypes.ts',
   'src/services/timeline/runtimeCoordinatorContracts.ts',
   'src/services/audio/AudioRecordingService.ts',
+  // Packet 221 split: the commit-to-timeline adapter moved out of the
+  // recording service; the grant follows it (entry itself is getState-free).
+  'src/services/audio/recording/commitRecording.ts',
   'src/services/audio/timelineRecordingWorkflow.ts',
   'src/services/export/**',
   'src/services/render/**',
@@ -139,7 +142,9 @@ export const classCHardTargets = [
   { path: 'src/hooks/useGlobalHistory.ts', maxCurrentHits: 3 },
   { path: 'src/services/audio/audioDiagnostics.ts', maxCurrentHits: 1 },
   { path: 'src/services/audio/ClipAudioAnalysisOrchestrator.ts', maxCurrentHits: 1 },
-  { path: 'src/services/audio/ClipAudioRenderService.ts', maxCurrentHits: 1 },
+  // Packet 220 split: ClipAudioRenderService is getState-free; its single
+  // hit moved into the spectral mask provider (cluster total conserved).
+  { path: 'src/services/audio/clipRender/spectralImageMaskProvider.ts', maxCurrentHits: 1 },
   { path: 'src/services/audio/midiPlaybackScheduler.ts', maxCurrentHits: 6 },
   { path: 'src/services/audio/stemSeparation/StemSeparationService.ts', maxCurrentHits: 1 },
   { path: 'src/services/audioAnalyzer.ts', maxCurrentHits: 1 },
@@ -238,7 +243,9 @@ export const classCHardTargets = [
 ] as const satisfies readonly GetStateClassCHardTarget[];
 
 export const getStateAccessPolicyBaselines = {
-  allowedAdapterPathCount: 21,
+  // 21 -> 22: packet-221 recording split moved the commit-to-timeline
+  // adapter into recording/commitRecording.ts (grant follows the move).
+  allowedAdapterPathCount: 22,
   // Running redistribution log: 178 (packet 172), 182 (183), 187 (186),
   // 189 (189+190: ExportPanel/MediaPanel hits moved into runner/board-hook
   // entries). Totals conserved per redistribution; max-hits ratchets DOWN

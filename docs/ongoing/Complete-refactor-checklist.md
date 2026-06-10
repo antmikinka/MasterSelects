@@ -18,9 +18,11 @@ orchestrator or worker-agent execution run starts.
 - Handoff templates: prepared for execution only
 - Source implementation: current bounded source packet has explicit write set,
   forbidden files, and gates
-- Current bounded packet:
-  `P3-PROJECTLOAD-FLASHBOARD-HYDRATION-SPLIT-213`, source split packet with
-  explicit projectLoad FlashBoard hydration write set.
+- Current bounded packets:
+  Wave 19 source packets 220-223 are dispatched in parallel for
+  ClipAudioRenderService, AudioRecordingService, AudioEffectRenderer, and
+  proxyFrameCache splits; docs closure packet `DOCS-CLOSURE-219` is
+  bookkeeping-only.
 - Completed source/tooling packet: `P0-REG-001`; focused registry checks passed.
 - Completed bounded packet: `P0-BASELINE-REFRESH-001`, read-only plus docs.
 - Completed bounded packet: `P1-CONTRACT-001`, contracts and focused boundary
@@ -2175,7 +2177,7 @@ orchestrator or worker-agent execution run starts.
   transport vite-plugin extraction, smoke scenario split, gate thresholds, and
   composer driver tool.
 - Wave 12 audit refresh:
-  over-700 audit is 111 files (from 114 at goal start); top files are now
+  over-700 audit is 111 files (from 114 at goal start); top files were then
   `proxyFrameCache` 3266, `timelineCanvasSmoke` 3110, `bridge` 2995,
   `Preview` 2410->, and `ExportPanel` 2269->, with `MediaPanel` at 742.
 - Wave 12 verification:
@@ -2255,44 +2257,39 @@ orchestrator or worker-agent execution run starts.
   documented in the dispatch skill.
 - Wave 16 verification:
   Orchestrator-verified: tsc clean; guards + adoption + dispatcher + proxy suites green.
-- Completed bounded packet:
-  `P6-AUDIOMANAGER-FACADE-MERGE-210`; collapsed deprecated `audioManager` Web
-  Audio ownership into an `audioRoutingManager` facade and extracted
-  `audioStatusTracker` into `src/services/audio/audioStatusTracker.ts`.
-  Current snapshots: `audioManager.ts` 117 LOC, `audioStatusTracker.ts` 46
-  LOC, `audioRoutingManager.ts` 1757 LOC, and
-  `tests/unit/audioManagerFacade.test.ts` 128 LOC. The Web Audio construction
-  scan now shows `new AudioContext`, `createMediaElementSource`, and EQ filter
-  creation only in `audioRoutingManager`; `audioManager` keeps the legacy
-  import surface. Focused audio facade tests passed with 1 file and 3 tests;
-  `npx tsc -b --pretty false`, `git diff --check` with only LF/CRLF warnings,
-  and `fc.exe /b AGENTS.md CLAUDE.md` passed.
-- Completed bounded packet:
-  `P5-SCENE-OBJECT-OVERLAY-SPLIT-211`; split Scene Object Overlay display,
-  projection, transform, type, and chrome helpers into
-  `src/components/preview/sceneOverlay/*`. Current snapshots:
-  `SceneObjectOverlay.tsx` 1186 LOC, `SceneOverlayChrome.tsx` 278 LOC,
-  `sceneOverlayDisplayPlans.ts` 116 LOC,
-  `sceneOverlayProjectionPlans.ts` 291 LOC,
-  `sceneOverlayTransformPlans.ts` 122 LOC, and `sceneOverlayTypes.ts` 85 LOC.
-  Pointer-lock/listener/getState scan keeps those runtime interactions in the
-  overlay host; no Preview host, Timeline, store, service, engine, or test
-  files were edited for this packet. `npx tsc -b --pretty false`,
-  `git diff --check` with only LF/CRLF warnings, and
-  `fc.exe /b AGENTS.md CLAUDE.md` passed.
-- Completed bounded packet:
-  `P3-PROJECTLOAD-SPLIT-PREFLIGHT-212`; read-only scan classified
-  `projectLoad.ts` at 1804 LOC with major clusters for progress UI,
-  project-media hydration and runtime handle restoration, composition/folder
-  conversion, FlashBoard generation-record hydration, store hydration, cached
-  thumbnail/background restoration, metadata refresh, auto-relink, nested-comp
-  reload, and clip-to-media status sync. The next safe source boundary is the
-  FlashBoard generation-record hydration/normalization cluster because it is
-  contiguous, already active-schema-only, and can move without touching
-  project schema, media hydration, Timeline, Media Board, stores, importers, or
-  media runtime.
-- Next eligible packet: execute
-  `P3-PROJECTLOAD-FLASHBOARD-HYDRATION-SPLIT-213`.
+- Wave 17 closure completed:
+  `DOCS-CLOSURE-210` closed wave 16 bookkeeping. `P6-AUDIOMANAGER-FACADE-MERGE-211`
+  made `audioRoutingManager` the single live audio owner, left `audioManager`
+  as a 146-line deprecated facade, extracted `audioStatusTracker` to
+  `src/services/audio/audioStatusTracker.ts`, and added
+  `tests/unit/audioManagerFacade.test.ts`. `P5-SCENE-OBJECT-OVERLAY-SPLIT-212`
+  split Scene Object Overlay from 2053 to 814 raw lines with 7 modules under
+  `src/components/preview/sceneOverlay/`; pointer-lock/listener orchestration
+  remains a higher-risk follow-up. `P3-PROJECTLOAD-FLASHBOARD-HYDRATION-SPLIT-213`
+  split `projectLoad` from 1989 to 145 raw lines with 9 modules under
+  `src/services/project/load/`, preserving the hydration order.
+- Wave 17 verification:
+  Orchestrator-verified: tsc clean; 7 suites green (82 tests).
+- Wave 18 closure completed:
+  `P6-DECODE-ISLANDS-AUDIODECODE-214` consolidated `AudioProxyService`
+  including its leak fix, `audioAnalyzer`, and `timelineWaveformPyramidCache`
+  onto `AudioDecodeService` with additive `decodeAudioBuffer` and a shared
+  HMR-safe accessor; `AudioExtractor` remains the decode-island follow-up.
+  `P6-SCRUB-AUDIO-LEASE-SLOTS-215` moved edit/repair preview services onto
+  isolated scrub-audio lease slots. `P6-AUDIO-BUFFER-FACTORY-216` added
+  `src/engine/audio/audioBufferFactory.ts`, migrated six
+  temp-allocation-context sites, and fixed the TimeStretch close-on-throw gap.
+  `P7-AINODE-RUNTIME-SPLIT-217` split `aiNodeRuntime` from 1975 to 960 raw
+  lines with 4 modules. `P4-MEDIA-PANEL-FINAL-BUDGET-218` reduced
+  `MediaPanel` from 742 to 699 raw lines and redistributed getState policy from
+  MediaPanel 4 to MediaPanel 3 plus `useMediaPanelCompositionSettings` 1.
+- Wave 18 audit refresh:
+  `MediaPanel` is off the over-700 list. Current tracked over-700 follow-ups
+  include `ClipAudioRenderService` 2098, `AudioEffectRenderer` 1991,
+  `AudioDecodeService` 996, `aiNodeRuntime` 960, and
+  `SceneObjectOverlay` 814.
+- Wave 18 verification:
+  Orchestrator-verified: tsc clean; 14 suites green (212 tests).
 - Product source refactors remain bounded by approved packet write sets.
 
 ## Document Map

@@ -2,8 +2,6 @@
 
 import { Logger } from './logger';
 import { projectFileService } from './projectFileService';
-import * as MP4BoxModule from 'mp4box';
-import type { MP4ArrayBuffer, MP4VideoTrack, Sample } from '../engine/webCodecsTypes';
 import {
   getProjectRawPathCandidates,
   getStoredProjectFileHandle,
@@ -17,31 +15,47 @@ import {
   toScrubAudioRuntimeSourceId,
 } from './mediaRuntime/scrubAudioLeases';
 import type { RuntimeSourceId } from './mediaRuntime/types';
+import type {
+  CachedFrame,
+  CachedVideoFrame,
+  LegacyProxyFrameCacheStats,
+  ProxyCachedFrame,
+  ProxyCachedVideoFrame,
+  ProxyVideoFrameCacheStats,
+} from './proxyFrame/frameCacheModels';
+import {
+  createAudioBufferResource,
+  createAudioProxyElementResource,
+  createLegacyFrameCacheResource,
+  createVideoFrameCacheResource,
+  estimateAudioBufferBytes,
+  getLegacyFrameCacheStats,
+  getVideoFrameCacheStats,
+} from './proxyFrame/runtimeResources';
+import {
+  HUM_NOTCH_MAX_HARMONICS,
+  normalizeScrubDynamicsReductionDb,
+  reconnectScrubCustomProcessor,
+  scrubProcessorSignature,
+  updateScrubProcessorNode,
+  type ScrubProcessorNode,
+} from './proxyFrame/scrubAudioProcessing';
+import { attachScrubSampleProcessor } from './proxyFrame/scrubAudioSampleProcessors';
+import type { ScrubAudioOptions, ScrubGrain } from './proxyFrame/scrubAudioModels';
+import {
+  decodeProxyVideoFrameFromSource,
+  parseProxyVideoFile,
+  type ProxyVideoSourceState,
+} from './proxyFrame/proxyVideoParser';
+export type { ProxyCachedFrame, ProxyCachedVideoFrame } from './proxyFrame/frameCacheModels';
 
 const log = Logger.create('ProxyFrameCache');
 import { fileSystemService } from './fileSystemService';
 import { useMediaStore } from '../stores/mediaStore';
-import { clampAudioPan, dbToLinearGain, finiteNumber } from '../engine/audio/audioMath';
+import { clampAudioPan } from '../engine/audio/audioMath';
 import { timelineRuntimeCoordinator } from './timeline/timelineRuntimeCoordinator';
-import type {
-  RenderResourceDescriptor,
-  TimelineRuntimeAdmissionDecision,
-  TimelineRuntimePolicyId,
-} from './timeline/runtimeCoordinatorTypes';
-import type { RuntimeProviderDemand } from '../timeline';
-import { createRenderResourceDescriptorFromDemand } from './timeline/runtimeProviderDemandBridge';
-import {
-  createSpectralGateState,
-  processSpectralGateBlock,
-  type SpectralGateState,
-} from '../engine/audio/spectralGateProcessor';
-import {
-  createAudioEqDynamicRuntimeState,
-  createSingleBandAudioEqParams,
-  processAudioEqChannels,
-  type AudioEqDynamicRuntimeState,
-} from '../engine/audio/eq/AudioEqDynamic';
-import type { AudioRouteEffectSettings, LiveAudioRouteProcessor } from './audio/audioGraphRouteSettings';
+import type { TimelineRuntimeAdmissionDecision } from './timeline/runtimeCoordinatorTypes';
+import type { LiveAudioRouteProcessor } from './audio/audioGraphRouteSettings';
 import type { AudioDynamicsReductionSnapshot, AudioMeterSnapshot } from '../types';
 import { calculateAudioMeterSnapshot } from './audio/audioMetering';
 
@@ -67,826 +81,20 @@ const SCRUB_FAST_VELOCITY_SECONDS_PER_SECOND = 2.5;
 const SCRUB_REVERSE_THRESHOLD_SECONDS_PER_SECOND = -0.04;
 const MAX_AUDIO_BUFFER_CACHE_BYTES = 192 * 1024 * 1024;
 const MAX_AUDIO_BUFFER_CACHE_ENTRIES = 3;
-const LEGACY_PROXY_FRAME_RUNTIME_POLICY_ID: TimelineRuntimePolicyId = 'thumbnail';
-const INTERACTIVE_PROXY_CACHE_RUNTIME_POLICY_ID: TimelineRuntimePolicyId = 'interactive';
-const BYTES_PER_RGBA_PIXEL = 4;
 const EQ_FREQUENCIES = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
-const HUM_NOTCH_MAX_HARMONICS = 8;
 
-const MP4Box = MP4BoxModule as unknown as {
-  createFile: typeof MP4BoxModule.createFile;
-  DataStream: {
-    new (buffer?: unknown, byteOffset?: number, endianness?: number): {
-      buffer: ArrayBuffer;
-      position?: number;
-    };
-    BIG_ENDIAN: number;
-  };
-};
 
-function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined)
-  ) as T;
-}
 
 // Frame cache entry
-interface CachedFrame {
-  mediaFileId: string;
-  frameIndex: number;
-  image: HTMLImageElement;
-  timestamp: number; // For LRU eviction
-}
 
-interface LegacyProxyFrameCacheStats {
-  frameCount: number;
-  heapBytes: number;
-  width?: number;
-  height?: number;
-}
 
-interface ProxyVideoFrameCacheStats {
-  frameCount: number;
-  decodedFrameBytes: number;
-  width?: number;
-  height?: number;
-}
 
-export interface ProxyCachedFrame {
-  frameIndex: number;
-  image: HTMLImageElement;
-}
-
-interface CodecConfigurationBox {
-  write: (stream: { buffer: ArrayBuffer; position?: number }) => void;
-}
-
-interface MP4TrackDetails {
-  mdia?: {
-    minf?: {
-      stbl?: {
-        stsd?: {
-          entries?: Array<{
-            avcC?: CodecConfigurationBox;
-            hvcC?: CodecConfigurationBox;
-            vpcC?: CodecConfigurationBox;
-            av1C?: CodecConfigurationBox;
-          }>;
-        };
-      };
-    };
-  };
-}
-
-interface MP4File {
-  onReady: (info: { videoTracks: MP4VideoTrack[] }) => void;
-  onSamples: (trackId: number, ref: unknown, samples: Sample[]) => void;
-  onError: (error: string) => void;
-  appendBuffer: (buffer: MP4ArrayBuffer) => number;
-  start: () => void;
-  flush: () => void;
-  setExtractionOptions: (trackId: number, user: unknown, options: { nbSamples: number }) => void;
-  getTrackById: (id: number) => MP4TrackDetails | undefined;
-}
-
-interface ProxyVideoSourceState {
-  mediaFileId: string;
-  storageKey: string;
-  samples: Sample[];
-  codecConfig: VideoDecoderConfig;
-  width: number;
-  height: number;
-}
-
-interface CachedVideoFrame {
-  mediaFileId: string;
-  frameIndex: number;
-  frame: VideoFrame;
-  timestamp: number;
-}
-
-export interface ProxyCachedVideoFrame {
-  frameIndex: number;
-  frame: VideoFrame;
-}
-
-interface ScrubAudioOptions {
-  volume?: number;
-  eqGains?: number[];
-  pan?: number;
-  processors?: LiveAudioRouteProcessor[];
-  masterRoute?: AudioRouteEffectSettings;
-}
-
-interface ScrubProcessorNode {
-  id: string;
-  type: LiveAudioRouteProcessor['type'];
-  nodes: AudioNode[];
-  inputNode?: AudioNode;
-  outputNode?: AudioNode;
-  panner?: StereoPannerNode;
-  filter?: BiquadFilterNode;
-  filters?: BiquadFilterNode[];
-  compressor?: DynamicsCompressorNode;
-  makeupGain?: GainNode;
-  dryGain?: GainNode;
-  wetGain?: GainNode;
-  scriptProcessor?: ScriptProcessorNode;
-  sampleProcessor?: LiveAudioRouteProcessor;
-  spectralGateState?: SpectralGateState;
-  dynamicEqState?: AudioEqDynamicRuntimeState;
-  gainByChannel?: number[];
-  envelopeByChannel?: number[];
-  gainReductionDb?: number;
-}
 
 function hasUsableAudioProxy(mediaFile: { hasProxyAudio?: boolean; audioProxyStatus?: string } | undefined): boolean {
   return mediaFile?.hasProxyAudio === true || mediaFile?.audioProxyStatus === 'ready';
 }
 
-function estimateAudioBufferBytes(buffer: AudioBuffer): number {
-  return buffer.length * buffer.numberOfChannels * Float32Array.BYTES_PER_ELEMENT;
-}
 
-interface ScrubGrain {
-  source: AudioBufferSourceNode;
-  gain: GainNode;
-  startTime: number;
-}
-
-function clampScrubFrequency(ctx: BaseAudioContext, value: number): number {
-  const nyquist = Math.max(20, ctx.sampleRate / 2 - 1);
-  return Math.max(10, Math.min(nyquist, finiteNumber(value, 1000)));
-}
-
-function scrubProcessorSignature(processors: readonly LiveAudioRouteProcessor[] = []): string {
-  return processors.map(processor => `${processor.id}:${processor.type}`).join('|');
-}
-
-function normalizeScrubDynamicsReductionDb(rawReduction: number): number {
-  if (!Number.isFinite(rawReduction)) return 0;
-  const reduction = rawReduction < 0 ? -rawReduction : rawReduction;
-  return Math.max(0, Math.min(60, reduction));
-}
-
-function getFirstPresentationCts(samples: Sample[]): number {
-  let firstPresentationCts = Number.POSITIVE_INFINITY;
-  for (const sample of samples) {
-    if (Number.isFinite(sample.cts) && sample.cts < firstPresentationCts) {
-      firstPresentationCts = sample.cts;
-    }
-  }
-  return Number.isFinite(firstPresentationCts) ? firstPresentationCts : 0;
-}
-
-function getNormalizedSampleTimestampUs(sample: Sample, firstPresentationCts: number): number {
-  const normalizedCts = Math.max(0, sample.cts - firstPresentationCts);
-  return (normalizedCts / sample.timescale) * 1_000_000;
-}
-
-function extractCodecDescription(trak: MP4TrackDetails | undefined): Uint8Array | undefined {
-  const entry = trak?.mdia?.minf?.stbl?.stsd?.entries?.[0];
-  if (!entry) return undefined;
-
-  const configBox = entry.avcC || entry.hvcC || entry.vpcC || entry.av1C;
-  if (!configBox) return undefined;
-
-  const stream = new MP4Box.DataStream(undefined, 0, MP4Box.DataStream.BIG_ENDIAN);
-  configBox.write(stream);
-  const totalWritten = stream.position || stream.buffer.byteLength;
-  if (totalWritten <= 8) return undefined;
-  return new Uint8Array(stream.buffer.slice(8, totalWritten));
-}
-
-async function parseProxyVideoFile(mediaFileId: string, storageKey: string, file: File): Promise<ProxyVideoSourceState | null> {
-  const buffer = await file.arrayBuffer() as MP4ArrayBuffer;
-  buffer.fileStart = 0;
-
-  return new Promise((resolve) => {
-    const mp4File = MP4Box.createFile() as unknown as MP4File;
-    const samples: Sample[] = [];
-    let codecConfig: VideoDecoderConfig | null = null;
-    let width = 0;
-    let height = 0;
-    let resolved = false;
-
-    const finish = async () => {
-      if (resolved) return;
-      if (!codecConfig || samples.length === 0) {
-        resolved = true;
-        resolve(null);
-        return;
-      }
-
-      try {
-        if ('VideoDecoder' in window) {
-          const support = await VideoDecoder.isConfigSupported(codecConfig);
-          if (!support.supported) {
-            log.warn('Proxy video decoder config is not supported', { mediaFileId, codec: codecConfig.codec });
-            resolved = true;
-            resolve(null);
-            return;
-          }
-        }
-      } catch (error) {
-        log.warn('Proxy video decoder support check failed', error);
-      }
-
-      resolved = true;
-      resolve({
-        mediaFileId,
-        storageKey,
-        samples,
-        codecConfig,
-        width,
-        height,
-      });
-    };
-
-    const timeout = window.setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        log.warn('Proxy video parse timed out', { mediaFileId, storageKey });
-        resolve(null);
-      }
-    }, 10000);
-
-    mp4File.onReady = (info) => {
-      const videoTrack = info.videoTracks[0];
-      if (!videoTrack) {
-        window.clearTimeout(timeout);
-        if (!resolved) {
-          resolved = true;
-          resolve(null);
-        }
-        return;
-      }
-
-      const trak = mp4File.getTrackById(videoTrack.id);
-      const description = extractCodecDescription(trak);
-      codecConfig = {
-        codec: videoTrack.codec,
-        codedWidth: videoTrack.video.width,
-        codedHeight: videoTrack.video.height,
-        hardwareAcceleration: 'prefer-hardware',
-        ...(description && { description }),
-      };
-      width = videoTrack.video.width;
-      height = videoTrack.video.height;
-
-      mp4File.setExtractionOptions(videoTrack.id, null, { nbSamples: Infinity });
-      mp4File.start();
-    };
-
-    mp4File.onSamples = (_trackId, _ref, newSamples) => {
-      samples.push(...newSamples);
-    };
-
-    mp4File.onError = (error) => {
-      log.warn('Proxy video MP4Box error', error);
-      window.clearTimeout(timeout);
-      if (!resolved) {
-        resolved = true;
-        resolve(null);
-      }
-    };
-
-    try {
-      mp4File.appendBuffer(buffer);
-      mp4File.flush();
-      window.setTimeout(() => {
-        window.clearTimeout(timeout);
-        void finish();
-      }, 0);
-    } catch (error) {
-      window.clearTimeout(timeout);
-      log.warn('Proxy video parse failed', error);
-      if (!resolved) {
-        resolved = true;
-        resolve(null);
-      }
-    }
-  });
-}
-
-function scrubLimiterReductionDb(inputLinear: number, outputLinear: number): number {
-  if (inputLinear <= 0 || outputLinear <= 0 || outputLinear >= inputLinear) return 0;
-  return normalizeScrubDynamicsReductionDb(20 * Math.log10(inputLinear / outputLinear));
-}
-
-function updateScrubProcessorNode(
-  ctx: BaseAudioContext,
-  node: ScrubProcessorNode,
-  processor: LiveAudioRouteProcessor,
-): void {
-  if (processor.type === 'pan' && node.panner) {
-    node.panner.pan.value = clampAudioPan(finiteNumber(processor.pan, 0));
-    return;
-  }
-
-  if (processor.type === 'parametric-eq' && node.filter) {
-    node.filter.type = 'peaking';
-    node.filter.frequency.value = clampScrubFrequency(ctx, processor.frequencyHz);
-    node.filter.Q.value = Math.max(0.0001, Math.min(30, finiteNumber(processor.q, 1)));
-    node.filter.gain.value = Math.max(-48, Math.min(48, finiteNumber(processor.gainDb, 0)));
-    return;
-  }
-
-  if ((processor.type === 'high-pass' || processor.type === 'low-pass') && node.filter) {
-    node.filter.type = processor.type === 'high-pass' ? 'highpass' : 'lowpass';
-    node.filter.frequency.value = clampScrubFrequency(ctx, processor.frequencyHz);
-    node.filter.Q.value = Math.max(0.0001, Math.min(30, finiteNumber(processor.q, 0.707)));
-    return;
-  }
-
-  if (processor.type === 'biquad-filter' && node.filter) {
-    node.filter.type = processor.filterType;
-    node.filter.frequency.value = clampScrubFrequency(ctx, processor.frequencyHz);
-    node.filter.Q.value = Math.max(0.0001, Math.min(30, finiteNumber(processor.q, 0.707)));
-    node.filter.gain.value = Math.max(-48, Math.min(48, finiteNumber(processor.gainDb, 0)));
-    return;
-  }
-
-  if (processor.type === 'hum-notch' && node.filters && node.dryGain && node.wetGain) {
-    const nyquist = Math.max(20, ctx.sampleRate / 2 - 1);
-    const baseFrequency = Math.max(20, Math.min(nyquist, finiteNumber(processor.frequencyHz, 50)));
-    const q = Math.max(1, Math.min(80, finiteNumber(processor.q, 30)));
-    const harmonicCount = Math.max(1, Math.min(HUM_NOTCH_MAX_HARMONICS, Math.round(finiteNumber(processor.harmonics, 2))));
-    const mix = Math.max(0, Math.min(1, finiteNumber(processor.mix, 1)));
-    node.dryGain.gain.value = 1 - mix;
-    node.wetGain.gain.value = mix;
-    node.filters.forEach((filter, index) => {
-      const harmonic = index + 1;
-      const frequency = baseFrequency * harmonic;
-      if (harmonic <= harmonicCount && frequency < nyquist) {
-        filter.type = 'notch';
-        filter.frequency.value = Math.max(20, Math.min(nyquist, frequency));
-        filter.Q.value = q;
-      } else {
-        filter.type = 'peaking';
-        filter.frequency.value = Math.min(nyquist, 1000);
-        filter.Q.value = 0.707;
-        filter.gain.value = 0;
-      }
-    });
-    return;
-  }
-
-  if (processor.type === 'compressor' && node.compressor) {
-    node.compressor.threshold.value = Math.max(-100, Math.min(0, finiteNumber(processor.thresholdDb, 0)));
-    node.compressor.ratio.value = Math.max(1, Math.min(20, finiteNumber(processor.ratio, 1)));
-    node.compressor.knee.value = Math.max(0, Math.min(40, finiteNumber(processor.kneeDb, 0)));
-    node.compressor.attack.value = Math.max(0, Math.min(1, finiteNumber(processor.attackMs, 10) / 1000));
-    node.compressor.release.value = Math.max(0.001, Math.min(1, finiteNumber(processor.releaseMs, 120) / 1000));
-    if (node.makeupGain) {
-      node.makeupGain.gain.value = Math.max(0, Math.min(4, dbToLinearGain(processor.makeupGainDb)));
-    }
-    return;
-  }
-
-  if (
-    (
-      processor.type === 'limiter' ||
-      processor.type === 'noise-gate' ||
-      processor.type === 'expander' ||
-      processor.type === 'de-click' ||
-      processor.type === 'noise-reduction' ||
-      processor.type === 'spectral-gate' ||
-      processor.type === 'dynamic-eq-band' ||
-      processor.type === 'saturation' ||
-      processor.type === 'polarity-invert' ||
-      processor.type === 'mono-sum' ||
-      processor.type === 'channel-swap' ||
-      processor.type === 'stereo-split'
-    ) &&
-    node.scriptProcessor
-  ) {
-    node.sampleProcessor = processor;
-  }
-}
-
-function copyScrubInputToOutput(input: AudioBuffer, output: AudioBuffer): void {
-  const fallbackChannel = input.numberOfChannels - 1;
-  for (let channel = 0; channel < output.numberOfChannels; channel += 1) {
-    const source = input.getChannelData(Math.max(0, Math.min(channel, fallbackChannel)));
-    output.getChannelData(channel).set(source);
-  }
-}
-
-function processScrubLimiterFrame(
-  node: ScrubProcessorNode,
-  input: AudioBuffer,
-  output: AudioBuffer,
-  processor: Extract<LiveAudioRouteProcessor, { type: 'limiter' }>,
-): void {
-  const ceiling = Math.max(0.000001, dbToLinearGain(processor.ceilingDb));
-  const inputGain = dbToLinearGain(processor.inputGainDb);
-  const fallbackChannel = input.numberOfChannels - 1;
-  let maxReductionDb = 0;
-
-  for (let channel = 0; channel < output.numberOfChannels; channel += 1) {
-    const source = input.getChannelData(Math.max(0, Math.min(channel, fallbackChannel)));
-    const target = output.getChannelData(channel);
-    for (let sampleIndex = 0; sampleIndex < target.length; sampleIndex += 1) {
-      const driven = (source[sampleIndex] ?? 0) * inputGain;
-      const limited = Math.max(-ceiling, Math.min(ceiling, driven));
-      target[sampleIndex] = limited;
-      maxReductionDb = Math.max(maxReductionDb, scrubLimiterReductionDb(Math.abs(driven), Math.abs(limited)));
-    }
-  }
-
-  node.gainReductionDb = maxReductionDb;
-}
-
-function processScrubNoiseGateFrame(
-  node: ScrubProcessorNode,
-  input: AudioBuffer,
-  output: AudioBuffer,
-  processor: Extract<LiveAudioRouteProcessor, { type: 'noise-gate' }>,
-): void {
-  const threshold = dbToLinearGain(processor.thresholdDb);
-  const floorGain = dbToLinearGain(processor.floorDb);
-  const attackMs = Math.max(0.001, finiteNumber(processor.attackMs, 2));
-  const releaseMs = Math.max(0.001, finiteNumber(processor.releaseMs, 80));
-  const attackCoefficient = Math.exp(-1 / (input.sampleRate * attackMs / 1000));
-  const releaseCoefficient = Math.exp(-1 / (input.sampleRate * releaseMs / 1000));
-  const fallbackChannel = input.numberOfChannels - 1;
-  const gainByChannel = node.gainByChannel ?? [];
-  let maxReductionDb = 0;
-
-  for (let channel = 0; channel < output.numberOfChannels; channel += 1) {
-    const source = input.getChannelData(Math.max(0, Math.min(channel, fallbackChannel)));
-    const target = output.getChannelData(channel);
-    let gain = gainByChannel[channel] ?? 1;
-    for (let sampleIndex = 0; sampleIndex < target.length; sampleIndex += 1) {
-      const sample = source[sampleIndex] ?? 0;
-      const targetGain = Math.abs(sample) >= threshold ? 1 : floorGain;
-      const coefficient = targetGain > gain ? attackCoefficient : releaseCoefficient;
-      gain = targetGain + coefficient * (gain - targetGain);
-      target[sampleIndex] = sample * gain;
-      maxReductionDb = Math.max(
-        maxReductionDb,
-        normalizeScrubDynamicsReductionDb(-20 * Math.log10(Math.max(0.000001, gain))),
-      );
-    }
-    gainByChannel[channel] = gain;
-  }
-
-  node.gainByChannel = gainByChannel;
-  node.gainReductionDb = maxReductionDb;
-}
-
-function calculateScrubExpanderTargetGain(sample: number, processor: Extract<LiveAudioRouteProcessor, { type: 'expander' }>): number {
-  const thresholdDb = Math.max(-100, Math.min(0, finiteNumber(processor.thresholdDb, 0)));
-  const ratio = Math.max(1, Math.min(20, finiteNumber(processor.ratio, 1)));
-  const rangeDb = Math.max(0, Math.min(80, finiteNumber(processor.rangeDb, 0)));
-  if (ratio <= 1.0001 || rangeDb <= 0.0001) return 1;
-  const inputDb = 20 * Math.log10(Math.max(0.000001, Math.abs(sample)));
-  if (inputDb >= thresholdDb) return 1;
-  const reductionDb = Math.min(rangeDb, (thresholdDb - inputDb) * (ratio - 1));
-  return dbToLinearGain(-reductionDb);
-}
-
-function processScrubExpanderFrame(
-  node: ScrubProcessorNode,
-  input: AudioBuffer,
-  output: AudioBuffer,
-  processor: Extract<LiveAudioRouteProcessor, { type: 'expander' }>,
-): void {
-  const attackMs = Math.max(0.001, finiteNumber(processor.attackMs, 2));
-  const releaseMs = Math.max(0.001, finiteNumber(processor.releaseMs, 120));
-  const attackCoefficient = Math.exp(-1 / (input.sampleRate * attackMs / 1000));
-  const releaseCoefficient = Math.exp(-1 / (input.sampleRate * releaseMs / 1000));
-  const fallbackChannel = input.numberOfChannels - 1;
-  const gainByChannel = node.gainByChannel ?? [];
-  let maxReductionDb = 0;
-
-  for (let channel = 0; channel < output.numberOfChannels; channel += 1) {
-    const source = input.getChannelData(Math.max(0, Math.min(channel, fallbackChannel)));
-    const target = output.getChannelData(channel);
-    let gain = gainByChannel[channel] ?? 1;
-    for (let sampleIndex = 0; sampleIndex < target.length; sampleIndex += 1) {
-      const sample = source[sampleIndex] ?? 0;
-      const targetGain = calculateScrubExpanderTargetGain(sample, processor);
-      const coefficient = targetGain < gain ? attackCoefficient : releaseCoefficient;
-      gain = targetGain + coefficient * (gain - targetGain);
-      target[sampleIndex] = sample * gain;
-      maxReductionDb = Math.max(maxReductionDb, normalizeScrubDynamicsReductionDb(-20 * Math.log10(Math.max(0.000001, gain))));
-    }
-    gainByChannel[channel] = gain;
-  }
-
-  node.gainByChannel = gainByChannel;
-  node.gainReductionDb = maxReductionDb;
-}
-
-function calculateScrubNoiseReductionTargetGain(
-  envelope: number,
-  processor: Extract<LiveAudioRouteProcessor, { type: 'noise-reduction' }>,
-): number {
-  const thresholdDb = Math.max(-100, Math.min(0, finiteNumber(processor.thresholdDb, -60)));
-  const reductionDb = Math.max(0, Math.min(60, finiteNumber(processor.reductionDb, 0)));
-  const sensitivity = Math.max(0.1, Math.min(4, finiteNumber(processor.sensitivity, 1)));
-  if (reductionDb <= 0.0001) return 1;
-  const envelopeDb = 20 * Math.log10(Math.max(0.000001, envelope));
-  if (envelopeDb >= thresholdDb) return 1;
-  const reductionRatio = Math.max(0, Math.min(1, ((thresholdDb - envelopeDb) / 48) * sensitivity));
-  return dbToLinearGain(-reductionDb * reductionRatio);
-}
-
-function processScrubNoiseReductionFrame(
-  node: ScrubProcessorNode,
-  input: AudioBuffer,
-  output: AudioBuffer,
-  processor: Extract<LiveAudioRouteProcessor, { type: 'noise-reduction' }>,
-): void {
-  const attackMs = Math.max(0.001, finiteNumber(processor.attackMs, 5));
-  const releaseMs = Math.max(0.001, finiteNumber(processor.releaseMs, 160));
-  const attackCoefficient = Math.exp(-1 / (input.sampleRate * attackMs / 1000));
-  const releaseCoefficient = Math.exp(-1 / (input.sampleRate * releaseMs / 1000));
-  const mix = Math.max(0, Math.min(1, finiteNumber(processor.mix, 0)));
-  const fallbackChannel = input.numberOfChannels - 1;
-  const gainByChannel = node.gainByChannel ?? [];
-  const envelopeByChannel = node.envelopeByChannel ?? [];
-
-  for (let channel = 0; channel < output.numberOfChannels; channel += 1) {
-    const source = input.getChannelData(Math.max(0, Math.min(channel, fallbackChannel)));
-    const target = output.getChannelData(channel);
-    let gain = gainByChannel[channel] ?? 1;
-    let envelope = envelopeByChannel[channel] ?? 0;
-    for (let sampleIndex = 0; sampleIndex < target.length; sampleIndex += 1) {
-      const dry = source[sampleIndex] ?? 0;
-      const amplitude = Math.abs(dry);
-      const envelopeCoefficient = amplitude > envelope ? attackCoefficient : releaseCoefficient;
-      envelope = amplitude + envelopeCoefficient * (envelope - amplitude);
-      const targetGain = calculateScrubNoiseReductionTargetGain(envelope, processor);
-      const gainCoefficient = targetGain < gain ? attackCoefficient : releaseCoefficient;
-      gain = targetGain + gainCoefficient * (gain - targetGain);
-      target[sampleIndex] = dry * (1 - mix) + dry * gain * mix;
-    }
-    gainByChannel[channel] = gain;
-    envelopeByChannel[channel] = envelope;
-  }
-
-  node.gainByChannel = gainByChannel;
-  node.envelopeByChannel = envelopeByChannel;
-  node.gainReductionDb = 0;
-}
-
-function processScrubSpectralGateFrame(
-  node: ScrubProcessorNode,
-  input: AudioBuffer,
-  output: AudioBuffer,
-  processor: Extract<LiveAudioRouteProcessor, { type: 'spectral-gate' }>,
-): void {
-  node.spectralGateState = processSpectralGateBlock(
-    input,
-    output,
-    processor,
-    node.spectralGateState ?? createSpectralGateState(),
-  );
-  node.gainReductionDb = 0;
-}
-
-function processScrubSaturationFrame(
-  input: AudioBuffer,
-  output: AudioBuffer,
-  processor: Extract<LiveAudioRouteProcessor, { type: 'saturation' }>,
-): void {
-  const driveDb = Math.max(0, Math.min(48, finiteNumber(processor.driveDb, 0)));
-  const drive = dbToLinearGain(driveDb);
-  const normalizer = driveDb <= 0.001 ? 1 : Math.tanh(drive) || 1;
-  const mix = Math.max(0, Math.min(1, finiteNumber(processor.mix, 0)));
-  const cutoff = Math.max(20, Math.min(input.sampleRate / 2 - 1, finiteNumber(processor.toneHz, 16000)));
-  const toneAlpha = 1 - Math.exp(-2 * Math.PI * cutoff / input.sampleRate);
-  const fallbackChannel = input.numberOfChannels - 1;
-
-  for (let channel = 0; channel < output.numberOfChannels; channel += 1) {
-    const source = input.getChannelData(Math.max(0, Math.min(channel, fallbackChannel)));
-    const target = output.getChannelData(channel);
-    let toneState = 0;
-
-    for (let sampleIndex = 0; sampleIndex < target.length; sampleIndex += 1) {
-      const dry = source[sampleIndex] ?? 0;
-      const saturated = driveDb <= 0.001 ? dry : Math.tanh(dry * drive) / normalizer;
-      toneState += toneAlpha * (saturated - toneState);
-      target[sampleIndex] = Math.max(-1, Math.min(1, dry * (1 - mix) + toneState * mix));
-    }
-  }
-}
-
-function processScrubPolarityInvertFrame(
-  input: AudioBuffer,
-  output: AudioBuffer,
-  processor: Extract<LiveAudioRouteProcessor, { type: 'polarity-invert' }>,
-): void {
-  const fallbackChannel = input.numberOfChannels - 1;
-  for (let channel = 0; channel < output.numberOfChannels; channel += 1) {
-    const source = input.getChannelData(Math.max(0, Math.min(channel, fallbackChannel)));
-    const target = output.getChannelData(channel);
-    const invert =
-      processor.channelMode === 'all' ||
-      (processor.channelMode === 'left' && channel === 0) ||
-      (processor.channelMode === 'right' && channel === 1);
-
-    for (let sampleIndex = 0; sampleIndex < target.length; sampleIndex += 1) {
-      const sample = source[sampleIndex] ?? 0;
-      target[sampleIndex] = invert ? -sample : sample;
-    }
-  }
-}
-
-function processScrubMonoSumFrame(input: AudioBuffer, output: AudioBuffer): void {
-  const sourceChannels = Array.from({ length: input.numberOfChannels }, (_, channel) => input.getChannelData(channel));
-  for (let sampleIndex = 0; sampleIndex < output.length; sampleIndex += 1) {
-    let sum = 0;
-    for (const source of sourceChannels) {
-      sum += source[sampleIndex] ?? 0;
-    }
-    const mono = sourceChannels.length > 0 ? sum / sourceChannels.length : 0;
-    for (let channel = 0; channel < output.numberOfChannels; channel += 1) {
-      output.getChannelData(channel)[sampleIndex] = mono;
-    }
-  }
-}
-
-function processScrubChannelSwapFrame(input: AudioBuffer, output: AudioBuffer): void {
-  const fallbackChannel = input.numberOfChannels - 1;
-  for (let channel = 0; channel < output.numberOfChannels; channel += 1) {
-    const sourceChannel = input.numberOfChannels >= 2
-      ? channel === 0 ? 1 : channel === 1 ? 0 : channel
-      : channel;
-    const source = input.getChannelData(Math.max(0, Math.min(sourceChannel, fallbackChannel)));
-    output.getChannelData(channel).set(source);
-  }
-}
-
-function processScrubDeClickFrame(
-  input: AudioBuffer,
-  output: AudioBuffer,
-  processor: Extract<LiveAudioRouteProcessor, { type: 'de-click' }>,
-): void {
-  const fallbackChannel = input.numberOfChannels - 1;
-  const threshold = Math.max(0.01, Math.min(1, finiteNumber(processor.threshold, 0.35)));
-  const ratio = Math.max(1, finiteNumber(processor.ratio, 4));
-  const mix = Math.max(0, Math.min(1, finiteNumber(processor.mix, 1)));
-
-  for (let channel = 0; channel < output.numberOfChannels; channel += 1) {
-    const source = input.getChannelData(Math.max(0, Math.min(channel, fallbackChannel)));
-    const target = output.getChannelData(channel);
-    if (target.length <= 2) {
-      target.set(source);
-      continue;
-    }
-    target[0] = source[0] ?? 0;
-    target[target.length - 1] = source[target.length - 1] ?? 0;
-
-    for (let sampleIndex = 1; sampleIndex < target.length - 1; sampleIndex += 1) {
-      const previous = source[sampleIndex - 1] ?? 0;
-      const dry = source[sampleIndex] ?? 0;
-      const next = source[sampleIndex + 1] ?? 0;
-      const prediction = (previous + next) / 2;
-      const residual = Math.abs(dry - prediction);
-      const neighborEnergy = (Math.abs(previous) + Math.abs(next)) / 2;
-      const click = residual >= threshold && residual >= neighborEnergy * ratio;
-      target[sampleIndex] = click ? dry * (1 - mix) + prediction * mix : dry;
-    }
-  }
-}
-
-function processScrubStereoSplitFrame(
-  input: AudioBuffer,
-  output: AudioBuffer,
-  processor: Extract<LiveAudioRouteProcessor, { type: 'stereo-split' }>,
-): void {
-  const sourceChannel = Math.max(
-    0,
-    Math.min(input.numberOfChannels - 1, Math.round(finiteNumber(processor.sourceChannel, 0))),
-  );
-  const source = input.getChannelData(sourceChannel);
-  for (let channel = 0; channel < output.numberOfChannels; channel += 1) {
-    output.getChannelData(channel).set(source);
-  }
-}
-
-function attachScrubSampleProcessor(node: ScrubProcessorNode): void {
-  const scriptProcessor = node.scriptProcessor;
-  if (!scriptProcessor) return;
-
-  scriptProcessor.onaudioprocess = (event: AudioProcessingEvent) => {
-    const processor = node.sampleProcessor;
-    if (processor?.type === 'limiter') {
-      processScrubLimiterFrame(node, event.inputBuffer, event.outputBuffer, processor);
-      return;
-    }
-
-    if (processor?.type === 'noise-gate') {
-      processScrubNoiseGateFrame(node, event.inputBuffer, event.outputBuffer, processor);
-      return;
-    }
-
-    if (processor?.type === 'expander') {
-      processScrubExpanderFrame(node, event.inputBuffer, event.outputBuffer, processor);
-      return;
-    }
-
-    if (processor?.type === 'de-click') {
-      processScrubDeClickFrame(event.inputBuffer, event.outputBuffer, processor);
-      node.gainReductionDb = 0;
-      return;
-    }
-
-    if (processor?.type === 'noise-reduction') {
-      processScrubNoiseReductionFrame(node, event.inputBuffer, event.outputBuffer, processor);
-      return;
-    }
-
-    if (processor?.type === 'spectral-gate') {
-      processScrubSpectralGateFrame(node, event.inputBuffer, event.outputBuffer, processor);
-      return;
-    }
-
-    if (processor?.type === 'dynamic-eq-band') {
-      processScrubDynamicEqBandFrame(node, event.inputBuffer, event.outputBuffer, processor);
-      return;
-    }
-
-    if (processor?.type === 'saturation') {
-      processScrubSaturationFrame(event.inputBuffer, event.outputBuffer, processor);
-      node.gainReductionDb = 0;
-      return;
-    }
-
-    if (processor?.type === 'polarity-invert') {
-      processScrubPolarityInvertFrame(event.inputBuffer, event.outputBuffer, processor);
-      node.gainReductionDb = 0;
-      return;
-    }
-
-    if (processor?.type === 'mono-sum') {
-      processScrubMonoSumFrame(event.inputBuffer, event.outputBuffer);
-      node.gainReductionDb = 0;
-      return;
-    }
-
-    if (processor?.type === 'channel-swap') {
-      processScrubChannelSwapFrame(event.inputBuffer, event.outputBuffer);
-      node.gainReductionDb = 0;
-      return;
-    }
-
-    if (processor?.type === 'stereo-split') {
-      processScrubStereoSplitFrame(event.inputBuffer, event.outputBuffer, processor);
-      node.gainReductionDb = 0;
-      return;
-    }
-
-    copyScrubInputToOutput(event.inputBuffer, event.outputBuffer);
-    node.gainReductionDb = 0;
-  };
-}
-
-function processScrubDynamicEqBandFrame(
-  node: ScrubProcessorNode,
-  input: AudioBuffer,
-  output: AudioBuffer,
-  processor: Extract<LiveAudioRouteProcessor, { type: 'dynamic-eq-band' }>,
-): void {
-  node.dynamicEqState ??= createAudioEqDynamicRuntimeState();
-  const channels = Array.from({ length: input.numberOfChannels }, (_, channel) => input.getChannelData(channel));
-  const result = processAudioEqChannels(channels, createSingleBandAudioEqParams(processor.band), {
-    sampleRate: input.sampleRate,
-    state: node.dynamicEqState,
-  });
-  for (let channel = 0; channel < output.numberOfChannels; channel += 1) {
-    output.getChannelData(channel).set(result.channels[channel] ?? channels[channel]);
-  }
-  node.gainReductionDb = result.telemetry.reduce(
-    (maxReduction, band) => Math.max(maxReduction, band.maxGainReductionDb),
-    0,
-  );
-}
-
-function reconnectScrubCustomProcessor(node: ScrubProcessorNode): void {
-  if (
-    node.type === 'hum-notch' &&
-    node.inputNode &&
-    node.outputNode &&
-    node.dryGain &&
-    node.wetGain &&
-    node.filters?.length
-  ) {
-    node.inputNode.connect(node.dryGain);
-    node.dryGain.connect(node.outputNode);
-    let wetTail: AudioNode = node.inputNode;
-    for (const filter of node.filters) {
-      wetTail.connect(filter);
-      wetTail = filter;
-    }
-    wetTail.connect(node.wetGain);
-    node.wetGain.connect(node.outputNode);
-  }
-}
 
 class ProxyFrameCache {
   private cache: Map<string, CachedFrame> = new Map();
@@ -1035,98 +243,19 @@ class ProxyFrameCache {
     return audio;
   }
 
-  private getAudioProxySrcKind(src: string | undefined): 'blob-url' | 'file-path' | 'project-path' | 'remote-url' | 'media-source' | 'unknown' {
-    if (!src) return 'unknown';
-    if (src.startsWith('blob:')) return 'blob-url';
-    if (src.startsWith('http')) return 'remote-url';
-    if (src.startsWith('mediastream:')) return 'media-source';
-    if (src.startsWith('/') || /^[A-Za-z]:[\\/]/.test(src)) return 'file-path';
-    return 'unknown';
-  }
-
-  private estimateLegacyImageBytes(image: HTMLImageElement): number {
-    const width = image.naturalWidth || image.width || 0;
-    const height = image.naturalHeight || image.height || 0;
-    return Math.max(0, Math.round(width * height * BYTES_PER_RGBA_PIXEL));
-  }
 
   private getLegacyFrameCacheStats(
     mediaFileId: string,
     override?: { key: string; entry: CachedFrame | null }
   ): LegacyProxyFrameCacheStats {
-    let frameCount = 0;
-    let heapBytes = 0;
-    let width: number | undefined;
-    let height: number | undefined;
-    let overrideApplied = false;
-
-    const addImage = (image: HTMLImageElement) => {
-      frameCount += 1;
-      heapBytes += this.estimateLegacyImageBytes(image);
-      width ??= image.naturalWidth || image.width || undefined;
-      height ??= image.naturalHeight || image.height || undefined;
-    };
-
-    for (const [key, entry] of this.cache) {
-      if (entry.mediaFileId !== mediaFileId) continue;
-      if (override && key === override.key) {
-        overrideApplied = true;
-        if (override.entry) {
-          addImage(override.entry.image);
-        }
-        continue;
-      }
-      addImage(entry.image);
-    }
-
-    if (override && !overrideApplied && override.entry?.mediaFileId === mediaFileId) {
-      addImage(override.entry.image);
-    }
-
-    return {
-      frameCount,
-      heapBytes,
-      ...(width ? { width } : {}),
-      ...(height ? { height } : {}),
-    };
+    return getLegacyFrameCacheStats(this.cache, mediaFileId, override);
   }
 
   private createLegacyFrameCacheResource(
     mediaFileId: string,
     stats: LegacyProxyFrameCacheStats
-  ): RenderResourceDescriptor {
-    const resourceId = this.getLegacyProxyFrameResourceId(mediaFileId);
-    const demand: RuntimeProviderDemand = {
-      id: resourceId,
-      facetId: `${resourceId}:facet`,
-      resourceKind: 'image-canvas',
-      policyId: LEGACY_PROXY_FRAME_RUNTIME_POLICY_ID,
-      leasePolicy: 'background-cache',
-      owner: {
-        ownerId: `proxy-frame-cache:${mediaFileId}`,
-        ownerType: 'timeline',
-        mediaFileId,
-      },
-      source: {
-        sourceId: mediaFileId,
-        mediaFileId,
-      },
-      dimensions: removeUndefinedValues({
-        width: stats.width,
-        height: stats.height,
-      }),
-      priority: 'background',
-      tags: ['proxy-frame-cache', 'jpeg-proxy-frame'],
-    };
-    return createRenderResourceDescriptorFromDemand(demand, {
-      resourceKind: 'image-canvas',
-      memoryCost: {
-        heapBytes: stats.heapBytes,
-      },
-      imageKind: 'html-image',
-      imageId: resourceId,
-      label: `JPEG proxy frame cache (${stats.frameCount} frames)`,
-    });
+  ) {
+    return createLegacyFrameCacheResource(mediaFileId, stats);
   }
 
   private canRetainLegacyFrame(
@@ -1154,40 +283,8 @@ class ProxyFrameCache {
     timelineRuntimeCoordinator.releaseResource(this.getLegacyProxyFrameResourceId(mediaFileId));
   }
 
-  private createAudioBufferResource(mediaFileId: string, buffer: AudioBuffer): RenderResourceDescriptor {
-    const resourceId = this.getAudioBufferResourceId(mediaFileId);
-    const demand: RuntimeProviderDemand = {
-      id: resourceId,
-      facetId: `${resourceId}:facet`,
-      resourceKind: 'audio-source-clock',
-      policyId: INTERACTIVE_PROXY_CACHE_RUNTIME_POLICY_ID,
-      leasePolicy: 'background-cache',
-      owner: {
-        ownerId: `proxy-frame-cache:${mediaFileId}`,
-        ownerType: 'timeline',
-        mediaFileId,
-      },
-      source: {
-        sourceId: mediaFileId,
-        mediaFileId,
-      },
-      dimensions: {
-        durationSeconds: buffer.duration,
-        sampleRate: buffer.sampleRate,
-        channelCount: buffer.numberOfChannels,
-      },
-      priority: 'background',
-      tags: ['proxy-frame-cache', 'decoded-audio-buffer', 'scrub-audio'],
-    };
-    return createRenderResourceDescriptorFromDemand(demand, {
-      resourceKind: 'audio-source-clock',
-      memoryCost: {
-        heapBytes: estimateAudioBufferBytes(buffer),
-      },
-      audioSourceId: mediaFileId,
-      clockId: resourceId,
-      label: 'Decoded proxy audio buffer',
-    });
+  private createAudioBufferResource(mediaFileId: string, buffer: AudioBuffer) {
+    return createAudioBufferResource(mediaFileId, buffer);
   }
 
   private cacheDecodedAudioBuffer(mediaFileId: string, buffer: AudioBuffer): boolean {
@@ -1228,51 +325,8 @@ class ProxyFrameCache {
     mediaFileId: string,
     audioSrc: string,
     audio?: HTMLAudioElement,
-  ): RenderResourceDescriptor {
-    const resourceId = this.getAudioProxyElementResourceId(mediaFileId);
-    const readyState = audio?.readyState ?? 0;
-    const networkState = audio?.networkState ?? 0;
-    const status = audio?.error ? 'warning' : readyState >= HTMLMediaElement.HAVE_METADATA ? 'ok' : 'unknown';
-    const demand: RuntimeProviderDemand = {
-      id: resourceId,
-      facetId: `${resourceId}:facet`,
-      resourceKind: 'html-media',
-      policyId: INTERACTIVE_PROXY_CACHE_RUNTIME_POLICY_ID,
-      leasePolicy: 'lease-visible',
-      owner: {
-        ownerId: `proxy-frame-cache:${mediaFileId}`,
-        ownerType: 'timeline',
-        mediaFileId,
-      },
-      source: {
-        sourceId: mediaFileId,
-        mediaFileId,
-      },
-      priority: 'visible',
-      tags: ['proxy-frame-cache', 'audio-proxy', 'html-audio'],
-    };
-    return createRenderResourceDescriptorFromDemand(demand, {
-      resourceKind: 'html-media',
-      mediaElementKind: 'audio',
-      elementId: resourceId,
-      srcKind: this.getAudioProxySrcKind(audioSrc),
-      diagnostics: {
-        status,
-        provider: {
-          providerId: resourceId,
-          providerKind: 'html-audio',
-          status,
-          isReady: readyState >= HTMLMediaElement.HAVE_METADATA,
-          isPlaying: audio ? !audio.paused : false,
-          isSeeking: audio?.seeking ?? false,
-          currentTimeSeconds: audio?.currentTime ?? 0,
-          readyState,
-          networkState,
-          errorCode: audio?.error ? String(audio.error.code) : undefined,
-        },
-      },
-      label: 'Proxy audio element',
-    });
+  ) {
+    return createAudioProxyElementResource(mediaFileId, audioSrc, audio);
   }
 
   private canRetainAudioProxyElement(mediaFileId: string, audioSrc: string): TimelineRuntimeAdmissionDecision {
@@ -1291,93 +345,18 @@ class ProxyFrameCache {
     timelineRuntimeCoordinator.releaseResource(this.getAudioProxyElementResourceId(mediaFileId));
   }
 
-  private estimateVideoFrameBytes(frame: VideoFrame): number {
-    const width = frame.codedWidth || frame.displayWidth || 0;
-    const height = frame.codedHeight || frame.displayHeight || 0;
-    return Math.max(0, Math.round(width * height * BYTES_PER_RGBA_PIXEL));
-  }
-
   private getVideoFrameCacheStats(
     mediaFileId: string,
     override?: { key: string; entry: CachedVideoFrame | null }
   ): ProxyVideoFrameCacheStats {
-    let frameCount = 0;
-    let decodedFrameBytes = 0;
-    let width: number | undefined;
-    let height: number | undefined;
-    let overrideApplied = false;
-
-    const addFrame = (frame: VideoFrame) => {
-      frameCount += 1;
-      decodedFrameBytes += this.estimateVideoFrameBytes(frame);
-      width ??= frame.codedWidth || frame.displayWidth || undefined;
-      height ??= frame.codedHeight || frame.displayHeight || undefined;
-    };
-
-    for (const [key, entry] of this.videoFrameCache) {
-      if (entry.mediaFileId !== mediaFileId) continue;
-      if (override && key === override.key) {
-        overrideApplied = true;
-        if (override.entry) {
-          addFrame(override.entry.frame);
-        }
-        continue;
-      }
-      addFrame(entry.frame);
-    }
-
-    if (override && !overrideApplied && override.entry?.mediaFileId === mediaFileId) {
-      addFrame(override.entry.frame);
-    }
-
-    return {
-      frameCount,
-      decodedFrameBytes,
-      ...(width ? { width } : {}),
-      ...(height ? { height } : {}),
-    };
+    return getVideoFrameCacheStats(this.videoFrameCache, mediaFileId, override);
   }
 
   private createVideoFrameCacheResource(
     mediaFileId: string,
     stats: ProxyVideoFrameCacheStats
-  ): RenderResourceDescriptor {
-    const resourceId = this.getVideoFrameResourceId(mediaFileId);
-    const demand: RuntimeProviderDemand = {
-      id: resourceId,
-      facetId: `${resourceId}:facet`,
-      resourceKind: 'video-frame-provider',
-      policyId: INTERACTIVE_PROXY_CACHE_RUNTIME_POLICY_ID,
-      leasePolicy: 'background-cache',
-      owner: {
-        ownerId: `proxy-frame-cache:${mediaFileId}`,
-        ownerType: 'timeline',
-        mediaFileId,
-      },
-      source: {
-        sourceId: mediaFileId,
-        mediaFileId,
-      },
-      dimensions: removeUndefinedValues({
-        width: stats.width,
-        height: stats.height,
-      }),
-      priority: 'background',
-      tags: ['proxy-frame-cache', 'webcodecs-video-frame'],
-    };
-    return createRenderResourceDescriptorFromDemand(demand, {
-      resourceKind: 'video-frame-provider',
-      memoryCost: {
-        heapBytes: stats.decodedFrameBytes,
-        decodedFrameBytes: stats.decodedFrameBytes,
-      },
-      providerId: resourceId,
-      providerKind: 'webcodecs',
-      canSeek: true,
-      canProvideStaleFrame: true,
-      frameFormat: 'video-frame',
-      label: `Proxy WebCodecs frame cache (${stats.frameCount} frames)`,
-    });
+  ) {
+    return createVideoFrameCacheResource(mediaFileId, stats);
   }
 
   private canRetainVideoFrame(
@@ -1404,7 +383,6 @@ class ProxyFrameCache {
   private releaseVideoFrameCacheResource(mediaFileId: string): void {
     timelineRuntimeCoordinator.releaseResource(this.getVideoFrameResourceId(mediaFileId));
   }
-
   private disposeAudioProxyElement(mediaFileId: string, audio: HTMLAudioElement): void {
     const src = mediaRuntimeScrubAudioLeaseOwner.releaseAudioElement(
       audio,
@@ -1618,7 +596,7 @@ class ProxyFrameCache {
       const proxyVideo = await projectFileService.getProxyVideo(storageKey);
       if (!proxyVideo) return null;
 
-      return parseProxyVideoFile(mediaFileId, storageKey, proxyVideo);
+      return parseProxyVideoFile(mediaFileId, storageKey, proxyVideo, log);
     })();
 
     this.proxyVideoSourcePromises.set(mediaFileId, promise);
@@ -1628,56 +606,8 @@ class ProxyFrameCache {
   private async decodeProxyVideoFrame(mediaFileId: string, frameIndex: number): Promise<VideoFrame | null> {
     const source = await this.getProxyVideoSource(mediaFileId);
     if (!source || source.samples.length === 0) return null;
-
-    const sampleIndex = Math.max(0, Math.min(source.samples.length - 1, frameIndex));
-    const sample = source.samples[sampleIndex];
-    const firstPresentationCts = getFirstPresentationCts(source.samples);
-    let decodedFrame: VideoFrame | null = null;
-    let decodeError: unknown = null;
-    const closeDecodedFrame = () => {
-      const frame = decodedFrame as VideoFrame | null;
-      if (frame) {
-        frame.close();
-        decodedFrame = null;
-      }
-    };
-
-    const decoder = new VideoDecoder({
-      output: (frame) => {
-        if (decodedFrame) decodedFrame.close();
-        decodedFrame = frame;
-      },
-      error: (error) => {
-        decodeError = error;
-      },
-    });
-
-    try {
-      decoder.configure(source.codecConfig);
-      decoder.decode(new EncodedVideoChunk({
-        type: 'key',
-        timestamp: getNormalizedSampleTimestampUs(sample, firstPresentationCts),
-        duration: sample.timescale > 0 ? (sample.duration / sample.timescale) * 1_000_000 : undefined,
-        data: sample.data,
-      }));
-      await decoder.flush();
-      if (decodeError) {
-        log.warn('Proxy video frame decode failed', decodeError);
-        closeDecodedFrame();
-        return null;
-      }
-      return decodedFrame;
-    } catch (error) {
-      log.warn('Proxy video frame decode failed', error);
-      closeDecodedFrame();
-      return null;
-    } finally {
-      try {
-        if (decoder.state !== 'closed') decoder.close();
-      } catch { /* ignore */ }
-    }
+    return decodeProxyVideoFrameFromSource(source, frameIndex, log);
   }
-
   private addVideoFrameToCache(mediaFileId: string, frameIndex: number, frame: VideoFrame): boolean {
     const key = this.getKey(mediaFileId, frameIndex);
     const entry: CachedVideoFrame = {

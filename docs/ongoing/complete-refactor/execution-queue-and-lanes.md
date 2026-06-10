@@ -749,7 +749,7 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
   transport vite-plugin extraction, smoke scenario split, gate thresholds, and
   composer driver tool.
 - Wave 12 audit refresh:
-  over-700 audit is 111 files (from 114 at goal start); top files are now
+  over-700 audit is 111 files (from 114 at goal start); top files were then
   `proxyFrameCache` 3266, `timelineCanvasSmoke` 3110, `bridge` 2995,
   `Preview` 2410->, and `ExportPanel` 2269->, with `MediaPanel` at 742.
 - Wave 12 verification:
@@ -831,6 +831,39 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
   documented in the dispatch skill.
 - Wave 16 verification:
   Orchestrator-verified: tsc clean; guards + adoption + dispatcher + proxy suites green.
+- Wave 17 closure completed:
+  `DOCS-CLOSURE-210` closed wave 16 bookkeeping.
+  `P6-AUDIOMANAGER-FACADE-MERGE-211` made `audioRoutingManager` the single live
+  audio owner, left `audioManager` as a 146-line deprecated facade, extracted
+  `audioStatusTracker` to `src/services/audio/audioStatusTracker.ts`, and
+  added `tests/unit/audioManagerFacade.test.ts`.
+  `P5-SCENE-OBJECT-OVERLAY-SPLIT-212` split Scene Object Overlay 2053 -> 814
+  raw lines with 7 modules under `src/components/preview/sceneOverlay/`;
+  pointer-lock/listener orchestration remains a higher-risk follow-up.
+  `P3-PROJECTLOAD-FLASHBOARD-HYDRATION-SPLIT-213` split `projectLoad` 1989 ->
+  145 raw lines with 9 modules under `src/services/project/load/`, preserving
+  hydration order.
+- Wave 17 verification:
+  Orchestrator-verified: tsc clean; 7 suites green (82 tests).
+- Wave 18 closure completed:
+  `P6-DECODE-ISLANDS-AUDIODECODE-214` consolidated `AudioProxyService`,
+  `audioAnalyzer`, and `timelineWaveformPyramidCache` onto
+  `AudioDecodeService`; `AudioExtractor` remains the decode-owner follow-up.
+  `P6-SCRUB-AUDIO-LEASE-SLOTS-215` moved edit/repair preview services onto
+  isolated scrub-audio lease slots. `P6-AUDIO-BUFFER-FACTORY-216` added
+  `src/engine/audio/audioBufferFactory.ts`, migrated six temp-allocation
+  context sites, and fixed the TimeStretch close-on-throw gap.
+  `P7-AINODE-RUNTIME-SPLIT-217` split `aiNodeRuntime` 1975 -> 960 raw lines
+  with 4 modules. `P4-MEDIA-PANEL-FINAL-BUDGET-218` reduced `MediaPanel` 742
+  -> 699 raw lines and redistributed getState policy from MediaPanel 4 to
+  MediaPanel 3 plus `useMediaPanelCompositionSettings` 1.
+- Wave 18 audit refresh:
+  `MediaPanel` is off the over-700 list. Current tracked over-700 follow-ups
+  include `ClipAudioRenderService` 2098, `AudioEffectRenderer` 1991,
+  `AudioDecodeService` 996, `aiNodeRuntime` 960, and
+  `SceneObjectOverlay` 814.
+- Wave 18 verification:
+  Orchestrator-verified: tsc clean; 14 suites green (212 tests).
 
 ## High-Conflict Ownership Snapshot
 
@@ -849,84 +882,35 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 | `src/engine/**`, `src/components/preview/**`, `src/components/export/**` | later P5/P6 joint packets | read, smoke only | render snapshot/output-router contracts frozen |
 | `src/services/aiTools/**` | later P7 smoke quarantine packets | read, smoke inventory only | Phase 0 smoke thresholds accepted |
 
-## Active Packet
+## Active Wave 19
 
-```text
-Lane: P3 Project Persistence And Current Schema Boundary
-Packet: P3-PROJECTLOAD-FLASHBOARD-HYDRATION-SPLIT-213 Project Load FlashBoard Hydration Split
-Mode: source split
-Goal: extract only the FlashBoard generation-record normalization/hydration
-cluster from `projectLoad.ts` into `projectFlashBoardHydration.ts`.
-Read first:
-- src/services/project/projectLoad.ts
-- src/services/project/types/flashboard.types.ts
-- src/stores/flashboardStore/activeGenerationRecords.ts
-- src/stores/flashboardStore/types.ts
-Allowed write set:
-- src/services/project/projectLoad.ts
-- src/services/project/projectFlashBoardHydration.ts
-- docs/ongoing/Complete-refactor-checklist.md
-- docs/ongoing/complete-refactor/execution-queue-and-lanes.md
-Forbidden files:
-- src/services/project/projectSave.ts
-- src/services/project/projectLifecycle.ts
-- src/services/project/projectFileService.ts
-- src/services/project/types/**
-- src/services/project/core/**
-- src/stores/**
-- src/components/**
-- src/timeline/**
-- src/engine/**
-- src/importers/**
-- src/signals/**
-- src/services/mediaRuntime/**
-- tests/**
-- package.json
-- package-lock.json
-Current contract: `P3-PROJECTLOAD-SPLIT-PREFLIGHT-212` selected the
-FlashBoard generation-record hydration cluster as the next safe projectLoad
-split. The cluster owns `FLASHBOARD_SERVICES`, `FLASHBOARD_OUTPUT_TYPES`,
-`FLASHBOARD_MEDIA_TYPES`, `normalizeFlashBoardService`,
-`normalizeFlashBoardOutputType`, `normalizeFlashBoardMediaType`,
-`normalizeFlashBoardRequest`, `normalizeFlashBoardResult`,
-`normalizeFlashBoardJob`, `normalizeFlashBoardGenerationRecord`, and
-`hydrateFlashBoardGenerationRecordsFromProject`.
-Target contract: `projectFlashBoardHydration.ts` owns those constants,
-normalizers, and the active-generation record hydration call. `projectLoad.ts`
-imports only the hydrate function and keeps the load sequence decision
-(`if (projectData.flashboard) ... else reset ...`) plus media bridge metadata
-hydration. No project schema, migration compatibility, store model, Media
-Board, Timeline, importer, media hydration, runtime handle, or CSS behavior may
-change.
-Expected checks:
-- LOC/readability snapshot for `projectLoad.ts` and
-  `projectFlashBoardHydration.ts`
-- rg -n "FLASHBOARD_|normalizeFlashBoard|hydrateFlashBoardGenerationRecordsFromProject|hydrateFlashBoardActiveGenerationRecords|resetFlashBoardActiveGenerationState|flashBoardMediaBridge" src/services/project/projectLoad.ts src/services/project/projectFlashBoardHydration.ts
-- rg -n "useMediaStore|useTimelineStore|useDockStore|useSettingsStore|useExportStore|useMIDIStore|projectFileService|fileSystemService|createMediaObjectUrl|MediaBoard|Timeline|mediaRuntime|\\.css" src/services/project/projectFlashBoardHydration.ts
-- npm run test -- tests/unit/projectSchemaBoundary.test.ts tests/unit/persistedStateRuntimeHandles.test.ts tests/unit/flashboardActiveGenerationRecords.test.ts
-- npx tsc -b --pretty false
-- git diff --check
-- fc.exe /b AGENTS.md CLAUDE.md
-Expected report:
-- extracted FlashBoard hydration owner and dependency scan result
-- LOC delta for `projectLoad.ts` and new helper LOC
-- focused project/FlashBoard tests, TypeScript, diff-check, and AGENTS/CLAUDE
-  parity results
-Stop conditions:
-- extraction requires changing project schema/types, store contracts, media
-  hydration, reset semantics, FlashBoard media bridge metadata hydration,
-  Timeline, Media Board, importers, media runtime, tests, or old-project
-  compatibility branches outside the selected active current-schema behavior.
-```
+Wave 19 packets are dispatched in parallel with docs-only
+`DOCS-CLOSURE-219`. Keep write sets disjoint and report any needed scope
+extension instead of self-extending.
+
+- `P6-CLIPAUDIORENDERSERVICE-SPLIT-220`: split `ClipAudioRenderService`
+  (currently 2098 raw lines).
+- `P6-AUDIORECORDINGSERVICE-SPLIT-221`: split `AudioRecordingService`.
+- `P6-AUDIOEFFECTRENDERER-SPLIT-222`: split `AudioEffectRenderer` (currently
+  1991 raw lines).
+- `P6-PROXYFRAMECACHE-STRUCTURE-SPLIT-223`: split `proxyFrameCache` structure.
 
 ## Queued Packets
 
-No additional packet is queued until
-`P3-PROJECTLOAD-FLASHBOARD-HYDRATION-SPLIT-213` reports its result.
+- `P6-AUDIOROUTINGMANAGER-SPLIT`: split `audioRoutingManager` after the
+  facade merge made it the single live audio owner.
+- `P6-AUDIODECODE-SERVICE-SPLIT`: split `AudioDecodeService` (currently 996
+  raw lines) after wave 18 decode-island consolidation.
+- `P5-SCENE-OBJECT-OVERLAY-FOLLOWUP`: extract pointer-lock/listener
+  orchestration from `SceneObjectOverlay` (currently 814 raw lines).
+- `P7-AINODE-RUNTIME-FOLLOWUP`: continue the `aiNodeRuntime` split (currently
+  960 raw lines).
+- Continue `WebCodecsPlayer`, `ExportPanel`, `Preview`, and `RenderDispatcher`
+  monolith reductions through bounded write sets.
+- `P6-AUDIOEXTRACTOR-DECODE-OWNER-FOLLOWUP`: move remaining AudioExtractor
+  decode ownership onto the chosen decode boundary.
 
 ## Immediate Next Step
 
-Execute `P3-PROJECTLOAD-FLASHBOARD-HYDRATION-SPLIT-213`. Do not reopen
-completed wave 13/14 smoke, Preview, bridge, dockStore, historyStore, wave 15
-P6 closure packets, wave 16 audio/export/preview closure packets, or completed
-wave 17 audio/SceneObjectOverlay packets.
+Track wave 19 packet reports and keep this file to the active wave plus the
+next few queued packets. Do not reopen completed wave 13-18 packets.
