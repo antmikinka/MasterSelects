@@ -32,9 +32,11 @@ export const classCHardTargets = [
   { path: 'src/components/common/MatAnyoneSetupDialog.tsx', maxCurrentHits: 4 },
   { path: 'src/components/common/Toolbar.tsx', maxCurrentHits: 2 },
   { path: 'src/components/export/exportHelpers.ts', maxCurrentHits: 2 },
-  // Redistributed by packet 189: one hit moved into the FFmpeg runner.
-  { path: 'src/components/export/ExportPanel.tsx', maxCurrentHits: 3 },
+  // Packets 189/208: ExportPanel is now getState-FREE (3 -> 0, entry
+  // removed); hits live in the run controller + runners.
   { path: 'src/components/export/runners/ffmpegDirectExportRunner.ts', maxCurrentHits: 1 },
+  { path: 'src/components/export/runners/fcpxmlExportRunner.ts', maxCurrentHits: 1 },
+  { path: 'src/components/export/useExportRunController.ts', maxCurrentHits: 2 },
   { path: 'src/components/export/useExportState.ts', maxCurrentHits: 1 },
   { path: 'src/components/outputManager/OutputManager.tsx', maxCurrentHits: 1 },
   { path: 'src/components/outputManager/OutputManagerBoot.ts', maxCurrentHits: 1 },
@@ -73,10 +75,12 @@ export const classCHardTargets = [
   { path: 'src/components/pianoRoll/PianoRollBoot.ts', maxCurrentHits: 1 },
   { path: 'src/components/preview/MaskOverlay.tsx', maxCurrentHits: 2 },
   { path: 'src/components/preview/MultiPreviewSlot.tsx', maxCurrentHits: 4 },
-  // Ratcheted 27 -> 23 by packet 188 (registration moved to adapter layer);
-  // packet 191 redistributed 3 hits into the source-config hook (total 23).
-  { path: 'src/components/preview/Preview.tsx', maxCurrentHits: 20 },
+  // Ratchet trail: 27 -> 23 (packet 188, adapter layer), -> 20+3 (191,
+  // source config), -> 17+3+2 (209, wheel handler). Cluster total 22 (one
+  // hit retired entirely in 209).
+  { path: 'src/components/preview/Preview.tsx', maxCurrentHits: 17 },
   { path: 'src/components/preview/usePreviewSourceConfig.ts', maxCurrentHits: 3 },
+  { path: 'src/components/preview/usePreviewWheelHandler.ts', maxCurrentHits: 2 },
   { path: 'src/components/preview/SAM2Overlay.tsx', maxCurrentHits: 2 },
   { path: 'src/components/preview/SceneObjectOverlay.tsx', maxCurrentHits: 3 },
   { path: 'src/components/preview/sceneObjectOverlayMath.ts', maxCurrentHits: 1 },
@@ -237,6 +241,7 @@ export const getStateAccessPolicyBaselines = {
   // 189 (189+190: ExportPanel/MediaPanel hits moved into runner/board-hook
   // entries). Totals conserved per redistribution; max-hits ratchets DOWN
   // only (669 -> 665 via the packet-188 Preview ceiling cut).
-  classCHardTargetFileCount: 190,
-  classCHardTargetMaxHits: 665,
+  classCHardTargetFileCount: 192,
+  // 669 -> 665 (packet 188 Preview cut) -> 664 (packet 209 retired one hit).
+  classCHardTargetMaxHits: 664,
 } as const;

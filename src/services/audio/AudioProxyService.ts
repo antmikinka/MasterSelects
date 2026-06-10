@@ -28,6 +28,20 @@ function getDecodeContext(): AudioContext {
   return decodeContext;
 }
 
+function disposeDecodeContext(): void {
+  const context = decodeContext;
+  decodeContext = null;
+  if (context && context.state !== 'closed') {
+    void context.close().catch((error) => {
+      log.warn('Failed to close audio proxy decode context', error);
+    });
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', disposeDecodeContext);
+}
+
 export function getAudioProxyStorageKey(mediaFile: Pick<MediaFile, 'id' | 'fileHash' | 'audioProxyStorageKey'>): string {
   return mediaFile.audioProxyStorageKey || mediaFile.fileHash || mediaFile.id;
 }

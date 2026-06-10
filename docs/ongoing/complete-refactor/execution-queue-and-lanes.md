@@ -786,6 +786,30 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
   6 new barrel imports redirected; ratchet held at 557.
 - Wave 14 verification:
   Orchestrator-verified: tsc clean; guards + policy + registry + history + dock suites green (101 tests).
+- Wave 15 closure completed:
+  `P6-RENDERDISPATCHER-FACET-SPLIT-203` moved telemetry,
+  debug-snapshot, gaussian-sequence, cached-frame, and empty-frame facets under
+  `engine/render/dispatcher/`; `RenderDispatcher` fell 2504 -> ~2050,
+  frame-path order stayed byte-identical, and facets are constructed once.
+  `P6-WEBCODECSPLAYER-SPLIT-204` created `engine/webcodecs/`
+  (`mp4DemuxLoader`, `htmlVideoFrameSource`/Seek, `webCodecsTelemetry`,
+  `sampleTimeline`); player fell 2539 -> 1915, the per-frame loop stayed
+  untouched, and the `wcPipeline` event set was proven identical at 16 names.
+  `P6-AUDIO-OWNERSHIP-SCOUT-205` produced a 25-site `AudioContext` census with
+  verdicts, found 4 leak gaps (`AudioProxyService` no-dispose; success-only
+  closes in `waveformHelpers`, `whisperService`, and `clipTranscriber` x2),
+  accepted `audioRoutingManager` as the single live owner and `audioManager` ->
+  `audioStatusTracker` plus a temp facade for 4 tiny consumers, recorded the
+  per-file lease-fit map, and proposed a 6-packet series.
+- Wave 15 test-migration event:
+  full-suite boundary caught 41 failures in renderDispatcher/proxyFrameCache
+  tests because de-facto public surface (`recordMainPreviewFrame` spy point,
+  preview-hold seed fields, `ownedAudioUrls` internal set) had moved into
+  facets/leases. The orchestrator restored the dispatcher delegate + compat
+  accessors (facets route through the spy point) and migrated the proxy test
+  reset to the lease-owner seam. Full suite then 4173/4173.
+- Wave 15 verification:
+  Orchestrator-verified: tsc clean; FULL suite green 4173/4173.
 
 ## High-Conflict Ownership Snapshot
 
@@ -806,17 +830,16 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 
 ## Active Packet
 
-Wave 15 running: RenderDispatcher facet split, WebCodecsPlayer split, and audio
-ownership scout.
+Wave 16 running: audio leak fixes, ExportPanel split 3, and Preview split 3.
 
 ## Queued Packets
 
-- Continue RenderDispatcher facet split.
-- Continue WebCodecsPlayer split.
-- Continue audio ownership scout.
+- Continue audio leak fixes.
+- Continue ExportPanel split 3.
+- Continue Preview split 3.
 
 ## Immediate Next Step
 
-Finish wave 15 active packets under their bounded write sets; do not reopen
-completed wave 13/14 smoke, Preview, bridge, dockStore, or historyStore
-packets.
+Finish wave 16 active packets under their bounded write sets; do not reopen
+completed wave 13/14 smoke, Preview, bridge, dockStore, historyStore, or wave
+15 P6 closure packets.

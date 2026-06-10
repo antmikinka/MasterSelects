@@ -98,8 +98,9 @@ class WhisperService {
       return null;
     }
 
+    let audioContext: AudioContext | null = null;
     try {
-      const audioContext = new AudioContext({ sampleRate: 16000 }); // Whisper expects 16kHz
+      audioContext = new AudioContext({ sampleRate: 16000 }); // Whisper expects 16kHz
       const arrayBuffer = await mediaFile.file.arrayBuffer();
       const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
@@ -121,15 +122,17 @@ class WhisperService {
           resampled[i] = channelData[srcIndexFloor] * (1 - t) + channelData[srcIndexCeil] * t;
         }
 
-        audioContext.close();
         return resampled;
       }
 
-      audioContext.close();
       return channelData;
     } catch (error) {
       log.error('Failed to extract audio', error);
       return null;
+    } finally {
+      if (audioContext && audioContext.state !== 'closed') {
+        await audioContext.close().catch(() => undefined);
+      }
     }
   }
 

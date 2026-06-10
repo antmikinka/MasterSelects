@@ -15,7 +15,6 @@ import {
   selectSceneNavFpsMode,
   selectSceneNavFpsMoveSpeed,
   selectSceneNavNoKeyframes,
-  stepSceneNavFpsMoveSpeed,
   useEngineStore,
 } from '../../stores/engineStore';
 import type { SceneCameraLiveOverride } from '../../stores/engineStore';
@@ -29,10 +28,7 @@ import { useEditModeOverlay } from './useEditModeOverlay';
 import { useLayerDrag } from './useLayerDrag';
 import { useSAM2Store } from '../../stores/sam2Store';
 import { engine } from '../../engine/WebGPUEngine';
-import {
-  resolveOrbitCameraFrame,
-  resolveOrbitCameraPose,
-} from '../../engine/gaussian/core/SplatCameraUtils';
+import { resolveOrbitCameraPose } from '../../engine/gaussian/core/SplatCameraUtils';
 import { resolveSharedSceneCameraConfig } from '../../engine/scene/SceneCameraUtils';
 import type { SceneCameraConfig, SceneVector3, SceneViewport } from '../../engine/scene/types';
 import type { ClipTransform, TimelineClip, TimelineTrack } from '../../types';
@@ -46,30 +42,34 @@ import {
   fullFrameFocalLengthMmToFov,
 } from '../../utils/cameraLens';
 import { getFirstEditablePreviewPanelId, getPreviewPanelIdFromElement } from './previewPanelDom';
+import {
+  EDIT_CAMERA_ORTHO_MAX_SCALE,
+  addSceneVectors,
+  clampEditCameraOrthoScale,
+  cloneSceneVector,
+  getEditCameraOrthoBasis,
+  getSharedSceneDefaultCameraDistance,
+  scaleSceneVector,
+  type EditCameraOrthoViewMode,
+  type EditCameraViewMode,
+} from './previewSceneCameraMath';
 import { usePreviewDropdownState } from './usePreviewDropdownState';
+import { usePreviewContextMenu } from './usePreviewContextMenu';
+import { usePreviewMouseRouting } from './usePreviewMouseRouting';
+import { usePreviewPlaybackDisplay } from './usePreviewPlaybackDisplay';
 import { usePreviewSceneNavigation } from './usePreviewSceneNavigation';
 import { usePreviewSourceConfig } from './usePreviewSourceConfig';
+import { usePreviewViewGeometry } from './usePreviewViewGeometry';
 import { usePreviewViewport } from './usePreviewViewport';
-
-function getSharedSceneDefaultCameraDistance(fovDegrees: number): number {
-  const worldHeight = 2.0;
-  const fovRadians = (Math.max(fovDegrees, 1) * Math.PI) / 180;
-  return worldHeight / (2 * Math.tan(fovRadians * 0.5));
-}
+import { usePreviewWheelHandler } from './usePreviewWheelHandler';
 
 const EDIT_CAMERA_BLEND_MS = 320;
 const TIMELINE_TIME_EPSILON = 1e-4;
-const EDIT_CAMERA_ORTHO_MIN_SCALE = 0.05;
-const EDIT_CAMERA_ORTHO_MAX_SCALE = 10000;
 const DEFAULT_EDIT_CAMERA_FOCAL_LENGTH_MM = 35;
 const DEFAULT_EDIT_CAMERA_SETTINGS: SceneCameraSettings = {
   ...DEFAULT_SCENE_CAMERA_SETTINGS,
   fov: fullFrameFocalLengthMmToFov(DEFAULT_EDIT_CAMERA_FOCAL_LENGTH_MM),
 };
-
-type EditCameraViewMode = 'camera' | 'front' | 'side' | 'top';
-type EditCameraOrthoViewMode = Exclude<EditCameraViewMode, 'camera'>;
-type PreviewWheelEvent = WheelEvent | React.WheelEvent;
 
 interface EditCameraOrthoFrame {
   clipId: string;
@@ -152,62 +152,8 @@ function lerpNumber(from: number, to: number, t: number): number {
   return from + (to - from) * t;
 }
 
-function cloneSceneVector(vector: SceneVector3): SceneVector3 {
-  return { x: vector.x, y: vector.y, z: vector.z };
-}
-
-function addSceneVectors(a: SceneVector3, b: SceneVector3): SceneVector3 {
-  return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
-}
-
-function scaleSceneVector(vector: SceneVector3, scale: number): SceneVector3 {
-  return { x: vector.x * scale, y: vector.y * scale, z: vector.z * scale };
-}
-
-function getSceneBoundsCenter(bounds: { min: [number, number, number]; max: [number, number, number] } | undefined): SceneVector3 {
-  if (!bounds) return { x: 0, y: 0, z: 0 };
-  return {
-    x: (bounds.min[0] + bounds.max[0]) * 0.5,
-    y: (bounds.min[1] + bounds.max[1]) * 0.5,
-    z: (bounds.min[2] + bounds.max[2]) * 0.5,
-  };
-}
-
-function clampEditCameraOrthoScale(scale: number): number {
-  if (!Number.isFinite(scale)) return 2;
-  return Math.max(EDIT_CAMERA_ORTHO_MIN_SCALE, Math.min(EDIT_CAMERA_ORTHO_MAX_SCALE, scale));
-}
-
 function isSceneObjectInteractionTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest(SCENE_OBJECT_INTERACTION_SELECTOR));
-}
-
-function getEditCameraOrthoBasis(mode: EditCameraOrthoViewMode): {
-  eyeDirection: SceneVector3;
-  right: SceneVector3;
-  up: SceneVector3;
-} {
-  switch (mode) {
-    case 'side':
-      return {
-        eyeDirection: { x: 1, y: 0, z: 0 },
-        right: { x: 0, y: 0, z: -1 },
-        up: { x: 0, y: 1, z: 0 },
-      };
-    case 'top':
-      return {
-        eyeDirection: { x: 0, y: 1, z: 0 },
-        right: { x: 1, y: 0, z: 0 },
-        up: { x: 0, y: 0, z: -1 },
-      };
-    case 'front':
-    default:
-      return {
-        eyeDirection: { x: 0, y: 0, z: 1 },
-        right: { x: 1, y: 0, z: 0 },
-        up: { x: 0, y: 1, z: 0 },
-      };
-  }
 }
 
 function getSceneCameraDistance(config: SceneCameraConfig): number {
@@ -1345,26 +1291,18 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
     }
   }, [selectedClipId, layerEditMode, clips, layers, selectedLayerId, selectLayer]);
 
-  const exportPreviewDisplaySize = useMemo(() => {
-    if (!exportPreviewFrame || containerSize.width <= 0 || containerSize.height <= 0) {
-      return canvasSize;
-    }
-
-    const frameAspect = exportPreviewFrame.width / Math.max(1, exportPreviewFrame.height);
-    const containerAspect = containerSize.width / Math.max(1, containerSize.height);
-    if (containerAspect > frameAspect) {
-      const height = containerSize.height;
-      return { width: Math.floor(height * frameAspect), height: Math.floor(height) };
-    }
-
-    const width = containerSize.width;
-    return { width: Math.floor(width), height: Math.floor(width / frameAspect) };
-  }, [
+  const {
+    exportPreviewDisplaySize,
+    playbackWaiterVideoCount,
+    showPlaybackWaiter,
+  } = usePreviewPlaybackDisplay({
     canvasSize,
-    containerSize.height,
-    containerSize.width,
+    containerSize,
     exportPreviewFrame,
-  ]);
+    isEngineReady,
+    playbackWarmup,
+    sourceMonitorActive,
+  });
 
   usePreviewViewport({
     containerRef,
@@ -1376,193 +1314,77 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
     setContainerSize,
   });
 
-  const zoomEditCameraOrthoView = useCallback((e: PreviewWheelEvent): boolean => {
-    if (!editCameraOrthoViewActive || !activeEditCameraOrthoFrame || !editCameraOrthoMode) return false;
-    if (!isCanvasInteractionTarget(e.target)) return false;
-
-    const canvasRect = canvasRef.current?.getBoundingClientRect();
-    if (!canvasRect || canvasRect.width <= 0 || canvasRect.height <= 0) return false;
-
-    e.preventDefault();
-    const current = activeEditCameraOrthoFrame;
-    const basis = getEditCameraOrthoBasis(editCameraOrthoMode);
-    const aspect = Math.max(0.001, canvasSize.width / Math.max(1, canvasSize.height));
-    const mouseX = Math.max(0, Math.min(canvasRect.width, e.clientX - canvasRect.left));
-    const mouseY = Math.max(0, Math.min(canvasRect.height, e.clientY - canvasRect.top));
-    const zoomFactor = Math.exp(e.deltaY * 0.0025);
-    const nextScale = clampEditCameraOrthoScale(current.scale * zoomFactor);
-    const currentRightOffset = (mouseX / canvasRect.width - 0.5) * current.scale * aspect;
-    const currentUpOffset = (0.5 - mouseY / canvasRect.height) * current.scale;
-    const nextRightOffset = (mouseX / canvasRect.width - 0.5) * nextScale * aspect;
-    const nextUpOffset = (0.5 - mouseY / canvasRect.height) * nextScale;
-    const worldUnderPointer = addSceneVectors(
-      addSceneVectors(current.center, scaleSceneVector(basis.right, currentRightOffset)),
-      scaleSceneVector(basis.up, currentUpOffset),
-    );
-    const nextCenter = addSceneVectors(
-      addSceneVectors(worldUnderPointer, scaleSceneVector(basis.right, -nextRightOffset)),
-      scaleSceneVector(basis.up, -nextUpOffset),
-    );
-
-    setEditCameraOrthoFrame({
-      ...current,
-      center: nextCenter,
-      scale: nextScale,
-    });
-    engine.requestRender();
-    return true;
-  }, [
+  const handleWheel = usePreviewWheelHandler({
     activeEditCameraOrthoFrame,
-    canvasSize.height,
-    canvasSize.width,
+    applyNavigationCameraValues,
+    canvasRef,
+    canvasSize,
+    containerRef,
+    containerSize,
+    editCameraClipIdRef,
+    editCameraModeActive,
     editCameraOrthoMode,
     editCameraOrthoViewActive,
-    isCanvasInteractionTarget,
-  ]);
-
-  useEffect(() => {
-    if (!isEditCameraOrthoPanning) return;
-
-    const handleWindowMouseMove = (event: MouseEvent) => {
-      event.preventDefault();
-      const { x, y, center, scale, mode } = editCameraOrthoPanStart.current;
-      const basis = getEditCameraOrthoBasis(mode);
-      const worldPerPixel = scale / Math.max(1, canvasSize.height);
-      const dx = event.clientX - x;
-      const dy = event.clientY - y;
-      const nextCenter = addSceneVectors(
-        addSceneVectors(center, scaleSceneVector(basis.right, -dx * worldPerPixel)),
-        scaleSceneVector(basis.up, dy * worldPerPixel),
-      );
-
-      setEditCameraOrthoFrame((current) => (
-        current?.mode === mode
-          ? { ...current, center: nextCenter }
-          : current
-      ));
-      engine.requestRender();
-    };
-
-    const handleWindowMouseUp = (event: MouseEvent) => {
-      event.preventDefault();
-      setIsEditCameraOrthoPanning(false);
-    };
-
-    window.addEventListener('mousemove', handleWindowMouseMove);
-    window.addEventListener('mouseup', handleWindowMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', handleWindowMouseMove);
-      window.removeEventListener('mouseup', handleWindowMouseUp);
-    };
-  }, [canvasSize.height, isEditCameraOrthoPanning]);
-
-  // Handle scene navigation and canvas zoom with the scroll wheel.
-  const handleWheel = useCallback((e: PreviewWheelEvent) => {
-    if (zoomEditCameraOrthoView(e)) {
-      return;
-    }
-
-    if (sceneNavEnabled && navigationSceneNavClip && isCanvasInteractionTarget(e.target)) {
-      const shouldAdjustFpsSpeed = effectiveSceneNavFpsMode && (
-        gaussianKeyboardMoveCodesRef.current.size > 0 ||
-        gaussianFpsLookStart.current.clipId !== null
-      );
-      if (shouldAdjustFpsSpeed) {
-        e.preventDefault();
-        const direction = e.deltaY < 0 ? 1 : e.deltaY > 0 ? -1 : 0;
-        if (direction !== 0) {
-          setSceneNavFpsMoveSpeed(stepSceneNavFpsMoveSpeed(
-            useEngineStore.getState().sceneNavFpsMoveSpeed,
-            direction,
-          ));
-        }
-        return;
-      }
-
-      e.preventDefault();
-      scheduleGaussianWheelBatchEnd();
-
-      const freshTransform = getFreshSceneNavTransform(navigationSceneNavClip);
-      if (!freshTransform) return;
-
-      const direction = e.deltaY < 0 ? 1 : e.deltaY > 0 ? -1 : 0;
-      if (direction !== 0) {
-        const timelineState = useTimelineStore.getState();
-        const cameraSettings = editCameraModeActive && navigationSceneNavClip.id === editCameraClipIdRef.current
-          ? editCameraSettingsRef.current
-          : timelineState.getInterpolatedCameraSettings(
-              navigationSceneNavClip.id,
-              timelineState.playheadPosition - navigationSceneNavClip.startTime,
-            );
-        const frame = resolveOrbitCameraFrame(
-          freshTransform,
-          {
-            nearPlane: cameraSettings.near,
-            farPlane: cameraSettings.far,
-            fov: cameraSettings.fov,
-            minimumDistance: getSharedSceneDefaultCameraDistance(cameraSettings.fov),
-          },
-          { width: effectiveResolution.width, height: effectiveResolution.height },
-        );
-        const wheelAmount = Math.abs(e.deltaY);
-        const dollyStep = Math.max(0.02, frame.distance * (Math.exp(wheelAmount * 0.0025) - 1));
-        const positionDelta = scaleSceneVector(frame.forward, direction * dollyStep);
-        applyNavigationCameraValues(navigationSceneNavClip, {
-          positionX: freshTransform.position.x + positionDelta.x,
-          positionY: freshTransform.position.y + positionDelta.y,
-          positionZ: freshTransform.position.z + positionDelta.z,
-        });
-      }
-      return;
-    }
-
-    if (!freeCanvasNavigationMode || !containerRef.current) return;
-
-    e.preventDefault();
-
-    if (e.altKey) {
-      setViewPan(prev => ({
-        x: prev.x - e.deltaY,
-        y: prev.y
-      }));
-    } else {
-      const rect = containerRef.current.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-
-      const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
-      const newZoom = Math.max(0.1, Math.min(150, viewZoom * zoomFactor));
-
-      const containerCenterX = containerSize.width / 2;
-      const containerCenterY = containerSize.height / 2;
-
-      const worldX = (mouseX - containerCenterX - viewPan.x) / viewZoom;
-      const worldY = (mouseY - containerCenterY - viewPan.y) / viewZoom;
-
-      const newPanX = mouseX - worldX * newZoom - containerCenterX;
-      const newPanY = mouseY - worldY * newZoom - containerCenterY;
-
-      setViewZoom(newZoom);
-      setViewPan({ x: newPanX, y: newPanY });
-    }
-  }, [
-    containerSize,
-    freeCanvasNavigationMode,
-    sceneNavEnabled,
+    editCameraSettingsRef,
+    effectiveResolution,
     effectiveSceneNavFpsMode,
+    freeCanvasNavigationMode,
+    gaussianFpsLookStart,
+    gaussianKeyboardMoveCodesRef,
     getFreshSceneNavTransform,
     isCanvasInteractionTarget,
-    scheduleGaussianWheelBatchEnd,
-    applyNavigationCameraValues,
-    setSceneNavFpsMoveSpeed,
     navigationSceneNavClip,
-    editCameraModeActive,
-    effectiveResolution.height,
-    effectiveResolution.width,
+    sceneNavEnabled,
+    scheduleGaussianWheelBatchEnd,
+    setEditCameraOrthoFrame,
+    setSceneNavFpsMoveSpeed,
+    setViewPan,
+    setViewZoom,
     viewPan,
     viewZoom,
-    zoomEditCameraOrthoView,
-  ]);
+  });
+
+  const {
+    handleMouseDown,
+    handleMouseMove,
+    handleMouseUp,
+    resetView,
+  } = usePreviewMouseRouting({
+    activeEditCameraOrthoFrame,
+    canvasSize,
+    containerRef,
+    editCameraOrthoMode,
+    editCameraOrthoPanStart,
+    editCameraOrthoViewActive,
+    effectiveSceneNavFpsMode,
+    endGaussianWheelBatch,
+    freeCanvasNavigationMode,
+    gaussianFpsLookStart,
+    gaussianOrbitStart,
+    gaussianPanStart,
+    getFreshSceneNavTransform,
+    getSceneNavPointerLockTarget,
+    getSceneNavSolveSettings,
+    isCanvasInteractionTarget,
+    isEditCameraOrthoPanning,
+    isPanning,
+    isSceneObjectInteractionTarget,
+    navigationSceneNavClip,
+    panStart,
+    sceneNavEnabled,
+    setEditCameraOrthoFrame,
+    setIsEditCameraOrthoPanning,
+    setIsGaussianFpsLooking,
+    setIsGaussianOrbiting,
+    setIsGaussianPanning,
+    setIsPanning,
+    setViewPan,
+    setViewZoom,
+    startSceneNavHistoryBatch,
+    stopGaussianFpsLook,
+    stopGaussianKeyboardMovement,
+    viewPan,
+  });
 
   useEffect(() => {
     const element = containerRef.current;
@@ -1585,199 +1407,24 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
   // Tab key to toggle edit mode (via shortcut registry)
   useShortcut('preview.editMode', toggleEditModeFromShortcut, { enabled: isEditableSource });
 
-  // Handle scene navigation and edit-mode panning
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (isCanvasInteractionTarget(e.target)) {
-      containerRef.current?.focus({ preventScroll: true });
-    }
-
-    if (isSceneObjectInteractionTarget(e.target)) {
-      return;
-    }
-
-    if (
-      editCameraOrthoViewActive &&
-      activeEditCameraOrthoFrame &&
-      editCameraOrthoMode &&
-      isCanvasInteractionTarget(e.target) &&
-      (e.button === 1 || e.button === 2 || (e.button === 0 && e.shiftKey))
-    ) {
-      e.preventDefault();
-      stopGaussianFpsLook();
-      stopGaussianKeyboardMovement();
-      editCameraOrthoPanStart.current = {
-        x: e.clientX,
-        y: e.clientY,
-        center: cloneSceneVector(activeEditCameraOrthoFrame.center),
-        scale: activeEditCameraOrthoFrame.scale,
-        mode: editCameraOrthoMode,
-      };
-      setIsEditCameraOrthoPanning(true);
-      return;
-    }
-
-    if (sceneNavEnabled && navigationSceneNavClip && isCanvasInteractionTarget(e.target)) {
-      const freshTransform = getFreshSceneNavTransform(navigationSceneNavClip);
-      if (!freshTransform) return;
-
-      if (e.button === 0) {
-        if (e.shiftKey) {
-          e.preventDefault();
-          endGaussianWheelBatch();
-          startSceneNavHistoryBatch('Scene pan');
-          gaussianPanStart.current = {
-            clipId: navigationSceneNavClip.id,
-            x: e.clientX,
-            y: e.clientY,
-            panX: freshTransform.position.x,
-            panY: freshTransform.position.y,
-            panZ: freshTransform.position.z,
-          };
-          setIsGaussianPanning(true);
-          return;
-        }
-        e.preventDefault();
-        endGaussianWheelBatch();
-        if (effectiveSceneNavFpsMode) {
-          startSceneNavHistoryBatch('Scene look');
-          gaussianFpsLookStart.current = {
-            clipId: navigationSceneNavClip.id,
-            x: e.clientX,
-            y: e.clientY,
-          };
-          getSceneNavPointerLockTarget()?.requestPointerLock?.();
-          setIsGaussianFpsLooking(true);
-        } else {
-          startSceneNavHistoryBatch('Scene orbit');
-          const solveSettings = getSceneNavSolveSettings(navigationSceneNavClip);
-          const pivot = getSceneBoundsCenter(solveSettings?.sceneBounds);
-          const radius = Math.hypot(
-            freshTransform.position.x - pivot.x,
-            freshTransform.position.y - pivot.y,
-            freshTransform.position.z - pivot.z,
-          );
-          gaussianOrbitStart.current = {
-            clipId: navigationSceneNavClip.id,
-            x: e.clientX,
-            y: e.clientY,
-            pitch: freshTransform.rotation.x,
-            yaw: freshTransform.rotation.y,
-            roll: freshTransform.rotation.z,
-            startPosX: freshTransform.position.x,
-            startPosY: freshTransform.position.y,
-            startPosZ: freshTransform.position.z,
-            pivotX: pivot.x,
-            pivotY: pivot.y,
-            pivotZ: pivot.z,
-            radius,
-          };
-          setIsGaussianOrbiting(true);
-        }
-        return;
-      }
-
-      if (e.button === 1 || e.button === 2) {
-        e.preventDefault();
-        endGaussianWheelBatch();
-        startSceneNavHistoryBatch('Scene pan');
-        gaussianPanStart.current = {
-          clipId: navigationSceneNavClip.id,
-          x: e.clientX,
-          y: e.clientY,
-          panX: freshTransform.position.x,
-          panY: freshTransform.position.y,
-          panZ: freshTransform.position.z,
-        };
-        setIsGaussianPanning(true);
-        return;
-      }
-    }
-
-    if (!freeCanvasNavigationMode) return;
-
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
-      e.preventDefault();
-      setIsPanning(true);
-      panStart.current = {
-        x: e.clientX,
-        y: e.clientY,
-        panX: viewPan.x,
-        panY: viewPan.y
-      };
-    }
-  }, [
-    activeEditCameraOrthoFrame,
-    editCameraOrthoMode,
+  const { handleContextMenu, handleAuxClick } = usePreviewContextMenu({
     editCameraOrthoViewActive,
-    freeCanvasNavigationMode,
-    endGaussianWheelBatch,
-    sceneNavEnabled,
-    effectiveSceneNavFpsMode,
-    getFreshSceneNavTransform,
-    getSceneNavSolveSettings,
-    getSceneNavPointerLockTarget,
     isCanvasInteractionTarget,
-    navigationSceneNavClip,
-    startSceneNavHistoryBatch,
-    stopGaussianFpsLook,
-    stopGaussianKeyboardMovement,
-    viewPan,
-  ]);
-
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (isPanning) {
-      const dx = e.clientX - panStart.current.x;
-      const dy = e.clientY - panStart.current.y;
-      setViewPan({
-        x: panStart.current.panX + dx,
-        y: panStart.current.panY + dy
-      });
-    }
-  }, [isPanning]);
-
-  const handleMouseUp = useCallback(() => {
-    setIsPanning(false);
-    setIsEditCameraOrthoPanning(false);
-  }, []);
-
-  const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    if ((sceneNavEnabled || editCameraOrthoViewActive) && isCanvasInteractionTarget(e.target)) {
-      e.preventDefault();
-    }
-  }, [editCameraOrthoViewActive, sceneNavEnabled, isCanvasInteractionTarget]);
-
-  const handleAuxClick = useCallback((e: React.MouseEvent) => {
-    if ((sceneNavEnabled || editCameraOrthoViewActive) && isCanvasInteractionTarget(e.target)) {
-      e.preventDefault();
-    }
-  }, [editCameraOrthoViewActive, sceneNavEnabled, isCanvasInteractionTarget]);
-
-  // Reset view
-  const resetView = useCallback(() => {
-    setViewZoom(1);
-    setViewPan({ x: 0, y: 0 });
-  }, []);
+    sceneNavEnabled,
+  });
 
   const setPanelEditMode = useCallback((value: boolean) => {
     containerRef.current?.focus({ preventScroll: true });
     setEditMode(value);
   }, []);
 
-  // Calculate canvas position within container (for full-container overlay)
-  const canvasInContainer = useMemo(() => {
-    const scaledWidth = canvasSize.width * viewZoom;
-    const scaledHeight = canvasSize.height * viewZoom;
-
-    const centerX = (containerSize.width - scaledWidth) / 2;
-    const centerY = (containerSize.height - scaledHeight) / 2;
-
-    return {
-      x: centerX + viewPan.x,
-      y: centerY + viewPan.y,
-      width: scaledWidth,
-      height: scaledHeight,
-    };
-  }, [containerSize, canvasSize, viewZoom, viewPan]);
+  const { canvasInContainer, viewTransform } = usePreviewViewGeometry({
+    canvasSize,
+    containerSize,
+    freeCanvasNavigationMode,
+    viewPan,
+    viewZoom,
+  });
 
   // Edit mode helpers (bounding box calculation, hit testing, cursor mapping)
   const { calculateLayerBounds, findLayerAtPosition, findHandleAtPosition, getCursorForHandle } =
@@ -1792,10 +1439,6 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
       calculateLayerBounds, findLayerAtPosition, findHandleAtPosition,
     });
 
-  // Calculate transform for zoomed/panned view
-  const viewTransform = freeCanvasNavigationMode ? {
-    transform: `scale(${viewZoom}) translate(${viewPan.x / viewZoom}px, ${viewPan.y / viewZoom}px)`,
-  } : {};
   const showSceneObjectOverlay = sceneObjectOverlayEnabled && activeSharedSceneOverlayContent && isEditableSource && !isPlaying;
   const textPreviewEditorEnabled = Boolean(
     isEditableSource &&
@@ -1816,12 +1459,6 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
   const editCameraGizmoTransform = editCameraModeActive && activeCameraClipAtPlayhead
     ? resolveCameraClipTransformAtPlayhead(activeCameraClipAtPlayhead)
     : null;
-  const showPlaybackWaiter = Boolean(
-    isEngineReady &&
-    !sourceMonitorActive &&
-    playbackWarmup
-  );
-  const playbackWaiterVideoCount = playbackWarmup?.pendingVideoCount ?? 0;
   const editCameraOrthoHint = editCameraOrthoViewActive && activeEditCameraOrthoFrame
     ? `${EDIT_CAMERA_VIEW_LABELS[activeEditCameraOrthoFrame.mode]} Ortho | 1 Front | 2 Side | 3 Top | 4 Camera | Wheel Zoom | Shift+Drag/MMB Pan`
     : null;

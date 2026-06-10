@@ -3,24 +3,20 @@
 import { useCallback, useRef, useState } from 'react';
 import './ExportPanel.css';
 import { Logger } from '../../services/logger';
-import { downloadFCPXML } from '../../services/export/fcpxmlExport';
 import { projectFileService } from '../../services/projectFileService';
 
 const log = Logger.create('ExportPanel');
-import { FrameExporter, downloadBlob } from '../../engine/export';
+import { FrameExporter } from '../../engine/export';
 import type { VideoCodec, ContainerFormat } from '../../engine/export';
-import { AudioExportPipeline } from '../../engine/audio';
 import { useShallow } from 'zustand/react/shallow';
 import { useTimelineStore } from '../../stores/timeline';
 import { useMediaStore } from '../../stores/mediaStore';
 import {
-  getFFmpegBridge,
   PRORES_PROFILES,
   DNXHR_PROFILES,
   getCodecsForContainer,
 } from '../../engine/ffmpeg';
 import { CodecSelector } from './CodecSelector';
-import { ExportRenderSessionImpl } from '../../engine/export/ExportRenderSessionImpl';
 import {
   GIF_COLOR_PRESETS,
   GIF_DITHER_OPTIONS,
@@ -34,14 +30,10 @@ import type {
   ProResProfile,
   DnxhrProfile,
 } from '../../engine/ffmpeg';
-import { FFmpegFrameRenderer } from './exportHelpers';
 import { resolveExportRange } from './exportRange';
 import { useExportState, type EncoderType } from './useExportState';
-import { runBrowserGifExport } from './runners/gifExportRunner';
-import { runFfmpegDirectExport } from './runners/ffmpegDirectExportRunner';
-import { runStillImageExport } from './runners/stillImageExportRunner';
-import { runImageSequenceExport } from './runners/imageSequenceExportRunner';
-import { runAudioOnlyExport } from './runners/audioOnlyExportRunner';
+import { ExportAdvancedSummarySections } from './ExportAdvancedSummarySections';
+import { ExportProgressView } from './ExportProgressView';
 import {
   buildExportSettingsState,
   formatExportTime,
@@ -49,14 +41,12 @@ import {
   IMAGE_QUALITY_PRESETS,
 } from './exportSettingsState';
 import type { ExportSummaryTarget } from './exportSummaryState';
+import { useExportRunController } from './useExportRunController';
 import {
   useExportStore,
 } from '../../stores/exportStore';
 
 export function ExportPanel() {
-  const ffmpegFrameRendererRef = useRef<FFmpegFrameRenderer | null>(null);
-  const ffmpegAudioPipelineRef = useRef<AudioExportPipeline | null>(null);
-  const exportRenderSessionRef = useRef<ExportRenderSessionImpl | null>(null);
   const summaryHighlightTimeoutsRef = useRef<Map<HTMLElement, number>>(new Map());
   const [setupStatus, setSetupStatus] = useState<string | null>(null);
   const { duration, inPoint, outPoint, playheadPosition, startExport, setExportProgress, endExport } = useTimelineStore(useShallow(s => ({
@@ -89,6 +79,7 @@ export function ExportPanel() {
   })));
 
   // All export state, effects, and simple handlers extracted to hook
+  const exportState = useExportState(composition);
   const {
     encoder, setEncoder,
     width, height,
@@ -117,400 +108,18 @@ export function ExportPanel() {
     imageExportMode, setImageExportMode,
     imageQuality, setImageQuality,
     specialContainer, setSpecialContainer,
-    isExporting, setIsExporting, progress, setProgress,
-    ffmpegProgress, setFfmpegProgress, exportPhase, setExportPhase,
-    error, setError, exporter, setExporter,
+    isExporting, progress,
+    ffmpegProgress, exportPhase,
+    error,
     isSupported, isAudioSupported, audioCodec,
     isFFmpegSupported, isFFmpegMultiThreaded,
     handleResolutionChange, loadFFmpeg,
     handleFFmpegContainerChange, handleFFmpegCodecChange,
-  } = useExportState(composition);
+  } = exportState;
 
   // Compute actual start/end based on In/Out markers for display.
   const { startTime, endTime } = resolveExportRange({ duration, inPoint, outPoint }, useInOut);
 
-  const getCurrentExportRange = useCallback(() => {
-    const timelineState = useTimelineStore.getState();
-    const exportSettings = useExportStore.getState().settings;
-    return resolveExportRange(
-      {
-        duration: timelineState.duration,
-        inPoint: timelineState.inPoint,
-        outPoint: timelineState.outPoint,
-      },
-      exportSettings.useInOut,
-    );
-  }, []);
-
-  // Handle export (WebCodecs)
-  const handleExport = useCallback(async () => {
-    if (isExporting) return;
-
-    setIsExporting(true);
-    setError(null);
-    setProgress(null);
-
-    const { startTime, endTime } = getCurrentExportRange();
-    const actualWidth = useCustomResolution ? customWidth : width;
-    const actualHeight = useCustomResolution ? customHeight : height;
-
-    // Get file extension from container format
-    const fileExtension = containerFormat === 'webm' ? 'webm' : 'mp4';
-
-    const exportFps = useCustomFps ? customFps : fps;
-
-    const exp = new FrameExporter({
-      width: actualWidth,
-      height: actualHeight,
-      fps: exportFps,
-      codec: videoCodec,
-      container: containerFormat,
-      bitrate,
-      rateControl,
-      startTime,
-      endTime,
-      // Alpha
-      stackedAlpha,
-      // Audio settings
-      includeAudio,
-      audioSampleRate,
-      audioBitrate,
-      normalizeAudio,
-      // Export mode: webcodecs = fast, htmlvideo = precise
-      exportMode: encoder === 'webcodecs' ? 'fast' : 'precise',
-    });
-    setExporter(exp);
-
-    // Start export progress in timeline
-    startExport(startTime, endTime);
-
-    try {
-      const blob = await exp.export((p) => {
-        setProgress(p);
-        // Update timeline export progress
-        setExportProgress(p.percent, p.currentTime);
-      });
-
-      if (blob) {
-        downloadBlob(blob, `${filename}.${fileExtension}`);
-      }
-    } catch (e) {
-      log.error('Export failed', e);
-      setError(e instanceof Error ? e.message : 'Export failed');
-    } finally {
-      setIsExporting(false);
-      setExporter(null);
-      // End export progress in timeline
-      endExport();
-    }
-  }, [
-    audioBitrate,
-    audioSampleRate,
-    bitrate,
-    containerFormat,
-    customFps,
-    customHeight,
-    customWidth,
-    encoder,
-    endExport,
-    filename,
-    fps,
-    includeAudio,
-    isExporting,
-    normalizeAudio,
-    rateControl,
-    setError,
-    setExportProgress,
-    setExporter,
-    setIsExporting,
-    setProgress,
-    getCurrentExportRange,
-    stackedAlpha,
-    startExport,
-    useCustomFps,
-    useCustomResolution,
-    videoCodec,
-    width,
-    height,
-  ]);
-
-  // Handle cancel
-  const handleCancel = useCallback(() => {
-    if (!videoEnabled) {
-      ffmpegAudioPipelineRef.current?.cancel();
-    } else if (visualMode === 'gif' || visualMode === 'image') {
-      ffmpegFrameRendererRef.current?.cancel();
-      const ffmpeg = getFFmpegBridge();
-      ffmpeg.cancel();
-    } else if (encoder === 'webcodecs' || encoder === 'htmlvideo') {
-      if (exporter) {
-        exporter.cancel();
-      }
-      setExporter(null);
-    } else {
-      ffmpegFrameRendererRef.current?.cancel();
-      ffmpegAudioPipelineRef.current?.cancel();
-      const ffmpeg = getFFmpegBridge();
-      ffmpeg.cancel();
-    }
-    exportRenderSessionRef.current?.cancel('Export cancelled');
-    setIsExporting(false);
-    setExportPhase('idle');
-    // End export progress in timeline
-    endExport();
-  }, [exporter, encoder, endExport, setExporter, setExportPhase, setIsExporting, videoEnabled, visualMode]);
-
-  // Handle browser-side GIF export. This is not a WebCodecs codec, but it shares
-  // the browser render path so GIF is available without loading FFmpeg.
-  const handleBrowserGifExport = useCallback(async () => {
-    if (isExporting) return;
-
-    setIsExporting(true);
-    setError(null);
-    setProgress(null);
-
-    const { startTime, endTime } = getCurrentExportRange();
-    const actualWidth = useCustomResolution ? customWidth : width;
-    const actualHeight = useCustomResolution ? customHeight : height;
-    const exportFps = useCustomFps ? customFps : fps;
-
-    startExport(startTime, endTime);
-
-    try {
-      const result = await runBrowserGifExport({
-        width: actualWidth, height: actualHeight, fps: exportFps, startTime, endTime,
-        exportMode: encoder === 'webcodecs' ? 'fast' : 'precise',
-        filename, gifColors, gifDither, gifLoop, gifPaletteMode, gifOptimize, gifAlphaThreshold,
-        frameRendererRef: ffmpegFrameRendererRef, renderSessionRef: exportRenderSessionRef,
-        createRenderSession: (options) => new ExportRenderSessionImpl(options),
-        onProgress: setProgress, onTimelineProgress: setExportProgress,
-      });
-
-      if (result) {
-        downloadBlob(result.blob, result.filename);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'GIF export failed');
-    } finally {
-      setIsExporting(false);
-      endExport();
-    }
-  }, [customFps, customHeight, customWidth, encoder, endExport, filename, fps, getCurrentExportRange, gifAlphaThreshold, gifColors, gifDither, gifLoop, gifOptimize, gifPaletteMode, height, isExporting, setError, setExportProgress, setIsExporting, setProgress, startExport, useCustomFps, useCustomResolution, width]);
-
-  // Handle FFmpeg export
-  const handleFFmpegExport = useCallback(async () => {
-    if (isExporting) return;
-
-    // Ensure FFmpeg is loaded
-    if (!isFFmpegReady) {
-      await loadFFmpeg();
-      if (!getFFmpegBridge().isLoaded()) {
-        setError('FFmpeg not loaded');
-        return;
-      }
-    }
-
-    setIsExporting(true);
-    setError(null);
-    setFfmpegProgress(null);
-    setExportPhase('rendering');
-
-    const { startTime, endTime } = getCurrentExportRange();
-    const actualWidth = useCustomResolution ? customWidth : width;
-    const actualHeight = useCustomResolution ? customHeight : height;
-    const exportFps = useCustomFps ? customFps : fps;
-
-    // Start export progress in timeline
-    startExport(startTime, endTime);
-
-    try {
-      const result = await runFfmpegDirectExport({
-        width: actualWidth, height: actualHeight, fps: exportFps, startTime, endTime,
-        filename, visualMode, includeAudio, audioSampleRate, audioBitrate, normalizeAudio,
-        ffmpegCodec, ffmpegContainer, ffmpegQuality, proresProfile, dnxhrProfile,
-        gifColors, gifDither, gifLoop, gifPaletteMode, gifOptimize, gifAlphaThreshold,
-        frameRendererRef: ffmpegFrameRendererRef, audioPipelineRef: ffmpegAudioPipelineRef,
-        renderSessionRef: exportRenderSessionRef,
-        createRenderSession: (options) => new ExportRenderSessionImpl(options),
-        onFfmpegProgress: setFfmpegProgress, onTimelineProgress: setExportProgress, onPhase: setExportPhase,
-      });
-
-      if (result) {
-        const url = URL.createObjectURL(result.blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = result.filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Export failed';
-      setError(msg);
-    } finally {
-      ffmpegAudioPipelineRef.current = null;
-      setIsExporting(false);
-      setExportPhase('idle');
-      // End export progress in timeline
-      endExport();
-    }
-  }, [isExporting, isFFmpegReady, loadFFmpeg, useCustomResolution, customWidth, customHeight, width, height, fps, customFps, useCustomFps, getCurrentExportRange, ffmpegCodec, ffmpegContainer, ffmpegQuality, proresProfile, dnxhrProfile, filename, gifAlphaThreshold, gifColors, gifDither, gifLoop, gifOptimize, gifPaletteMode, visualMode, includeAudio, audioSampleRate, audioBitrate, normalizeAudio, startExport, setExportProgress, endExport, setError, setExportPhase, setFfmpegProgress, setIsExporting]);
-  // Handle audio-only export
-  const handleExportAudioOnly = useCallback(async () => {
-    if (isExporting) return;
-
-    setIsExporting(true);
-    setError(null);
-    const { startTime, endTime } = getCurrentExportRange();
-    const actualWidth = useCustomResolution ? customWidth : width;
-    const actualHeight = useCustomResolution ? customHeight : height;
-    const actualFps = useCustomFps ? customFps : fps;
-    let timelineExportStarted = false;
-
-    try {
-      const result = await runAudioOnlyExport({
-        width: actualWidth, height: actualHeight, fps: actualFps, startTime, endTime,
-        filename, encoder, videoCodec, containerFormat, bitrate,
-        audioOnlyFormat, audioSampleRate, audioBitrate, normalizeAudio,
-        audioPipelineRef: ffmpegAudioPipelineRef,
-        onProgress: setProgress,
-        onTimelineProgress: setExportProgress,
-        onTimelineStart: (rangeStart, rangeEnd) => {
-          startExport(rangeStart, rangeEnd);
-          timelineExportStarted = true;
-        },
-      });
-
-      if (result.kind === 'download') {
-        downloadBlob(result.blob, result.filename);
-      } else {
-        setError(result.message);
-      }
-    } catch (e) {
-      log.error('Audio export failed', e);
-      setError(e instanceof Error ? e.message : 'Audio export failed');
-    } finally {
-      ffmpegAudioPipelineRef.current = null;
-      setIsExporting(false);
-      if (timelineExportStarted) {
-        endExport();
-      }
-    }
-  }, [
-    audioBitrate,
-    audioOnlyFormat,
-    audioSampleRate,
-    bitrate,
-    containerFormat,
-    customFps,
-    customHeight,
-    customWidth,
-    encoder,
-    endExport,
-    filename,
-    fps,
-    getCurrentExportRange,
-    height,
-    isExporting,
-    normalizeAudio,
-    setError,
-    setExportProgress,
-    setIsExporting,
-    setProgress,
-    startExport,
-    useCustomFps,
-    useCustomResolution,
-    videoCodec,
-    width,
-  ]);
-
-  // Handle FCPXML export
-  const handleExportFCPXML = useCallback(() => {
-    const { clips, tracks, duration: timelineDuration } = useTimelineStore.getState();
-    const activeComp = getActiveComposition();
-
-    downloadFCPXML(clips, tracks, timelineDuration, {
-      projectName: activeComp?.name || filename || 'MasterSelects Export',
-      frameRate: activeComp?.frameRate || fps,
-      width: activeComp?.width || width,
-      height: activeComp?.height || height,
-      includeAudio,
-    });
-  }, [filename, fps, width, height, includeAudio, getActiveComposition]);
-
-  // Handle render current frame
-  const handleRenderFrame = useCallback(async () => {
-    if (isExporting) {
-      return;
-    }
-
-    const actualWidth = useCustomResolution ? customWidth : width;
-    const actualHeight = useCustomResolution ? customHeight : height;
-    const exportTime = playheadPosition;
-    const exportFps = useCustomFps ? customFps : fps;
-    const selectedImageFormat = IMAGE_FORMATS.find(({ id }) => id === imageFormat) ?? IMAGE_FORMATS[0];
-
-    try {
-      const result = await runStillImageExport({
-        width: actualWidth, height: actualHeight, fps: exportFps, exportTime,
-        filename, imageFormat, imageQuality, selectedImageFormat,
-        renderSessionRef: exportRenderSessionRef,
-        createRenderSession: (options) => new ExportRenderSessionImpl(options),
-      });
-
-      if (result) {
-        downloadBlob(result.blob, result.filename);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Frame render failed');
-    }
-  }, [width, height, customWidth, customHeight, useCustomResolution, fps, customFps, useCustomFps, filename, playheadPosition, imageFormat, imageQuality, isExporting, setError]);
-
-  const handleRenderImageSequence = useCallback(async () => {
-    if (isExporting) {
-      return;
-    }
-
-    setIsExporting(true);
-    setError(null);
-    setProgress(null);
-    setExportPhase('rendering');
-
-    const { startTime, endTime } = getCurrentExportRange();
-    const actualWidth = useCustomResolution ? customWidth : width;
-    const actualHeight = useCustomResolution ? customHeight : height;
-    const exportFps = useCustomFps ? customFps : fps;
-    const selectedImageFormat = IMAGE_FORMATS.find(({ id }) => id === imageFormat) ?? IMAGE_FORMATS[0];
-    let timelineExportStarted = false;
-
-    try {
-      const result = await runImageSequenceExport({
-        width: actualWidth, height: actualHeight, fps: exportFps, startTime, endTime,
-        exportMode: encoder === 'webcodecs' ? 'fast' : 'precise',
-        filename, imageFormat, imageQuality, selectedImageFormat,
-        frameRendererRef: ffmpegFrameRendererRef, renderSessionRef: exportRenderSessionRef,
-        createRenderSession: (options) => new ExportRenderSessionImpl(options),
-        onTimelineStart: (rangeStart, rangeEnd) => {
-          startExport(rangeStart, rangeEnd);
-          timelineExportStarted = true;
-        },
-        onProgress: setProgress, onTimelineProgress: setExportProgress,
-      });
-
-      if (result?.kind === 'zip') {
-        downloadBlob(result.blob, result.filename);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Image sequence export failed');
-    } finally {
-      setExportPhase('idle');
-      setIsExporting(false);
-      if (timelineExportStarted) {
-        endExport();
-      }
-    }
-  }, [customFps, customHeight, customWidth, encoder, endExport, filename, fps, getCurrentExportRange, height, imageFormat, imageQuality, isExporting, setError, setExportPhase, setExportProgress, setIsExporting, setProgress, startExport, useCustomFps, useCustomResolution, width]);
   const formatTime = formatExportTime;
   const {
     actualWidth,
@@ -611,6 +220,21 @@ export function ExportPanel() {
     specialContainer,
     isExporting,
   });
+  const { handleCancel, handlePrimaryExport } = useExportRunController({
+    exportState,
+    playheadPosition,
+    startExport,
+    setExportProgress,
+    endExport,
+    getActiveComposition,
+    selectedImageFormat,
+    isXmlMode,
+    isImageMode,
+    isImageSequenceMode,
+    isGifMode,
+    isWebCodecsEncoder,
+  });
+
   const handleQuickResolutionPreset = useCallback((value: string) => {
     setUseCustomResolution(false);
     handleResolutionChange(value);
@@ -715,45 +339,6 @@ export function ExportPanel() {
 
     summaryHighlightTimeoutsRef.current.set(node, timeout);
   }, []);
-
-  const handlePrimaryExport = useCallback(() => {
-    if (isXmlMode) {
-      handleExportFCPXML();
-      return;
-    }
-
-    if (isImageMode) {
-      if (isImageSequenceMode) {
-        void handleRenderImageSequence();
-      } else {
-        void handleRenderFrame();
-      }
-      return;
-    }
-
-    if (isGifMode) {
-      if (encoder === 'ffmpeg') {
-        void handleFFmpegExport();
-      } else {
-        void handleBrowserGifExport();
-      }
-      return;
-    }
-
-    if (!videoEnabled) {
-      if (includeAudio) {
-        void handleExportAudioOnly();
-      }
-      return;
-    }
-
-    if (isWebCodecsEncoder) {
-      void handleExport();
-      return;
-    }
-
-    void handleFFmpegExport();
-  }, [encoder, handleBrowserGifExport, handleExport, handleExportAudioOnly, handleExportFCPXML, handleFFmpegExport, handleRenderFrame, handleRenderImageSequence, includeAudio, isGifMode, isImageMode, isImageSequenceMode, isWebCodecsEncoder, isXmlMode, videoEnabled]);
 
   // If neither encoder is supported, show error
   if (!webCodecsAvailable && !ffmpegAvailable) {
@@ -2269,130 +1854,36 @@ export function ExportPanel() {
             )}
           </div>
 
-          {/* Alpha Settings */}
-          {(encoder === 'webcodecs' || encoder === 'htmlvideo') && !isGifMode && (
-            <div className="export-section export-advanced-section">
-              <div className="export-section-header">Advanced Alpha</div>
-
-              <div className="control-row">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={stackedAlpha}
-                    onChange={(e) => setStackedAlpha(e.target.checked)}
-                  />
-                  Stacked Alpha (transparent video)
-                </label>
-              </div>
-
-              {stackedAlpha && (
-                <div style={{
-                  padding: '8px 10px',
-                  background: 'rgba(255, 170, 0, 0.1)',
-                  border: '1px solid rgba(255, 170, 0, 0.3)',
-                  borderRadius: '4px',
-                  fontSize: '11px',
-                  color: 'var(--warning, #ffaa00)',
-                  lineHeight: 1.4,
-                }}>
-                  Output: {actualWidth}x{actualHeight * 2}px (doubled height).
-                  Top half = RGB, bottom half = alpha as grayscale.
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Range Settings */}
-          <div className="export-section export-advanced-section">
-            <div className="export-section-header">Range & Summary</div>
-
-            <div className="control-row">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={useInOut}
-                  onChange={(e) => setUseInOut(e.target.checked)}
-                />
-                Use In/Out Markers
-              </label>
-            </div>
-
-            <div className="export-summary">
-              <div>Output: {actualWidth}x{outputHeight}{stackedAlpha && !isGifMode ? ' (stacked alpha)' : ''}</div>
-              <div>Range: {formatTime(startTime)} - {formatTime(endTime)}</div>
-              <div>Duration: {formatTime(endTime - startTime)}</div>
-              <div>Frames: {frameCount}</div>
-              <div>Est. Size: {estimatedSizeLabel}</div>
-            </div>
-          </div>
-
-          {error && <div className="export-error">{error}</div>}
+          <ExportAdvancedSummarySections
+            encoder={encoder}
+            isGifMode={isGifMode}
+            stackedAlpha={stackedAlpha}
+            setStackedAlpha={setStackedAlpha}
+            actualWidth={actualWidth}
+            actualHeight={actualHeight}
+            outputHeight={outputHeight}
+            useInOut={useInOut}
+            setUseInOut={setUseInOut}
+            startTime={startTime}
+            endTime={endTime}
+            frameCount={frameCount}
+            estimatedSizeLabel={estimatedSizeLabel}
+            error={error}
+            formatTime={formatTime}
+          />
         </div>
       ) : (
-        <div className="export-progress-container">
-          {/* Phase indicator */}
-          <div style={{ marginBottom: '12px', fontSize: '14px', fontWeight: 500, color: 'var(--text-primary)' }}>
-            {usesBrowserProgress ? (
-              <>
-                {progress?.phase === 'video' && (
-                  isImageSequenceMode
-                    ? 'Rendering image sequence...'
-                    : isGifMode
-                      ? 'Encoding GIF frames...'
-                      : 'Encoding video frames...'
-                )}
-                {progress?.phase === 'audio' && (
-                  <>Processing audio: {progress.audioPhase} ({progress.audioPercent}%)</>
-                )}
-                {progress?.phase === 'muxing' && (isImageSequenceMode ? 'Finalizing sequence...' : 'Finalizing...')}
-              </>
-            ) : (
-              <>
-                {exportPhase === 'rendering' && 'Rendering frames...'}
-                {exportPhase === 'audio' && 'Processing audio...'}
-                {exportPhase === 'encoding' && (isGifMode ? 'Encoding GIF (please wait)...' : 'Encoding video (please wait)...')}
-              </>
-            )}
-          </div>
-
-          <div className="export-progress-bar">
-            <div
-              className="export-progress-fill"
-              style={{
-                width: `${(encoder === 'webcodecs' || encoder === 'htmlvideo')
-                  ? (progress?.percent ?? 0)
-                  : (ffmpegProgress?.percent ?? 0)}%`
-              }}
-            />
-          </div>
-          <div className="export-progress-info">
-            {usesBrowserProgress ? (
-              <>
-                {progress?.phase === 'video' ? (
-                  <span>Frame {progress?.currentFrame ?? 0} / {progress?.totalFrames ?? 0}</span>
-                ) : progress?.phase === 'muxing' ? (
-                  <span>{isImageSequenceMode ? 'Packaging sequence' : 'Finalizing'}</span>
-                ) : (
-                  <span>Audio processing</span>
-                )}
-                <span>{(progress?.percent ?? 0).toFixed(1)}%</span>
-              </>
-            ) : (
-              <>
-                <span>Frame {ffmpegProgress?.frame ?? 0}</span>
-                <span>{(ffmpegProgress?.percent ?? 0).toFixed(1)}%</span>
-              </>
-            )}
-          </div>
-          {usesBrowserProgress && progress && progress.phase === 'video' && progress.estimatedTimeRemaining > 0 && (
-            <div className="export-eta">
-              ETA: {formatTime(progress.estimatedTimeRemaining)}
-            </div>
-          )}
-          <button className="btn export-cancel-btn" onClick={handleCancel}>
-            Cancel
-          </button>
-        </div>
+        <ExportProgressView
+          encoder={encoder}
+          progress={progress}
+          ffmpegProgress={ffmpegProgress}
+          exportPhase={exportPhase}
+          usesBrowserProgress={usesBrowserProgress}
+          isImageSequenceMode={isImageSequenceMode}
+          isGifMode={isGifMode}
+          formatTime={formatTime}
+          onCancel={handleCancel}
+        />
       )}
     </div>
   );

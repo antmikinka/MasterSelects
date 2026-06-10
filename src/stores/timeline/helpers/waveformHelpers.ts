@@ -27,8 +27,9 @@ export async function generateWaveform(
   samplesPerSecond: number = 50,
   onProgress?: (progress: number, partialWaveform: number[]) => void
 ): Promise<number[]> {
+  let audioContext: AudioContext | null = null;
   try {
-    const audioContext = new AudioContext();
+    audioContext = new AudioContext();
     const arrayBuffer = await file.arrayBuffer();
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
 
@@ -71,7 +72,9 @@ export async function generateWaveform(
 
     // Final normalization to 0-1 range
     const max = Math.max(...samples);
-    await audioContext.close();
+    if (audioContext.state !== 'closed') {
+      await audioContext.close();
+    }
 
     if (max > 0) {
       return samples.map(s => s / max);
@@ -80,6 +83,10 @@ export async function generateWaveform(
   } catch (e) {
     log.warn('Failed to generate waveform', e);
     return [];
+  } finally {
+    if (audioContext && audioContext.state !== 'closed') {
+      await audioContext.close().catch(() => undefined);
+    }
   }
 }
 

@@ -18,9 +18,8 @@ orchestrator or worker-agent execution run starts.
 - Handoff templates: prepared for execution only
 - Source implementation: current bounded source packet has explicit write set,
   forbidden files, and gates
-- Current bounded packet: wave 15 running; waves 13-14 complete. Active:
-  RenderDispatcher facet split, WebCodecsPlayer split, and audio ownership
-  scout.
+- Current bounded packet: wave 16 running; waves 13-15 complete. Active:
+  audio leak fixes, ExportPanel split 3, and Preview split 3.
 - Completed source/tooling packet: `P0-REG-001`; focused registry checks passed.
 - Completed bounded packet: `P0-BASELINE-REFRESH-001`, read-only plus docs.
 - Completed bounded packet: `P1-CONTRACT-001`, contracts and focused boundary
@@ -2210,9 +2209,33 @@ orchestrator or worker-agent execution run starts.
   6 new barrel imports redirected; ratchet held at 557.
 - Wave 14 verification:
   Orchestrator-verified: tsc clean; guards + policy + registry + history + dock suites green (101 tests).
+- Wave 15 closure completed:
+  `P6-RENDERDISPATCHER-FACET-SPLIT-203` moved telemetry,
+  debug-snapshot, gaussian-sequence, cached-frame, and empty-frame facets under
+  `engine/render/dispatcher/`; `RenderDispatcher` fell 2504 -> ~2050,
+  frame-path order stayed byte-identical, and facets are constructed once.
+  `P6-WEBCODECSPLAYER-SPLIT-204` created `engine/webcodecs/`
+  (`mp4DemuxLoader`, `htmlVideoFrameSource`/Seek, `webCodecsTelemetry`,
+  `sampleTimeline`); player fell 2539 -> 1915, the per-frame loop stayed
+  untouched, and the `wcPipeline` event set was proven identical at 16 names.
+  `P6-AUDIO-OWNERSHIP-SCOUT-205` produced a 25-site `AudioContext` census with
+  verdicts, found 4 leak gaps (`AudioProxyService` no-dispose; success-only
+  closes in `waveformHelpers`, `whisperService`, and `clipTranscriber` x2),
+  accepted `audioRoutingManager` as the single live owner and `audioManager` ->
+  `audioStatusTracker` plus a temp facade for 4 tiny consumers, recorded the
+  per-file lease-fit map, and proposed a 6-packet series.
+- Wave 15 test-migration event:
+  full-suite boundary caught 41 failures in renderDispatcher/proxyFrameCache
+  tests because de-facto public surface (`recordMainPreviewFrame` spy point,
+  preview-hold seed fields, `ownedAudioUrls` internal set) had moved into
+  facets/leases. The orchestrator restored the dispatcher delegate + compat
+  accessors (facets route through the spy point) and migrated the proxy test
+  reset to the lease-owner seam. Full suite then 4173/4173.
+- Wave 15 verification:
+  Orchestrator-verified: tsc clean; FULL suite green 4173/4173.
 - Next active packets:
-  wave 15 is running RenderDispatcher facet split, WebCodecsPlayer split, and
-  audio ownership scout.
+  wave 16 is running audio leak fixes, ExportPanel split 3, and Preview split
+  3.
 - Product source refactors remain bounded by approved packet write sets.
 
 ## Document Map
@@ -2864,10 +2887,10 @@ Gates and subchecks:
   - [x] per-frame snapshot contract avoids live store reads
 - [x] `P6_RENDER_OUTPUT_ROUTER`
   - [x] output target routing owner defined
-- [ ] `P6_RENDER_DISPATCHER_OWNERSHIP_SPLIT`
-  - [ ] collection/composition/output/diagnostics split plan defined
-- [ ] `P6_WEBCODECS_LIFECYCLE_SPLIT`
-  - [ ] source open/close/seek/decode scheduling owners defined
+- [x] `P6_RENDER_DISPATCHER_OWNERSHIP_SPLIT`
+  - [x] collection/composition/output/diagnostics split plan defined
+- [x] `P6_WEBCODECS_LIFECYCLE_SPLIT`
+  - [x] source open/close/seek/decode scheduling owners defined
 - [ ] `P6_VIDEOFRAME_LEASE_CONTRACT`
   - [ ] borrow/clone/close accounting defined
 - [ ] `P6_PROXY_CACHE_OWNER_DEFINED`
@@ -2878,8 +2901,8 @@ Gates and subchecks:
   - [ ] per-frame decoder churn reduction target defined
 - [ ] `P6_THUMBNAIL_PROXY_BOUNDARY`
   - [ ] thumbnail rendering separated from proxy cache ownership
-- [ ] `P6_AUDIO_CONTEXT_OWNERSHIP_MAP`
-  - [ ] playback, scrub, recording, export, diagnostics owners listed
+- [x] `P6_AUDIO_CONTEXT_OWNERSHIP_MAP`
+  - [x] playback, scrub, recording, export, diagnostics owners listed
 - [ ] `P6_AUDIO_RECORDING_AND_ROUTE_BOUNDARY`
   - [ ] recording/worklet/routing boundaries defined
 - [ ] `P6_SCRUB_AUDIOCONTEXT_DISPOSED`
@@ -3147,7 +3170,7 @@ Do not:
 - [ ] Define playback/scrub/export performance baseline.
 - [ ] Define GPU/resource lifetime checks.
 - [ ] Define cache eviction/object URL lifetime checks.
-- [ ] Define `audioRoutingManager` versus `audioManager` ownership decision.
+- [x] Define `audioRoutingManager` versus `audioManager` ownership decision.
 - [ ] Define scrub `AudioContext` disposal check.
 
 ## Phase 7 - AI Tools, Dev Bridge, Guided Actions, And Smokes

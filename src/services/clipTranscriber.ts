@@ -490,8 +490,15 @@ async function extractAudioBuffer(
   endTime?: number
 ): Promise<AudioBuffer> {
   const audioContext = new AudioContext();
-  const arrayBuffer = await file.arrayBuffer();
-  const fullBuffer = await audioContext.decodeAudioData(arrayBuffer);
+  let fullBuffer: AudioBuffer | null = null;
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    fullBuffer = await audioContext.decodeAudioData(arrayBuffer);
+  } finally {
+    if (!fullBuffer && audioContext.state !== 'closed') {
+      await audioContext.close().catch(() => undefined);
+    }
+  }
 
   // If no time range specified, return full buffer
   if (startTime === undefined && endTime === undefined) {
@@ -752,9 +759,15 @@ async function transcribeWithOpenAI(
 
   // Re-decode the WAV blob to get an AudioBuffer we can split
   const audioContext = new AudioContext();
-  const arrayBuffer = await audioBlob.arrayBuffer();
-  const fullBuffer = await audioContext.decodeAudioData(arrayBuffer);
-  audioContext.close();
+  let fullBuffer: AudioBuffer;
+  try {
+    const arrayBuffer = await audioBlob.arrayBuffer();
+    fullBuffer = await audioContext.decodeAudioData(arrayBuffer);
+  } finally {
+    if (audioContext.state !== 'closed') {
+      await audioContext.close().catch(() => undefined);
+    }
+  }
 
   const chunks = splitAudioBuffer(fullBuffer, OPENAI_MAX_BYTES);
   log.info(`Split into ${chunks.length} chunks`);
