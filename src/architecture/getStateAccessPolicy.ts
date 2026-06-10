@@ -143,7 +143,9 @@ export const classCHardTargets = [
   { path: 'src/engine/export/layerBuilder/sourceLookup.ts', maxCurrentHits: 4 },
   { path: 'src/engine/export/layerBuilder/textLayers.ts', maxCurrentHits: 1 },
   { path: 'src/engine/export/ExportMaskTextures.ts', maxCurrentHits: 1 },
-  { path: 'src/engine/export/FrameExporter.ts', maxCurrentHits: 4 },
+  // Packet 307: 4 -> 3 + 1 (preview publisher), total conserved.
+  { path: 'src/engine/export/FrameExporter.ts', maxCurrentHits: 3 },
+  { path: 'src/engine/export/frameExporter/ExportPreviewPublisher.ts', maxCurrentHits: 1 },
   { path: 'src/engine/export/preloadGaussianSplats.ts', maxCurrentHits: 4 },
   { path: 'src/engine/managers/OutputWindowManager.ts', maxCurrentHits: 6 },
   // Packet 239: LayerCollector 7 -> collector branch modules, conserved.
@@ -167,8 +169,7 @@ export const classCHardTargets = [
   // Packet 254: 12 -> 5 + 7 (output-window controller), total conserved.
   { path: 'src/engine/WebGPUEngine.ts', maxCurrentHits: 5 },
   { path: 'src/engine/engineCore/outputWindowController.ts', maxCurrentHits: 7 },
-  // Packet 306: 25 -> 12+4+3+3+2 (engine sync hooks; one site consolidated,
-  // maxHits ratchets 657 -> 656).
+  // Packet 306: 25 -> 12+4+3+3+2 (engine sync hooks; maxHits 657 -> 656).
   { path: 'src/hooks/useEngine.ts', maxCurrentHits: 12 },
   { path: 'src/hooks/engine/useEngineMaskTextureSync.ts', maxCurrentHits: 4 },
   { path: 'src/hooks/engine/useEngineRenderWakeSubscriptions.ts', maxCurrentHits: 3 },
@@ -290,7 +291,7 @@ export const getStateAccessPolicyBaselines = {
   // fileCount log (totals conserved per split redistribution):
   // 192 ->193(218) ->196(227) ->199(231) ->203(239) ->205(246) ->206(253/254)
   // ->207(259) ->208(267) ->212(279) ->216(287).
-  classCHardTargetFileCount: 222,
+  classCHardTargetFileCount: 223,
   // 669 -> 665 (packet 188 Preview cut) -> 664 (packet 209 retired one hit)
   // -> 659 (packet 231 retired the dispatcher ceiling slack: 16 -> 11 actual)
   // -> 658 (packet 237 retired one compositionRenderer hit).

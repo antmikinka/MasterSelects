@@ -1,6 +1,3 @@
-// Frame-by-frame exporter for precise video rendering
-// Main orchestrator - delegates to specialized modules
-
 import { Logger } from '../../services/logger';
 import { exportDiagnostics } from '../../services/export/exportDiagnostics';
 
@@ -36,17 +33,16 @@ import {
 } from './codecHelpers';
 import {
   canRetainExportOutputSurface,
-  canRetainExportPreviewFrame,
   canRetainExportRunJob,
   createExportRunId,
   releaseExportRunResources,
   reportExportClipStates,
   reportExportOutputSurface,
   reportExportParallelDecodeResources,
-  reportExportPreviewFrame,
   reportExportRunJob,
 } from '../../services/timeline/exportRuntimeReporting';
 import type { TimelineRuntimeAdmissionDecision } from '../../services/timeline/runtimeCoordinatorTypes';
+import { ExportPreviewPublisher } from './frameExporter/ExportPreviewPublisher';
 
 export class FrameExporter {
   private static readonly PREVIEW_FRAME_INTERVAL_MS = 0;
@@ -61,14 +57,19 @@ export class FrameExporter {
   private exportMode: ExportMode;
   private parallelDecoder: ParallelDecodeManager | null = null;
   private useParallelDecode = false;
-  private lastPreviewFramePublishMs = Number.NEGATIVE_INFINITY;
   private lastExportRuntimeReportMs = Number.NEGATIVE_INFINITY;
   private activeExportRunId: string | null = null;
   private renderSession: ExportRenderSessionImpl | null = null;
+  private previewPublisher: ExportPreviewPublisher;
 
   constructor(settings: FullExportSettings) {
     this.settings = settings;
     this.exportMode = settings.exportMode ?? 'fast';
+    this.previewPublisher = new ExportPreviewPublisher(
+      FrameExporter.PREVIEW_FRAME_INTERVAL_MS,
+      () => this.activeExportRunId,
+      (stage, decision) => this.logSoftAdmissionDenial(stage, decision),
+    );
   }
 
   private createAdmissionError(
@@ -461,14 +462,14 @@ export class FrameExporter {
         let encodeMs = 0;
         if (capture.kind === 'video-frame') {
           const videoFrame = capture.frame;
-          this.publishExportPreviewFrame(videoFrame, time);
+          this.previewPublisher.publishFrame(videoFrame, time);
           const encodeStart = performance.now();
           await this.encoder.encodeVideoFrame(videoFrame, frame, keyframeInterval);
           encodeMs = performance.now() - encodeStart;
           videoFrame.close();
         } else {
           const pixels = capture.pixels;
-          this.publishExportPreviewPixels(pixels, width, height, time);
+          this.previewPublisher.publishPixels(pixels, width, height, time);
           const encodeStart = performance.now();
           await this.encoder.encodeFrame(pixels, frame, keyframeInterval);
           encodeMs = performance.now() - encodeStart;
@@ -609,98 +610,6 @@ export class FrameExporter {
       this.parallelDecoder.getRuntimeSnapshot(),
       this.clipStates
     );
-  }
-
-  private shouldPublishExportPreviewFrame(): boolean {
-    const now = performance.now();
-    if (now - this.lastPreviewFramePublishMs < FrameExporter.PREVIEW_FRAME_INTERVAL_MS) {
-      return false;
-    }
-    this.lastPreviewFramePublishMs = now;
-    return true;
-  }
-
-  private shouldAllocateExportPreviewFrame(
-    width: number,
-    height: number,
-    currentTime: number
-  ): boolean {
-    if (!this.shouldPublishExportPreviewFrame()) return false;
-    if (!this.activeExportRunId) return false;
-
-    const admission = canRetainExportPreviewFrame({
-      runId: this.activeExportRunId,
-      width,
-      height,
-      currentTime,
-    });
-    if (!admission.admitted) {
-      this.logSoftAdmissionDenial('preview frame', admission);
-      return false;
-    }
-    return true;
-  }
-
-  private publishBitmapWhenStillExporting(
-    bitmapPromise: Promise<ImageBitmap>,
-    currentTime: number,
-    cleanup?: () => void,
-  ): void {
-    void bitmapPromise
-      .then((bitmap) => {
-        const timeline = useTimelineStore.getState();
-        if (!timeline.isExporting) {
-          bitmap.close();
-          return;
-        }
-        if (this.activeExportRunId) {
-          reportExportPreviewFrame({
-            runId: this.activeExportRunId,
-            width: bitmap.width,
-            height: bitmap.height,
-            currentTime,
-          });
-        }
-        timeline.setExportPreviewFrame(bitmap, currentTime);
-      })
-      .catch((error) => {
-        log.warn('Could not publish export preview frame', error);
-      })
-      .finally(() => {
-        cleanup?.();
-      });
-  }
-
-  private publishExportPreviewFrame(videoFrame: VideoFrame, currentTime: number): void {
-    const width = videoFrame.displayWidth || videoFrame.codedWidth;
-    const height = videoFrame.displayHeight || videoFrame.codedHeight;
-    if (!this.shouldAllocateExportPreviewFrame(width, height, currentTime)) return;
-
-    let previewFrame: VideoFrame;
-    try {
-      previewFrame = videoFrame.clone();
-    } catch (error) {
-      log.warn('Could not clone export frame for preview', error);
-      return;
-    }
-
-    this.publishBitmapWhenStillExporting(
-      createImageBitmap(previewFrame),
-      currentTime,
-      () => previewFrame.close(),
-    );
-  }
-
-  private publishExportPreviewPixels(
-    pixels: Uint8ClampedArray,
-    width: number,
-    height: number,
-    currentTime: number,
-  ): void {
-    if (!this.shouldAllocateExportPreviewFrame(width, height, currentTime)) return;
-
-    const imageData = new ImageData(new Uint8ClampedArray(pixels), width, height);
-    this.publishBitmapWhenStillExporting(createImageBitmap(imageData), currentTime);
   }
 
   private cleanup(renderSession: ExportRenderSessionImpl): void {

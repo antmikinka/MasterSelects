@@ -1,13 +1,5 @@
 import { useGuidedActionStore, type GuidedActionStoreApi } from '../../stores/guidedActionStore';
-import { useMediaStore } from '../../stores/mediaStore';
 import { useTimelineStore } from '../../stores/timeline';
-import {
-  clearExternalDragPayload,
-  createExternalDragPayloadForProjectItem,
-  dispatchExternalDragBridgeEvent,
-  getExternalDragPayload,
-  setExternalDragPayload,
-} from '../../components/timeline/utils/externalDragSession';
 import {
   guidedTargetRegistry,
   type GuidedTargetRegistry,
@@ -21,12 +13,12 @@ import {
   validateGuidedCheck,
   waitForGuidedValidation,
 } from './scenarios/validation';
+import { GuidedExternalDragPreview } from './runtimeExternalDragPreview';
 import type {
   GuidedAction,
   GuidedActionType,
   GuidedExecutionContext,
   GuidedInputGesture,
-  GuidedPoint,
   GuidedRuntimeEvent,
   GuidedScheduledAction,
   GuidedSerializableTargetResolution,
@@ -94,7 +86,7 @@ export class GuidedActionRuntime {
   private activeSession: ActiveSession | null = null;
   private stopRequests = new Map<string, { status: StopStatus; reason?: string }>();
   private skipDelayResolvers = new Map<string, Set<() => void>>();
-  private guidedExternalDragTimers = new Set<ReturnType<typeof setTimeout>>();
+  private externalDragPreview: GuidedExternalDragPreview;
 
   constructor(options: GuidedActionRuntimeOptions = {}) {
     this.store = options.store ?? useGuidedActionStore;
@@ -109,6 +101,7 @@ export class GuidedActionRuntime {
       setTimeout: (callback, ms) => setTimeout(callback, ms),
       clearTimeout: (timer) => clearTimeout(timer),
     };
+    this.externalDragPreview = new GuidedExternalDragPreview(this.store, this.clock);
   }
 
   setActionHandlers(actionHandlers: GuidedActionHandlerMap): () => void {
@@ -207,7 +200,7 @@ export class GuidedActionRuntime {
           executionContext,
         );
         if (scheduledAction.action.type === 'executeTool') {
-          this.cancelGuidedExternalDragPreview();
+          this.externalDragPreview.cancel();
         }
         if (isSemanticToolResultAction(scheduledAction.action) && isToolResult(result)) {
           toolResults.push(result);
@@ -243,7 +236,7 @@ export class GuidedActionRuntime {
         this.activeSession = null;
       }
       this.stopRequests.delete(sessionId);
-      this.cancelGuidedExternalDragPreview();
+      this.externalDragPreview.cancel();
     }
 
     this.finishSession(sessionId, status, error);
@@ -359,7 +352,7 @@ export class GuidedActionRuntime {
           toolId: getActiveGuidedCursorToolId(),
           transitionMs: scheduledAction.plannedDurationMs,
         });
-        this.startGuidedExternalDragPreview(
+        this.externalDragPreview.start(
           action,
           fromResolution.status === 'resolved'
             ? fromResolution.center
@@ -549,77 +542,6 @@ export class GuidedActionRuntime {
       timer = this.clock.setTimeout(finish, ms);
       signal.addEventListener('abort', onAbort, { once: true });
     });
-  }
-
-  private startGuidedExternalDragPreview(
-    action: Extract<GuidedAction, { type: 'dragCursor' }>,
-    from: GuidedPoint,
-    to: GuidedPoint,
-    durationMs: number,
-    signal: AbortSignal,
-  ): void {
-    if (action.from.kind !== 'mediaItem' || action.to.kind !== 'timelineTime') {
-      return;
-    }
-    const targetTrackId = action.to.trackId;
-
-    const mediaState = useMediaStore.getState();
-    const item = mediaState.getItemById(action.from.itemId);
-    if (!item) {
-      return;
-    }
-
-    const payload = createExternalDragPayloadForProjectItem(item, {
-      activeCompositionId: mediaState.activeCompositionId,
-      requireMediaFileObject: false,
-    });
-    if (!payload) {
-      return;
-    }
-
-    this.clearGuidedExternalDragTimers();
-    setExternalDragPayload(payload);
-    this.store.getState().setDragGhost({
-      label: payload.label ?? action.from.itemId,
-      mediaType: payload.mediaType,
-      thumbnailUrl: payload.thumbnailUrl,
-    });
-
-    const plannedDurationMs = Math.max(0, durationMs);
-    const stepCount = Math.max(2, Math.min(10, Math.ceil(plannedDurationMs / 120)));
-    for (let index = 0; index <= stepCount; index += 1) {
-      const progress = index / stepCount;
-      const delayMs = Math.round(plannedDurationMs * progress);
-      const timer: ReturnType<typeof setTimeout> = this.clock.setTimeout(() => {
-        this.guidedExternalDragTimers.delete(timer);
-        if (signal.aborted) {
-          return;
-        }
-        dispatchExternalDragBridgeEvent({
-          phase: 'move',
-          clientX: from.x + (to.x - from.x) * progress,
-          clientY: from.y + (to.y - from.y) * progress,
-          targetTrackId,
-        });
-      }, delayMs);
-      this.guidedExternalDragTimers.add(timer);
-    }
-  }
-
-  private cancelGuidedExternalDragPreview(): void {
-    this.clearGuidedExternalDragTimers();
-    if (getExternalDragPayload()) {
-      dispatchExternalDragBridgeEvent({ phase: 'cancel', clientX: 0, clientY: 0 });
-    }
-    clearExternalDragPayload();
-    this.store.getState().setDragGhost(null);
-  }
-
-  private clearGuidedExternalDragTimers(): void {
-    for (const timer of this.guidedExternalDragTimers) {
-      this.clock.clearTimeout(timer);
-    }
-    this.guidedExternalDragTimers.clear();
   }
 
   private emitEvent(event: GuidedRuntimeEvent): void {
