@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 
 import type { TimelineAudioDisplayMode, TimelineTrackFocusMode } from '../../../stores/timeline/types';
@@ -75,6 +75,18 @@ function buildSectionMetrics(
     totalHeight += getSectionTrackHeight(track, sectionKind);
   }
   return { contentHeight: totalHeight };
+}
+
+function getResizeObserverBlockSize(entry: ResizeObserverEntry): number {
+  const borderBox = entry.borderBoxSize;
+  const borderBoxSize = Array.isArray(borderBox) ? borderBox[0] : borderBox;
+  return borderBoxSize?.blockSize ?? entry.contentRect.height;
+}
+
+function getResizeObserverInlineSize(entry: ResizeObserverEntry): number {
+  const borderBox = entry.borderBoxSize;
+  const borderBoxSize = Array.isArray(borderBox) ? borderBox[0] : borderBox;
+  return borderBoxSize?.inlineSize ?? entry.contentRect.width;
 }
 
 export function useTimelineSectionLayout({
@@ -264,28 +276,55 @@ export function useTimelineSectionViewportMeasurement({
   const [audioViewportHeight, setAudioViewportHeight] = useState(160);
   const [splitViewportHeight, setSplitViewportHeight] = useState(320);
 
-  useEffect(() => {
-    const updateViewportHeights = () => {
-      if (scrollWrapperRef.current) setSplitViewportHeight(scrollWrapperRef.current.clientHeight);
-      if (videoSectionViewportRef.current) setVideoViewportHeight(videoSectionViewportRef.current.clientHeight);
-      if (audioSectionViewportRef.current) setAudioViewportHeight(audioSectionViewportRef.current.clientHeight);
+  useLayoutEffect(() => {
+    const updateViewportHeights = (entryByElement?: Map<Element, ResizeObserverEntry>) => {
+      const scrollWrapper = scrollWrapperRef.current;
+      const timeline = timelineRef.current;
+      const timelineBody = timelineBodyRef.current;
+      const videoViewport = videoSectionViewportRef.current;
+      const audioViewport = audioSectionViewportRef.current;
+
+      if (scrollWrapper) {
+        const entry = entryByElement?.get(scrollWrapper);
+        setSplitViewportHeight(entry ? getResizeObserverBlockSize(entry) : scrollWrapper.clientHeight);
+      }
+      if (videoViewport) {
+        const entry = entryByElement?.get(videoViewport);
+        setVideoViewportHeight(entry ? getResizeObserverBlockSize(entry) : videoViewport.clientHeight);
+      }
+      if (audioViewport) {
+        const entry = entryByElement?.get(audioViewport);
+        setAudioViewportHeight(entry ? getResizeObserverBlockSize(entry) : audioViewport.clientHeight);
+      }
+
+      const timelineEntry = timeline ? entryByElement?.get(timeline) : undefined;
+      const timelineBodyEntry = timelineBody ? entryByElement?.get(timelineBody) : undefined;
       const nextTimelineViewportWidth =
-        timelineRef.current?.clientWidth ??
-        (timelineBodyRef.current ? timelineBodyRef.current.clientWidth - trackHeaderWidth : null);
+        (timelineEntry ? getResizeObserverInlineSize(timelineEntry) : timeline?.clientWidth) ??
+        (timelineBody
+          ? (timelineBodyEntry ? getResizeObserverInlineSize(timelineBodyEntry) : timelineBody.clientWidth) - trackHeaderWidth
+          : null);
       if (nextTimelineViewportWidth && nextTimelineViewportWidth > 0) {
         setTimelineViewportWidth(Math.max(1, nextTimelineViewportWidth));
       }
     };
     updateViewportHeights();
-    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateViewportHeights) : null;
-    [scrollWrapperRef.current, timelineRef.current, videoSectionViewportRef.current, audioSectionViewportRef.current]
+    const observer = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver((entries) => {
+          const entryByElement = new Map<Element, ResizeObserverEntry>();
+          entries.forEach((entry) => entryByElement.set(entry.target, entry));
+          updateViewportHeights(entryByElement);
+        })
+      : null;
+    [scrollWrapperRef.current, timelineRef.current, timelineBodyRef.current, videoSectionViewportRef.current, audioSectionViewportRef.current]
       .forEach((element) => {
         if (element) observer?.observe(element);
       });
-    window.addEventListener('resize', updateViewportHeights);
+    const handleWindowResize = () => updateViewportHeights();
+    window.addEventListener('resize', handleWindowResize);
     return () => {
       observer?.disconnect();
-      window.removeEventListener('resize', updateViewportHeights);
+      window.removeEventListener('resize', handleWindowResize);
     };
   }, [scrollWrapperRef, setTimelineViewportWidth, timelineBodyRef, timelineRef, trackHeaderWidth]);
 

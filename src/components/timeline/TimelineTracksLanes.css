@@ -223,16 +223,16 @@
     repeating-linear-gradient(
       90deg,
       color-mix(in srgb, var(--timeline-grid-video) var(--frame-grid-strength, 0%), transparent),
-      color-mix(in srgb, var(--timeline-grid-video) var(--frame-grid-strength, 0%), transparent) 1px,
-      transparent 1px,
+      color-mix(in srgb, var(--timeline-grid-video) var(--frame-grid-strength, 0%), transparent) var(--timeline-grid-line-width, 1px),
+      transparent var(--timeline-grid-line-width, 1px),
       transparent var(--frame-grid-size, 99999px)
     ),
     linear-gradient(90deg, color-mix(in srgb, var(--track-color, #303030) 12%, transparent), transparent 72px),
     repeating-linear-gradient(
       90deg,
       color-mix(in srgb, var(--timeline-grid-video) var(--time-grid-strength, 100%), transparent),
-      color-mix(in srgb, var(--timeline-grid-video) var(--time-grid-strength, 100%), transparent) 1px,
-      var(--bg-secondary) 1px,
+      color-mix(in srgb, var(--timeline-grid-video) var(--time-grid-strength, 100%), transparent) var(--timeline-grid-line-width, 1px),
+      var(--bg-secondary) var(--timeline-grid-line-width, 1px),
       var(--bg-secondary) var(--grid-size, 50px)
     );
 }
@@ -242,16 +242,16 @@
     repeating-linear-gradient(
       90deg,
       color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent),
-      color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent) 1px,
-      transparent 1px,
+      color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent) var(--timeline-grid-line-width, 1px),
+      transparent var(--timeline-grid-line-width, 1px),
       transparent var(--frame-grid-size, 99999px)
     ),
     linear-gradient(90deg, rgba(255, 255, 255, 0.012), transparent 72px),
     repeating-linear-gradient(
       90deg,
       color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-strength, 100%), transparent),
-      color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-strength, 100%), transparent) 1px,
-      var(--bg-secondary) 1px,
+      color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-strength, 100%), transparent) var(--timeline-grid-line-width, 1px),
+      var(--bg-secondary) var(--timeline-grid-line-width, 1px),
       var(--bg-secondary) var(--grid-size, 50px)
     );
 }
@@ -412,8 +412,8 @@
     repeating-linear-gradient(
       90deg,
       color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent),
-      color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent) 1px,
-      transparent 1px,
+      color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent) var(--timeline-grid-line-width, 1px),
+      transparent var(--timeline-grid-line-width, 1px),
       transparent var(--frame-grid-size, 99999px)
     ),
     linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 46%, rgba(0, 0, 0, 0.08)),
@@ -421,8 +421,8 @@
     repeating-linear-gradient(
       90deg,
       color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-strength, 100%), transparent),
-      color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-strength, 100%), transparent) 1px,
-      var(--bg-secondary) 1px,
+      color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-strength, 100%), transparent) var(--timeline-grid-line-width, 1px),
+      var(--bg-secondary) var(--timeline-grid-line-width, 1px),
       var(--bg-secondary) var(--grid-size, 50px)
     );
 }
@@ -437,16 +437,16 @@
     repeating-linear-gradient(
       90deg,
       color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent),
-      color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent) 1px,
-      transparent 1px,
+      color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent) var(--timeline-grid-line-width, 1px),
+      transparent var(--timeline-grid-line-width, 1px),
       transparent var(--frame-grid-size, 99999px)
     ),
     linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 46%, rgba(0, 0, 0, 0.08)),
     repeating-linear-gradient(
       90deg,
       color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-strength, 100%), transparent),
-      color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-strength, 100%), transparent) 1px,
-      var(--bg-secondary) 1px,
+      color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-strength, 100%), transparent) var(--timeline-grid-line-width, 1px),
+      var(--bg-secondary) var(--timeline-grid-line-width, 1px),
       transparent var(--grid-size, 50px)
     );
 }
@@ -487,8 +487,8 @@
     repeating-linear-gradient(
       90deg,
       color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent),
-      color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent) 1px,
-      transparent 1px,
+      color-mix(in srgb, var(--timeline-grid-audio) var(--frame-grid-strength, 0%), transparent) var(--timeline-grid-line-width, 1px),
+      transparent var(--timeline-grid-line-width, 1px),
       transparent var(--frame-grid-size, 99999px)
     ),
     linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 32%, rgba(0, 0, 0, 0.08)),
@@ -496,8 +496,8 @@
     repeating-linear-gradient(
       90deg,
       color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-muted-strength, 22%), transparent),
-      color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-muted-strength, 22%), transparent) 1px,
-      transparent 1px,
+      color-mix(in srgb, var(--timeline-grid-audio) var(--time-grid-muted-strength, 22%), transparent) var(--timeline-grid-line-width, 1px),
+      transparent var(--timeline-grid-line-width, 1px),
       transparent var(--grid-size, 50px)
     );
 }
@@ -511,15 +511,15 @@
     repeating-linear-gradient(
       90deg,
       color-mix(in srgb, var(--timeline-grid-video) var(--frame-grid-strength, 0%), transparent),
-      color-mix(in srgb, var(--timeline-grid-video) var(--frame-grid-strength, 0%), transparent) 1px,
-      transparent 1px,
+      color-mix(in srgb, var(--timeline-grid-video) var(--frame-grid-strength, 0%), transparent) var(--timeline-grid-line-width, 1px),
+      transparent var(--timeline-grid-line-width, 1px),
       transparent var(--frame-grid-size, 99999px)
     ),
     repeating-linear-gradient(
       90deg,
       color-mix(in srgb, var(--timeline-grid-video) var(--time-grid-strength, 100%), transparent),
-      color-mix(in srgb, var(--timeline-grid-video) var(--time-grid-strength, 100%), transparent) 1px,
-      var(--bg-secondary) 1px,
+      color-mix(in srgb, var(--timeline-grid-video) var(--time-grid-strength, 100%), transparent) var(--timeline-grid-line-width, 1px),
+      var(--bg-secondary) var(--timeline-grid-line-width, 1px),
       var(--bg-secondary) var(--grid-size, 50px)
     );
 }
