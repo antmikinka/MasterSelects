@@ -137,7 +137,13 @@ export const classCHardTargets = [
   { path: 'src/engine/export/FrameExporter.ts', maxCurrentHits: 4 },
   { path: 'src/engine/export/preloadGaussianSplats.ts', maxCurrentHits: 4 },
   { path: 'src/engine/managers/OutputWindowManager.ts', maxCurrentHits: 6 },
-  { path: 'src/engine/render/LayerCollector.ts', maxCurrentHits: 7 },
+  // Packet 239 split: LayerCollector entry is getState-free; its 7 hits
+  // moved into the collector branch modules (cluster total conserved).
+  { path: 'src/engine/render/layerCollector/htmlVideoCollector.ts', maxCurrentHits: 1 },
+  { path: 'src/engine/render/layerCollector/htmlVideoFrameCache.ts', maxCurrentHits: 1 },
+  { path: 'src/engine/render/layerCollector/htmlVideoNotReadyCollector.ts', maxCurrentHits: 1 },
+  { path: 'src/engine/render/layerCollector/htmlVideoReadyCollector.ts', maxCurrentHits: 1 },
+  { path: 'src/engine/render/layerCollector/webCodecsCollector.ts', maxCurrentHits: 3 },
   { path: 'src/engine/render/NestedCompRenderer.ts', maxCurrentHits: 10 },
   // Packet 231 moved 5 hits into the scene-3D/target-preview facets and the
   // old 16-ceiling slack (actual was 11) is retired: 16 -> 6 + 2 + 2 + 1.
@@ -162,7 +168,8 @@ export const classCHardTargets = [
   { path: 'src/services/clipTranscriber.ts', maxCurrentHits: 4 },
   { path: 'src/services/cloudAiService.ts', maxCurrentHits: 2 },
   { path: 'src/services/compositionAudioMixer.ts', maxCurrentHits: 2 },
-  { path: 'src/services/compositionRenderer.ts', maxCurrentHits: 12 },
+  // 12 -> 11: packet 237 retired one hit during the composition render split.
+  { path: 'src/services/compositionRenderer.ts', maxCurrentHits: 11 },
   { path: 'src/services/layerBuilder/AudioSyncHandler.ts', maxCurrentHits: 2 },
   { path: 'src/services/layerBuilder/audioTrackRuntimeElements.ts', maxCurrentHits: 1 },
   { path: 'src/services/layerBuilder/audioTrackStemBufferMixerSessions.ts', maxCurrentHits: 1 },
@@ -265,8 +272,11 @@ export const getStateAccessPolicyBaselines = {
   // 193 -> 196: packet-227 Preview redistribution added three camera-hook
   // entries (Preview 17 -> 1; cluster total conserved).
   // 196 -> 199: packet-231 dispatcher facets (16 -> 6+2+2+1).
-  classCHardTargetFileCount: 199,
+  // 199 -> 203: packet-239 LayerCollector entry replaced by five collector
+  // modules (7 -> 1+1+1+1+3, total conserved).
+  classCHardTargetFileCount: 203,
   // 669 -> 665 (packet 188 Preview cut) -> 664 (packet 209 retired one hit)
-  // -> 659 (packet 231 retired the dispatcher ceiling slack: 16 -> 11 actual).
-  classCHardTargetMaxHits: 659,
+  // -> 659 (packet 231 retired the dispatcher ceiling slack: 16 -> 11 actual)
+  // -> 658 (packet 237 retired one compositionRenderer hit).
+  classCHardTargetMaxHits: 658,
 } as const;

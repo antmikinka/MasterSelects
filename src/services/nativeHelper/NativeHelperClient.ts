@@ -1,16 +1,8 @@
-/**
- * Native Helper WebSocket Client
- *
- * Manages the connection to the native helper application and provides
- * methods for video decoding and encoding operations.
- */
-
 import { Logger } from '../logger';
 import { APP_VERSION } from '../../version';
 import type {
   Command,
   Response,
-  OkResponse,
   FileMetadata,
   SystemInfo,
   EncodeOutput,
@@ -20,78 +12,36 @@ import type {
   MatAnyoneMatteResult,
 } from './protocol';
 
-import {
-  parseFrameHeader,
-  isCompressed,
-  isJpeg,
-} from './protocol';
+import type {
+  ConnectionStatus,
+  DecodedFrame,
+  FrameCallback,
+  NativeFolderPickResult,
+  NativeHelperCommandHost,
+  NativeHelperConfig,
+  ProgressLikeResponse,
+  ResponseCallback,
+} from './nativeHelperClientTypes';
+import * as videoCommands from './nativeHelperVideoCommands';
+import * as downloadCommands from './nativeHelperDownloadCommands';
+import * as fileCommands from './nativeHelperFileCommands';
+import { createMatAnyoneCommands } from './nativeHelperMatAnyoneCommands';
+import { handleNativeHelperMessage } from './nativeHelperMessageHandler';
+import { getErrorMessage, okField } from './nativeHelperResponseUtils';
 
 // LZ4 decompression (we'll use a simple implementation or skip for now)
 // In production, use a proper LZ4 library like 'lz4js'
 
 const log = Logger.create('NativeHelper');
-const NATIVE_FILE_REFERENCE_PREFIX = 'native-helper-file://';
 
-export interface NativeHelperConfig {
-  port?: number;
-  autoReconnect?: boolean;
-  reconnectInterval?: number;
-  connectTimeoutMs?: number;
-  token?: string;
-  /** Only reconnect if we were previously connected */
-  onlyReconnectIfWasConnected?: boolean;
-}
+export type {
+  ConnectionStatus,
+  DecodedFrame,
+  NativeFolderPickResult,
+  NativeHelperConfig,
+} from './nativeHelperClientTypes';
 
-export interface DecodedFrame {
-  width: number;
-  height: number;
-  frameNum: number;
-  data: Uint8ClampedArray;
-  requestId: number;
-  /** If true, data contains JPEG bytes — use createImageBitmap(Blob) instead of ImageData */
-  isJpeg?: boolean;
-}
 
-export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
-export interface NativeFolderPickResult {
-  path: string | null;
-  cancelled: boolean;
-  error?: string;
-}
-
-type ResponseCallback = (response: Response) => void;
-type FrameCallback = (frame: DecodedFrame) => void;
-type JsonObject = Record<string, unknown>;
-type NativeHelperJsonMessage = JsonObject & {
-  id?: string;
-  type?: string;
-  request_id?: string;
-  tool?: string;
-  args?: Record<string, unknown>;
-};
-type ProgressLikeResponse = Response & {
-  type?: string;
-  job_id?: string;
-  percent?: number;
-  speed?: string;
-  eta?: string;
-  step?: string;
-  message?: string;
-  current_frame?: number;
-  total_frames?: number;
-};
-
-function getErrorMessage(response: Response, fallback: string): string {
-  return response.ok === false ? response.error.message : fallback;
-}
-
-function okField<T>(response: Response, key: string): T | undefined {
-  return response.ok === true ? (response as OkResponse)[key] as T | undefined : undefined;
-}
-
-/**
- * Singleton client for communicating with the Native Helper
- */
 class NativeHelperClientImpl {
   private ws: WebSocket | null = null;
   private config: Required<NativeHelperConfig>;
@@ -101,14 +51,35 @@ class NativeHelperClientImpl {
   private pendingRequests = new Map<string, ResponseCallback>();
   private progressCallbacks = new Map<string, (percent: number, speed?: string) => void>();
   private frameCallbacks = new Map<string, FrameCallback>();
-  private activeMatAnyoneMatte: {
-    id: string;
-    timeout: ReturnType<typeof setTimeout>;
-    reject: (error: Error) => void;
-  } | null = null;
   private statusListeners = new Set<(status: ConnectionStatus) => void>();
   private reconnectTimer: number | null = null;
   private wasEverConnected = false;
+  private readonly commandHost: NativeHelperCommandHost = {
+    nextId: () => this.nextId(),
+    isConnected: () => this.isConnected(),
+    send: (cmd, timeoutMs) => this.send(cmd, timeoutMs),
+    sendRaw: (data) => this.sendRaw(data),
+    registerPendingRequest: (id, callback) => this.pendingRequests.set(id, callback),
+    getPendingRequest: (id) => this.pendingRequests.get(id),
+    deletePendingRequest: (id) => {
+      this.pendingRequests.delete(id);
+    },
+    registerFrameCallback: (id, callback) => this.frameCallbacks.set(id, callback),
+    deleteFrameCallback: (id) => {
+      this.frameCallbacks.delete(id);
+    },
+    setProgressCallback: (id, callback) => this.progressCallbacks.set(id, callback),
+    getProgressCallback: (id) => this.progressCallbacks.get(id),
+    deleteProgressCallback: (id) => {
+      this.progressCallbacks.delete(id);
+    },
+    getHttpBaseUrl: () => this.getHttpBaseUrl(),
+    getInfo: (timeoutMs) => this.getInfo(timeoutMs),
+    fetchWithAuth: (url, init) => this.fetchWithAuth(url, init),
+    fetchWithTimeout: (url, init, timeoutMs) => this.fetchWithTimeout(url, init, timeoutMs),
+    dispatchFrame: (frame) => this.dispatchFrame(frame),
+  };
+  private readonly matAnyoneCommands = createMatAnyoneCommands(this.commandHost);
 
   constructor() {
     this.config = {
@@ -121,31 +92,23 @@ class NativeHelperClientImpl {
     };
   }
 
-  /**
-   * Configure the client
-   */
+
   configure(config: NativeHelperConfig): void {
     this.config = { ...this.config, ...config };
   }
 
-  /**
-   * Get current connection status
-   */
+
   getStatus(): ConnectionStatus {
     return this.status;
   }
 
-  /**
-   * Add a status change listener
-   */
+
   onStatusChange(listener: (status: ConnectionStatus) => void): () => void {
     this.statusListeners.add(listener);
     return () => this.statusListeners.delete(listener);
   }
 
-  /**
-   * Connect to the native helper
-   */
+
   async connect(): Promise<boolean> {
     if (this.ws?.readyState === WebSocket.OPEN) {
       return true;
@@ -319,9 +282,7 @@ class NativeHelperClientImpl {
     return connectPromise;
   }
 
-  /**
-   * Disconnect from the native helper
-   */
+
   disconnect(): void {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -336,30 +297,17 @@ class NativeHelperClientImpl {
     this.setStatus('disconnected');
   }
 
-  /**
-   * Check if connected
-   */
+
   isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
   }
 
-  /**
-   * Open a video file
-   */
+
   async openFile(path: string): Promise<FileMetadata> {
-    const id = this.nextId();
-    const response = await this.send({ cmd: 'open', id, path });
-
-    if (!response.ok) {
-      throw new Error(getErrorMessage(response, 'Failed to open file'));
-    }
-
-    return response as unknown as FileMetadata;
+    return videoCommands.openFile(this.commandHost, path);
   }
 
-  /**
-   * Decode a single frame
-   */
+
   async decodeFrame(
     fileId: string,
     frame: number,
@@ -369,136 +317,40 @@ class NativeHelperClientImpl {
       compression?: 'lz4';
     }
   ): Promise<DecodedFrame> {
-    const id = this.nextId();
-
-    return new Promise((resolve, reject) => {
-      let settled = false;
-
-      const cleanup = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        this.frameCallbacks.delete(id);
-        this.pendingRequests.delete(id);
-      };
-
-      // Set timeout
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error('Decode timeout'));
-      }, 10000);
-
-      // Register frame callback (for binary success response)
-      this.frameCallbacks.set(id, (frame) => {
-        cleanup();
-        resolve(frame);
-      });
-
-      // Also register in pendingRequests (for JSON error responses)
-      this.pendingRequests.set(id, (response) => {
-        cleanup();
-        const err = response.ok === false ? response.error : null;
-        reject(new Error(err?.message || 'Decode failed'));
-      });
-
-      // Send decode command
-      const cmd: Command = {
-        cmd: 'decode',
-        id,
-        file_id: fileId,
-        frame,
-        format: options?.format,
-        scale: options?.scale,
-        compression: options?.compression,
-      };
-
-      this.sendRaw(JSON.stringify(cmd)).catch((err) => {
-        cleanup();
-        reject(err);
-      });
-    });
+    return videoCommands.decodeFrame(this.commandHost, fileId, frame, options);
   }
 
-  /**
-   * Prefetch frames around a position (fire and forget)
-   */
+
   prefetch(fileId: string, aroundFrame: number, radius = 50): void {
-    if (!this.isConnected()) return;
-
-    const cmd: Command = {
-      cmd: 'prefetch',
-      file_id: fileId,
-      around_frame: aroundFrame,
-      radius,
-    };
-
-    this.sendRaw(JSON.stringify(cmd)).catch(() => {
-      // Ignore prefetch errors
-    });
+    videoCommands.prefetch(this.commandHost, fileId, aroundFrame, radius);
   }
 
-  /**
-   * Start an encode job
-   */
+
   async startEncode(output: EncodeOutput, frameCount: number): Promise<string> {
-    const id = this.nextId();
-    const response = await this.send({ cmd: 'start_encode', id, output, frame_count: frameCount });
-
-    if (!response.ok) {
-      throw new Error(getErrorMessage(response, 'Failed to start encode'));
-    }
-
-    return id;
+    return videoCommands.startEncode(this.commandHost, output, frameCount);
   }
 
-  /**
-   * Send a frame for encoding
-   */
+
   async encodeFrame(encodeId: string, frameNum: number, frameData: Uint8Array): Promise<void> {
-    // Send text command first
-    const cmd: Command = {
-      cmd: 'encode_frame',
-      id: encodeId,
-      frame_num: frameNum,
-    };
-
-    await this.sendRaw(JSON.stringify(cmd));
-
-    // Then send binary frame data
-    await this.sendRaw(frameData);
+    return videoCommands.encodeFrame(this.commandHost, encodeId, frameNum, frameData);
   }
 
-  /**
-   * Finish encoding
-   */
+
   async finishEncode(encodeId: string): Promise<string> {
-    const response = await this.send({ cmd: 'finish_encode', id: encodeId });
-
-    if (!response.ok) {
-      throw new Error(getErrorMessage(response, 'Failed to finish encode'));
-    }
-
-    return okField<string>(response, 'output_path') ?? '';
+    return videoCommands.finishEncode(this.commandHost, encodeId);
   }
 
-  /**
-   * Cancel encoding
-   */
+
   async cancelEncode(encodeId: string): Promise<void> {
-    await this.send({ cmd: 'cancel_encode', id: encodeId });
+    return videoCommands.cancelEncode(this.commandHost, encodeId);
   }
 
-  /**
-   * Close a file
-   */
+
   async closeFile(fileId: string): Promise<void> {
-    const id = this.nextId();
-    await this.send({ cmd: 'close', id, file_id: fileId });
+    return videoCommands.closeFile(this.commandHost, fileId);
   }
 
-  /**
-   * Get system info
-   */
+
   async getInfo(timeoutMs = 30000): Promise<SystemInfo> {
     const id = this.nextId();
     const response = await this.send({ cmd: 'info', id }, timeoutMs);
@@ -510,9 +362,7 @@ class NativeHelperClientImpl {
     return response as unknown as SystemInfo;
   }
 
-  /**
-   * Ping the server
-   */
+
   async ping(timeoutMs = 3000): Promise<boolean> {
     try {
       const id = this.nextId();
@@ -523,712 +373,162 @@ class NativeHelperClientImpl {
     }
   }
 
-  /**
-   * List available formats for a video URL (YouTube, TikTok, Instagram, etc.)
-   */
+
   async listFormats(url: string): Promise<VideoInfo | null> {
-    const id = this.nextId();
-
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        this.pendingRequests.delete(id);
-        resolve(null);
-      }, 30000);
-
-      this.pendingRequests.set(id, (response) => {
-        clearTimeout(timeout);
-        if (response.ok) {
-          resolve({
-            title: okField<string>(response, 'title') ?? '',
-            thumbnail: okField<string>(response, 'thumbnail') ?? '',
-            duration: okField<number>(response, 'duration') ?? 0,
-            uploader: okField<string>(response, 'uploader') ?? '',
-            platform: okField<string>(response, 'platform'),
-            recommendations: okField<VideoInfo['recommendations']>(response, 'recommendations') ?? [],
-            allFormats: okField<VideoInfo['allFormats']>(response, 'allFormats') ?? [],
-          });
-        } else {
-          resolve(null);
-        }
-      });
-
-      const cmd = {
-        cmd: 'list_formats',
-        id,
-        url,
-      };
-
-      this.sendRaw(JSON.stringify(cmd)).catch(() => {
-        clearTimeout(timeout);
-        this.pendingRequests.delete(id);
-        resolve(null);
-      });
-    });
+    return downloadCommands.listFormats(this.commandHost, url);
   }
 
-  /**
-   * Download a YouTube video using yt-dlp
-   */
+
   async downloadYouTube(
     url: string,
     formatId?: string,
     onProgress?: (percent: number, speed?: string) => void
   ): Promise<{ success: boolean; path?: string; error?: string }> {
-    const id = this.nextId();
-
-    return new Promise((resolve, reject) => {
-      // Set timeout (10 minutes for large videos)
-      const timeout = setTimeout(() => {
-        this.pendingRequests.delete(id);
-        this.progressCallbacks.delete(id);
-        reject(new Error('Download timeout'));
-      }, 600000);
-
-      // Register progress callback if provided
-      if (onProgress) {
-        this.progressCallbacks.set(id, onProgress);
-      }
-
-      // Register completion callback
-      this.pendingRequests.set(id, (response: ProgressLikeResponse) => {
-        // Check if this is a progress message
-        if (response.type === 'progress' && response.percent !== undefined) {
-          // Don't resolve yet - this is just progress
-          const progressCb = this.progressCallbacks.get(id);
-          if (progressCb) {
-            progressCb(response.percent, response.speed);
-          }
-          return; // Keep waiting for final response
-        }
-
-        // Final response
-        clearTimeout(timeout);
-        this.progressCallbacks.delete(id);
-        if (response.ok) {
-          resolve({
-            success: true,
-            path: okField<string>(response, 'path'),
-          });
-        } else {
-          resolve({
-            success: false,
-            error: getErrorMessage(response, 'Download failed'),
-          });
-        }
-      });
-
-      // Send download command
-      const cmd: Command = {
-        cmd: 'download_youtube',
-        id,
-        url,
-      };
-
-      if (formatId) {
-        cmd.format_id = formatId;
-      }
-
-      this.sendRaw(JSON.stringify(cmd)).catch((err) => {
-        clearTimeout(timeout);
-        this.pendingRequests.delete(id);
-        this.progressCallbacks.delete(id);
-        reject(err);
-      });
-    });
+    return downloadCommands.downloadYouTube(this.commandHost, url, formatId, onProgress);
   }
 
-  /**
-   * Download a video from any yt-dlp-supported platform
-   */
+
   async download(
     url: string,
     formatId?: string,
     onProgress?: (percent: number, speed?: string) => void
   ): Promise<{ success: boolean; path?: string; error?: string }> {
-    const id = this.nextId();
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pendingRequests.delete(id);
-        this.progressCallbacks.delete(id);
-        reject(new Error('Download timeout'));
-      }, 600000);
-
-      if (onProgress) {
-        this.progressCallbacks.set(id, onProgress);
-      }
-
-      this.pendingRequests.set(id, (response: ProgressLikeResponse) => {
-        if (response.type === 'progress' && response.percent !== undefined) {
-          const progressCb = this.progressCallbacks.get(id);
-          if (progressCb) {
-            progressCb(response.percent, response.speed);
-          }
-          return;
-        }
-
-        clearTimeout(timeout);
-        this.progressCallbacks.delete(id);
-        if (response.ok) {
-          resolve({
-            success: true,
-            path: okField<string>(response, 'path'),
-          });
-        } else {
-          resolve({
-            success: false,
-            error: getErrorMessage(response, 'Download failed'),
-          });
-        }
-      });
-
-      const cmd: Command = {
-        cmd: 'download',
-        id,
-        url,
-      };
-
-      if (formatId) {
-        cmd.format_id = formatId;
-      }
-
-      this.sendRaw(JSON.stringify(cmd)).catch((err) => {
-        clearTimeout(timeout);
-        this.pendingRequests.delete(id);
-        this.progressCallbacks.delete(id);
-        reject(err);
-      });
-    });
+    return downloadCommands.download(this.commandHost, url, formatId, onProgress);
   }
 
-  /**
-   * Locate a file by name in common directories (Desktop, Downloads, Videos, Documents, Home)
-   * Returns the absolute path if found, or null if not found.
-   */
+
   async locateFile(filename: string, searchDirs?: string[]): Promise<string | null> {
-    const id = this.nextId();
-    const cmd: Command = { cmd: 'locate', id, filename };
-    if (searchDirs?.length) {
-      cmd.search_dirs = searchDirs;
-    }
-    const response = await this.send(cmd);
-    if (!response.ok) return null;
-    const found = okField<boolean>(response, 'found');
-    const path = okField<string>(response, 'path');
-    if (found && path) {
-      return path;
-    }
-    return null;
+    return downloadCommands.locateFile(this.commandHost, filename, searchDirs);
   }
 
   // ── File System Commands (for project persistence in Firefox) ──
 
-  /**
-   * Get the HTTP base URL for the native helper file server
-   */
+
   getHttpBaseUrl(): string {
     return `http://127.0.0.1:${this.config.port + 1}`;
   }
 
-  /**
-   * Get the default project root path from the native helper
-   */
+
   async getProjectRoot(timeoutMs = 1500): Promise<string | null> {
-    try {
-      const response = await this.fetchWithTimeout(`${this.getHttpBaseUrl()}/project-root`, undefined, timeoutMs);
-      if (response.ok) {
-        const data = await response.json();
-        return data.path || null;
-      }
-    } catch {
-      // Fallback to info command
-      try {
-        const info = await this.getInfo(timeoutMs);
-        return info.project_root || null;
-      } catch {
-        return null;
-      }
-    }
-    return null;
+    return fileCommands.getProjectRoot(this.commandHost, timeoutMs);
   }
 
-   /**
-   * Check if the native helper supports file system commands
-   */
+
   async hasFsCommands(timeoutMs = 1500): Promise<boolean> {
-    try {
-      const response = await this.fetchWithTimeout(`${this.getHttpBaseUrl()}/project-root`, undefined, timeoutMs);
-      if (response.ok) {
-        return true;
-      }
-    } catch {
-      // Fall back to the older info-based check below.
-    }
-
-    try {
-      const info = await this.getInfo(timeoutMs);
-      return info.fs_commands === true;
-    } catch {
-      return false;
-    }
+    return fileCommands.hasFsCommands(this.commandHost, timeoutMs);
   }
 
-  /**
-   * Write a text file via WebSocket
-   */
+
   async writeFile(path: string, content: string): Promise<boolean> {
-    const id = this.nextId();
-    try {
-      const response = await this.send({ cmd: 'write_file', id, path, data: content, encoding: 'utf8' });
-      return response.ok === true;
-    } catch (e) {
-      log.error('writeFile failed', e);
-      return false;
-    }
+    return fileCommands.writeFile(this.commandHost, path, content, log);
   }
 
-  /**
-   * Write binary data via HTTP POST /upload (efficient, no base64 overhead)
-   * Falls back to WebSocket base64 if HTTP fails.
-   */
+
   async writeFileBinary(path: string, data: Blob | ArrayBuffer | Uint8Array): Promise<boolean> {
-    // Try HTTP upload first (no base64 overhead)
-    try {
-      const url = `${this.getHttpBaseUrl()}/upload?path=${encodeURIComponent(path)}`;
-      const body = data instanceof Blob ? data : data instanceof ArrayBuffer ? new Blob([data]) : new Blob([data.buffer as ArrayBuffer]);
-      const response = await this.fetchWithAuth(url, { method: 'POST', body });
-      if (response.ok) {
-        return true;
-      }
-    } catch {
-      log.debug('HTTP upload failed, falling back to WebSocket');
-    }
-
-    // Fallback: base64 via WebSocket
-    try {
-      let bytes: Uint8Array;
-      if (data instanceof Blob) {
-        bytes = new Uint8Array(await data.arrayBuffer());
-      } else if (data instanceof ArrayBuffer) {
-        bytes = new Uint8Array(data);
-      } else {
-        bytes = data;
-      }
-
-      // Convert to base64
-      let binary = '';
-      for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      const base64 = btoa(binary);
-
-      const id = this.nextId();
-      const response = await this.send({ cmd: 'write_file', id, path, data: base64, encoding: 'base64' });
-      return response.ok === true;
-    } catch (e) {
-      log.error('writeFileBinary failed', e);
-      return false;
-    }
+    return fileCommands.writeFileBinary(this.commandHost, path, data, log);
   }
 
-  /**
-   * Read a text file and return its contents as string
-   */
+
   async readFileText(path: string): Promise<string | null> {
-    const buffer = await this.getDownloadedFile(path);
-    if (!buffer) return null;
-    return new TextDecoder().decode(buffer);
+    return fileCommands.readFileText(this.commandHost, path, log);
   }
 
-  /**
-   * Create a directory (recursive by default)
-   */
+
   async createDir(path: string, recursive = true): Promise<boolean> {
-    const id = this.nextId();
-    try {
-      const response = await this.send({ cmd: 'create_dir', id, path, recursive });
-      if (response.ok !== true) {
-        log.warn('createDir rejected', {
-          path,
-          error: getErrorMessage(response, 'Create directory failed'),
-        });
-      }
-      return response.ok === true;
-    } catch (e) {
-      log.error('createDir failed', e);
-      return false;
-    }
+    return fileCommands.createDir(this.commandHost, path, recursive, log);
   }
 
-  /**
-   * List directory contents
-   */
+
   async listDir(path: string): Promise<DirEntry[]> {
-    const id = this.nextId();
-    try {
-      const response = await this.send({ cmd: 'list_dir', id, path });
-      if (response.ok) {
-        return okField<DirEntry[]>(response, 'entries') ?? [];
-      }
-    } catch (e) {
-      log.error('listDir failed', e);
-    }
-    return [];
+    return fileCommands.listDir(this.commandHost, path, log);
   }
 
-  /**
-   * Delete a file or directory
-   */
+
   async deleteFile(path: string, recursive = false): Promise<boolean> {
-    const id = this.nextId();
-    try {
-      const response = await this.send({ cmd: 'delete', id, path, recursive });
-      return response.ok === true;
-    } catch (e) {
-      log.error('deleteFile failed', e);
-      return false;
-    }
+    return fileCommands.deleteFile(this.commandHost, path, recursive, log);
   }
 
-  /**
-   * Check if a path exists and what type it is
-   */
+
   async exists(path: string): Promise<{ exists: boolean; kind: 'file' | 'directory' | 'none' }> {
-    const id = this.nextId();
-    try {
-      const response = await this.send({ cmd: 'exists', id, path });
-      if (response.ok) {
-        return {
-          exists: okField<boolean>(response, 'exists') ?? false,
-          kind: okField<'file' | 'directory' | 'none'>(response, 'kind') ?? 'none',
-        };
-      }
-    } catch (e) {
-      log.error('exists failed', e);
-    }
-    return { exists: false, kind: 'none' };
+    return fileCommands.exists(this.commandHost, path, log);
   }
 
-  /**
-   * Rename or move a file/directory
-   */
+
   async rename(oldPath: string, newPath: string): Promise<boolean> {
-    const id = this.nextId();
-    try {
-      const response = await this.send({ cmd: 'rename', id, old_path: oldPath, new_path: newPath });
-      return response.ok === true;
-    } catch (e) {
-      log.error('rename failed', e);
-      return false;
-    }
+    return fileCommands.rename(this.commandHost, oldPath, newPath, log);
   }
 
-  /**
-   * Open a native OS folder picker dialog via the Native Helper.
-   * Returns detailed picker state so callers can distinguish cancellation from
-   * platforms where the helper cannot show a native picker.
-   */
+
   async pickFolderDetailed(title?: string, defaultPath?: string): Promise<NativeFolderPickResult> {
-    const id = this.nextId();
-    try {
-      const cmd = { cmd: 'pick_folder', id, title, default_path: defaultPath } satisfies JsonObject;
-      if (title) cmd.title = title;
-      if (defaultPath) cmd.default_path = defaultPath;
-      const response = await this.send(cmd as unknown as Command, 5 * 60 * 1000);
-      const path = okField<string>(response, 'path');
-      if (response.ok && path) {
-        return { path, cancelled: false };
-      }
-      if (response.ok) {
-        return { path: null, cancelled: okField<boolean>(response, 'cancelled') !== false };
-      }
-      return {
-        path: null,
-        cancelled: false,
-        error: getErrorMessage(response, 'Folder picker failed'),
-      };
-    } catch (e) {
-      log.error('pickFolder failed', e);
-      return {
-        path: null,
-        cancelled: false,
-        error: e instanceof Error ? e.message : String(e),
-      };
-    }
+    return fileCommands.pickFolderDetailed(this.commandHost, title, defaultPath, log);
   }
 
-  /**
-   * Grant helper file access to a user-approved project path.
-   * Used after restoring paths persisted by the browser between sessions.
-   */
+
   async grantPath(path: string): Promise<boolean> {
-    const id = this.nextId();
-    try {
-      const response = await this.send({ cmd: 'grant_path', id, path });
-      return response.ok === true;
-    } catch (e) {
-      log.error('grantPath failed', e);
-      return false;
-    }
+    return fileCommands.grantPath(this.commandHost, path, log);
   }
 
-  /**
-   * Open a native OS folder picker dialog via the Native Helper.
-   * Returns the selected folder path, or null if cancelled or unavailable.
-   */
+
   async pickFolder(title?: string, defaultPath?: string): Promise<string | null> {
     return (await this.pickFolderDetailed(title, defaultPath)).path;
   }
 
-  /**
-   * Build a URL that serves a file via the native helper HTTP server.
-   * Use this for media src attributes (video, audio, img) in Firefox.
-   */
+
   getFileUrl(absolutePath: string): string {
-    return `${this.getHttpBaseUrl()}/file?path=${encodeURIComponent(absolutePath)}`;
+    return fileCommands.getFileUrl(this.commandHost, absolutePath);
   }
 
-  /**
-   * Build an app-internal URL for files that must be fetched through the
-   * authenticated Native Helper client rather than by a DOM element.
-   */
+
   getFileReferenceUrl(absolutePath: string): string {
-    return `${NATIVE_FILE_REFERENCE_PREFIX}${encodeURIComponent(absolutePath)}`;
+    return fileCommands.getFileReferenceUrl(absolutePath);
   }
 
   parseFileReferenceUrl(url: string | undefined): string | null {
-    if (!url?.startsWith(NATIVE_FILE_REFERENCE_PREFIX)) {
-      return null;
-    }
-
-    try {
-      return decodeURIComponent(url.slice(NATIVE_FILE_REFERENCE_PREFIX.length));
-    } catch {
-      return null;
-    }
+    return fileCommands.parseFileReferenceUrl(url);
   }
 
   async getReferencedFile(url: string, fileName: string): Promise<File | null> {
-    const path = this.parseFileReferenceUrl(url);
-    if (!path) {
-      return null;
-    }
-
-    const fileBuffer = await this.getDownloadedFile(path);
-    if (!fileBuffer) {
-      return null;
-    }
-
-    return new File([fileBuffer], fileName || path.split(/[\\/]/).pop() || 'file');
+    return fileCommands.getReferencedFile(this.commandHost, url, fileName, log);
   }
 
-  /**
-   * Get a downloaded file from the Native Helper via HTTP (fast) or WebSocket fallback
-   */
+
   async getDownloadedFile(path: string): Promise<ArrayBuffer | null> {
-    // Try HTTP first (much faster than WebSocket base64)
-    const httpPort = this.config.port + 1; // HTTP on port+1 (9877)
-    try {
-      log.debug('Fetching file via HTTP:', path);
-      const response = await this.fetchWithAuth(`http://127.0.0.1:${httpPort}/file?path=${encodeURIComponent(path)}`);
-      if (response.ok) {
-        const buffer = await response.arrayBuffer();
-        log.debug('File received via HTTP:', buffer.byteLength + ' bytes');
-        return buffer;
-      }
-    } catch (e) {
-      log.warn('HTTP fetch failed, falling back to WebSocket', e);
-    }
-
-    // Fallback to WebSocket (slower but more compatible)
-    const id = this.nextId();
-
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        this.pendingRequests.delete(id);
-        resolve(null);
-      }, 120000); // 120 seconds for large files via WebSocket
-
-      // For file requests, we expect base64 data in the response
-      this.pendingRequests.set(id, async (response) => {
-        clearTimeout(timeout);
-        const data = okField<string>(response, 'data');
-        if (response.ok && data) {
-          // Decode base64 to ArrayBuffer using fetch (much faster than manual loop)
-          try {
-            const dataUrl = `data:application/octet-stream;base64,${data}`;
-            const fetchResponse = await fetch(dataUrl);
-            const buffer = await fetchResponse.arrayBuffer();
-            resolve(buffer);
-          } catch (e) {
-            log.error('Failed to decode base64 data', e);
-            resolve(null);
-          }
-        } else {
-          resolve(null);
-        }
-      });
-
-      const cmd = {
-        cmd: 'get_file',
-        id,
-        path,
-      };
-
-      this.sendRaw(JSON.stringify(cmd)).catch(() => {
-        clearTimeout(timeout);
-        this.pendingRequests.delete(id);
-        resolve(null);
-      });
-    });
+    return fileCommands.getDownloadedFile(this.commandHost, path, log);
   }
 
   // ── MatAnyone2 Methods ──
 
-  /**
-   * Check MatAnyone2 environment status
-   */
+
   async matanyoneStatus(): Promise<MatAnyoneStatusResponse> {
-    const id = this.nextId();
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pendingRequests.delete(id);
-        reject(new Error('Request timeout'));
-      }, 15000);
-
-      this.pendingRequests.set(id, (response) => {
-        clearTimeout(timeout);
-        this.pendingRequests.delete(id);
-        if (!response.ok) {
-          reject(new Error(getErrorMessage(response, 'Failed to get MatAnyone2 status')));
-        } else {
-          resolve(response as unknown as MatAnyoneStatusResponse);
-        }
-      });
-
-      this.sendRaw(JSON.stringify({ cmd: 'mat_anyone_status', id })).catch((err) => {
-        clearTimeout(timeout);
-        this.pendingRequests.delete(id);
-        reject(err);
-      });
-    });
+    return this.matAnyoneCommands.status();
   }
 
-  /**
-   * Run full MatAnyone2 setup with progress
-   */
+
   async matanyoneSetup(
     onProgress?: (step: string, percent: number, message: string) => void,
     pythonPath?: string,
   ): Promise<{ success: boolean; error?: string }> {
-    const id = this.nextId();
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pendingRequests.delete(id);
-        reject(new Error('MatAnyone2 setup timeout'));
-      }, 600000); // 10 minutes
-
-      this.pendingRequests.set(id, (response: ProgressLikeResponse) => {
-        if (response.type === 'progress') {
-          if (onProgress) {
-            onProgress(response.step ?? '', response.percent ?? 0, response.message ?? '');
-          }
-          return;
-        }
-
-        clearTimeout(timeout);
-        if (response.ok) {
-          resolve({ success: true });
-        } else {
-          resolve({
-            success: false,
-            error: getErrorMessage(response, 'Setup failed'),
-          });
-        }
-      });
-
-      const cmd: Command = { cmd: 'mat_anyone_setup', id };
-      if (pythonPath) {
-        cmd.python_path = pythonPath;
-      }
-
-      this.sendRaw(JSON.stringify(cmd)).catch((err) => {
-        clearTimeout(timeout);
-        this.pendingRequests.delete(id);
-        reject(err);
-      });
-    });
+    return this.matAnyoneCommands.setup(onProgress, pythonPath);
   }
 
-  /**
-   * Download MatAnyone2 model weights with progress
-   */
+
   async matanyoneDownloadModel(
     onProgress?: (percent: number, speed?: string, eta?: string) => void,
   ): Promise<{ success: boolean; error?: string }> {
-    const id = this.nextId();
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pendingRequests.delete(id);
-        reject(new Error('Model download timeout'));
-      }, 600000); // 10 minutes
-
-      this.pendingRequests.set(id, (response: ProgressLikeResponse) => {
-        if (response.type === 'progress') {
-          if (onProgress) {
-            onProgress(response.percent ?? 0, response.speed, response.eta);
-          }
-          return;
-        }
-
-        clearTimeout(timeout);
-        if (response.ok) {
-          resolve({ success: true });
-        } else {
-          resolve({
-            success: false,
-            error: getErrorMessage(response, 'Model download failed'),
-          });
-        }
-      });
-
-      this.sendRaw(JSON.stringify({ cmd: 'mat_anyone_download_model', id })).catch((err) => {
-        clearTimeout(timeout);
-        this.pendingRequests.delete(id);
-        reject(err);
-      });
-    });
+    return this.matAnyoneCommands.downloadModel(onProgress);
   }
 
-  /**
-   * Start MatAnyone2 inference server
-   */
+
   async matanyoneStart(): Promise<{ success: boolean; port?: number }> {
-    const id = this.nextId();
-    const response = await this.send({ cmd: 'mat_anyone_start', id });
-
-    if (!response.ok) {
-      return { success: false };
-    }
-
-    return { success: true, port: okField<number>(response, 'port') };
+    return this.matAnyoneCommands.start();
   }
 
-  /**
-   * Stop MatAnyone2 inference server
-   */
+
   async matanyoneStop(): Promise<{ success: boolean }> {
-    const id = this.nextId();
-    const response = await this.send({ cmd: 'mat_anyone_stop', id });
-    return { success: response.ok === true };
+    return this.matAnyoneCommands.stop();
   }
 
-  /**
-   * Run MatAnyone2 matting job with progress
-   */
+
   async matanyoneMatte(
     videoPath: string,
     maskPath: string,
@@ -1236,106 +536,22 @@ class NativeHelperClientImpl {
     options?: { startFrame?: number; endFrame?: number },
     onProgress?: (currentFrame: number, totalFrames: number, percent: number, jobId?: string) => void,
   ): Promise<MatAnyoneMatteResult> {
-    const id = this.nextId();
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pendingRequests.delete(id);
-        if (this.activeMatAnyoneMatte?.id === id) {
-          this.activeMatAnyoneMatte = null;
-        }
-        reject(new Error('Matting timeout'));
-      }, 600000); // 10 minutes
-
-      this.activeMatAnyoneMatte = { id, timeout, reject };
-
-      this.pendingRequests.set(id, (response: ProgressLikeResponse) => {
-        if (response.type === 'progress') {
-          if (onProgress) {
-            onProgress(
-              response.current_frame ?? 0,
-              response.total_frames ?? 0,
-              response.percent ?? 0,
-              response.job_id,
-            );
-          }
-          return;
-        }
-
-        clearTimeout(timeout);
-        if (this.activeMatAnyoneMatte?.id === id) {
-          this.activeMatAnyoneMatte = null;
-        }
-        if (response.ok) {
-          resolve({
-            foreground_path: okField<string>(response, 'foreground_path') ?? '',
-            alpha_path: okField<string>(response, 'alpha_path') ?? '',
-            job_id: okField<string>(response, 'job_id') ?? '',
-          });
-        } else {
-          reject(new Error(getErrorMessage(response, 'Matting failed')));
-        }
-      });
-
-      const cmd: Command = {
-        cmd: 'mat_anyone_matte',
-        id,
-        video_path: videoPath,
-        mask_path: maskPath,
-        output_dir: outputDir,
-      };
-
-      if (options?.startFrame !== undefined) {
-        cmd.start_frame = options.startFrame;
-      }
-      if (options?.endFrame !== undefined) {
-        cmd.end_frame = options.endFrame;
-      }
-
-      this.sendRaw(JSON.stringify(cmd)).catch((err) => {
-        clearTimeout(timeout);
-        this.pendingRequests.delete(id);
-        if (this.activeMatAnyoneMatte?.id === id) {
-          this.activeMatAnyoneMatte = null;
-        }
-        reject(err);
-      });
-    });
+    return this.matAnyoneCommands.matte(videoPath, maskPath, outputDir, options, onProgress);
   }
 
-  /**
-   * Cancel a running MatAnyone2 matting job
-   */
+
   async matanyoneCancel(jobId: string): Promise<void> {
-    const id = this.nextId();
-    const response = await this.send({ cmd: 'mat_anyone_cancel', id, job_id: jobId });
-    if (!response.ok) {
-      throw new Error(getErrorMessage(response, 'Failed to cancel MatAnyone2 job'));
-    }
-
-    const active = this.activeMatAnyoneMatte;
-    if (active) {
-      clearTimeout(active.timeout);
-      this.pendingRequests.delete(active.id);
-      this.activeMatAnyoneMatte = null;
-      active.reject(new Error('Matte job cancelled'));
-    }
+    return this.matAnyoneCommands.cancel(jobId);
   }
 
-  /**
-   * Uninstall MatAnyone2 (remove venv, models, etc.)
-   */
+
   async matanyoneUninstall(): Promise<{ success: boolean }> {
-    const id = this.nextId();
-    const response = await this.send({ cmd: 'mat_anyone_uninstall', id });
-    return { success: response.ok === true };
+    return this.matAnyoneCommands.uninstall();
   }
 
   // Private methods
 
-  /**
-   * Fetch with Authorization header injected
-   */
+
   private fetchWithAuth(url: string, init?: RequestInit): Promise<globalThis.Response> {
     const headers = new Headers(init?.headers);
     if (this.config.token) {
@@ -1404,124 +620,14 @@ class NativeHelperClientImpl {
   }
 
   private async handleMessage(data: string | ArrayBuffer): Promise<void> {
-    if (typeof data === 'string') {
-      // JSON response
-      try {
-        const message = JSON.parse(data) as NativeHelperJsonMessage;
-        if (message.type === 'ai_tool_request') {
-          await this.handleAiToolRequest({
-            request_id: message.request_id,
-            tool: message.tool,
-            args: message.args,
-          });
-          return;
-        }
-
-        if (!message.id) {
-          return;
-        }
-
-        const response = message as Response;
-        const isProgress = message.type === 'progress';
-        const callback = this.pendingRequests.get(message.id);
-
-        if (callback) {
-          // Check if this is a progress message - don't delete callback yet
-          if (!isProgress) {
-            this.pendingRequests.delete(message.id);
-          }
-          callback(response);
-        }
-      } catch (err) {
-        log.error('Failed to parse response', err);
-      }
-    } else {
-      // Binary frame data
-      const header = parseFrameHeader(data);
-
-      if (!header) {
-        log.error('Invalid frame header');
-        return;
-      }
-
-      // Extract payload
-      const payloadStart = 16;
-      const payload = new Uint8Array(data, payloadStart);
-
-      const jpegFrame = isJpeg(header.flags);
-
-      // Decompress if needed (LZ4 — not used when JPEG is active)
-      if (!jpegFrame && isCompressed(header.flags)) {
-        log.warn('LZ4 decompression not implemented, using raw data');
-      }
-
-      const frame: DecodedFrame = {
-        width: header.width,
-        height: header.height,
-        frameNum: header.frameNum,
-        data: new Uint8ClampedArray(payload),
-        requestId: header.requestId,
-        isJpeg: jpegFrame,
-      };
-
-      // Find callback by request ID pattern
-      // The request ID in the header maps to our string IDs
-      for (const [id, callback] of this.frameCallbacks) {
-        // Match by checking if any pending decode could be this frame
-        callback(frame);
-        this.frameCallbacks.delete(id);
-        break;
-      }
-    }
+    await handleNativeHelperMessage(this.commandHost, data, log);
   }
 
-  private async handleAiToolRequest(payload: {
-    request_id?: string;
-    tool?: string;
-    args?: Record<string, unknown>;
-  }): Promise<void> {
-    const requestId = payload.request_id;
-    const tool = payload.tool;
-
-    if (!requestId || !tool) {
-      log.warn('Ignoring malformed ai_tool_request from native helper');
-      return;
-    }
-
-    const commandId = this.nextId();
-
-    try {
-      const { executeAITool, AI_TOOLS, getQuickTimelineSummary } = await import('../aiTools');
-      let result: unknown;
-
-      if (tool === '_list') {
-        result = { success: true, data: AI_TOOLS };
-      } else if (tool === '_status') {
-        result = { success: true, data: getQuickTimelineSummary() };
-      } else {
-        result = await executeAITool(tool, payload.args ?? {}, 'nativeHelper');
-      }
-
-      await this.send({
-        cmd: 'ai_tool_result',
-        id: commandId,
-        request_id: requestId,
-        result,
-      });
-    } catch (error) {
-      try {
-        await this.send({
-          cmd: 'ai_tool_result',
-          id: commandId,
-          request_id: requestId,
-          result: {
-            success: false,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        });
-      } catch (sendError) {
-        log.error('Failed to send ai_tool_result error response', sendError);
-      }
+  private dispatchFrame(frame: DecodedFrame): void {
+    for (const [id, callback] of this.frameCallbacks) {
+      callback(frame);
+      this.frameCallbacks.delete(id);
+      break;
     }
   }
 

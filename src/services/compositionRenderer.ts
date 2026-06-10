@@ -3,99 +3,39 @@
 
 import { Logger } from './logger';
 import type {
-  Layer,
-  LayerSource,
   SerializableClip,
   TimelineTrack,
   TimelineClip,
-  NestedCompositionData,
 } from '../types';
-import type { RuntimeProviderDemand } from '../timeline';
 
 const log = Logger.create('CompositionRenderer');
 import { useMediaStore } from '../stores/mediaStore';
 import { useTimelineStore } from '../stores/timeline';
-import { calculateSourceTime } from '../utils/speedIntegration';
 import { textRenderer } from './textRenderer';
-import { proxyFrameCache } from './proxyFrameCache';
+import { isVectorAnimationSourceType } from '../types/vectorAnimation';
 import {
-  bindSourceRuntimeForOwner,
-  planSourceRuntimeBindingForOwner,
-} from './mediaRuntime/clipBindings';
+  buildEvaluatedClipLayer,
+  evaluateNestedComposition,
+} from './compositionRender/layerEvaluation';
 import {
-  getRuntimeFrameProvider,
-  releaseRuntimePlaybackSession,
-  updateRuntimePlaybackTime,
-} from './mediaRuntime/runtimePlayback';
-import { mediaRuntimeRegistry } from './mediaRuntime/registry';
-import { vectorAnimationRuntimeManager } from './vectorAnimation/VectorAnimationRuntimeManager';
-import { isVectorAnimationSourceType, type VectorAnimationProvider } from '../types/vectorAnimation';
-import { mathSceneRenderer } from './mathScene/MathSceneRenderer';
-import { getEffectiveScale } from '../utils/transformScale';
+  buildSerializableMathSceneClip,
+  getBackgroundSessionKey,
+  getSerializableImageSource,
+  getTimelineImageSource,
+} from './compositionRender/sourceSetup';
+import { disposeCompositionSources, reportCompositionSource } from './compositionRender/sourceLifecycle';
 import {
-  releaseCompositionRenderSourceResource,
-  reportCompositionRenderSource,
-} from './timeline/compositionRenderRuntimeReporting';
-import {
-  startTimelineImageHydration,
-  type TimelineImageHydrationHandle,
-} from './timeline/imageRuntimeHydrator';
-import { reservePlannedClipRuntimeResources } from './timeline/runtimeResourceReporting';
-
-type CompositionClipSourceEntry = {
-  clipId: string;
-  compositionId?: string;
-  type: 'video' | 'image' | 'audio' | 'text' | 'math-scene' | VectorAnimationProvider;
-  videoElement?: HTMLVideoElement;
-  webCodecsPlayer?: LayerSource['webCodecsPlayer'];
-  imageElement?: HTMLImageElement;
-  textCanvas?: HTMLCanvasElement;
-  file?: File;
-  lottieClip?: TimelineClip;
-  mathSceneClip?: TimelineClip;
-  naturalDuration: number;
-  runtimeSourceId?: string;
-  runtimeSessionKey?: string;
-  runtimeOwnerId?: string;
-  mediaFileId?: string;
-  ownedObjectUrl?: string;
-};
-
-type CompositionImageSource = {
-  url: string;
-  file?: File;
-  objectUrl?: string;
-  name: string;
-};
-
-type CompositionLoadClip = {
-  id: string;
-  name: string;
-  mediaFileId?: string;
-  naturalDuration?: number;
-};
-
-function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined)
-  ) as T;
-}
-
-// Source cache entry for a composition
-interface CompositionSources {
-  compositionId: string;
-  clipSources: Map<string, CompositionClipSourceEntry>;
-  pendingSourceDisposers: Map<string, () => void>;
-  isReady: boolean;
-  disposed: boolean;
-  lastAccessTime: number;
-}
-
-// Evaluated layer result
-export interface EvaluatedLayer extends Omit<Layer, 'id'> {
-  id: string;
-  clipId: string;
-}
+  loadImageSource,
+  loadVectorAnimationSource,
+  loadVideoSource,
+  prepareNestedTimelineImageSources,
+} from './compositionRender/sourceLoaders';
+import type {
+  CompositionClipSourceEntry,
+  CompositionSources,
+  EvaluatedLayer,
+} from './compositionRender/sourceTypes';
+export type { EvaluatedLayer } from './compositionRender/sourceTypes';
 
 class CompositionRendererService {
   // Cache of prepared sources per composition
@@ -110,393 +50,8 @@ class CompositionRendererService {
   // Track in-flight preparation promises to deduplicate concurrent calls
   private preparingPromises: Map<string, Promise<boolean>> = new Map();
 
-  private getRuntimeOwnerId(compositionId: string, clipId: string): string {
-    return `composition:${compositionId}:clip:${clipId}`;
-  }
-
-  private getRuntimeAdmissionClip(compositionId: string, clip: SerializableClip): TimelineClip {
-    return {
-      id: clip.id,
-      trackId: clip.trackId,
-      name: clip.name,
-      startTime: clip.startTime,
-      duration: clip.duration,
-      inPoint: clip.inPoint,
-      outPoint: clip.outPoint,
-      source: null,
-      transform: clip.transform as TimelineClip['transform'],
-      effects: clip.effects ?? [],
-      mediaFileId: clip.mediaFileId,
-      compositionId,
-    } as TimelineClip;
-  }
-
-  private createImageHydrationDemand(
-    sources: CompositionSources,
-    clip: CompositionLoadClip,
-    imageSource: CompositionImageSource,
-    runtimeOwnerId: string
-  ): RuntimeProviderDemand {
-    const resourceId = `composition-render:${sources.compositionId}:${clip.id}:image-canvas:image`;
-    return {
-      id: resourceId,
-      facetId: `${resourceId}:facet`,
-      resourceKind: 'image-canvas',
-      policyId: 'composition-render',
-      leasePolicy: 'background-cache',
-      owner: removeUndefinedValues({
-        ownerId: runtimeOwnerId,
-        ownerType: 'composition' as const,
-        clipId: clip.id,
-        compositionId: sources.compositionId,
-        mediaFileId: clip.mediaFileId,
-      }),
-      source: removeUndefinedValues({
-        sourceId: clip.mediaFileId,
-        mediaFileId: clip.mediaFileId,
-        clipId: clip.id,
-        compositionId: sources.compositionId,
-        previewPath: imageSource.url,
-      }),
-      dimensions: {
-        durationSeconds: clip.naturalDuration || 5,
-      },
-      priority: 'background',
-      tags: ['composition-render', 'image'],
-    };
-  }
-
-  private getBackgroundSessionKey(
-    compositionId: string,
-    clipId: string,
-    source?: Pick<LayerSource, 'runtimeSourceId' | 'runtimeSessionKey'> | null
-  ): string | undefined {
-    if (!source?.runtimeSourceId) {
-      return source?.runtimeSessionKey;
-    }
-    return `background:${this.getRuntimeOwnerId(compositionId, clipId)}`;
-  }
-
-  private getTimelineImageSource(
-    clip: TimelineClip,
-    mediaFile?: { url?: string; file?: File; name?: string } | null
-  ): CompositionImageSource | null {
-    if (clip.source?.imageUrl) {
-      return {
-        url: clip.source.imageUrl,
-        file: clip.source.file ?? mediaFile?.file ?? clip.file,
-        name: clip.name,
-      };
-    }
-
-    if (mediaFile?.url) {
-      return {
-        url: mediaFile.url,
-        file: mediaFile.file ?? clip.source?.file ?? clip.file,
-        name: mediaFile.name ?? clip.name,
-      };
-    }
-
-    const file = mediaFile?.file ?? clip.source?.file ?? clip.file;
-    if (file && file.size > 0) {
-      const objectUrl = URL.createObjectURL(file);
-      return {
-        url: objectUrl,
-        file,
-        objectUrl,
-        name: file.name || clip.name,
-      };
-    }
-
-    return null;
-  }
-
-  private getSerializableImageSource(
-    clip: SerializableClip,
-    mediaFile?: { url?: string; file?: File; name?: string } | null
-  ): CompositionImageSource | null {
-    if (mediaFile?.url) {
-      return {
-        url: mediaFile.url,
-        file: mediaFile.file,
-        name: mediaFile.name ?? clip.name,
-      };
-    }
-
-    if (mediaFile?.file && mediaFile.file.size > 0) {
-      const objectUrl = URL.createObjectURL(mediaFile.file);
-      return {
-        url: objectUrl,
-        file: mediaFile.file,
-        objectUrl,
-        name: mediaFile.file.name || mediaFile.name || clip.name,
-      };
-    }
-
-    return null;
-  }
-
-  private prepareNestedTimelineImageSources(
-    sources: CompositionSources,
-    clips: readonly TimelineClip[],
-    mediaFiles: Array<{ id: string; url?: string; file?: File; name?: string }>,
-    loadPromises: Promise<void>[],
-  ): void {
-    for (const clip of clips) {
-      if (clip.nestedClips?.length) {
-        this.prepareNestedTimelineImageSources(sources, clip.nestedClips, mediaFiles, loadPromises);
-      }
-
-      if (clip.source?.type !== 'image' || clip.source.imageElement) {
-        continue;
-      }
-
-      const mediaFileId = clip.source.mediaFileId ?? clip.mediaFileId;
-      const mediaFile = mediaFileId
-        ? mediaFiles.find((file) => file.id === mediaFileId)
-        : undefined;
-      const imageSource = this.getTimelineImageSource(clip, mediaFile);
-      if (!imageSource) {
-        continue;
-      }
-
-      loadPromises.push(this.loadImageSource(
-        sources,
-        {
-          id: clip.id,
-          name: clip.name,
-          mediaFileId,
-          naturalDuration: clip.source.naturalDuration || clip.duration,
-        },
-        imageSource
-      ));
-    }
-  }
-
-  private getBaseLayerSource(entry: CompositionClipSourceEntry): LayerSource {
-    if (entry.type === 'video') {
-      return {
-        type: 'video',
-        file: entry.file,
-        videoElement: entry.videoElement,
-        webCodecsPlayer: entry.webCodecsPlayer,
-        runtimeSourceId: entry.runtimeSourceId,
-        runtimeSessionKey: entry.runtimeSessionKey,
-      };
-    }
-
-    if (entry.type === 'image') {
-      return {
-        type: 'image',
-        file: entry.file,
-        imageElement: entry.imageElement,
-      };
-    }
-
-    return {
-      type: 'text',
-      textCanvas: entry.textCanvas,
-    };
-  }
-
-  private buildSerializableVectorAnimationClip(clip: SerializableClip, file: File): TimelineClip {
-    const sourceType = isVectorAnimationSourceType(clip.sourceType) ? clip.sourceType : 'lottie';
-    return {
-      id: clip.id,
-      trackId: clip.trackId,
-      name: clip.name,
-      file,
-      startTime: clip.startTime,
-      duration: clip.duration,
-      inPoint: clip.inPoint,
-      outPoint: clip.outPoint,
-      source: {
-        type: sourceType,
-        mediaFileId: clip.mediaFileId,
-        naturalDuration: clip.naturalDuration ?? clip.duration,
-        vectorAnimationSettings: clip.vectorAnimationSettings,
-      },
-      effects: clip.effects || [],
-      transform: clip.transform,
-      reversed: clip.reversed,
-      isLoading: false,
-    } as TimelineClip;
-  }
-
-  private buildSerializableMathSceneClip(clip: SerializableClip): TimelineClip | null {
-    if (!clip.mathScene) {
-      return null;
-    }
-
-    const canvas = mathSceneRenderer.createCanvas();
-    const mathClip: TimelineClip = {
-      id: clip.id,
-      trackId: clip.trackId,
-      name: clip.name,
-      file: new File([JSON.stringify(clip.mathScene)], 'math-scene.json', { type: 'application/json' }),
-      startTime: clip.startTime,
-      duration: clip.duration,
-      inPoint: clip.inPoint,
-      outPoint: clip.outPoint,
-      source: {
-        type: 'math-scene',
-        textCanvas: canvas,
-        naturalDuration: clip.duration,
-      },
-      mathScene: structuredClone(clip.mathScene),
-      effects: clip.effects || [],
-      transform: clip.transform,
-      reversed: clip.reversed,
-      isLoading: false,
-    } as TimelineClip;
-
-    mathSceneRenderer.renderClip(mathClip, 0);
-    return mathClip;
-  }
-
-  private buildBackgroundVideoLayerSource(
-    entry: CompositionClipSourceEntry,
-    clipTime: number
-  ): LayerSource {
-    const baseSource = this.getBaseLayerSource(entry);
-    const binding = updateRuntimePlaybackTime(baseSource, clipTime, 'background');
-    const runtimeProvider =
-      binding?.frameProvider ?? getRuntimeFrameProvider(baseSource, 'background');
-    const isRuntimeFullWebCodecs =
-      !!baseSource.runtimeSourceId && !!runtimeProvider?.isFullMode();
-
-    if (
-      entry.videoElement &&
-      !isRuntimeFullWebCodecs &&
-      Math.abs(entry.videoElement.currentTime - clipTime) > 0.05
-    ) {
-      entry.videoElement.currentTime = clipTime;
-    }
-
-    return {
-      ...baseSource,
-      webCodecsPlayer: runtimeProvider ?? baseSource.webCodecsPlayer,
-    };
-  }
-
-  private releaseCompositionSourceRuntime(entry: CompositionClipSourceEntry): void {
-    if (entry.compositionId) {
-      releaseCompositionRenderSourceResource(entry.compositionId, entry.clipId);
-    }
-
-    if (!entry.runtimeSourceId) {
-      return;
-    }
-
-    if (entry.runtimeSessionKey) {
-      releaseRuntimePlaybackSession({
-        runtimeSourceId: entry.runtimeSourceId,
-        runtimeSessionKey: entry.runtimeSessionKey,
-      });
-    }
-
-    if (!entry.runtimeOwnerId) {
-      return;
-    }
-
-    mediaRuntimeRegistry.releaseRuntime(entry.runtimeSourceId, entry.runtimeOwnerId);
-  }
-
-  private reportCompositionSource(
-    compositionId: string,
-    entry: CompositionClipSourceEntry
-  ): void {
-    reportCompositionRenderSource({
-      compositionId,
-      clipId: entry.clipId,
-      type: entry.type,
-      videoElement: entry.videoElement,
-      imageElement: entry.imageElement,
-      textCanvas: entry.textCanvas,
-      naturalDuration: entry.naturalDuration,
-      runtimeSourceId: entry.runtimeSourceId,
-      runtimeSessionKey: entry.runtimeSessionKey,
-      mediaFileId: entry.mediaFileId,
-    });
-  }
-
   private isSourcesCurrent(sources: CompositionSources): boolean {
     return !sources.disposed && this.compositionSources.get(sources.compositionId) === sources;
-  }
-
-  private revokeObjectUrl(url: string | undefined): void {
-    if (url?.startsWith('blob:')) {
-      URL.revokeObjectURL(url);
-    }
-  }
-
-  private revokeObjectUrls(...urls: Array<string | undefined>): void {
-    for (const url of new Set(urls.filter((candidate): candidate is string => !!candidate))) {
-      this.revokeObjectUrl(url);
-    }
-  }
-
-  private releaseVideoElement(video: HTMLVideoElement, ownedObjectUrl?: string): void {
-    const src = video.currentSrc || video.src;
-    video.pause();
-    this.revokeObjectUrls(ownedObjectUrl, src);
-    video.removeAttribute('src');
-    video.src = '';
-    try {
-      video.load();
-    } catch {
-      // Some browsers throw if load() runs during teardown; src removal is enough.
-    }
-  }
-
-  private releaseImageElement(image: HTMLImageElement, ownedObjectUrl?: string): void {
-    this.revokeObjectUrls(ownedObjectUrl);
-    image.removeAttribute('src');
-    image.src = '';
-  }
-
-  private disposeCompositionSourceEntry(entry: CompositionClipSourceEntry): void {
-    this.releaseCompositionSourceRuntime(entry);
-
-    if (!entry.compositionId) {
-      return;
-    }
-
-    if (entry.videoElement) {
-      this.releaseVideoElement(entry.videoElement);
-    }
-
-    if (entry.imageElement) {
-      this.releaseImageElement(entry.imageElement, entry.ownedObjectUrl);
-    }
-
-    if (entry.lottieClip && isVectorAnimationSourceType(entry.type)) {
-      vectorAnimationRuntimeManager.destroyClipRuntime(entry.lottieClip.id, entry.type);
-    }
-  }
-
-  private disposeCompositionSources(
-    sources: CompositionSources,
-    options: { deleteFromCache?: boolean } = {}
-  ): void {
-    sources.disposed = true;
-    sources.isReady = false;
-
-    for (const disposePendingSource of Array.from(sources.pendingSourceDisposers.values())) {
-      disposePendingSource();
-    }
-
-    sources.pendingSourceDisposers.clear();
-
-    for (const source of sources.clipSources.values()) {
-      this.disposeCompositionSourceEntry(source);
-    }
-
-    sources.clipSources.clear();
-
-    if (options.deleteFromCache) {
-      this.compositionSources.delete(sources.compositionId);
-    }
   }
 
   /**
@@ -531,7 +86,7 @@ class CompositionRendererService {
       return true;
     }
     if (existing) {
-      this.disposeCompositionSources(existing);
+      disposeCompositionSources(existing);
     }
     log.debug(`prepareComposition: not ready, preparing...`);
 
@@ -611,7 +166,7 @@ class CompositionRendererService {
               timelineClip.source.videoElement?.duration ||
               0,
             runtimeSourceId: timelineClip.source.runtimeSourceId,
-            runtimeSessionKey: this.getBackgroundSessionKey(
+            runtimeSessionKey: getBackgroundSessionKey(
               compositionId,
               clip.id,
               timelineClip.source
@@ -628,7 +183,7 @@ class CompositionRendererService {
             file: timelineClip.file,
             naturalDuration: timelineClip.source.naturalDuration || 5,
             runtimeSourceId: timelineClip.source.runtimeSourceId,
-            runtimeSessionKey: this.getBackgroundSessionKey(
+            runtimeSessionKey: getBackgroundSessionKey(
               compositionId,
               clip.id,
               timelineClip.source
@@ -638,9 +193,9 @@ class CompositionRendererService {
         }
 
         if (sourceType === 'image') {
-          const imageSource = this.getTimelineImageSource(timelineClip, mediaFile);
+          const imageSource = getTimelineImageSource(timelineClip, mediaFile);
           if (imageSource) {
-            loadPromises.push(this.loadImageSource(
+            loadPromises.push(loadImageSource(
               sources,
               {
                 id: timelineClip.id,
@@ -648,7 +203,8 @@ class CompositionRendererService {
                 mediaFileId,
                 naturalDuration: timelineClip.source.naturalDuration || timelineClip.duration,
               },
-              imageSource
+              imageSource,
+              (currentSources) => this.isSourcesCurrent(currentSources)
             ));
             continue;
           }
@@ -679,7 +235,7 @@ class CompositionRendererService {
               file: timelineClip.file,
               naturalDuration: timelineClip.source.naturalDuration || timelineClip.source.videoElement.duration || 0,
               runtimeSourceId: timelineClip.source.runtimeSourceId,
-              runtimeSessionKey: this.getBackgroundSessionKey(
+              runtimeSessionKey: getBackgroundSessionKey(
                 compositionId,
                 clip.id,
                 timelineClip.source
@@ -693,7 +249,7 @@ class CompositionRendererService {
               file: timelineClip.file,
               naturalDuration: timelineClip.source.naturalDuration || 5,
               runtimeSourceId: timelineClip.source.runtimeSourceId,
-              runtimeSessionKey: this.getBackgroundSessionKey(
+              runtimeSessionKey: getBackgroundSessionKey(
                 compositionId,
                 clip.id,
                 timelineClip.source
@@ -723,12 +279,12 @@ class CompositionRendererService {
               naturalDuration: clip.duration,
             };
             sources.clipSources.set(clip.id, entry);
-            this.reportCompositionSource(compositionId, entry);
+            reportCompositionSource(compositionId, entry);
           }
         }
 
         if (sourceType === 'math-scene' && serializableClip.mathScene) {
-          const mathSceneClip = this.buildSerializableMathSceneClip(serializableClip);
+          const mathSceneClip = buildSerializableMathSceneClip(serializableClip);
           if (mathSceneClip?.source?.textCanvas) {
             const entry: CompositionClipSourceEntry = {
               clipId: clip.id,
@@ -739,7 +295,7 @@ class CompositionRendererService {
               naturalDuration: clip.duration,
             };
             sources.clipSources.set(clip.id, entry);
-            this.reportCompositionSource(compositionId, entry);
+            reportCompositionSource(compositionId, entry);
           }
         }
 
@@ -759,16 +315,31 @@ class CompositionRendererService {
 
       if (sourceType === 'video') {
         if (mediaFile?.file) {
-          loadPromises.push(this.loadVideoSource(sources, serializableClip, mediaFile.file));
+          loadPromises.push(loadVideoSource(
+            sources,
+            serializableClip,
+            mediaFile.file,
+            (currentSources) => this.isSourcesCurrent(currentSources)
+          ));
         }
       } else if (sourceType === 'image') {
-        const imageSource = this.getSerializableImageSource(serializableClip, mediaFile);
+        const imageSource = getSerializableImageSource(serializableClip, mediaFile);
         if (imageSource) {
-          loadPromises.push(this.loadImageSource(sources, serializableClip, imageSource));
+          loadPromises.push(loadImageSource(
+            sources,
+            serializableClip,
+            imageSource,
+            (currentSources) => this.isSourcesCurrent(currentSources)
+          ));
         }
       } else if (isVectorAnimationSourceType(sourceType)) {
         if (mediaFile?.file) {
-          loadPromises.push(this.loadVectorAnimationSource(sources, serializableClip, mediaFile.file));
+          loadPromises.push(loadVectorAnimationSource(
+            sources,
+            serializableClip,
+            mediaFile.file,
+            (currentSources) => this.isSourcesCurrent(currentSources)
+          ));
         }
       }
     }
@@ -779,11 +350,12 @@ class CompositionRendererService {
           continue;
         }
 
-        this.prepareNestedTimelineImageSources(
+        prepareNestedTimelineImageSources(
           sources,
           clip.nestedClips,
           mediaFiles,
-          loadPromises
+          loadPromises,
+          (currentSources) => this.isSourcesCurrent(currentSources)
         );
       }
     }
@@ -814,279 +386,6 @@ class CompositionRendererService {
     this.readyCallbacks.delete(compositionId);
 
     return true;
-  }
-
-  private loadVideoSource(sources: CompositionSources, clip: SerializableClip, file: File): Promise<void> {
-    return new Promise((resolve) => {
-      const runtimeOwnerId = this.getRuntimeOwnerId(sources.compositionId, clip.id);
-      const plannedSource = {
-        type: 'video' as const,
-        mediaFileId: clip.mediaFileId,
-        naturalDuration: clip.naturalDuration || clip.duration || 0,
-      };
-      const runtimePlan = planSourceRuntimeBindingForOwner({
-        ownerId: runtimeOwnerId,
-        sessionOwnerId: runtimeOwnerId,
-        sessionPolicy: 'background',
-        source: plannedSource,
-        file,
-        mediaFileId: clip.mediaFileId,
-      });
-      const admissionClip = this.getRuntimeAdmissionClip(sources.compositionId, clip);
-      const admission = reservePlannedClipRuntimeResources({
-        policyId: 'composition-render',
-        ownerId: runtimeOwnerId,
-        ownerType: 'composition',
-        compositionId: sources.compositionId,
-        clip: admissionClip,
-        source: runtimePlan?.source ?? plannedSource,
-        mediaElementKind: 'video',
-        srcKind: 'blob-url',
-        label: 'Composition render video hydration',
-        tags: ['composition-render', 'video'],
-      });
-      if (!admission.admitted) {
-        log.debug('Composition video hydration skipped by runtime admission', {
-          compositionId: sources.compositionId,
-          clipId: clip.id,
-          reason: admission.decision.reason,
-          rejectedUnits: admission.decision.rejectedUnits.map((entry) => entry.unit),
-        });
-        resolve();
-        return;
-      }
-
-      const video = document.createElement('video');
-      const objectUrl = URL.createObjectURL(file);
-      let settled = false;
-      let cleanedUp = false;
-      const pendingKey = `video:${clip.id}`;
-      const finish = () => {
-        if (!settled) {
-          settled = true;
-          if (sources.pendingSourceDisposers.get(pendingKey) === cleanupPendingSource) {
-            sources.pendingSourceDisposers.delete(pendingKey);
-          }
-          resolve();
-        }
-      };
-      const cleanupPendingSource = () => {
-        if (cleanedUp) {
-          return;
-        }
-
-        cleanedUp = true;
-        video.removeEventListener('canplaythrough', onCanPlayThrough);
-        video.removeEventListener('error', onError);
-        admission.release();
-        this.releaseVideoElement(video, objectUrl);
-        finish();
-      };
-      const onCanPlayThrough = () => {
-        if (!this.isSourcesCurrent(sources)) {
-          cleanupPendingSource();
-          return;
-        }
-
-        if (sources.pendingSourceDisposers.get(pendingKey) === cleanupPendingSource) {
-          sources.pendingSourceDisposers.delete(pendingKey);
-        }
-
-        const runtimeSource = bindSourceRuntimeForOwner({
-          ownerId: runtimeOwnerId,
-          sessionOwnerId: runtimeOwnerId,
-          sessionPolicy: 'background',
-          source: {
-            type: 'video',
-            videoElement: video,
-            mediaFileId: clip.mediaFileId,
-            naturalDuration: video.duration || clip.naturalDuration || 0,
-          },
-          file,
-          mediaFileId: clip.mediaFileId,
-        });
-        const entry: CompositionClipSourceEntry = {
-          clipId: clip.id,
-          compositionId: sources.compositionId,
-          type: 'video',
-          videoElement: video,
-          file,
-          naturalDuration: video.duration || clip.naturalDuration || 0,
-          runtimeSourceId: runtimeSource?.runtimeSourceId,
-          runtimeSessionKey: runtimeSource?.runtimeSessionKey,
-          runtimeOwnerId,
-          mediaFileId: clip.mediaFileId,
-        };
-        sources.clipSources.set(clip.id, entry);
-        this.reportCompositionSource(sources.compositionId, entry);
-        log.debug(`Video loaded: ${file.name}`);
-        finish();
-      };
-      const onError = () => {
-        admission.release();
-        log.error(`Failed to load video: ${file.name}`);
-        cleanupPendingSource();
-      };
-
-      video.src = objectUrl;
-      video.loop = false; // We control playback manually
-      video.muted = true;
-      video.playsInline = true;
-      video.crossOrigin = 'anonymous';
-      video.preload = 'auto';
-      sources.pendingSourceDisposers.set(pendingKey, cleanupPendingSource);
-
-      video.addEventListener('canplaythrough', onCanPlayThrough, { once: true });
-      video.addEventListener('error', onError, { once: true });
-
-      video.load();
-    });
-  }
-
-  private loadImageSource(
-    sources: CompositionSources,
-    clip: CompositionLoadClip,
-    imageSource: CompositionImageSource
-  ): Promise<void> {
-    return new Promise((resolve) => {
-      let handle: TimelineImageHydrationHandle | null = null;
-      let settled = false;
-      let cleanedUp = false;
-      const pendingKey = `image:${clip.id}`;
-      const finish = () => {
-        if (!settled) {
-          settled = true;
-          if (sources.pendingSourceDisposers.get(pendingKey) === cleanupPendingSource) {
-            sources.pendingSourceDisposers.delete(pendingKey);
-          }
-          resolve();
-        }
-      };
-      const cleanupPendingSource = () => {
-        if (cleanedUp) {
-          return;
-        }
-
-        cleanedUp = true;
-        handle?.cancel();
-        if (handle?.image) {
-          this.releaseImageElement(handle.image, imageSource.objectUrl);
-        } else {
-          this.revokeObjectUrls(imageSource.objectUrl);
-        }
-        finish();
-      };
-
-      sources.pendingSourceDisposers.set(pendingKey, cleanupPendingSource);
-      const runtimeOwnerId = this.getRuntimeOwnerId(sources.compositionId, clip.id);
-
-      handle = startTimelineImageHydration({
-        url: imageSource.url,
-        resource: {
-          demand: this.createImageHydrationDemand(sources, clip, imageSource, runtimeOwnerId),
-          imageId: `${runtimeOwnerId}:image`,
-          label: 'Composition render image hydration',
-          tags: ['composition-render', 'image'],
-        },
-        isCurrent: () => this.isSourcesCurrent(sources),
-        onReady: (img) => {
-          if (sources.pendingSourceDisposers.get(pendingKey) === cleanupPendingSource) {
-            sources.pendingSourceDisposers.delete(pendingKey);
-          }
-
-          const runtimeSource = bindSourceRuntimeForOwner({
-            ownerId: runtimeOwnerId,
-            sessionOwnerId: runtimeOwnerId,
-            sessionPolicy: 'background',
-            source: {
-              type: 'image',
-              imageElement: img,
-              mediaFileId: clip.mediaFileId,
-              naturalDuration: clip.naturalDuration || 5,
-            },
-            file: imageSource.file,
-            mediaFileId: clip.mediaFileId,
-          });
-          const entry: CompositionClipSourceEntry = {
-            clipId: clip.id,
-            compositionId: sources.compositionId,
-            type: 'image',
-            imageElement: img,
-            file: imageSource.file,
-            naturalDuration: clip.naturalDuration || 5,
-            runtimeSourceId: runtimeSource?.runtimeSourceId,
-            runtimeSessionKey: runtimeSource?.runtimeSessionKey,
-            runtimeOwnerId,
-            mediaFileId: clip.mediaFileId,
-            ownedObjectUrl: imageSource.objectUrl,
-          };
-          sources.clipSources.set(clip.id, entry);
-          this.reportCompositionSource(sources.compositionId, entry);
-          log.debug(`Image loaded: ${imageSource.name}`);
-          finish();
-        },
-        onError: () => {
-          log.error(`Failed to load image: ${imageSource.name}`);
-          cleanupPendingSource();
-        },
-        onStale: (img) => {
-          this.releaseImageElement(img, imageSource.objectUrl);
-          finish();
-        },
-        onAdmissionDenied: (decision) => {
-          log.debug('Composition image hydration skipped by runtime admission', {
-            compositionId: sources.compositionId,
-            clipId: clip.id,
-            reason: decision.reason,
-            rejectedUnits: decision.rejectedUnits.map((entry) => entry.unit),
-          });
-          cleanupPendingSource();
-        },
-      });
-    });
-  }
-
-  private async loadVectorAnimationSource(sources: CompositionSources, clip: SerializableClip, file: File): Promise<void> {
-    try {
-      const vectorClip = this.buildSerializableVectorAnimationClip(clip, file);
-      const runtimeOwnerId = `composition:${sources.compositionId}:clip:${clip.id}`;
-      const runtime = await vectorAnimationRuntimeManager.prepareClipSource(vectorClip, file, {
-        policyId: 'composition-render',
-        ownerId: runtimeOwnerId,
-        ownerType: 'composition',
-        compositionId: sources.compositionId,
-        resourceId: `composition-render:${sources.compositionId}:${clip.id}:image-canvas:text-canvas`,
-        imageId: `${runtimeOwnerId}:text-canvas`,
-        label: 'Composition render vector runtime canvas',
-        tags: ['composition-render', 'vector-animation', isVectorAnimationSourceType(clip.sourceType) ? clip.sourceType : 'lottie'],
-      });
-
-      if (!this.isSourcesCurrent(sources)) {
-        vectorAnimationRuntimeManager.destroyClipRuntime(vectorClip.id, vectorClip.source?.type);
-        return;
-      }
-
-      vectorClip.source = {
-        ...vectorClip.source!,
-        textCanvas: runtime.canvas,
-        naturalDuration: runtime.metadata.duration ?? clip.naturalDuration ?? clip.duration,
-      };
-
-      const entry: CompositionClipSourceEntry = {
-        clipId: clip.id,
-        compositionId: sources.compositionId,
-        type: isVectorAnimationSourceType(clip.sourceType) ? clip.sourceType : 'lottie',
-        textCanvas: runtime.canvas,
-        file,
-        lottieClip: vectorClip,
-        naturalDuration: runtime.metadata.duration ?? clip.naturalDuration ?? clip.duration,
-        mediaFileId: clip.mediaFileId,
-      };
-      sources.clipSources.set(clip.id, entry);
-      this.reportCompositionSource(sources.compositionId, entry);
-    } catch (error) {
-      log.error(`Failed to load vector animation: ${file.name}`, error);
-    }
   }
 
   /**
@@ -1148,6 +447,8 @@ class CompositionRendererService {
 
     // Build layers from bottom to top (reverse track order)
     const layers: EvaluatedLayer[] = [];
+    const getVectorAnimationSettings = (clipId: string, localTime: number) =>
+      useTimelineStore.getState().getInterpolatedVectorAnimationSettings(clipId, localTime);
 
     for (let trackIndex = videoTracks.length - 1; trackIndex >= 0; trackIndex--) {
       const track = videoTracks[trackIndex];
@@ -1165,12 +466,17 @@ class CompositionRendererService {
       // Handle nested compositions
       const timelineClip = clipAtTime as TimelineClip;
       if (timelineClip.isComposition && timelineClip.compositionId) {
-        const nestedLayer = this.evaluateNestedComposition(
-          timelineClip,
-          time,
-          compositionId,
-          sources
-        );
+        const mediaStore = useMediaStore.getState();
+        const nestedLayer = evaluateNestedComposition({
+          clip: timelineClip,
+          parentTime: time,
+          parentCompId: compositionId,
+          sources,
+          compositions: mediaStore.compositions,
+          mediaFiles: mediaStore.files,
+          proxyEnabled: mediaStore.proxyEnabled,
+          getVectorAnimationSettings,
+        });
         if (nestedLayer) {
           layers.push(nestedLayer);
         }
@@ -1180,292 +486,17 @@ class CompositionRendererService {
       const source = sources.clipSources.get(clipAtTime.id);
       if (!source) continue;
 
-      // Calculate clip-local time (on timeline, relative to clip start)
-      const timelineLocalTime = time - clipAtTime.startTime;
-      // Calculate source time using speed (nested comps don't have keyframes, use default speed)
-      const defaultSpeed = clipAtTime.speed ?? (clipAtTime.reversed ? -1 : 1);
-      const sourceTime = calculateSourceTime([], timelineLocalTime, defaultSpeed);
-      // Determine start point based on playback direction
-      const startPoint = defaultSpeed >= 0 ? (clipAtTime.inPoint || 0) : (clipAtTime.outPoint || source.naturalDuration);
-      const clipTime = Math.max(0, Math.min(source.naturalDuration, startPoint + sourceTime));
-
-      // Build layer object
-      const transform = clipAtTime.transform || {
-        position: { x: 0, y: 0, z: 0 },
-        scale: { x: 1, y: 1 },
-        rotation: { x: 0, y: 0, z: 0 },
-        anchor: { x: 0.5, y: 0.5 },
-        opacity: 1,
-      };
-
-      // Build layer source based on type
-      let layerSource: EvaluatedLayer['source'] = null;
-      if (source.videoElement) {
-        layerSource = this.buildBackgroundVideoLayerSource(
-          source,
-          clipTime
-        );
-      } else if (source.imageElement) {
-        layerSource = this.getBaseLayerSource(source);
-      } else if (isVectorAnimationSourceType(source.type)) {
-        const runtimeClip =
-          isActiveComp && isVectorAnimationSourceType(timelineClip.source?.type)
-            ? timelineClip
-            : source.lottieClip;
-        if (runtimeClip) {
-          const runtimeClipLocalTime = Math.max(0, time - runtimeClip.startTime);
-          vectorAnimationRuntimeManager.renderClipAtTime(
-            runtimeClip,
-            time,
-            useTimelineStore.getState().getInterpolatedVectorAnimationSettings(
-              runtimeClip.id,
-              runtimeClipLocalTime,
-            ),
-          );
-          layerSource = {
-            type: 'text',
-            textCanvas: runtimeClip.source?.textCanvas ?? source.textCanvas,
-          };
-        }
-      } else if (source.type === 'math-scene') {
-        if (source.mathSceneClip) {
-          mathSceneRenderer.renderClip(source.mathSceneClip, clipTime);
-        }
-        layerSource = {
-          type: 'text',
-          textCanvas: source.mathSceneClip?.source?.textCanvas ?? source.textCanvas,
-        };
-      } else if (source.textCanvas) {
-        layerSource = this.getBaseLayerSource(source);
-      }
-
-      const layer: EvaluatedLayer = {
-        id: `${compositionId}-${clipAtTime.id}`,
-        clipId: clipAtTime.id,
-        name: clipAtTime.name,
-        visible: true,
-        opacity: transform.opacity ?? 1,
-        blendMode: 'normal',
-        source: layerSource,
-        effects: clipAtTime.effects || [],
-        position: transform.position || { x: 0, y: 0, z: 0 },
-        scale: getEffectiveScale(transform.scale),
-        rotation: typeof transform.rotation === 'number'
-          ? transform.rotation
-          : transform.rotation?.z || 0,
-      };
-
-      layers.push(layer);
+      layers.push(buildEvaluatedClipLayer({
+        compositionId,
+        time,
+        clipAtTime,
+        source,
+        isActiveComposition: isActiveComp,
+        getVectorAnimationSettings,
+      }));
     }
 
     return layers;
-  }
-
-  /**
-   * Evaluate a nested composition clip and return a layer with nested composition data
-   */
-  private evaluateNestedComposition(
-    clip: TimelineClip,
-    parentTime: number,
-    parentCompId: string,
-    sources: CompositionSources
-  ): EvaluatedLayer | null {
-    if (!clip.nestedClips || !clip.nestedTracks) {
-      return null;
-    }
-
-    // Calculate time within the nested composition
-    const clipLocalTime = parentTime - clip.startTime;
-    const nestedTime = clipLocalTime + (clip.inPoint || 0);
-
-    // Get composition dimensions
-    const mediaStore = useMediaStore.getState();
-    const nestedComp = mediaStore.compositions.find(c => c.id === clip.compositionId);
-    const compWidth = nestedComp?.width || 1920;
-    const compHeight = nestedComp?.height || 1080;
-
-    // Build layers for the nested composition
-    const nestedVideoTracks = clip.nestedTracks.filter(t => t.type === 'video' && t.visible);
-    const nestedLayers: Layer[] = [];
-
-    for (let i = nestedVideoTracks.length - 1; i >= 0; i--) {
-      const nestedTrack = nestedVideoTracks[i];
-      const nestedClip = clip.nestedClips.find(
-        nc =>
-          nc.trackId === nestedTrack.id &&
-          nestedTime >= nc.startTime &&
-          nestedTime < nc.startTime + nc.duration
-      );
-
-      if (!nestedClip) continue;
-
-      const nestedLocalTime = nestedTime - nestedClip.startTime;
-      const nestedClipTime = nestedClip.reversed
-        ? nestedClip.outPoint - nestedLocalTime
-        : nestedLocalTime + nestedClip.inPoint;
-
-      // Build transform
-      const transform = nestedClip.transform || {
-        position: { x: 0, y: 0, z: 0 },
-        scale: { x: 1, y: 1 },
-        rotation: { x: 0, y: 0, z: 0 },
-        anchor: { x: 0.5, y: 0.5 },
-        opacity: 1,
-        blendMode: 'normal' as const,
-      };
-
-      const baseLayer = {
-        id: `${parentCompId}-nested-${nestedClip.id}`,
-        name: nestedClip.name,
-        visible: true,
-        opacity: transform.opacity ?? 1,
-        blendMode: transform.blendMode || 'normal',
-        effects: nestedClip.effects || [],
-        position: {
-          x: transform.position?.x || 0,
-          y: transform.position?.y || 0,
-          z: transform.position?.z || 0,
-        },
-        scale: getEffectiveScale(transform.scale),
-        rotation: {
-          x: ((transform.rotation?.x || 0) * Math.PI) / 180,
-          y: ((transform.rotation?.y || 0) * Math.PI) / 180,
-          z: ((transform.rotation?.z || 0) * Math.PI) / 180,
-        },
-      };
-
-      // Handle video clips with proxy support
-      if (nestedClip.source?.videoElement) {
-        const nestedMediaFile = mediaStore.files.find(f =>
-          f.id === nestedClip.source?.mediaFileId ||
-          f.name === nestedClip.file?.name ||
-          f.name === nestedClip.name
-        );
-
-        const shouldUseProxy = mediaStore.proxyEnabled &&
-          nestedMediaFile?.proxyFps &&
-          nestedMediaFile.proxyFormat !== 'mp4-all-intra' &&
-          (nestedMediaFile.proxyStatus === 'ready' || nestedMediaFile.proxyStatus === 'generating');
-
-        if (shouldUseProxy && nestedMediaFile) {
-          const proxyFps = nestedMediaFile.proxyFps || 30;
-          const frameIndex = Math.floor(nestedClipTime * proxyFps);
-          const cachedFrame = proxyFrameCache.getCachedFrame(nestedMediaFile.id, frameIndex, proxyFps);
-
-          if (cachedFrame) {
-            nestedLayers.push({
-              ...baseLayer,
-              source: {
-                type: 'image',
-                imageElement: cachedFrame,
-                mediaTime: frameIndex / proxyFps,
-                targetMediaTime: nestedClipTime,
-                previewPath: 'nested-proxy-image-frame',
-                proxyFrameIndex: frameIndex,
-              },
-            } as Layer);
-            continue;
-          }
-          void proxyFrameCache.getFrame(nestedMediaFile.id, nestedClipTime, proxyFps);
-        }
-
-        nestedLayers.push({
-          ...baseLayer,
-          source: this.buildBackgroundVideoLayerSource(
-            {
-              clipId: nestedClip.id,
-              type: 'video',
-              videoElement: nestedClip.source.videoElement,
-              webCodecsPlayer: nestedClip.source.webCodecsPlayer,
-              file: nestedClip.file,
-              naturalDuration: nestedClip.source.naturalDuration || nestedClip.source.videoElement.duration || 0,
-              runtimeSourceId: nestedClip.source.runtimeSourceId,
-              runtimeSessionKey: this.getBackgroundSessionKey(
-                parentCompId,
-                nestedClip.id,
-                nestedClip.source
-              ),
-            },
-            nestedClipTime
-          ),
-        } as Layer);
-      } else if (nestedClip.source?.type === 'image') {
-        const imageElement =
-          nestedClip.source.imageElement ??
-          sources.clipSources.get(nestedClip.id)?.imageElement;
-        if (!imageElement) {
-          continue;
-        }
-
-        nestedLayers.push({
-          ...baseLayer,
-          source: {
-            type: 'image',
-            imageElement,
-          },
-        } as Layer);
-      } else if (nestedClip.source?.textCanvas) {
-        if (isVectorAnimationSourceType(nestedClip.source.type)) {
-          vectorAnimationRuntimeManager.renderClipAtTime(
-            nestedClip,
-            nestedTime,
-            useTimelineStore.getState().getInterpolatedVectorAnimationSettings(
-              nestedClip.id,
-              nestedLocalTime,
-            ),
-          );
-        } else if (nestedClip.source.type === 'math-scene') {
-          mathSceneRenderer.renderClip(nestedClip, nestedClipTime);
-        }
-        nestedLayers.push({
-          ...baseLayer,
-          source: {
-            type: 'text',
-            textCanvas: nestedClip.source.textCanvas,
-          },
-        } as Layer);
-      }
-    }
-
-    if (nestedLayers.length === 0) {
-      return null;
-    }
-
-    // Build the nested composition data
-    const nestedCompData: NestedCompositionData = {
-      compositionId: clip.compositionId || clip.id,
-      layers: nestedLayers,
-      width: compWidth,
-      height: compHeight,
-    };
-
-    // Get clip transform
-    const clipTransform = clip.transform || {
-      position: { x: 0, y: 0, z: 0 },
-      scale: { x: 1, y: 1 },
-      rotation: { x: 0, y: 0, z: 0 },
-      opacity: 1,
-      blendMode: 'normal' as const,
-    };
-
-    return {
-      id: `${parentCompId}-${clip.id}`,
-      clipId: clip.id,
-      name: clip.name,
-      visible: true,
-      opacity: clipTransform.opacity ?? 1,
-      blendMode: clipTransform.blendMode || 'normal',
-      source: {
-        type: 'video',
-        nestedComposition: nestedCompData,
-      },
-      effects: clip.effects || [],
-      position: clipTransform.position || { x: 0, y: 0, z: 0 },
-      scale: getEffectiveScale(clipTransform.scale),
-      rotation: typeof clipTransform.rotation === 'number'
-        ? clipTransform.rotation
-        : (clipTransform.rotation?.z || 0) * Math.PI / 180,
-    };
   }
 
   /**
@@ -1496,7 +527,10 @@ class CompositionRendererService {
     const sources = this.compositionSources.get(compositionId);
     if (!sources) return;
 
-    this.disposeCompositionSources(sources, { deleteFromCache: true });
+    disposeCompositionSources(sources, {
+      deleteFromCache: true,
+      cache: this.compositionSources,
+    });
     log.debug(`Disposed composition: ${compositionId}`);
   }
 
@@ -1529,7 +563,7 @@ class CompositionRendererService {
     const sources = this.compositionSources.get(compositionId);
     if (sources) {
       log.debug(`Invalidating composition: ${compositionId}`);
-      this.disposeCompositionSources(sources);
+      disposeCompositionSources(sources);
     }
   }
 
@@ -1541,7 +575,7 @@ class CompositionRendererService {
     const { activeCompositionId } = useMediaStore.getState();
     for (const [id, sources] of this.compositionSources.entries()) {
       if (id !== activeCompositionId) {
-        this.disposeCompositionSources(sources);
+        disposeCompositionSources(sources);
       }
     }
     log.debug('Invalidated all non-active compositions');
@@ -1581,7 +615,7 @@ class CompositionRendererService {
    */
   invalidateAll(): void {
     for (const [, sources] of this.compositionSources.entries()) {
-      this.disposeCompositionSources(sources);
+      disposeCompositionSources(sources);
     }
     log.debug('Invalidated ALL compositions');
   }
