@@ -6,64 +6,56 @@
  *
  * Solution: Pre-decode frames in parallel using separate VideoDecoder instances
  * per clip, with a frame buffer that stays ahead of the render position.
+ *
+ * Every decoder state transition and VideoFrame teardown happens in this
+ * file; parallelDecode/** holds the handle-free planning and buffering math.
  */
 
 import { Logger } from '../services/logger';
 const log = Logger.create('ParallelDecode');
 
-import * as MP4BoxModule from 'mp4box';
 import {
-  createBaseDecoderConfig,
   createHardwareDecoderConfig,
-  extractCodecDescription,
-  getCodecString,
   HARDWARE_ACCELERATION_MODES,
-  type MP4DataStreamConstructor,
-  type MP4TrackDetails,
-  type MP4VideoTrack,
 } from './parallelDecode/decoderConfig';
 import { isDecoderResetAbort } from './parallelDecode/decoderErrors';
 import {
-  getClipMainTimelineStart,
-  getPrefetchTargetForClip,
   isTimeInClipRange,
   timelineToSourceTime,
   type ParallelDecodeClipInfo as ClipInfo,
 } from './parallelDecode/clipWindow';
+import { type ParallelDecodeFrameLookupOptions } from './parallelDecode/frameLookup';
+import { getNormalizedSampleSourceTime, getPresentationOffsetSeconds } from './parallelDecode/sampleTiming';
 import {
-  getFrameLookupResult,
-  type ParallelDecodeFrameLookupOptions,
-} from './parallelDecode/frameLookup';
-import {
-  getNormalizedSampleSourceTime,
-  getNormalizedSampleTimestampMicroseconds,
-  getPresentationOffsetSeconds,
-} from './parallelDecode/sampleTiming';
-import {
-  BUFFER_AHEAD_FRAMES,
   MAX_BUFFER_SIZE,
   MAX_PREWARM_CLIP_STARTS,
-  SLOW_BLOCKING_PREFETCH_WARN_MS,
-  UPCOMING_CLIP_PREFETCH_SECONDS,
-  binarySearchInsertPosition,
   collectPresentationKeyframeCandidates,
-  createDecodeSchedulingPlan,
   findKeyframeAtOrBeforeSample,
-  findSampleIndexForSourceTime,
-  getBufferedTimeRangeForLog,
   getDecodeBatchSize,
   getDecodeSeekState,
   getSeekTargetSampleIndex,
   hasDecodeSeekDistance,
-  hasUsableBufferedFrame,
 } from './parallelDecode/scheduling';
 import {
   createParallelDecodeRuntimeSnapshot,
-  estimateDecodedFrameBytes,
-  secondsFromTimestamp,
-  type ParallelDecodeClipRuntimeSnapshot,
   type ParallelDecodeRuntimeSnapshot,
 } from './parallelDecode/runtimeSnapshot';
+import { createEncodedChunkForSample, parseMP4TrackInfo } from './parallelDecode/mp4Parsing';
+import {
+  buildClipRuntimeSnapshot,
+  clearFrameBufferState,
+  refreshBufferedTimestampBounds,
+  removeBufferedTimestamp,
+  storeDecodedFrame,
+  type ClipDecoder,
+  type DecodedFrame,
+} from './parallelDecode/clipDecoderState';
+import {
+  prefetchFramesForTime as runPrefetchFramesForTime,
+  prewarmClipStarts as runPrewarmClipStarts,
+  type ParallelDecodePrefetchDeps,
+} from './parallelDecode/prefetchCoordinator';
+import { getBufferedFrameForClip } from './parallelDecode/frameAccess';
 
 export type { ParallelDecodeClipInfo } from './parallelDecode/clipWindow';
 export type { ParallelDecodeFrameLookupOptions } from './parallelDecode/frameLookup';
@@ -77,65 +69,6 @@ export type {
   ParallelDecodeClipRuntimeSnapshot,
   ParallelDecodeRuntimeSnapshot,
 } from './parallelDecode/runtimeSnapshot';
-
-const MP4Box = MP4BoxModule as unknown as {
-  createFile: typeof MP4BoxModule.createFile;
-  DataStream: MP4DataStreamConstructor;
-};
-
-// MP4Box types
-interface MP4ArrayBuffer extends ArrayBuffer {
-  fileStart: number;
-}
-
-interface Sample {
-  number: number;
-  track_id: number;
-  data: ArrayBuffer;
-  size: number;
-  cts: number;
-  dts: number;
-  duration: number;
-  is_sync: boolean;
-  timescale: number;
-}
-
-interface MP4File {
-  onReady: (info: { videoTracks: MP4VideoTrack[] }) => void;
-  onSamples: (trackId: number, ref: unknown, samples: Sample[]) => void;
-  onError: (error: string) => void;
-  appendBuffer: (buffer: MP4ArrayBuffer) => number;
-  start: () => void;
-  flush: () => void;
-  setExtractionOptions: (trackId: number, user: unknown, options: { nbSamples: number }) => void;
-  getTrackById: (id: number) => MP4TrackDetails | undefined;
-}
-
-interface DecodedFrame {
-  frame: VideoFrame;
-  sourceTime: number;     // Normalized time in source video (seconds)
-  timestamp: number;      // Normalized timestamp from VideoFrame (microseconds)
-}
-
-interface ClipDecoder {
-  clipId: string;
-  clipName: string;
-  decoder: VideoDecoder;
-  samples: Sample[];
-  sampleIndex: number;
-  videoTrack: MP4VideoTrack;
-  codecConfig: VideoDecoderConfig;
-  presentationOffsetSeconds: number;
-  frameBuffer: Map<number, DecodedFrame>;  // timestamp (μs) -> decoded frame
-  sortedTimestamps: number[];              // Sorted list for O(log n) lookup
-  oldestTimestamp: number;                 // Track bounds for quick rejection
-  newestTimestamp: number;                 // Track bounds for quick rejection
-  lastDecodedTimestamp: number;            // Track last decoded timestamp
-  clipInfo: ClipInfo;
-  isDecoding: boolean;
-  pendingDecode: Promise<void> | null;
-  needsKeyframe: boolean;                  // True after flush - must start from keyframe
-}
 
 export class ParallelDecodeManager {
   private clipDecoders: Map<string, ClipDecoder> = new Map();
@@ -170,7 +103,7 @@ export class ParallelDecodeManager {
    */
   private async initializeClip(clipInfo: ClipInfo): Promise<void> {
     // Phase 1: Parse MP4 and extract track info (sync onReady)
-    const parseResult = await this.parseMP4TrackInfo(clipInfo);
+    const parseResult = await parseMP4TrackInfo(clipInfo);
 
     // Phase 2: Async hardware acceleration probing
     const hwAccel = await this.findSupportedHwAccel(parseResult.baseConfig, clipInfo.clipName);
@@ -241,83 +174,6 @@ export class ParallelDecodeManager {
   }
 
   /**
-   * Parse MP4 file and extract track info + samples synchronously.
-   * onReady MUST be sync — MP4Box calls it during appendBuffer, and an async
-   * callback would yield control before setExtractionOptions/start/flush,
-   * causing MP4Box to never deliver samples.
-   */
-  private parseMP4TrackInfo(clipInfo: ClipInfo): Promise<{
-    videoTrack: MP4VideoTrack;
-    baseConfig: VideoDecoderConfig;
-    samples: Sample[];
-  }> {
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error(`MP4 parsing timeout for clip "${clipInfo.clipName}"`));
-      }, 5000);
-
-      const mp4File = MP4Box.createFile() as unknown as MP4File;
-      const collectedSamples: Sample[] = [];
-
-      // SYNC onReady — no await allowed here!
-      mp4File.onReady = (info) => {
-        const videoTrack = info.videoTracks[0];
-        if (!videoTrack) {
-          clearTimeout(timeout);
-          reject(new Error(`No video track in clip "${clipInfo.clipName}"`));
-          return;
-        }
-
-        // Build codec config
-        const codec = getCodecString(videoTrack);
-        let description: ArrayBuffer | undefined;
-
-        try {
-          const trak = mp4File.getTrackById(videoTrack.id);
-          description = extractCodecDescription(trak, MP4Box.DataStream);
-        } catch (e) {
-          log.warn(`Failed to extract codec description for ${clipInfo.clipName}: ${e}`);
-        }
-
-        const baseConfig = createBaseDecoderConfig(videoTrack, description);
-
-        // Start sample extraction SYNCHRONOUSLY before appendBuffer returns
-        mp4File.setExtractionOptions(videoTrack.id, null, { nbSamples: Infinity });
-        mp4File.start();
-
-        // Resolve will happen after appendBuffer+flush complete (samples collected via onSamples)
-        // Use setTimeout(0) to resolve after the synchronous appendBuffer+flush chain completes
-        setTimeout(() => {
-          clearTimeout(timeout);
-          log.info(`"${clipInfo.clipName}" parsed: ${codec} ${videoTrack.video.width}x${videoTrack.video.height}, ${collectedSamples.length} samples`);
-          resolve({ videoTrack, baseConfig, samples: collectedSamples });
-        }, 0);
-      };
-
-      mp4File.onSamples = (_trackId, _ref, newSamples) => {
-        collectedSamples.push(...newSamples);
-      };
-
-      mp4File.onError = (e) => {
-        clearTimeout(timeout);
-        reject(new Error(`MP4 parsing error for "${clipInfo.clipName}": ${e}`));
-      };
-
-      // Feed entire buffer — onReady fires sync during appendBuffer,
-      // which sets up extraction before flush() signals end-of-data
-      const mp4Buffer = clipInfo.fileData as MP4ArrayBuffer;
-      mp4Buffer.fileStart = 0;
-      try {
-        mp4File.appendBuffer(mp4Buffer);
-        mp4File.flush();
-      } catch (e) {
-        clearTimeout(timeout);
-        reject(new Error(`MP4Box appendBuffer failed for "${clipInfo.clipName}": ${e}`));
-      }
-    });
-  }
-
-  /**
    * Handle a decoded frame from VideoDecoder output callback
    * Uses the frame's timestamp directly for accurate time mapping
    * Optimized: maintains sorted timestamp list for O(log n) lookups
@@ -335,9 +191,7 @@ export class ParallelDecodeManager {
     const existingFrame = clipDecoder.frameBuffer.get(timestamp);
     if (existingFrame) {
       this.closeDecodedFrame(existingFrame);
-      clipDecoder.frameBuffer.delete(timestamp);
-      clipDecoder.sortedTimestamps = clipDecoder.sortedTimestamps.filter(ts => ts !== timestamp);
-      this.refreshBufferedTimestampBounds(clipDecoder);
+      removeBufferedTimestamp(clipDecoder, timestamp);
     }
 
     // Log first 5 frames for debugging
@@ -345,26 +199,8 @@ export class ParallelDecodeManager {
       log.debug(`"${clipDecoder.clipName}": Frame ${clipDecoder.frameBuffer.size + 1} decoded at ${sourceTime.toFixed(3)}s (timestamp=${timestamp}µs)`);
     }
 
-    // Store frame by its timestamp
-    clipDecoder.frameBuffer.set(timestamp, {
-      frame,
-      sourceTime,
-      timestamp,
-    });
-
-    // Maintain sorted timestamp list with binary insertion - O(log n)
-    const insertIdx = binarySearchInsertPosition(clipDecoder.sortedTimestamps, timestamp);
-    clipDecoder.sortedTimestamps.splice(insertIdx, 0, timestamp);
-
-    // Update bounds - O(1)
-    if (timestamp < clipDecoder.oldestTimestamp) {
-      clipDecoder.oldestTimestamp = timestamp;
-    }
-    if (timestamp > clipDecoder.newestTimestamp) {
-      clipDecoder.newestTimestamp = timestamp;
-    }
-
-    clipDecoder.lastDecodedTimestamp = timestamp;
+    // Store frame by its timestamp and maintain sorted index + bounds
+    storeDecodedFrame(clipDecoder, frame, timestamp, sourceTime);
 
     // Cleanup if buffer too large - remove oldest (no sorting needed)
     while (clipDecoder.frameBuffer.size > MAX_BUFFER_SIZE && clipDecoder.sortedTimestamps.length > 0) {
@@ -376,7 +212,7 @@ export class ParallelDecodeManager {
       }
     }
 
-    this.refreshBufferedTimestampBounds(clipDecoder);
+    refreshBufferedTimestampBounds(clipDecoder);
   }
 
   private closeDecodedFrame(decodedFrame: DecodedFrame): void {
@@ -387,39 +223,12 @@ export class ParallelDecodeManager {
     }
   }
 
-  private refreshBufferedTimestampBounds(clipDecoder: ClipDecoder): void {
-    clipDecoder.oldestTimestamp = clipDecoder.sortedTimestamps[0] ?? Infinity;
-    clipDecoder.newestTimestamp = clipDecoder.sortedTimestamps[clipDecoder.sortedTimestamps.length - 1] ?? -Infinity;
-  }
-
   async prewarmClipStarts(
     startTime: number,
     endTime: number,
     maxStarts: number = MAX_PREWARM_CLIP_STARTS
   ): Promise<number> {
-    if (!this.isActive || this.clipDecoders.size === 0) {
-      return 0;
-    }
-
-    const clipStartTimes = new Map<number, number>();
-    for (const [, clipDecoder] of this.clipDecoders) {
-      const clipStart = getClipMainTimelineStart(clipDecoder.clipInfo);
-      if (clipStart <= startTime + 0.0005 || clipStart >= endTime) {
-        continue;
-      }
-
-      clipStartTimes.set(Math.round(clipStart * 1000), clipStart);
-    }
-
-    const prewarmTimes = Array.from(clipStartTimes.values())
-      .sort((a, b) => a - b)
-      .slice(0, maxStarts);
-
-    for (const clipStart of prewarmTimes) {
-      await this.prefetchFramesForTime(clipStart);
-    }
-
-    return prewarmTimes.length;
+    return runPrewarmClipStarts(this.prefetchDeps(), startTime, endTime, maxStarts);
   }
 
   /**
@@ -427,235 +236,18 @@ export class ParallelDecodeManager {
    * Optimized for speed: fires decode ahead in background, only waits if frame is missing
    */
   async prefetchFramesForTime(timelineTime: number): Promise<void> {
-    log.debug(`prefetchFramesForTime(${timelineTime.toFixed(3)}) - isActive=${this.isActive}, decoders=${this.clipDecoders.size}`);
-    if (!this.isActive) return;
+    return runPrefetchFramesForTime(this.prefetchDeps(), timelineTime);
+  }
 
-    const clipsNeedingFlush: ClipDecoder[] = [];
-
-    for (const [, clipDecoder] of this.clipDecoders) {
-      const clipInfo = clipDecoder.clipInfo;
-      const prefetchTarget = getPrefetchTargetForClip(
-        clipInfo,
-        timelineTime,
-        UPCOMING_CLIP_PREFETCH_SECONDS
-      );
-
-      if (!prefetchTarget) {
-        log.debug(`"${clipInfo.clipName}": Skipped - not in range (start=${clipInfo.startTime}, dur=${clipInfo.duration}, nested=${clipInfo.isNested})`);
-        continue;
-      }
-
-      log.debug(`"${clipInfo.clipName}": Processing at time ${prefetchTarget.timelineTime.toFixed(3)}s - samples=${clipDecoder.samples.length}, buffer=${clipDecoder.frameBuffer.size}, decoderState=${clipDecoder.decoder.state}, blocking=${prefetchTarget.shouldBlock}`);
-
-      // Wait for samples if lazy loading hasn't delivered them yet
-      if (clipDecoder.samples.length === 0) {
-        log.debug(`"${clipInfo.clipName}": Waiting for samples...`);
-        const maxWaitMs = 10000; // 10 second max wait per clip (increased for large files)
-        const startWait = performance.now();
-        while (clipDecoder.samples.length === 0 && performance.now() - startWait < maxWaitMs) {
-          await new Promise(r => setTimeout(r, 50));
-        }
-        if (clipDecoder.samples.length === 0) {
-          const errorMsg = `"${clipInfo.clipName}" has no samples after waiting ${maxWaitMs}ms`;
-          log.error(errorMsg);
-          throw new Error(`Parallel decode initialization failed: ${errorMsg}`);
-        }
-        log.info(`"${clipInfo.clipName}" samples ready: ${clipDecoder.samples.length} (waited ${(performance.now() - startWait).toFixed(0)}ms)`);
-      }
-
-      // Calculate target source time and sample index
-      const sourceTime = timelineToSourceTime(clipInfo, prefetchTarget.timelineTime);
-      const targetSampleIndex = findSampleIndexForSourceTime(
-        clipDecoder.samples,
-        sourceTime,
-        clipDecoder.presentationOffsetSeconds
-      );
-
-      // Check if frame is already in buffer (fast path)
-      const targetTimestamp = sourceTime * 1_000_000;
-      const checkTolerance = this.frameTolerance * 2; // Double tolerance for buffer check
-
-      // Get buffer time range for logging
-      const { start: bufferStart, end: bufferEnd } = getBufferedTimeRangeForLog(
-        clipDecoder.sortedTimestamps
-      );
-      const frameInBuffer = hasUsableBufferedFrame(
-        clipDecoder.sortedTimestamps,
-        clipDecoder.oldestTimestamp,
-        clipDecoder.newestTimestamp,
-        targetTimestamp,
-        checkTolerance
-      );
-
-      log.debug(`"${clipInfo.clipName}": Frame check - target=${(targetTimestamp/1_000_000).toFixed(3)}s, buffer=${clipDecoder.frameBuffer.size} frames [${bufferStart}s-${bufferEnd}s], frameInBuffer=${frameInBuffer}, tolerance=${(checkTolerance/1000).toFixed(1)}ms`);
-
-      // Trigger decode ahead - ALWAYS await if we're behind the target sample
-      // Also need to decode if frame is not in buffer (we might be too far ahead and need to seek back)
-      const decodePlan = createDecodeSchedulingPlan({
-        sampleIndex: clipDecoder.sampleIndex,
-        targetSampleIndex,
-        frameBufferSize: clipDecoder.frameBuffer.size,
-        frameInBuffer,
-      });
-      const {
-        decodeTarget,
-        needsDecoding,
-        needsDecodingBack,
-        isBehindTarget,
-        shouldSeekDirectlyToTarget,
-      } = decodePlan;
-
-      if (needsDecoding && !clipDecoder.isDecoding) {
-        log.debug(`"${clipInfo.clipName}": Triggering decode - samples=${clipDecoder.samples.length}, targetIdx=${targetSampleIndex}, currentIdx=${clipDecoder.sampleIndex}, decodeTarget=${decodeTarget}, frameInBuffer=${frameInBuffer}, isBehindTarget=${isBehindTarget}, needsBackSeek=${needsDecodingBack}, directSeek=${shouldSeekDirectlyToTarget}`);
-
-        // Decode WITHOUT flush first — let output callback deliver frames async.
-        // This avoids the expensive flush→needsKeyframe→reset→re-decode-from-keyframe cycle.
-        // The retry loop below will flush only if the frame hasn't appeared.
-        if (!frameInBuffer) {
-          const decodePromise = this.decodeAhead(
-            clipDecoder,
-            decodeTarget,
-            shouldSeekDirectlyToTarget,
-            0,
-            targetSampleIndex
-          );
-          if (prefetchTarget.shouldBlock) {
-            const directDecodeStart = performance.now();
-            await decodePromise;
-            const directDecodeMs = performance.now() - directDecodeStart;
-            if (directDecodeMs >= SLOW_BLOCKING_PREFETCH_WARN_MS) {
-              log.warn(`${clipDecoder.clipName}: slow direct prefetch decode`, {
-                timelineTime: Number(prefetchTarget.timelineTime.toFixed(3)),
-                sourceTime: Number(sourceTime.toFixed(3)),
-                targetSampleIndex,
-                decodeTarget,
-                sampleIndex: clipDecoder.sampleIndex,
-                directDecodeMs: Number(directDecodeMs.toFixed(1)),
-                directSeek: shouldSeekDirectlyToTarget,
-                decodeQueueSize: clipDecoder.decoder.decodeQueueSize,
-                bufferSize: clipDecoder.frameBuffer.size,
-                bufferedStart: Number.isFinite(clipDecoder.oldestTimestamp)
-                  ? Number((clipDecoder.oldestTimestamp / 1_000_000).toFixed(3))
-                  : null,
-                bufferedEnd: Number.isFinite(clipDecoder.newestTimestamp)
-                  ? Number((clipDecoder.newestTimestamp / 1_000_000).toFixed(3))
-                  : null,
-              });
-            }
-          } else {
-            void decodePromise;
-          }
-        } else {
-          // Frame already in buffer - background decode for future frames
-          log.debug(`"${clipInfo.clipName}": Background decode (frame in buffer)`);
-          this.decodeAhead(clipDecoder, decodeTarget, false);
-        }
-      }
-
-      // Track clips that still need their frames
-      if (prefetchTarget.shouldBlock && !frameInBuffer) {
-        clipsNeedingFlush.push(clipDecoder);
-      }
-    }
-
-    // Wait for clips that still need their frame — escalating strategy:
-    // 1. Wait for async output callback (no flush)
-    // 2. Flush only if frame hasn't appeared
-    // 3. Re-decode with flush as last resort
-    for (const clipDecoder of clipsNeedingFlush) {
-      const clipInfo = clipDecoder.clipInfo;
-      const sourceTime = timelineToSourceTime(clipInfo, timelineTime);
-      const targetTimestamp = sourceTime * 1_000_000;
-      const targetSampleIndex = findSampleIndexForSourceTime(
-        clipDecoder.samples,
-        sourceTime,
-        clipDecoder.presentationOffsetSeconds
-      );
-      const blockingStart = performance.now();
-      let attemptsUsed = 0;
-
-      for (let attempt = 0; attempt < 10; attempt++) {
-        attemptsUsed = attempt + 1;
-        // Wait for pending decode to complete
-        if (clipDecoder.pendingDecode) {
-          await clipDecoder.pendingDecode;
-        }
-
-        // Check if frame is now in buffer
-        const frameFound = hasUsableBufferedFrame(
-          clipDecoder.sortedTimestamps,
-          clipDecoder.oldestTimestamp,
-          clipDecoder.newestTimestamp,
-          targetTimestamp,
-          this.frameTolerance * 2
-        );
-
-        if (frameFound) {
-          if (attempt > 0) {
-            log.debug(`"${clipDecoder.clipName}": Frame found after ${attempt + 1} attempts`);
-          }
-          break;
-        }
-
-        // Escalating strategy
-        if (attempt < 2) {
-          // First 2 attempts: just wait briefly for async output callback
-          await new Promise(r => setTimeout(r, 8));
-        } else if (clipDecoder.decoder.decodeQueueSize > 0) {
-          // Flush decoder queue to force output
-          log.debug(`"${clipDecoder.clipName}": Flushing decoder (attempt ${attempt + 1}, queue=${clipDecoder.decoder.decodeQueueSize})`);
-          await clipDecoder.decoder.flush();
-          clipDecoder.needsKeyframe = true;
-        } else if (!clipDecoder.isDecoding) {
-          // Queue is empty but frame not found — re-decode with forceFlush
-          log.debug(`"${clipDecoder.clipName}": Re-decode with flush (attempt ${attempt + 1}, queue empty)`);
-          const decodeTarget = Math.max(targetSampleIndex + BUFFER_AHEAD_FRAMES, BUFFER_AHEAD_FRAMES);
-          await this.decodeAhead(clipDecoder, decodeTarget, true, 0, targetSampleIndex);
-        } else {
-          // Decoder is busy, wait for it
-          await new Promise(r => setTimeout(r, 10));
-        }
-      }
-
-      // Final check - strict export should fail instead of using a nearby frame.
-      const finalTolerance = this.frameTolerance * 3; // 3x tolerance for final check
-      const finalCheck = hasUsableBufferedFrame(
-        clipDecoder.sortedTimestamps,
-        clipDecoder.oldestTimestamp,
-        clipDecoder.newestTimestamp,
-        targetTimestamp,
-        finalTolerance
-      );
-      const blockingMs = performance.now() - blockingStart;
-      if (blockingMs >= SLOW_BLOCKING_PREFETCH_WARN_MS) {
-        log.warn(`${clipDecoder.clipName}: slow blocking prefetch`, {
-          timelineTime: Number(timelineTime.toFixed(3)),
-          sourceTime: Number(sourceTime.toFixed(3)),
-          targetSampleIndex,
-          sampleIndex: clipDecoder.sampleIndex,
-          attempts: attemptsUsed,
-          blockingMs: Number(blockingMs.toFixed(1)),
-          decodeQueueSize: clipDecoder.decoder.decodeQueueSize,
-          bufferSize: clipDecoder.frameBuffer.size,
-          bufferedStart: Number.isFinite(clipDecoder.oldestTimestamp)
-            ? Number((clipDecoder.oldestTimestamp / 1_000_000).toFixed(3))
-            : null,
-          bufferedEnd: Number.isFinite(clipDecoder.newestTimestamp)
-            ? Number((clipDecoder.newestTimestamp / 1_000_000).toFixed(3))
-            : null,
-          finalCheck,
-        });
-      }
-      if (!finalCheck) {
-        const availableFrames = Array.from(clipDecoder.frameBuffer.values())
-          .map(f => (f.timestamp / 1_000_000).toFixed(3))
-          .sort()
-          .slice(0, 10)
-          .join(', ');
-
-        throw new Error(`FAST export failed: "${clipDecoder.clipName}" has no decoded frame at ${(targetTimestamp/1_000_000).toFixed(3)}s after all attempts (buffer: ${clipDecoder.frameBuffer.size} frames, decoderState: ${clipDecoder.decoder.state}, nearby: [${availableFrames}...]).`);
-      }
-    }
+  /** Host surface for the prefetch coordinator; decoder/frame handles and decode-ahead stay owned here. */
+  private prefetchDeps(): ParallelDecodePrefetchDeps {
+    return {
+      isActive: () => this.isActive,
+      clipDecoders: this.clipDecoders,
+      frameToleranceUs: this.frameTolerance,
+      decodeAhead: (clipDecoder, targetSampleIndex, forceFlush, recursionDepth, seekTargetSampleIndex) =>
+        this.decodeAhead(clipDecoder, targetSampleIndex, forceFlush, recursionDepth, seekTargetSampleIndex),
+    };
   }
 
   /**
@@ -713,10 +305,7 @@ export class ParallelDecodeManager {
     for (const [, decodedFrame] of clipDecoder.frameBuffer) {
       try { decodedFrame.frame.close(); } catch (_) { /* already closed */ }
     }
-    clipDecoder.frameBuffer.clear();
-    clipDecoder.sortedTimestamps = [];
-    clipDecoder.oldestTimestamp = Infinity;
-    clipDecoder.newestTimestamp = -Infinity;
+    clearFrameBufferState(clipDecoder);
 
     log.info(`${clipDecoder.clipName}: Decoder recreated successfully (hwAccel=${hwAccel})`);
   }
@@ -803,12 +392,11 @@ export class ParallelDecodeManager {
             clipDecoder.decoder.reset();
             clipDecoder.decoder.configure(exportConfig);
 
-            const chunk = new EncodedVideoChunk({
-              type: 'key',
-              timestamp: getNormalizedSampleTimestampMicroseconds(candidateSample, clipDecoder.presentationOffsetSeconds),
-              duration: (candidateSample.duration * 1_000_000) / candidateSample.timescale,
-              data: candidateSample.data,
-            });
+            const chunk = createEncodedChunkForSample(
+              candidateSample,
+              clipDecoder.presentationOffsetSeconds,
+              'key'
+            );
 
             try {
               clipDecoder.decoder.decode(chunk);
@@ -833,10 +421,7 @@ export class ParallelDecodeManager {
           for (const [, decodedFrame] of clipDecoder.frameBuffer) {
             decodedFrame.frame.close();
           }
-          clipDecoder.frameBuffer.clear();
-          clipDecoder.sortedTimestamps = [];
-          clipDecoder.oldestTimestamp = Infinity;
-          clipDecoder.newestTimestamp = -Infinity;
+          clearFrameBufferState(clipDecoder);
         }
 
         // Calculate frames to decode AFTER potential seek (sampleIndex may have changed)
@@ -891,12 +476,11 @@ export class ParallelDecodeManager {
 
           clipDecoder.sampleIndex++;
 
-          const chunk = new EncodedVideoChunk({
-            type: sample.is_sync ? 'key' : 'delta',
-            timestamp: getNormalizedSampleTimestampMicroseconds(sample, clipDecoder.presentationOffsetSeconds),
-            duration: (sample.duration * 1_000_000) / sample.timescale,
-            data: sample.data,
-          });
+          const chunk = createEncodedChunkForSample(
+            sample,
+            clipDecoder.presentationOffsetSeconds,
+            sample.is_sync ? 'key' : 'delta'
+          );
 
           try {
             clipDecoder.decoder.decode(chunk);
@@ -953,7 +537,6 @@ export class ParallelDecodeManager {
   /**
    * Get the decoded frame for a clip at a specific timeline time
    * Returns null if frame isn't ready (shouldn't happen if prefetch was called)
-   * Optimized: O(log n) binary search instead of O(n) linear scan
    */
   getFrameForClip(
     clipId: string,
@@ -963,58 +546,7 @@ export class ParallelDecodeManager {
     const clipDecoder = this.clipDecoders.get(clipId);
     if (!clipDecoder) return null;
 
-    const clipInfo = clipDecoder.clipInfo;
-    const lookupTolerance = this.frameTolerance * Math.max(1, options.toleranceMultiplier ?? 1);
-
-    // Check if time is within clip range (handles nested clips too)
-    if (!isTimeInClipRange(clipInfo, timelineTime)) {
-      return null;
-    }
-
-    const targetSourceTime = timelineToSourceTime(clipInfo, timelineTime);
-    const targetTimestamp = targetSourceTime * 1_000_000;  // Convert to microseconds
-
-    const lookupResult = getFrameLookupResult({
-      timestamps: clipDecoder.sortedTimestamps,
-      oldestTimestamp: clipDecoder.oldestTimestamp,
-      newestTimestamp: clipDecoder.newestTimestamp,
-      targetTimestamp,
-      tolerance: lookupTolerance,
-    });
-
-    // Quick bounds check - return first/last frame if target is outside buffer range
-    // This handles videos where first frame isn't at exactly 0 or clip extends beyond video
-    if (lookupResult.kind === 'empty') {
-      log.warn(`${clipDecoder.clipName}: Buffer empty for target ${(targetTimestamp/1_000_000).toFixed(3)}s`);
-      return null;
-    }
-
-    if (lookupResult.kind === 'after-newest') {
-      const lastFrame = clipDecoder.frameBuffer.get(lookupResult.timestamp);
-      log.warn(`${clipDecoder.clipName}: target ${(targetTimestamp/1_000_000).toFixed(3)}s is outside buffered range (last=${lastFrame ? (lookupResult.timestamp/1_000_000).toFixed(3) : 'none'}s)`);
-      return null;
-    }
-
-    if (lookupResult.kind === 'before-oldest') {
-      const firstFrame = clipDecoder.frameBuffer.get(lookupResult.timestamp);
-      log.warn(`${clipDecoder.clipName}: target ${(targetTimestamp/1_000_000).toFixed(3)}s is outside buffered range (first=${firstFrame ? (lookupResult.timestamp/1_000_000).toFixed(3) : 'none'}s)`);
-      return null;
-    }
-
-    const frameTimestamp = lookupResult.timestamp;
-    const frameDiff = lookupResult.diff;
-    const decodedFrame = clipDecoder.frameBuffer.get(frameTimestamp);
-    if (decodedFrame) {
-      if (frameDiff >= lookupTolerance) {
-        log.warn(`${clipDecoder.clipName}: nearest frame at ${(frameTimestamp/1_000_000).toFixed(3)}s is outside tolerance for target ${(targetTimestamp/1_000_000).toFixed(3)}s (diff=${(frameDiff/1000).toFixed(1)}ms, tolerance=${(lookupTolerance/1000).toFixed(1)}ms)`);
-        return null;
-      }
-      return decodedFrame.frame;
-    }
-
-    // No frame found at all
-    log.warn(`${clipDecoder.clipName}: No frame available at ${(targetTimestamp/1_000_000).toFixed(3)}s - buffer=${clipDecoder.frameBuffer.size} frames`);
-    return null;
+    return getBufferedFrameForClip(clipDecoder, timelineTime, this.frameTolerance, options);
   }
 
   /**
@@ -1069,7 +601,7 @@ export class ParallelDecodeManager {
       if (timestampsToRemove.length > 0) {
         const removedTimestamps = new Set(timestampsToRemove);
         clipDecoder.sortedTimestamps = clipDecoder.sortedTimestamps.filter(timestamp => !removedTimestamps.has(timestamp));
-        this.refreshBufferedTimestampBounds(clipDecoder);
+        refreshBufferedTimestampBounds(clipDecoder);
       }
     }
   }
@@ -1082,41 +614,10 @@ export class ParallelDecodeManager {
   }
 
   getRuntimeSnapshot(): ParallelDecodeRuntimeSnapshot {
-    const clips = Array.from(this.clipDecoders.values()).map((clipDecoder) => {
-      const estimatedBufferedFrameBytes = estimateDecodedFrameBytes(
-        clipDecoder.videoTrack.video.width,
-        clipDecoder.videoTrack.video.height,
-        clipDecoder.frameBuffer.size
-      );
-      return {
-        clipId: clipDecoder.clipId,
-        clipName: clipDecoder.clipName,
-        codec: clipDecoder.codecConfig.codec,
-        decoderState: clipDecoder.decoder.state,
-        decodeQueueSize: clipDecoder.decoder.decodeQueueSize,
-        hardwareAcceleration: clipDecoder.codecConfig.hardwareAcceleration,
-        dimensions: {
-          width: clipDecoder.videoTrack.video.width,
-          height: clipDecoder.videoTrack.video.height,
-        },
-        sampleCount: clipDecoder.samples.length,
-        sampleIndex: clipDecoder.sampleIndex,
-        isDecoding: clipDecoder.isDecoding,
-        hasPendingDecode: Boolean(clipDecoder.pendingDecode),
-        frameBufferSize: clipDecoder.frameBuffer.size,
-        estimatedBufferedFrameBytes,
-        oldestBufferedTimeSeconds: secondsFromTimestamp(clipDecoder.oldestTimestamp),
-        newestBufferedTimeSeconds: secondsFromTimestamp(clipDecoder.newestTimestamp),
-        lastDecodedTimeSeconds: secondsFromTimestamp(clipDecoder.lastDecodedTimestamp),
-        isNested: clipDecoder.clipInfo.isNested,
-        parentClipId: clipDecoder.clipInfo.parentClipId,
-      } satisfies ParallelDecodeClipRuntimeSnapshot;
-    });
-
     return createParallelDecodeRuntimeSnapshot({
       isActive: this.isActive,
       frameToleranceUs: this.frameTolerance,
-      clips,
+      clips: Array.from(this.clipDecoders.values()).map(buildClipRuntimeSnapshot),
     });
   }
 

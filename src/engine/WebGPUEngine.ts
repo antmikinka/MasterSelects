@@ -6,76 +6,49 @@ import type { ModelSequenceData } from '../types';
 import type { Layer, EngineStats } from './core/types';
 // OutputWindow type no longer needed — state lives in renderTargetStore
 import { WebGPUContext, type GPUPowerPreference } from './core/WebGPUContext';
-import { TextureManager } from './texture/TextureManager';
-import { MaskTextureManager } from './texture/MaskTextureManager';
 import { CacheManager } from './managers/CacheManager';
 import { ExportCanvasManager } from './managers/ExportCanvasManager';
-import { CompositorPipeline } from './pipeline/CompositorPipeline';
-import { EffectsPipeline } from '../effects/EffectsPipeline';
-import { ColorPipeline } from './color/ColorPipeline';
-import { OutputPipeline } from './pipeline/OutputPipeline';
-import { SlicePipeline } from './pipeline/SlicePipeline';
 import { VideoFrameManager } from './video/VideoFrameManager';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useRenderTargetStore } from '../stores/renderTargetStore';
 import { Logger } from '../services/logger';
 import { buildDebugInfrastructureState, type DebugInfrastructureState } from './engineCore/debugInfrastructureState';
+import { wireContextRecovery } from './engineCore/contextRecoveryWiring';
+import * as engineResources from './engineCore/engineResources';
 import { createEngineRenderDispatcher } from './engineCore/renderDispatcherFactory';
-import {
-  closeOutputWindow as closeOutputWindowTarget,
-  createOutputWindow as createOutputWindowTarget,
-  reconnectOutputWindows as reconnectOutputWindowTargets,
-  removeOutputTarget as removeOutputWindowTarget,
-  restoreOutputWindow as restoreOutputWindowTarget,
-  type OutputWindowControllerDeps,
-} from './engineCore/outputWindowController';
+import * as outputWindows from './engineCore/outputWindowController';
+import * as outputPresenter from './engineCore/outputPresenter';
 import { PixelReadback } from './engineCore/pixelReadback';
+import type { GaussianSplatSceneLoadRequest } from './render/dispatcher/gaussianSequenceFacet';
 
 const log = Logger.create('WebGPUEngine');
 
-// New modules
 import { PerformanceStats } from './stats/PerformanceStats';
-import { RenderTargetManager } from './core/RenderTargetManager';
-import { OutputWindowManager } from './managers/OutputWindowManager';
-import { RenderLoop } from './render/RenderLoop';
-import { LayerCollector } from './render/LayerCollector';
-import { Compositor } from './render/Compositor';
-import { NestedCompRenderer } from './render/NestedCompRenderer';
+import type { RenderLoop } from './render/RenderLoop';
+import type { LayerCollector } from './render/LayerCollector';
 import type { RenderDispatcher, RenderDispatcherDebugSnapshot } from './render/RenderDispatcher';
-import { MotionRenderer } from './motion/MotionRenderer';
+import type { TextureManager } from './texture/TextureManager';
 import type { ScrubbingCacheStats } from './texture/ScrubbingCache';
 
 export class WebGPUEngine {
   // Core context
   private context: WebGPUContext;
 
-  // Extracted modules
+  // Stats + render orchestration
   private performanceStats: PerformanceStats;
-  private renderTargetManager: RenderTargetManager | null = null;
-  private outputWindowManager: OutputWindowManager | null = null;
   private renderLoop: RenderLoop | null = null;
-  private layerCollector: LayerCollector | null = null;
-  private compositor: Compositor | null = null;
-  private nestedCompRenderer: NestedCompRenderer | null = null;
   private renderDispatcher: RenderDispatcher | null = null;
-  private motionRenderer: MotionRenderer | null = null;
 
-  // Existing managers (unchanged)
-  private textureManager: TextureManager | null = null;
-  private maskTextureManager: MaskTextureManager | null = null;
+  // Device-epoch resource set (managers, pipelines, renderers).
+  // Rebuilt by createResources(); see EngineResourceSet for loss semantics.
+  private res: engineResources.EngineResourceSet | null = null;
+
+  // Engine-lifetime managers (survive device loss)
   private cacheManager: CacheManager = new CacheManager();
   private exportCanvasManager: ExportCanvasManager = new ExportCanvasManager();
   private videoFrameManager: VideoFrameManager;
 
-  // Pipelines
-  private compositorPipeline: CompositorPipeline | null = null;
-  private effectsPipeline: EffectsPipeline | null = null;
-  private colorPipeline: ColorPipeline | null = null;
-  private outputPipeline: OutputPipeline | null = null;
-  private slicePipeline: SlicePipeline | null = null;
-
   // Resources
-  private sampler: GPUSampler | null = null;
   private pixelReadback = new PixelReadback();
 
   // Unified canvas management - single Map replaces 6 old Maps
@@ -98,26 +71,10 @@ export class WebGPUEngine {
     this.videoFrameManager = new VideoFrameManager();
     this.performanceStats = new PerformanceStats();
 
-    // Device recovery handlers
-    this.context.onDeviceLost((reason) => {
-      log.warn('Device lost', { reason });
-      this.isRecoveringFromDeviceLoss = true;
-      this.handleDeviceLost();
-    });
-
-    this.context.onDeviceRestored(() => {
-      log.info('Device restored');
-      this.handleDeviceRestored();
-      this.isRecoveringFromDeviceLoss = false;
-    });
-
-    this.context.onPowerPreferenceFallback((preference) => {
-      try {
-        useSettingsStore.getState().setGpuPowerPreference(preference);
-        log.info('Persisted GPU power preference fallback', { preference });
-      } catch (e) {
-        log.error('Failed to persist GPU power preference fallback', e);
-      }
+    wireContextRecovery(this.context, {
+      setRecovering: (recovering) => { this.isRecoveringFromDeviceLoss = recovering; },
+      handleDeviceLost: () => this.handleDeviceLost(),
+      handleDeviceRestored: () => { this.handleDeviceRestored(); },
     });
   }
 
@@ -133,92 +90,37 @@ export class WebGPUEngine {
     return true;
   }
 
+  private getRenderLoopHooks(): engineResources.EngineRenderLoopHooks {
+    return {
+      performanceStats: this.performanceStats,
+      isRecovering: () => this.isRecoveringFromDeviceLoss || this.context.recovering,
+      isExporting: () => this.exportCanvasManager.getIsExporting(),
+    };
+  }
+
   private async createResources(): Promise<void> {
     const device = this.context.getDevice();
     if (!device) return;
 
-    // Initialize managers
-    this.textureManager = new TextureManager(device);
-    this.maskTextureManager = new MaskTextureManager(device);
-    this.cacheManager.initialize(device, () => {
-      this.requestRender();
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new Event('masterselects:scrub-cache-updated'));
-      }
-    });
-
-    // Create sampler
-    this.sampler = this.context.createSampler();
-
-    // Initialize render targets
-    this.renderTargetManager = new RenderTargetManager(device);
-
-    // Create black texture
-    this.renderTargetManager.createBlackTexture((r, g, b, a) =>
-      this.context.createSolidColorTexture(r, g, b, a)
-    );
-
-    // Create ping-pong textures
-    this.renderTargetManager.createPingPongTextures();
-
-    // Create pipelines
-    this.compositorPipeline = new CompositorPipeline(device);
-    this.effectsPipeline = new EffectsPipeline(device);
-    this.colorPipeline = new ColorPipeline(device);
-    this.outputPipeline = new OutputPipeline(device);
-    this.slicePipeline = new SlicePipeline(device);
-    await this.compositorPipeline.createPipelines();
-    await this.effectsPipeline.createPipelines();
-    await this.colorPipeline.createPipeline();
-    await this.outputPipeline.createPipeline();
-    await this.slicePipeline.createPipeline();
-
-    const { width, height } = this.renderTargetManager.getResolution();
-    this.outputWindowManager = new OutputWindowManager(width, height);
-
-    this.layerCollector = new LayerCollector();
-    this.motionRenderer = new MotionRenderer(device);
-
-    this.compositor = new Compositor(
-      this.compositorPipeline,
-      this.effectsPipeline,
-      this.maskTextureManager,
-      this.colorPipeline
-    );
-
-    this.nestedCompRenderer = new NestedCompRenderer(
+    // Ordered construction sequence lives in createEngineResources();
+    // the render dispatcher is created last, exactly as before.
+    const { resources, renderLoop } = await engineResources.createEngineResources({
       device,
-      this.compositorPipeline,
-      this.effectsPipeline,
-      this.textureManager,
-      this.maskTextureManager,
-      this.cacheManager.getScrubbingCache(),
-      this.colorPipeline,
-      this.motionRenderer
-    );
-
-    this.renderLoop = new RenderLoop(this.performanceStats, {
-      isRecovering: () => this.isRecoveringFromDeviceLoss || this.context.recovering,
-      isExporting: () => this.exportCanvasManager.getIsExporting(),
-      onRender: () => {}, // Set by start()
+      cacheManager: this.cacheManager,
+      requestRender: () => this.requestRender(),
+      createSampler: () => this.context.createSampler(),
+      createSolidColorTexture: (r, g, b, a) => this.context.createSolidColorTexture(r, g, b, a),
+      renderLoopHooks: this.getRenderLoopHooks(),
     });
+    this.res = resources;
+    this.renderLoop = renderLoop;
 
     this.renderDispatcher = createEngineRenderDispatcher({
       getDevice: () => this.context.getDevice(),
       isRecovering: () => this.isRecoveringFromDeviceLoss || this.context.recovering,
-      getSampler: () => this.sampler,
+      getResources: () => this.res,
       getPreviewContext: () => this.previewContext,
       getTargetCanvases: () => this.targetCanvases,
-      getCompositorPipeline: () => this.compositorPipeline,
-      getOutputPipeline: () => this.outputPipeline,
-      getSlicePipeline: () => this.slicePipeline,
-      getTextureManager: () => this.textureManager,
-      getMaskTextureManager: () => this.maskTextureManager,
-      getRenderTargetManager: () => this.renderTargetManager,
-      getLayerCollector: () => this.layerCollector,
-      getCompositor: () => this.compositor,
-      getNestedCompRenderer: () => this.nestedCompRenderer,
-      getMotionRenderer: () => this.motionRenderer,
       getCacheManager: () => this.cacheManager,
       getExportCanvasManager: () => this.exportCanvasManager,
       getPerformanceStats: () => this.performanceStats,
@@ -237,34 +139,30 @@ export class WebGPUEngine {
     this.pixelReadback.destroy();
 
     // Clear GPU resources
-    this.renderTargetManager?.clearAll();
+    this.res?.renderTargetManager.clearAll();
     this.previewContext = null;
     this.targetCanvases.clear();
     this.cacheManager.handleDeviceLost();
 
     // Clear managers
-    this.textureManager = null;
-    this.maskTextureManager = null;
-    this.motionRenderer?.destroy();
-    this.motionRenderer = null;
-    this.compositorPipeline = null;
-    this.effectsPipeline = null;
-    this.colorPipeline = null;
-    this.outputPipeline = null;
-    this.slicePipeline = null;
+    engineResources.releaseEngineResourcesOnDeviceLost(this.res);
 
     log.debug('Resources cleaned after device loss');
   }
 
   private async handleDeviceRestored(): Promise<void> {
     await this.createResources();
+    this.reconfigureCanvasesAfterRestore();
+    this.renderLoop?.start();
+    this.requestRender();
+    log.info('Recovery complete');
+  }
 
-    // Reconfigure main preview canvas
+  /** Reconfigure main preview + all target canvases after device restore/reinit */
+  private reconfigureCanvasesAfterRestore(): void {
     if (this.mainPreviewCanvas) {
       this.previewContext = this.context.configureCanvas(this.mainPreviewCanvas);
     }
-
-    // Reconfigure all target canvases from unified map
     for (const [id, entry] of this.targetCanvases) {
       const ctx = this.context.configureCanvas(entry.canvas);
       if (ctx) {
@@ -273,10 +171,6 @@ export class WebGPUEngine {
         useRenderTargetStore.getState().setTargetCanvas(id, entry.canvas, ctx);
       }
     }
-
-    this.renderLoop?.start();
-    this.requestRender();
-    log.info('Recovery complete');
   }
 
   // === CANVAS MANAGEMENT (Unified) ===
@@ -313,32 +207,30 @@ export class WebGPUEngine {
 
   // === OUTPUT WINDOWS ===
 
-  private getOutputWindowControllerDeps(): OutputWindowControllerDeps {
-    return {
-      getOutputWindowManager: () => this.outputWindowManager,
-      registerTargetCanvas: (targetId, canvas) => this.registerTargetCanvas(targetId, canvas),
-      unregisterTargetCanvas: (targetId) => this.unregisterTargetCanvas(targetId),
-    };
-  }
+  private readonly outputWindowDeps: outputWindows.OutputWindowControllerDeps = {
+    getOutputWindowManager: () => this.res?.outputWindowManager ?? null,
+    registerTargetCanvas: (targetId, canvas) => this.registerTargetCanvas(targetId, canvas),
+    unregisterTargetCanvas: (targetId) => this.unregisterTargetCanvas(targetId),
+  };
 
   /**
    * Create an output window, register it as a render target, and configure WebGPU.
    * The window will automatically receive frames based on its source (default: activeComp).
    */
   createOutputWindow(id: string, name: string): { id: string; name: string } | null {
-    return createOutputWindowTarget(this.getOutputWindowControllerDeps(), id, name);
+    return outputWindows.createOutputWindow(this.outputWindowDeps, id, name);
   }
 
   closeOutputWindow(id: string): void {
-    closeOutputWindowTarget(this.getOutputWindowControllerDeps(), id);
+    outputWindows.closeOutputWindow(this.outputWindowDeps, id);
   }
 
   restoreOutputWindow(id: string): boolean {
-    return restoreOutputWindowTarget(this.getOutputWindowControllerDeps(), id);
+    return outputWindows.restoreOutputWindow(this.outputWindowDeps, id);
   }
 
   removeOutputTarget(id: string): void {
-    removeOutputWindowTarget(this.getOutputWindowControllerDeps(), id);
+    outputWindows.removeOutputTarget(this.outputWindowDeps, id);
   }
 
   /**
@@ -346,21 +238,21 @@ export class WebGPUEngine {
    * Takes an array of {id, name, source} from saved metadata.
    */
   reconnectOutputWindows(savedTargets: Array<{ id: string; name: string; source: import('../types/renderTarget').RenderSource }>): number {
-    return reconnectOutputWindowTargets(this.getOutputWindowControllerDeps(), savedTargets);
+    return outputWindows.reconnectOutputWindows(this.outputWindowDeps, savedTargets);
   }
 
   // === MASK MANAGEMENT ===
 
   updateMaskTexture(layerId: string, imageData: ImageData | null): void {
-    this.maskTextureManager?.updateMaskTexture(layerId, imageData);
+    this.res?.maskTextureManager?.updateMaskTexture(layerId, imageData);
   }
 
   removeMaskTexture(layerId: string): void {
-    this.maskTextureManager?.removeMaskTexture(layerId);
+    this.res?.maskTextureManager?.removeMaskTexture(layerId);
   }
 
   hasMaskTexture(layerId: string): boolean {
-    return this.maskTextureManager?.hasMaskTexture(layerId) ?? false;
+    return this.res?.maskTextureManager?.hasMaskTexture(layerId) ?? false;
   }
 
   // === VIDEO MANAGEMENT ===
@@ -415,18 +307,18 @@ export class WebGPUEngine {
   // === TEXTURE MANAGEMENT ===
 
   createImageTexture(image: HTMLImageElement): GPUTexture | null {
-    return this.textureManager?.createImageTexture(image) ?? null;
+    return this.res?.textureManager?.createImageTexture(image) ?? null;
   }
 
   importVideoTexture(source: HTMLVideoElement | VideoFrame): GPUExternalTexture | null {
-    return this.textureManager?.importVideoTexture(source) ?? null;
+    return this.res?.textureManager?.importVideoTexture(source) ?? null;
   }
 
   // === CACHING (delegated to CacheManager) ===
 
   clearCaches(): void {
     this.cacheManager.clearAll();
-    this.textureManager?.clearCaches();
+    this.res?.textureManager?.clearCaches();
   }
 
   clearVideoCache(): void {
@@ -455,9 +347,12 @@ export class WebGPUEngine {
 
   // === RAM PREVIEW CACHE ===
 
+  private getResolutionOrDefault(): { width: number; height: number } {
+    return this.res?.renderTargetManager.getResolution() ?? { width: 640, height: 360 };
+  }
+
   async cacheCompositeFrame(time: number): Promise<void> {
-    const getResolution = () => this.renderTargetManager?.getResolution() ?? { width: 640, height: 360 };
-    await this.cacheManager.cacheCompositeFrame(time, () => this.readPixels(), getResolution);
+    await this.cacheManager.cacheCompositeFrame(time, () => this.readPixels(), () => this.getResolutionOrDefault());
   }
 
   getCachedCompositeFrame(time: number): ImageData | null {
@@ -473,8 +368,7 @@ export class WebGPUEngine {
   }
 
   getCompositeCacheStats(): { count: number; maxFrames: number; memoryMB: number } {
-    const getResolution = () => this.renderTargetManager?.getResolution() ?? { width: 640, height: 360 };
-    return this.cacheManager.getCompositeCacheStats(getResolution);
+    return this.cacheManager.getCompositeCacheStats(() => this.getResolutionOrDefault());
   }
 
   setGeneratingRamPreview(generating: boolean): void {
@@ -544,7 +438,7 @@ export class WebGPUEngine {
   }
 
   markVideoGpuReady(video: HTMLVideoElement): void {
-    this.layerCollector?.markVideoGpuReady(video);
+    this.res?.layerCollector.markVideoGpuReady(video);
   }
 
   /**
@@ -567,41 +461,13 @@ export class WebGPUEngine {
   start(renderCallback: () => void): void {
     if (!this.performanceStats) return;
 
-    if (this.renderLoop?.getIsRunning()) {
-      this.renderLoop.setRenderCallback(renderCallback);
-      if (this._isPlaying) {
-        this.renderLoop.setIsPlaying(true);
-      }
-      this.requestRender();
-      return;
-    }
-
-    // Stop a stale loop before replacing it.
-    this.renderLoop?.stop();
-
-    // Create new loop with the callback
-    this.renderLoop = new RenderLoop(this.performanceStats, {
-      isRecovering: () => this.isRecoveringFromDeviceLoss || this.context.recovering,
-      isExporting: () => this.exportCanvasManager.getIsExporting(),
-      onRender: renderCallback,
-    });
-
-    // Suppress idle until user presses play for the first time.
-    // After page reload, video GPU surfaces are empty and need the render loop
-    // running continuously so syncClipVideo warmup can complete.
-    if (!this.hasEverPlayed) {
-      this.renderLoop.suppressIdle();
-    }
-
-    // Carry over playing state: when start() is called from a useEffect that
-    // re-runs on isPlaying change, React's effect ordering means setIsPlaying()
-    // may have already fired on the OLD RenderLoop. Transfer the state so the
-    // new RenderLoop has correct frame rate limiting from the first frame.
-    if (this._isPlaying) {
-      this.renderLoop.setIsPlaying(true);
-    }
-
-    this.renderLoop.start();
+    this.renderLoop = engineResources.startEngineRenderLoop({
+      currentLoop: this.renderLoop,
+      hooks: this.getRenderLoopHooks(),
+      hasEverPlayed: this.hasEverPlayed,
+      isPlaying: this._isPlaying,
+      requestRender: () => this.requestRender(),
+    }, renderCallback);
   }
 
   stop(): void {
@@ -618,15 +484,7 @@ export class WebGPUEngine {
     this.renderDispatcher?.setRenderTimeOverride(time);
   }
 
-  async ensureGaussianSplatSceneLoaded(options: {
-    sceneKey: string;
-    clipId?: string;
-    url?: string;
-    fileName: string;
-    file?: File;
-    showProgress?: boolean;
-    maxSplats?: number;
-  }): Promise<boolean> {
+  async ensureGaussianSplatSceneLoaded(options: GaussianSplatSceneLoadRequest): Promise<boolean> {
     return this.renderDispatcher?.ensureGaussianSplatSceneLoaded(options) ?? false;
   }
 
@@ -654,58 +512,34 @@ export class WebGPUEngine {
     return this.renderDispatcher?.getGaussianSplatSceneBounds(clipId);
   }
 
-  // === NESTED COMPOSITION HELPERS ===
+  // === NESTED COMPOSITION HELPERS (delegated to outputPresenter) ===
+
+  private readonly presenterDeps: outputPresenter.OutputPresenterDeps = {
+    getDevice: () => this.context.getDevice(),
+    getResources: () => this.res,
+    getPreviewContext: () => this.previewContext,
+    getTargetContext: (targetId) => this.getTargetContext(targetId),
+    getRenderDispatcher: () => this.renderDispatcher,
+  };
 
   hasNestedCompTexture(compositionId: string): boolean {
-    return this.nestedCompRenderer?.hasTexture(compositionId) ?? false;
+    return this.res?.nestedCompRenderer.hasTexture(compositionId) ?? false;
   }
 
   cacheActiveCompOutput(compositionId: string): void {
-    const pingTex = this.renderTargetManager?.getPingTexture();
-    const pongTex = this.renderTargetManager?.getPongTexture();
-    if (!pingTex || !pongTex || !this.nestedCompRenderer) return;
-
-    const { width, height } = this.renderTargetManager!.getResolution();
-    const finalIsPing = !this.compositor?.getLastRenderWasPing();
-    const sourceTexture = finalIsPing ? pingTex : pongTex;
-
-    this.nestedCompRenderer.cacheActiveCompOutput(compositionId, sourceTexture, width, height);
+    outputPresenter.cacheActiveCompOutput(this.presenterDeps, compositionId);
   }
 
   copyMainOutputToPreview(canvasId: string): boolean {
-    const device = this.context.getDevice();
-    const canvasContext = this.targetCanvases.get(canvasId)?.context;
-    const pingView = this.renderTargetManager?.getPingView();
-    const pongView = this.renderTargetManager?.getPongView();
-
-    if (!device || !canvasContext || !this.outputPipeline || !this.sampler || !pingView || !pongView) return false;
-
-    const finalIsPing = !this.compositor?.getLastRenderWasPing();
-    const finalView = finalIsPing ? pingView : pongView;
-
-    const commandEncoder = device.createCommandEncoder();
-    const outputBindGroup = this.outputPipeline.getOutputBindGroup(this.sampler, finalView, finalIsPing);
-    this.outputPipeline.renderToCanvas(commandEncoder, canvasContext, outputBindGroup);
-    device.queue.submit([commandEncoder.finish()]);
-    return true;
+    return outputPresenter.copyMainOutputToPreview(this.presenterDeps, canvasId);
   }
 
   copyNestedCompTextureToPreview(canvasId: string, compositionId: string): boolean {
-    const device = this.context.getDevice();
-    const canvasContext = this.targetCanvases.get(canvasId)?.context;
-    const compTexture = this.nestedCompRenderer?.getTexture(compositionId);
-
-    if (!device || !canvasContext || !compTexture || !this.outputPipeline || !this.sampler) return false;
-
-    const commandEncoder = device.createCommandEncoder();
-    const outputBindGroup = this.outputPipeline.createOutputBindGroup(this.sampler, compTexture.view);
-    this.outputPipeline.renderToCanvas(commandEncoder, canvasContext, outputBindGroup);
-    device.queue.submit([commandEncoder.finish()]);
-    return true;
+    return outputPresenter.copyNestedCompTextureToPreview(this.presenterDeps, canvasId, compositionId);
   }
 
   cleanupNestedCompTexture(compositionId: string): void {
-    this.nestedCompRenderer?.cleanupTexture(compositionId);
+    this.res?.nestedCompRenderer.cleanupTexture(compositionId);
   }
 
   /**
@@ -713,79 +547,28 @@ export class WebGPUEngine {
    * Used by TargetPreview to preview sliced output for a target.
    */
   renderSlicedToCanvas(canvasId: string, slices: import('../types/outputSlice').OutputSlice[]): boolean {
-    const device = this.context.getDevice();
-    const canvasContext = this.targetCanvases.get(canvasId)?.context;
-    const pingView = this.renderTargetManager?.getPingView();
-    const pongView = this.renderTargetManager?.getPongView();
-
-    if (!device || !canvasContext || !this.slicePipeline || !this.sampler || !pingView || !pongView) return false;
-
-    const enabledSlices = slices.filter((s) => s.enabled);
-    if (enabledSlices.length === 0) return false;
-
-    const finalIsPing = !this.compositor?.getLastRenderWasPing();
-    const finalView = finalIsPing ? pingView : pongView;
-
-    this.slicePipeline.buildVertexBuffer(enabledSlices);
-
-    const commandEncoder = device.createCommandEncoder();
-    this.slicePipeline.renderSlicedOutput(commandEncoder, canvasContext, finalView, this.sampler);
-    device.queue.submit([commandEncoder.finish()]);
-    return true;
+    return outputPresenter.renderSlicedToCanvas(this.presenterDeps, canvasId, slices);
   }
 
   // === RESOLUTION ===
 
   setResolution(width: number, height: number): void {
-    if (this.renderTargetManager?.setResolution(width, height)) {
+    if (this.res?.renderTargetManager.setResolution(width, height)) {
       this.cacheManager.clearCompositeCache();
       this.cacheManager.clearScrubbingCache();
-      this.outputWindowManager?.updateResolution(width, height);
-      this.outputPipeline?.invalidateCache();
-      this.compositorPipeline?.invalidateBindGroupCache();
+      this.res.outputWindowManager.updateResolution(width, height);
+      this.res.outputPipeline?.invalidateCache();
+      this.res.compositorPipeline?.invalidateBindGroupCache();
       log.debug('Caches cleared for resolution change', { width, height });
     }
   }
 
   clearFrame(): void {
-    const device = this.context.getDevice();
-    const pingView = this.renderTargetManager?.getPingView();
-    const pongView = this.renderTargetManager?.getPongView();
-    if (!device || !pingView || !pongView) return;
-
-    const commandEncoder = device.createCommandEncoder();
-
-    const clearPing = commandEncoder.beginRenderPass({
-      colorAttachments: [{ view: pingView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' }],
-    });
-    clearPing.end();
-
-    const clearPong = commandEncoder.beginRenderPass({
-      colorAttachments: [{ view: pongView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' }],
-    });
-    clearPong.end();
-
-    const { width, height } = this.renderTargetManager!.getResolution();
-    this.outputPipeline?.updateResolution(width, height);
-    if (this.outputPipeline && this.sampler) {
-      if (this.previewContext) {
-        const mainBindGroup = this.outputPipeline.createOutputBindGroup(this.sampler, pingView, 'normal');
-        this.outputPipeline.renderToCanvas(commandEncoder, this.previewContext, mainBindGroup);
-      }
-      const activeTargets = useRenderTargetStore.getState().getActiveCompTargets();
-      for (const target of activeTargets) {
-        const ctx = this.targetCanvases.get(target.id)?.context;
-        if (!ctx) continue;
-        const targetBindGroup = this.outputPipeline.createOutputBindGroup(this.sampler, pingView, target.showTransparencyGrid ? 'grid' : 'normal');
-        this.outputPipeline.renderToCanvas(commandEncoder, ctx, targetBindGroup);
-      }
-    }
-
-    device.queue.submit([commandEncoder.finish()]);
+    outputPresenter.clearFrame(this.presenterDeps);
   }
 
   getOutputDimensions(): { width: number; height: number } {
-    return this.renderTargetManager?.getResolution() ?? { width: 640, height: 360 };
+    return this.getResolutionOrDefault();
   }
 
   // === STATS ===
@@ -803,15 +586,11 @@ export class WebGPUEngine {
   }
 
   getLastRenderedTexture(): GPUTexture | null {
-    if (!this.renderTargetManager || !this.compositor) return null;
-    if (!this.renderDispatcher?.lastRenderHadContent) return null;
-    return this.compositor.getLastRenderWasPing()
-      ? this.renderTargetManager.getPingTexture()
-      : this.renderTargetManager.getPongTexture();
+    return outputPresenter.getLastRenderedTexture(this.presenterDeps);
   }
 
   getLayerCollector(): LayerCollector | null {
-    return this.layerCollector;
+    return this.res?.layerCollector ?? null;
   }
 
   getRenderLoop(): RenderLoop | null {
@@ -826,19 +605,14 @@ export class WebGPUEngine {
     return buildDebugInfrastructureState({
       context: this.context,
       renderDispatcher: this.renderDispatcher,
-      renderTargetManager: this.renderTargetManager,
       previewContext: this.previewContext,
       targetCanvases: this.targetCanvases,
-      layerCollector: this.layerCollector,
-      compositor: this.compositor,
-      sampler: this.sampler,
-      compositorPipeline: this.compositorPipeline,
-      outputPipeline: this.outputPipeline,
+      resources: this.res,
     });
   }
 
   getTextureManager(): TextureManager | null {
-    return this.textureManager;
+    return this.res?.textureManager ?? null;
   }
 
   isDeviceValid(): boolean {
@@ -863,19 +637,7 @@ export class WebGPUEngine {
       return false;
     }
     await this.createResources();
-
-    if (this.mainPreviewCanvas) {
-      this.previewContext = this.context.configureCanvas(this.mainPreviewCanvas);
-    }
-    // Reconfigure all target canvases
-    for (const [id, entry] of this.targetCanvases) {
-      const ctx = this.context.configureCanvas(entry.canvas);
-      if (ctx) {
-        this.targetCanvases.set(id, { canvas: entry.canvas, context: ctx });
-        useRenderTargetStore.getState().setTargetCanvas(id, entry.canvas, ctx);
-      }
-    }
-
+    this.reconfigureCanvasesAfterRestore();
     this.requestRender();
     log.info('Reinitialize complete');
     return true;
@@ -885,28 +647,19 @@ export class WebGPUEngine {
 
   async readPixels(): Promise<Uint8ClampedArray | null> {
     const device = this.context.getDevice();
-    if (!device || !this.renderTargetManager) return null;
-    return this.pixelReadback.readPixels(device, this.renderTargetManager, this.compositor);
+    if (!device || !this.res) return null;
+    return this.pixelReadback.readPixels(device, this.res.renderTargetManager, this.res.compositor);
   }
 
   // === CLEANUP ===
 
   destroy(): void {
     this.stop();
-    this.outputWindowManager?.destroy();
-    this.renderTargetManager?.destroy();
-    this.nestedCompRenderer?.destroy();
-    this.motionRenderer?.destroy();
-    this.textureManager?.destroy();
-    this.maskTextureManager?.destroy();
+    engineResources.destroyEngineRenderers(this.res);
     this.cacheManager.destroy();
     this.exportCanvasManager.destroy();
     this.videoFrameManager.destroy();
-    this.compositorPipeline?.destroy();
-    this.effectsPipeline?.destroy();
-    this.colorPipeline?.destroy();
-    this.outputPipeline?.destroy();
-    this.slicePipeline?.destroy();
+    engineResources.destroyEnginePipelines(this.res);
     this.pixelReadback.destroy();
     this.context.destroy();
   }

@@ -1,4 +1,4 @@
-export interface GetStateClassCHardTarget {
+﻿export interface GetStateClassCHardTarget {
   path: string;
   maxCurrentHits: number;
 }
@@ -22,7 +22,6 @@ export const allowedAdapterPaths = [
   'src/services/timeline/runtimeCoordinatorTypes.ts',
   'src/services/timeline/runtimeCoordinatorContracts.ts',
   'src/services/audio/AudioRecordingService.ts',
-  // Packet 221: commit-to-timeline adapter grant follows the split module.
   'src/services/audio/recording/commitRecording.ts',
   'src/services/audio/timelineRecordingWorkflow.ts',
   'src/services/export/**',
@@ -34,7 +33,6 @@ export const classCHardTargets = [
   { path: 'src/components/common/MatAnyoneSetupDialog.tsx', maxCurrentHits: 4 },
   { path: 'src/components/common/Toolbar.tsx', maxCurrentHits: 2 },
   { path: 'src/components/export/exportHelpers.ts', maxCurrentHits: 2 },
-  // 189/208: ExportPanel getState-FREE; hits live in run controller/runners.
   { path: 'src/components/export/runners/ffmpegDirectExportRunner.ts', maxCurrentHits: 1 },
   { path: 'src/components/export/runners/fcpxmlExportRunner.ts', maxCurrentHits: 1 },
   { path: 'src/components/export/useExportRunController.ts', maxCurrentHits: 2 },
@@ -53,8 +51,6 @@ export const classCHardTargets = [
   { path: 'src/components/panels/audio-mixer/MixerTrackColorMenu.tsx', maxCurrentHits: 1 },
   { path: 'src/components/panels/color/ColorEditor.tsx', maxCurrentHits: 1 },
   { path: 'src/components/panels/HistoryPanel.tsx', maxCurrentHits: 1 },
-  // MediaPanel trail: badge hook (172), node-move hook (190),
-  // composition-settings hook (218). Cluster total 7.
   { path: 'src/components/panels/MediaPanel.tsx', maxCurrentHits: 3 },
   { path: 'src/components/panels/media/board/useMediaBoardNodeMoveGesture.ts', maxCurrentHits: 1 },
   { path: 'src/components/panels/media/panel/useMediaPanelCompositionSettings.ts', maxCurrentHits: 1 },
@@ -148,26 +144,30 @@ export const classCHardTargets = [
   { path: 'src/engine/export/frameExporter/ExportPreviewPublisher.ts', maxCurrentHits: 1 },
   { path: 'src/engine/export/preloadGaussianSplats.ts', maxCurrentHits: 4 },
   { path: 'src/engine/managers/OutputWindowManager.ts', maxCurrentHits: 6 },
-  // Packet 239: LayerCollector 7 -> collector branch modules, conserved.
   { path: 'src/engine/render/layerCollector/htmlVideoCollector.ts', maxCurrentHits: 1 },
   { path: 'src/engine/render/layerCollector/htmlVideoFrameCache.ts', maxCurrentHits: 1 },
   { path: 'src/engine/render/layerCollector/htmlVideoNotReadyCollector.ts', maxCurrentHits: 1 },
   { path: 'src/engine/render/layerCollector/htmlVideoReadyCollector.ts', maxCurrentHits: 1 },
   { path: 'src/engine/render/layerCollector/webCodecsCollector.ts', maxCurrentHits: 3 },
-  // Packet 246: 10 -> 1 + 8 + 1 (nestedComp modules), total conserved.
   { path: 'src/engine/render/NestedCompRenderer.ts', maxCurrentHits: 1 },
   { path: 'src/engine/render/nestedComp/htmlVideoPreview.ts', maxCurrentHits: 8 },
   { path: 'src/engine/render/nestedComp/sharedScene.ts', maxCurrentHits: 1 },
   // Packet 231 moved 5 hits into the scene-3D/target-preview facets and the
   // old 16-ceiling slack (actual was 11) is retired: 16 -> 6 + 2 + 2 + 1.
-  { path: 'src/engine/render/RenderDispatcher.ts', maxCurrentHits: 6 },
+  // Packet 343: 6 -> 2+3+1 (splat loader + export readiness), conserved.
+  { path: 'src/engine/render/RenderDispatcher.ts', maxCurrentHits: 2 },
+  { path: 'src/engine/render/dispatcher/gaussianSplatSceneLoader.ts', maxCurrentHits: 3 },
+  { path: 'src/engine/render/dispatcher/exportReadinessFacet.ts', maxCurrentHits: 1 },
   { path: 'src/engine/render/dispatcher/sharedScene3DProcessor.ts', maxCurrentHits: 2 },
   { path: 'src/engine/render/dispatcher/targetPreviewLayerCollector.ts', maxCurrentHits: 2 },
   { path: 'src/engine/render/dispatcher/targetPreviewRenderer.ts', maxCurrentHits: 1 },
   { path: 'src/engine/scene/SceneCameraUtils.ts', maxCurrentHits: 7 },
   { path: 'src/engine/scene/SceneEffectorUtils.ts', maxCurrentHits: 2 },
-  // Packet 254: 12 -> 5 + 7 (output-window controller), total conserved.
-  { path: 'src/engine/WebGPUEngine.ts', maxCurrentHits: 5 },
+  // Packet 345: 5 -> 2+1+1 (presenter + recovery wiring; one site retired
+  // via restore-loop dedup, maxHits 656 -> 655).
+  { path: 'src/engine/WebGPUEngine.ts', maxCurrentHits: 2 },
+  { path: 'src/engine/engineCore/outputPresenter.ts', maxCurrentHits: 1 },
+  { path: 'src/engine/engineCore/contextRecoveryWiring.ts', maxCurrentHits: 1 },
   { path: 'src/engine/engineCore/outputWindowController.ts', maxCurrentHits: 7 },
   // Packet 306: 25 -> 12+4+3+3+2 (engine sync hooks; maxHits 657 -> 656).
   { path: 'src/hooks/useEngine.ts', maxCurrentHits: 12 },
@@ -178,7 +178,6 @@ export const classCHardTargets = [
   { path: 'src/hooks/useGlobalHistory.ts', maxCurrentHits: 3 },
   { path: 'src/services/audio/audioDiagnostics.ts', maxCurrentHits: 1 },
   { path: 'src/services/audio/ClipAudioAnalysisOrchestrator.ts', maxCurrentHits: 1 },
-  // Packet 220 split: ClipAudioRenderService is getState-free; its single
   // hit moved into the spectral mask provider (cluster total conserved).
   { path: 'src/services/audio/clipRender/spectralImageMaskProvider.ts', maxCurrentHits: 1 },
   { path: 'src/services/audio/midiPlaybackScheduler.ts', maxCurrentHits: 6 },
@@ -208,14 +207,15 @@ export const classCHardTargets = [
   { path: 'src/services/multicamAnalyzer.ts', maxCurrentHits: 1 },
   { path: 'src/services/performanceMonitor.ts', maxCurrentHits: 1 },
   { path: 'src/services/playbackHealthMonitor.ts', maxCurrentHits: 7 },
-  // Packet 261: registrar hit moved into the vector-animation module.
   { path: 'src/services/properties/vectorAnimationProperties.ts', maxCurrentHits: 1 },
-  { path: 'src/services/proxyFrameCache.ts', maxCurrentHits: 4 },
+  // Packet 342: entry is getState-free; 4 -> 1+1+2 loader modules, conserved.
+  { path: 'src/services/proxyFrame/audioBufferLoader.ts', maxCurrentHits: 1 },
+  { path: 'src/services/proxyFrame/audioProxyLoader.ts', maxCurrentHits: 1 },
+  { path: 'src/services/proxyFrame/proxyStorageSources.ts', maxCurrentHits: 2 },
   { path: 'src/services/renderScheduler.ts', maxCurrentHits: 12 },
   { path: 'src/services/sceneDescriber.ts', maxCurrentHits: 5 },
   { path: 'src/services/shortcutRegistry.ts', maxCurrentHits: 1 },
   { path: 'src/services/slotDeckManager.ts', maxCurrentHits: 6 },
-  // Packet 253 split: the single hit moved into the sampling module.
   { path: 'src/services/thumbnailRender/sampling.ts', maxCurrentHits: 1 },
   { path: 'src/services/timeline/renderTargetRuntimeReporting.ts', maxCurrentHits: 3 },
   { path: 'src/services/timeline/timelineAudioArtifactGenerationWarmup.ts', maxCurrentHits: 3 },
@@ -232,14 +232,12 @@ export const classCHardTargets = [
   { path: 'src/stores/mediaStore/helpers/importPipeline.ts', maxCurrentHits: 1 },
   { path: 'src/stores/mediaStore/helpers/modelSequenceImport.ts', maxCurrentHits: 1 },
   { path: 'src/stores/mediaStore/init.ts', maxCurrentHits: 6 },
-  // Packet 186: compositionSlice 10 -> six role modules, conserved.
   { path: 'src/stores/mediaStore/slices/composition/activeTimelineSync.ts', maxCurrentHits: 2 },
   { path: 'src/stores/mediaStore/slices/composition/crudActions.ts', maxCurrentHits: 1 },
   { path: 'src/stores/mediaStore/slices/composition/resizeTransforms.ts', maxCurrentHits: 1 },
   { path: 'src/stores/mediaStore/slices/composition/slotAssignmentActions.ts', maxCurrentHits: 3 },
   { path: 'src/stores/mediaStore/slices/composition/tabActions.ts', maxCurrentHits: 1 },
   { path: 'src/stores/mediaStore/slices/composition/timelineSwitchBridge.ts', maxCurrentHits: 2 },
-  // Packet 183: fileManageSlice 8 -> five role modules, conserved.
   { path: 'src/stores/mediaStore/slices/fileManage/deleteActions.ts', maxCurrentHits: 1 },
   { path: 'src/stores/mediaStore/slices/fileManage/deleteRuntimeCleanup.ts', maxCurrentHits: 3 },
   { path: 'src/stores/mediaStore/slices/fileManage/mediaUsagePlanner.ts', maxCurrentHits: 1 },
@@ -291,9 +289,9 @@ export const getStateAccessPolicyBaselines = {
   // fileCount log (totals conserved per split redistribution):
   // 192 ->193(218) ->196(227) ->199(231) ->203(239) ->205(246) ->206(253/254)
   // ->207(259) ->208(267) ->212(279) ->216(287).
-  classCHardTargetFileCount: 223,
+  classCHardTargetFileCount: 229,
   // 669 -> 665 (packet 188 Preview cut) -> 664 (packet 209 retired one hit)
   // -> 659 (packet 231 retired the dispatcher ceiling slack: 16 -> 11 actual)
   // -> 658 (packet 237 retired one compositionRenderer hit).
-  classCHardTargetMaxHits: 656,
+  classCHardTargetMaxHits: 655,
 } as const;
