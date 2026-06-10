@@ -178,11 +178,27 @@ export async function measureUiFrameLoop(args: Record<string, unknown> = {}) {
     try {
       animationFrameObserver = new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) {
+          // LoAF entries carry per-script attribution (which function/source
+          // kept the frame busy) — the whole point of measuring here.
+          const scripts = (entry as PerformanceEntry & {
+            scripts?: Array<{
+              invoker?: string;
+              sourceURL?: string;
+              sourceFunctionName?: string;
+              duration?: number;
+            }>;
+          }).scripts ?? [];
           longAnimationFrames.push({
             name: entry.name,
             startTime: Math.round(entry.startTime * 100) / 100,
             durationMs: Math.round(entry.duration * 100) / 100,
             entryType: entry.entryType,
+            scripts: scripts.map((script) => ({
+              invoker: script.invoker ?? '',
+              sourceURL: script.sourceURL ?? '',
+              sourceFunctionName: script.sourceFunctionName ?? '',
+              durationMs: Math.round((script.duration ?? 0) * 100) / 100,
+            })),
           });
         }
       });
