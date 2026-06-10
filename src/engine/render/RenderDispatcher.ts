@@ -1,4 +1,4 @@
-// RenderDispatcher — extracted render methods from WebGPUEngine
+﻿// RenderDispatcher â€” extracted render methods from WebGPUEngine
 // Handles: render(), renderEmptyFrame(), renderToPreviewCanvas(), renderCachedFrame()
 
 import type { Layer, LayerRenderData } from '../core/types';
@@ -22,7 +22,6 @@ import { reportRenderTime } from '../../services/performanceMonitor';
 import { Logger } from '../../services/logger';
 import { NativeHelperClient } from '../../services/nativeHelper/NativeHelperClient';
 import { scrubSettleState } from '../../services/scrubSettleState';
-import { vfPipelineMonitor } from '../../services/vfPipelineMonitor';
 import { getCopiedHtmlVideoPreviewFrame } from './htmlVideoPreviewFallback';
 import { flags } from '../featureFlags';
 import type { NativeSceneRenderer } from '../native3d/NativeSceneRenderer';
@@ -44,7 +43,6 @@ import { getGaussianSplatGpuRenderer } from '../gaussian/core/GaussianSplatGpuRe
 import { resolveOrbitCameraFrame } from '../gaussian/core/SplatCameraUtils';
 import { loadGaussianSplatAssetCached, type GaussianSplatLoadProgress } from '../gaussian/loaders';
 import { DEFAULT_GAUSSIAN_SPLAT_SETTINGS } from '../gaussian/types';
-import { getGaussianSplatSequenceFrameIndex } from '../../utils/gaussianSplatSequence';
 import {
   buildSharedSplatRuntimeRequest,
   resolveSharedSplatSceneKey,
@@ -53,20 +51,17 @@ import type { MotionRenderer } from '../motion/MotionRenderer';
 import { getMotionRenderSize } from '../motion/MotionTypes';
 import { RenderOutputRouterAdapter } from './RenderOutputRouterAdapter';
 import type { RenderOutputRouter } from './contracts';
+import { CachedFrameRenderer } from './dispatcher/cachedFrameRenderer';
+import { DispatcherDebugSnapshotFacet, type RenderDispatcherDebugSnapshot } from './dispatcher/dispatcherDebugSnapshot';
+import { DispatcherTelemetry } from './dispatcher/dispatcherTelemetry';
+import { EmptyFrameRenderer } from './dispatcher/emptyFrameRenderer';
+import { GaussianSequenceFacet, type GaussianSplatSceneLoadRequest } from './dispatcher/gaussianSequenceFacet';
+
+export type { RenderDispatcherDebugSnapshot } from './dispatcher/dispatcherDebugSnapshot';
 
 const log = Logger.create('RenderDispatcher');
 const GAUSSIAN_PLAYBACK_SORT_FREQUENCY = 6;
 const MAX_EXPORT_LAYER_NESTING_DEPTH = 8;
-
-type GaussianSplatSceneLoadRequest = {
-  sceneKey: string;
-  clipId?: string;
-  url?: string;
-  fileName: string;
-  file?: File;
-  showProgress?: boolean;
-  maxSplats?: number;
-};
 
 export interface GaussianSplatSequenceWarmupOptions {
   time?: number;
@@ -84,12 +79,6 @@ export interface GaussianSplatSequenceWarmupResult {
   scheduled: number;
   timedOut: boolean;
 }
-
-const SPLAT_SEQUENCE_PREVIEW_MAX_SPLATS = 65536;
-const SPLAT_SEQUENCE_MAX_BACKGROUND_LOADS = 3;
-const SPLAT_SEQUENCE_PLAYBACK_PRELOAD_FRAMES = 72;
-const SPLAT_SEQUENCE_PLAYBACK_RETAIN_BEHIND_FRAMES = 12;
-const SPLAT_SEQUENCE_PLAYBACK_RETAIN_AHEAD_FRAMES = 72;
 
 function clampUnitInterval(value: number): number {
   if (!Number.isFinite(value)) {
@@ -168,7 +157,7 @@ function buildCameraGizmoTransform(
 }
 
 /**
- * Mutable deps bag — the engine updates these references as they change
+ * Mutable deps bag â€” the engine updates these references as they change
  * (e.g. after device loss/restore, canvas attach/detach).
  */
 export interface RenderDeps {
@@ -194,54 +183,52 @@ export interface RenderDeps {
   sceneRenderer?: NativeSceneRenderer | null;
 }
 
-export interface RenderDispatcherDebugSnapshot {
-  inputLayers: number;
-  collectedLayerData: number;
-  after3DLayerData: number;
-  gaussianCandidates: number;
-  gaussianRendered: number;
-  gaussianPendingLoad: number;
-  gaussianMissingUrl: number;
-  gaussianNoTextureView: number;
-  finalLayerData: number;
-  splatSequence?: {
-    targetSceneKey?: string;
-    renderedSceneKey?: string;
-    mode: 'target' | 'held' | 'missing';
-    visualFrameChangesLastSecond: number;
-    backgroundLoads: number;
-  };
-}
-
 export class RenderDispatcher {
   /** Whether the last render() call produced visible content */
   lastRenderHadContent = false;
   lastRenderDebugSnapshot: RenderDispatcherDebugSnapshot | null = null;
   private deps: RenderDeps;
   private outputRouter: RenderOutputRouter;
+  private readonly telemetry = new DispatcherTelemetry();
+
+  // Public delegate kept on the dispatcher: facets and internal paths route
+  // through here so external instrumentation (tests, diagnostics) can
+  // spy/suppress preview-frame telemetry at one stable point.
+  recordMainPreviewFrame(
+    ...args: Parameters<DispatcherTelemetry['recordMainPreviewFrame']>
+  ): void {
+    this.telemetry.recordMainPreviewFrame(...args);
+  }
+
+  // Compat accessors: the preview-hold state moved into the telemetry facet;
+  // these keep the dispatcher's long-standing seed/inspect surface intact.
+  get lastPreviewTargetTimeMs(): number | undefined {
+    return this.telemetry.lastPreviewTargetTimeMs;
+  }
+  set lastPreviewTargetTimeMs(value: number | undefined) {
+    this.telemetry.lastPreviewTargetTimeMs = value;
+  }
+  get lastPreviewDisplayedTimeMs(): number | undefined {
+    return this.telemetry.lastPreviewDisplayedTimeMs;
+  }
+  set lastPreviewDisplayedTimeMs(value: number | undefined) {
+    this.telemetry.lastPreviewDisplayedTimeMs = value;
+  }
+
+  private readonly debugSnapshotFacet = new DispatcherDebugSnapshotFacet();
+  private readonly gaussianSequenceFacet: GaussianSequenceFacet;
+  private readonly cachedFrameRenderer: CachedFrameRenderer;
+  private readonly emptyFrameRenderer: EmptyFrameRenderer;
   private renderTimeOverride: number | null = null;
-  private lastPreviewSignature = '';
-  private lastPreviewTargetTimeMs?: number;
-  private lastPreviewDisplayedTimeMs?: number;
   private static readonly MAX_DRAG_FALLBACK_DRIFT_SECONDS = 0.35;
   private static readonly MAX_DRAG_LIVE_IMPORT_DRIFT_SECONDS = 0.35;
   private sceneRendererInitializing = false;
   // Native Gaussian Splat rendering state (new WebGPU path)
   private splatLoadingClips = new Set<string>();
-  private backgroundSplatSequenceLoads = new Set<string>();
   private splatSceneBounds = new Map<string, { min: [number, number, number]; max: [number, number, number] }>();
   private exportReadySceneRendererResolutions = new Set<string>();
   private exportReadyNativeSplatSceneKeys = new Set<string>();
   private exportReadyModelUrls = new Set<string>();
-  private lastSceneRenderDebugKey = '';
-  private lastSharedSplatSequenceFrame: {
-    textureView: GPUTextureView;
-    sceneKey: string;
-    width: number;
-    height: number;
-  } | null = null;
-  private lastRenderedSplatSequenceSceneKey: string | null = null;
-  private splatSequenceVisualFrameChanges: number[] = [];
 
   constructor(deps: RenderDeps, outputRouter?: RenderOutputRouter) {
     this.deps = deps;
@@ -261,6 +248,16 @@ export class RenderDispatcher {
       getExportCanvasContext: () => this.deps.exportCanvasManager.getExportCanvasContext(),
       isExporting: () => this.deps.exportCanvasManager.getIsExporting(),
     });
+    this.gaussianSequenceFacet = new GaussianSequenceFacet({
+      resolveSceneKey: (clipId, runtimeKey) => this.getNativeGaussianSplatSceneKey(clipId, runtimeKey),
+      isSplatLoading: (sceneKey) => this.splatLoadingClips.has(sceneKey),
+      ensureSceneLoaded: (request) => this.ensureGaussianSplatSceneLoaded(request),
+    });
+    // Facets route through the dispatcher delegate so the long-standing
+    // public spy/suppress point (recordMainPreviewFrame) keeps working.
+    const recordMainPreviewFrame = this.recordMainPreviewFrame.bind(this);
+    this.cachedFrameRenderer = new CachedFrameRenderer(this.deps, this.outputRouter, recordMainPreviewFrame);
+    this.emptyFrameRenderer = new EmptyFrameRenderer(this.deps, this.outputRouter, recordMainPreviewFrame);
     // Legacy gaussian-avatar code stays on disk for migration/reference only.
     void this.processGaussianLayers;
     // Legacy per-layer native splat bridge stays on disk for migration/reference only.
@@ -290,190 +287,6 @@ export class RenderDispatcher {
       clipId,
       runtimeKey,
     });
-  }
-
-  private getGaussianSplatFrameRuntimeKey(
-    frame: NonNullable<SceneSplatLayer['gaussianSplatSequence']>['frames'][number] | undefined,
-    fallbackKey: string,
-  ): string {
-    return frame?.projectPath || frame?.absolutePath || frame?.sourcePath || frame?.name || fallbackKey;
-  }
-
-  private getSplatSequencePreviewMaxSplats(layer: SceneSplatLayer): number | undefined {
-    if (layer.gaussianSplatIsSequence !== true) {
-      return undefined;
-    }
-
-    const requestedMaxSplats = Math.floor(layer.gaussianSplatSettings?.render?.maxSplats ?? 0);
-    if (Number.isFinite(requestedMaxSplats) && requestedMaxSplats > 0) {
-      return Math.min(requestedMaxSplats, SPLAT_SEQUENCE_PREVIEW_MAX_SPLATS);
-    }
-    return SPLAT_SEQUENCE_PREVIEW_MAX_SPLATS;
-  }
-
-  private getGaussianSplatSequenceRuntimeKey(runtimeKey: string | undefined, maxSplats?: number): string | undefined {
-    if (!runtimeKey || !maxSplats || maxSplats <= 0) {
-      return runtimeKey;
-    }
-    return `${runtimeKey}|preview-lod-${maxSplats}`;
-  }
-
-  private getGaussianSplatSequenceFrameSceneKey(
-    layer: SceneSplatLayer,
-    frameIndex: number,
-    maxSplats?: number,
-  ): { sceneKey: string; runtimeKey: string; frame?: NonNullable<SceneSplatLayer['gaussianSplatSequence']>['frames'][number] } | null {
-    const sequence = layer.gaussianSplatSequence;
-    const frame = sequence?.frames[frameIndex];
-    if (!sequence || !frame) {
-      return null;
-    }
-
-    const fallbackKey = `${layer.clipId}:sequence:${frameIndex}`;
-    const runtimeKey = this.getGaussianSplatSequenceRuntimeKey(
-      this.getGaussianSplatFrameRuntimeKey(frame, fallbackKey),
-      maxSplats,
-    ) ?? fallbackKey;
-
-    return {
-      sceneKey: this.getNativeGaussianSplatSceneKey(layer.clipId, runtimeKey),
-      runtimeKey,
-      frame,
-    };
-  }
-
-  private recordSplatSequenceVisualFrame(sceneKey: string | undefined, countAsChange: boolean): number {
-    const now = performance.now();
-    if (sceneKey && sceneKey !== this.lastRenderedSplatSequenceSceneKey) {
-      if (countAsChange && this.lastRenderedSplatSequenceSceneKey !== null) {
-        this.splatSequenceVisualFrameChanges.push(now);
-      }
-      this.lastRenderedSplatSequenceSceneKey = sceneKey;
-    }
-
-    const cutoff = now - 1000;
-    this.splatSequenceVisualFrameChanges = this.splatSequenceVisualFrameChanges
-      .filter((timestamp) => timestamp >= cutoff);
-    return this.splatSequenceVisualFrameChanges.length;
-  }
-
-  private setSplatSequenceDebugSnapshot(
-    snapshot: NonNullable<RenderDispatcherDebugSnapshot['splatSequence']>,
-  ): void {
-    if (this.lastRenderDebugSnapshot) {
-      this.lastRenderDebugSnapshot.splatSequence = snapshot;
-    }
-  }
-
-  private preloadNearbyGaussianSplatSequenceFrames(
-    layer: SceneSplatLayer,
-    renderer: ReturnType<typeof getGaussianSplatGpuRenderer>,
-    realtimePlayback: boolean,
-    draggingPlayhead: boolean,
-    maxSplats?: number,
-  ): void {
-    const sequence = layer.gaussianSplatSequence;
-    if (!sequence || sequence.frames.length <= 1 || layer.mediaTime == null) {
-      return;
-    }
-    const currentIndex = getGaussianSplatSequenceFrameIndex(sequence, layer.mediaTime);
-    const usePlaybackPreloadWindow = realtimePlayback || !draggingPlayhead;
-    const offsets = usePlaybackPreloadWindow
-      ? Array.from({ length: SPLAT_SEQUENCE_PLAYBACK_PRELOAD_FRAMES + 1 }, (_, index) => index)
-      : [0, -1, 1, -2, 2];
-    let scheduled = 0;
-    const maxSchedulePerPass = usePlaybackPreloadWindow ? SPLAT_SEQUENCE_MAX_BACKGROUND_LOADS : 1;
-
-    for (const offset of offsets) {
-      if (
-        scheduled >= maxSchedulePerPass ||
-        this.backgroundSplatSequenceLoads.size >= SPLAT_SEQUENCE_MAX_BACKGROUND_LOADS
-      ) {
-        continue;
-      }
-
-      const frameIndex = currentIndex + offset;
-      if (frameIndex < 0 || frameIndex >= sequence.frames.length) {
-        continue;
-      }
-
-      const frameInfo = this.getGaussianSplatSequenceFrameSceneKey(layer, frameIndex, maxSplats);
-      if (!frameInfo) {
-        continue;
-      }
-      const frame = frameInfo.frame;
-      if (!frame?.file && !frame?.splatUrl) {
-        continue;
-      }
-
-      const sceneKey = frameInfo.sceneKey;
-      if (renderer.hasScene(sceneKey) || this.splatLoadingClips.has(sceneKey)) {
-        continue;
-      }
-
-      scheduled += 1;
-      this.scheduleBackgroundGaussianSplatSequenceLoad({
-        sceneKey,
-        clipId: layer.clipId,
-        url: frame.splatUrl,
-        fileName: frame.name || layer.gaussianSplatFileName || layer.layerId,
-        file: frame.file,
-        showProgress: false,
-        maxSplats,
-      });
-    }
-  }
-
-  private scheduleBackgroundGaussianSplatSequenceLoad(
-    request: GaussianSplatSceneLoadRequest,
-    priority = false,
-  ): void {
-    if (
-      this.backgroundSplatSequenceLoads.has(request.sceneKey) ||
-      this.splatLoadingClips.has(request.sceneKey) ||
-      (!priority && this.backgroundSplatSequenceLoads.size >= SPLAT_SEQUENCE_MAX_BACKGROUND_LOADS)
-    ) {
-      return;
-    }
-
-    this.backgroundSplatSequenceLoads.add(request.sceneKey);
-    void this.ensureGaussianSplatSceneLoaded({
-      ...request,
-      showProgress: false,
-    }).finally(() => {
-      this.backgroundSplatSequenceLoads.delete(request.sceneKey);
-    });
-  }
-
-  private pruneGaussianSplatSequencePreviewScenes(
-    layer: SceneSplatLayer,
-    renderer: ReturnType<typeof getGaussianSplatGpuRenderer>,
-    maxSplats: number | undefined,
-  ): void {
-    const sequence = layer.gaussianSplatSequence;
-    if (!sequence || !maxSplats || maxSplats <= 0 || layer.mediaTime == null) {
-      return;
-    }
-
-    const currentIndex = getGaussianSplatSequenceFrameIndex(sequence, layer.mediaTime);
-    const retainStart = Math.max(0, currentIndex - SPLAT_SEQUENCE_PLAYBACK_RETAIN_BEHIND_FRAMES);
-    const retainEnd = Math.min(sequence.frames.length - 1, currentIndex + SPLAT_SEQUENCE_PLAYBACK_RETAIN_AHEAD_FRAMES);
-
-    for (let frameIndex = 0; frameIndex < sequence.frames.length; frameIndex += 1) {
-      if (frameIndex >= retainStart && frameIndex <= retainEnd) {
-        continue;
-      }
-
-      const frameInfo = this.getGaussianSplatSequenceFrameSceneKey(layer, frameIndex, maxSplats);
-      if (!frameInfo || this.backgroundSplatSequenceLoads.has(frameInfo.sceneKey)) {
-        continue;
-      }
-      if (this.lastSharedSplatSequenceFrame?.sceneKey === frameInfo.sceneKey) {
-        continue;
-      }
-
-      renderer.releaseScene(frameInfo.sceneKey);
-    }
   }
 
   private collectActiveSplatEffectors(width: number, height: number): SceneSplatEffectorRuntimeData[] {
@@ -760,103 +573,6 @@ export class RenderDispatcher {
     );
   }
 
-  private toMediaTimeMs(time?: number): number | undefined {
-    if (typeof time !== 'number' || !Number.isFinite(time)) {
-      return undefined;
-    }
-    return Math.round(time * 1000);
-  }
-
-  private getPreviewFallbackFromLayers(
-    layers: Layer[]
-  ): { clipId?: string; targetTimeMs?: number } {
-    const primary =
-      layers.find((layer) => layer?.visible && layer.opacity !== 0 && layer.source?.type === 'video') ??
-      layers.find((layer) => layer?.visible && layer.opacity !== 0 && !!layer.source);
-
-    return {
-      clipId: primary?.sourceClipId ?? primary?.id,
-      targetTimeMs: this.toMediaTimeMs(primary?.source?.mediaTime),
-    };
-  }
-
-  private hasVisiblePreviewInputLayer(layers: Layer[]): boolean {
-    return layers.some((layer) =>
-      layer?.visible !== false &&
-      layer.opacity !== 0 &&
-      !!layer.source
-    );
-  }
-
-  private shouldHoldLastFrameOnEmptyPlayback(targetTimeMs?: number): boolean {
-    if (!this.lastRenderHadContent) {
-      return false;
-    }
-
-    if (
-      typeof targetTimeMs === 'number' &&
-      typeof this.lastPreviewTargetTimeMs === 'number' &&
-      Math.abs(targetTimeMs - this.lastPreviewTargetTimeMs) >= 250
-    ) {
-      return false;
-    }
-
-    return true;
-  }
-
-  private recordMainPreviewFrame(
-    mode: string,
-    layerData?: LayerRenderData[],
-    fallback?: { clipId?: string; targetTimeMs?: number; displayedTimeMs?: number }
-  ): void {
-    const primary = layerData?.find((data) => data.layer.source?.type === 'video') ?? layerData?.[0];
-    const clipId = fallback?.clipId ?? primary?.layer.sourceClipId ?? primary?.layer.id;
-    const targetTimeMs =
-      fallback?.targetTimeMs ??
-      this.toMediaTimeMs(primary?.targetMediaTime);
-    const displayedTimeMs =
-      fallback?.displayedTimeMs ??
-      this.toMediaTimeMs(primary?.displayedMediaTime ?? primary?.targetMediaTime);
-    const previewPath =
-      primary?.previewPath ??
-      primary?.layer.source?.type ??
-      mode;
-    const signature = layerData && layerData.length > 0
-      ? layerData
-        .slice(0, 4)
-        .map((data) => {
-          const id = data.layer.sourceClipId ?? data.layer.id;
-          const mediaTimeMs = this.toMediaTimeMs(data.displayedMediaTime ?? data.targetMediaTime) ?? -1;
-          return `${id}:${data.previewPath ?? data.layer.source?.type ?? 'layer'}:${mediaTimeMs}`;
-        })
-        .join('|')
-      : `${mode}:${clipId ?? 'none'}:${displayedTimeMs ?? -1}`;
-    const changed = signature !== this.lastPreviewSignature;
-    const targetMoved =
-      targetTimeMs !== undefined &&
-      this.lastPreviewTargetTimeMs !== undefined &&
-      Math.abs(targetTimeMs - this.lastPreviewTargetTimeMs) >= 12;
-    const driftMs =
-      targetTimeMs !== undefined && displayedTimeMs !== undefined
-        ? Math.abs(targetTimeMs - displayedTimeMs)
-        : undefined;
-
-    vfPipelineMonitor.record('vf_preview_frame', {
-      mode,
-      changed: changed ? 'true' : 'false',
-      targetMoved: targetMoved ? 'true' : 'false',
-      previewPath,
-      ...(clipId ? { clipId } : {}),
-      ...(targetTimeMs !== undefined ? { targetTimeMs } : {}),
-      ...(displayedTimeMs !== undefined ? { displayedTimeMs } : {}),
-      ...(driftMs !== undefined ? { driftMs } : {}),
-    });
-
-    this.lastPreviewSignature = signature;
-    this.lastPreviewTargetTimeMs = targetTimeMs;
-    this.lastPreviewDisplayedTimeMs = displayedTimeMs;
-  }
-
   // === MAIN RENDER ===
 
   render(layers: Layer[]): void {
@@ -890,42 +606,12 @@ export class RenderDispatcher {
       isPlaying: d.renderLoop?.getIsPlaying() ?? false,
     });
     const importTime = performance.now() - t1;
-    const debugSnapshot: RenderDispatcherDebugSnapshot = {
-      inputLayers: layers.length,
-      collectedLayerData: layerData.length,
-      after3DLayerData: layerData.length,
-      gaussianCandidates: layerData.filter((data) => this.isNativeGaussianSplatSource(data.layer.source)).length,
-      gaussianRendered: 0,
-      gaussianPendingLoad: 0,
-      gaussianMissingUrl: 0,
-      gaussianNoTextureView: 0,
-      finalLayerData: layerData.length,
-    };
+    const debugSnapshot: RenderDispatcherDebugSnapshot = this.debugSnapshotFacet.createRenderDebugSnapshot(
+      layers.length,
+      layerData,
+    );
     this.lastRenderDebugSnapshot = debugSnapshot;
-    const sceneRenderDebugPayload = {
-      input: layers.map((layer) => layer ? {
-        id: layer.id,
-        sourceClipId: layer.sourceClipId,
-        sourceType: layer.source?.type,
-        hasGaussianSplatUrl: !!layer.source?.gaussianSplatUrl,
-        is3D: layer.is3D === true,
-        visible: layer.visible !== false,
-        opacity: layer.opacity,
-      } : null),
-      collected: layerData.map((data) => ({
-        id: data.layer.id,
-        sourceClipId: data.layer.sourceClipId,
-        sourceType: data.layer.source?.type,
-        hasGaussianSplatUrl: !!data.layer.source?.gaussianSplatUrl,
-        is3D: data.layer.is3D === true,
-        hasTextureView: !!data.textureView,
-      })),
-    };
-    const sceneRenderDebugKey = JSON.stringify(sceneRenderDebugPayload);
-    if (sceneRenderDebugKey !== this.lastSceneRenderDebugKey) {
-      this.lastSceneRenderDebugKey = sceneRenderDebugKey;
-      log.debug('Shared scene render input changed', sceneRenderDebugPayload);
-    }
+    this.debugSnapshotFacet.recordSceneRenderInputChanged(layers, layerData);
 
     // Update stats
     d.performanceStats.setDecoder(d.layerCollector.getDecoder());
@@ -934,8 +620,9 @@ export class RenderDispatcher {
 
     // Handle empty layers
     if (layerData.length === 0) {
-      const previewFallback = this.getPreviewFallbackFromLayers(layers);
-      const hasVisibleInputLayer = this.hasVisiblePreviewInputLayer(layers);
+      const previewFallback = this.telemetry.getPreviewFallbackFromLayers(layers);
+      const hasVisibleInputLayer = this.telemetry.hasVisiblePreviewInputLayer(layers);
+      const lastPreviewDisplayedTimeMs = this.telemetry.getLastPreviewDisplayedTimeMs();
       // During playback, if we just had content, hold the last frame on screen
       // instead of flashing black. This only applies when an input layer exists
       // for the current time but collection produced no texture/frame, which
@@ -951,8 +638,8 @@ export class RenderDispatcher {
         scrubSettleState.isPending(previewFallback.clipId);
       const emptyScrubHoldDriftMs =
         typeof previewFallback.targetTimeMs === 'number' &&
-        typeof this.lastPreviewDisplayedTimeMs === 'number'
-          ? Math.abs(previewFallback.targetTimeMs - this.lastPreviewDisplayedTimeMs)
+        typeof lastPreviewDisplayedTimeMs === 'number'
+          ? Math.abs(previewFallback.targetTimeMs - lastPreviewDisplayedTimeMs)
           : undefined;
       // During interactive scrubs, a stale visible frame is preferable to a
       // black clear while the browser decoder catches up to a long-GOP seek.
@@ -962,12 +649,12 @@ export class RenderDispatcher {
       const shouldHoldEmptyFrame =
         hasVisibleInputLayer &&
         (
-          (isPlaying && this.shouldHoldLastFrameOnEmptyPlayback(previewFallback.targetTimeMs)) ||
+          (isPlaying && this.telemetry.shouldHoldLastFrameOnEmptyPlayback(this.lastRenderHadContent, previewFallback.targetTimeMs)) ||
           canHoldEmptyScrubFrame
         );
 
       if (shouldHoldEmptyFrame) {
-        // Don't render anything — canvas retains previous frame automatically.
+        // Don't render anything â€” canvas retains previous frame automatically.
         // Log once so the stall is visible in telemetry.
         log.debug('Holding last frame during empty preview frame', {
           isPlaying,
@@ -979,7 +666,7 @@ export class RenderDispatcher {
           undefined,
           {
             ...previewFallback,
-            displayedTimeMs: this.lastPreviewDisplayedTimeMs,
+            displayedTimeMs: lastPreviewDisplayedTimeMs,
           }
         );
         d.performanceStats.setLayerCount(0);
@@ -1138,7 +825,7 @@ export class RenderDispatcher {
     const preciseSplatSorting = this.deps.exportCanvasManager.getIsExporting();
 
     if (!renderer || !renderer.isInitialized) {
-      // Lazy init happens async — on the first frame with 3D layers,
+      // Lazy init happens async â€” on the first frame with 3D layers,
       // we trigger init and skip the 3D pass. Next frames will render.
       if (!this.sceneRendererInitializing && !renderer?.isInitialized) {
         this.sceneRendererInitializing = true;
@@ -1179,13 +866,13 @@ export class RenderDispatcher {
       if (layer.kind !== 'splat' || layer.gaussianSplatIsSequence !== true) {
         return layer;
       }
-      const previewMaxSplats = preciseSplatSorting ? undefined : this.getSplatSequencePreviewMaxSplats(layer);
+      const previewMaxSplats = preciseSplatSorting ? undefined : this.gaussianSequenceFacet.getPreviewMaxSplats(layer);
       if (!previewMaxSplats) {
         return layer;
       }
       return {
         ...layer,
-        gaussianSplatRuntimeKey: this.getGaussianSplatSequenceRuntimeKey(
+        gaussianSplatRuntimeKey: this.gaussianSequenceFacet.getRuntimeKey(
           layer.gaussianSplatRuntimeKey,
           previewMaxSplats,
         ),
@@ -1241,9 +928,9 @@ export class RenderDispatcher {
         }
       : null;
     for (const layer of nativeSplatLayers) {
-      const previewMaxSplats = preciseSplatSorting ? undefined : this.getSplatSequencePreviewMaxSplats(layer);
+      const previewMaxSplats = preciseSplatSorting ? undefined : this.gaussianSequenceFacet.getPreviewMaxSplats(layer);
       const sceneKey = this.getNativeGaussianSplatSceneKey(layer.clipId, layer.gaussianSplatRuntimeKey);
-      const canHoldSequenceFrame = layer.gaussianSplatIsSequence === true && this.lastSharedSplatSequenceFrame !== null;
+      const canHoldSequenceFrame = layer.gaussianSplatIsSequence === true && this.gaussianSequenceFacet.hasLastSharedFrame();
       if (!nativeRenderer.hasScene(sceneKey) && !this.splatLoadingClips.has(sceneKey)) {
         const canDeferDragLoad =
           layer.gaussianSplatIsSequence === true &&
@@ -1263,21 +950,21 @@ export class RenderDispatcher {
             maxSplats: previewMaxSplats,
           };
           if (layer.gaussianSplatIsSequence === true && canHoldSequenceFrame) {
-            this.scheduleBackgroundGaussianSplatSequenceLoad(request, true);
+            this.gaussianSequenceFacet.scheduleBackgroundLoad(request, true);
           } else {
             void this.ensureGaussianSplatSceneLoaded(request);
           }
         }
       }
       if (!preciseSplatSorting) {
-        this.preloadNearbyGaussianSplatSequenceFrames(
+        this.gaussianSequenceFacet.preloadNearbyFrames(
           layer,
           nativeRenderer,
           isRealtimePlayback,
           isDraggingPlayhead,
           previewMaxSplats,
         );
-        this.pruneGaussianSplatSequencePreviewScenes(layer, nativeRenderer, previewMaxSplats);
+        this.gaussianSequenceFacet.prunePreviewScenes(layer, nativeRenderer, previewMaxSplats);
       }
     }
 
@@ -1300,42 +987,43 @@ export class RenderDispatcher {
     );
     const hasSplatSequence = nativeSplatLayers.some((layer) => layer.gaussianSplatIsSequence === true);
     if (textureView && hasSplatSequence) {
-      this.lastSharedSplatSequenceFrame = {
+      this.gaussianSequenceFacet.setLastSharedFrame({
         textureView,
         sceneKey: sequenceRenderedSceneKey ?? sequenceTargetSceneKey ?? '',
         width,
         height,
-      };
+      });
     }
     if (!textureView) {
+      const lastSharedSplatSequenceFrame = this.gaussianSequenceFacet.getLastSharedFrame();
       const canHoldLastSplatSequenceFrame =
         hasSplatSequence &&
-        this.lastSharedSplatSequenceFrame !== null &&
-        this.lastSharedSplatSequenceFrame.width === width &&
-        this.lastSharedSplatSequenceFrame.height === height;
+        lastSharedSplatSequenceFrame !== null &&
+        lastSharedSplatSequenceFrame.width === width &&
+        lastSharedSplatSequenceFrame.height === height;
       if (canHoldLastSplatSequenceFrame) {
-        textureView = this.lastSharedSplatSequenceFrame!.textureView;
-        this.setSplatSequenceDebugSnapshot({
+        textureView = lastSharedSplatSequenceFrame!.textureView;
+        this.debugSnapshotFacet.setSplatSequenceDebugSnapshot(this.lastRenderDebugSnapshot, {
           targetSceneKey: sequenceTargetSceneKey,
-          renderedSceneKey: this.lastSharedSplatSequenceFrame!.sceneKey || undefined,
+          renderedSceneKey: lastSharedSplatSequenceFrame!.sceneKey || undefined,
           mode: 'held',
-          visualFrameChangesLastSecond: this.recordSplatSequenceVisualFrame(
-            this.lastSharedSplatSequenceFrame!.sceneKey || undefined,
+          visualFrameChangesLastSecond: this.gaussianSequenceFacet.recordVisualFrame(
+            lastSharedSplatSequenceFrame!.sceneKey || undefined,
             false,
           ),
-          backgroundLoads: this.backgroundSplatSequenceLoads.size,
+          backgroundLoads: this.gaussianSequenceFacet.getBackgroundLoadCount(),
         });
       } else {
         if (!hasSplatSequence) {
-          this.lastSharedSplatSequenceFrame = null;
+          this.gaussianSequenceFacet.clearLastSharedFrame();
         }
         if (hasSplatSequence) {
-          this.setSplatSequenceDebugSnapshot({
+          this.debugSnapshotFacet.setSplatSequenceDebugSnapshot(this.lastRenderDebugSnapshot, {
             targetSceneKey: sequenceTargetSceneKey,
             renderedSceneKey: undefined,
             mode: 'missing',
-            visualFrameChangesLastSecond: this.recordSplatSequenceVisualFrame(undefined, false),
-            backgroundLoads: this.backgroundSplatSequenceLoads.size,
+            visualFrameChangesLastSecond: this.gaussianSequenceFacet.recordVisualFrame(undefined, false),
+            backgroundLoads: this.gaussianSequenceFacet.getBackgroundLoadCount(),
           });
         }
         for (let i = indices3D.length - 1; i >= 0; i--) {
@@ -1344,12 +1032,12 @@ export class RenderDispatcher {
         return;
       }
     } else if (hasSplatSequence) {
-      this.setSplatSequenceDebugSnapshot({
+      this.debugSnapshotFacet.setSplatSequenceDebugSnapshot(this.lastRenderDebugSnapshot, {
         targetSceneKey: sequenceTargetSceneKey,
         renderedSceneKey: sequenceRenderedSceneKey,
         mode: 'target',
-        visualFrameChangesLastSecond: this.recordSplatSequenceVisualFrame(sequenceRenderedSceneKey, true),
-        backgroundLoads: this.backgroundSplatSequenceLoads.size,
+        visualFrameChangesLastSecond: this.gaussianSequenceFacet.recordVisualFrame(sequenceRenderedSceneKey, true),
+        backgroundLoads: this.gaussianSequenceFacet.getBackgroundLoadCount(),
       });
     }
 
@@ -1399,7 +1087,7 @@ export class RenderDispatcher {
   /**
    * Process Gaussian Splat avatar layers: grab the renderer's canvas,
    * import as GPU texture, replace with synthetic layer.
-   * Unlike the old frame-on-demand shared-scene path, the Gaussian renderer runs its own rAF loop —
+   * Unlike the old frame-on-demand shared-scene path, the Gaussian renderer runs its own rAF loop â€”
    * we simply capture the latest frame each compositor cycle.
    */
   private processGaussianLayers(layerData: LayerRenderData[], device: GPUDevice, width: number, height: number): void {
@@ -1426,10 +1114,10 @@ export class RenderDispatcher {
     const avatarUrl = firstLayerData.layer.source?.gaussianAvatarUrl;
 
     if (!renderer || !renderer.isInitialized) {
-      // Lazy init — trigger on first frame with gaussian layers
+      // Lazy init â€” trigger on first frame with gaussian layers
       if (!this.gaussianInitializing) {
         this.gaussianInitializing = true;
-        // Capture URL now — layerData will be stale by the time the promise resolves
+        // Capture URL now â€” layerData will be stale by the time the promise resolves
         const capturedAvatarUrl = avatarUrl;
         import('../gaussian/GaussianSplatSceneRenderer').then(({ getGaussianSplatSceneRenderer }) => {
           const r = getGaussianSplatSceneRenderer();
@@ -1462,7 +1150,7 @@ export class RenderDispatcher {
       return;
     }
 
-    // Still loading — skip rendering but don't call loadAvatar again
+    // Still loading â€” skip rendering but don't call loadAvatar again
     if (renderer.isLoading || !renderer.isAvatarLoaded) {
       for (let i = indices.length - 1; i >= 0; i--) {
         layerData.splice(indices[i], 1);
@@ -1482,7 +1170,7 @@ export class RenderDispatcher {
     // Get the renderer's canvas (already rendered by its own rAF loop)
     const canvas = renderer.getCanvas();
     if (!canvas || canvas.width === 0 || canvas.height === 0) {
-      // Canvas not ready yet — remove layers
+      // Canvas not ready yet â€” remove layers
       for (let i = indices.length - 1; i >= 0; i--) {
         layerData.splice(indices[i], 1);
       }
@@ -1500,7 +1188,7 @@ export class RenderDispatcher {
       this.gaussianTextureView = this.gaussianTexture.createView();
     }
 
-    // Copy canvas to GPU texture — guard against canvas without rendering context
+    // Copy canvas to GPU texture â€” guard against canvas without rendering context
     try {
       device.queue.copyExternalImageToTexture(
         { source: canvas },
@@ -1513,7 +1201,7 @@ export class RenderDispatcher {
         log.error('Gaussian canvas copy failed (logging once)', err);
         this.gaussianErrorLogged = true;
       }
-      // Remove gaussian layers — canvas is not usable
+      // Remove gaussian layers â€” canvas is not usable
       for (let i = indices.length - 1; i >= 0; i--) {
         layerData.splice(indices[i], 1);
       }
@@ -1557,7 +1245,7 @@ export class RenderDispatcher {
 
   /**
    * Process gaussian-splat layers (native WebGPU path).
-   * Each layer is rendered individually into its own texture — NO merging.
+   * Each layer is rendered individually into its own texture â€” NO merging.
    * The original layer object is preserved for compositor semantics.
    */
   private processGaussianSplatLayers(
@@ -1630,7 +1318,7 @@ export class RenderDispatcher {
         : renderSettings.sortFrequency;
       const sceneLayer = sceneSplatLayers.get(data.layer.id);
 
-      // No URL — remove layer
+      // No URL â€” remove layer
       if (!splatUrl) {
         summary.missingUrl++;
         layerData.splice(i, 1);
@@ -1643,7 +1331,7 @@ export class RenderDispatcher {
         continue;
       }
 
-      // Upload scene if not cached — trigger async load, skip this frame
+      // Upload scene if not cached â€” trigger async load, skip this frame
       if (!renderer.hasScene(sceneKey)) {
         this.loadAndUploadSplatScene({
           sceneKey,
@@ -1689,7 +1377,7 @@ export class RenderDispatcher {
             ? 0
             : { x: 0, y: 0, z: 0 },
         };
-        // In-place replacement — keep the SAME layer (preserving opacity, blend, masks, effects)
+        // In-place replacement â€” keep the SAME layer (preserving opacity, blend, masks, effects)
         layerData[i] = {
           layer: compositeLayer,
           isVideo: false,
@@ -1934,38 +1622,7 @@ export class RenderDispatcher {
   }
 
   renderEmptyFrame(device: GPUDevice): void {
-    const d = this.deps;
-    const commandEncoder = device.createCommandEncoder();
-    const pingView = d.renderTargetManager?.getPingView();
-
-    // Use output pipeline to render empty frame (allows shader to generate checkerboard)
-    if (pingView && d.outputPipeline && d.sampler) {
-      // Clear ping texture to transparent
-      const clearPass = commandEncoder.beginRenderPass({
-        colorAttachments: [{
-          view: pingView,
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-          loadOp: 'clear',
-          storeOp: 'store',
-        }],
-      });
-      clearPass.end();
-    }
-
-    const outputSnapshot = pingView && d.outputPipeline && d.sampler
-      ? this.outputRouter.captureSnapshot()
-      : undefined;
-    this.outputRouter.routeEmptyFrame({
-      commandEncoder,
-      sourceView: pingView ?? undefined,
-      sampler: d.sampler ?? undefined,
-      snapshot: outputSnapshot,
-      targetIds: outputSnapshot?.activeCompositionTargetIds,
-    });
-    if (pingView && d.outputPipeline && d.sampler && d.previewContext) {
-      this.recordMainPreviewFrame('empty');
-    }
-    device.queue.submit([commandEncoder.finish()]);
+    this.emptyFrameRenderer.renderEmptyFrame(device);
   }
 
   /**
@@ -2388,117 +2045,6 @@ export class RenderDispatcher {
   }
 
   renderCachedFrame(time: number): boolean {
-    const d = this.deps;
-    const device = d.getDevice();
-    const scrubbingCache = d.cacheManager.getScrubbingCache();
-    if (!d.previewContext || !device || !scrubbingCache || !d.outputPipeline || !d.sampler) {
-      return false;
-    }
-
-    const gpuCached = scrubbingCache.getGpuCachedFrame(time);
-    if (gpuCached) {
-      const commandEncoder = device.createCommandEncoder();
-      const outputSnapshot = this.outputRouter.captureSnapshot();
-      this.outputRouter.routeCachedFrame({
-        commandEncoder,
-        bindGroup: gpuCached.bindGroup,
-        time,
-        snapshot: outputSnapshot,
-        targetIds: outputSnapshot.activeCompositionTargetIds,
-      });
-      this.recordMainPreviewFrame('ram-gpu-cache', undefined, {
-        targetTimeMs: Math.round(time * 1000),
-        displayedTimeMs: Math.round(time * 1000),
-      });
-      device.queue.submit([commandEncoder.finish()]);
-      return true;
-    }
-
-    const imageData = scrubbingCache.getCachedCompositeFrame(time);
-    if (!imageData) {
-      return false;
-    }
-    let createdTexture: GPUTexture | null = null;
-    try {
-      const { width, height } = { width: imageData.width, height: imageData.height };
-      const gpuCacheAdmission = scrubbingCache.canCacheGpuFrame(time, {
-        width,
-        height,
-        format: 'rgba8unorm',
-        gpuBytes: width * height * 4,
-      });
-      if (!gpuCacheAdmission.admitted) {
-        log.debug('RAM preview GPU cache skipped by runtime admission', {
-          resourceId: gpuCacheAdmission.resourceId,
-          reason: gpuCacheAdmission.reason,
-          rejectedUnits: gpuCacheAdmission.rejectedUnits.map((entry) => entry.unit),
-        });
-        return false;
-      }
-
-      let canvas = d.cacheManager.getRamPlaybackCanvas();
-      let ctx = d.cacheManager.getRamPlaybackCtx();
-
-      if (!canvas || !ctx) {
-        canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        ctx = canvas.getContext('2d', { willReadFrequently: false });
-        if (!ctx) return false;
-        d.cacheManager.setRamPlaybackCanvas(canvas, ctx);
-      } else if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width;
-        canvas.height = height;
-      }
-
-      ctx.putImageData(imageData, 0, 0);
-
-      const texture = device.createTexture({
-        size: [width, height],
-        format: 'rgba8unorm',
-        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
-      });
-      createdTexture = texture;
-
-      device.queue.copyExternalImageToTexture({ source: canvas }, { texture }, [width, height]);
-
-      const view = texture.createView();
-      const bindGroup = d.outputPipeline.createOutputBindGroup(d.sampler, view);
-
-      const cachedOnGpu = scrubbingCache.addToGpuCache(time, {
-        texture,
-        view,
-        bindGroup,
-        width,
-        height,
-        format: 'rgba8unorm',
-        gpuBytes: width * height * 4,
-      });
-      if (!cachedOnGpu) {
-        createdTexture = null;
-        return false;
-      }
-      createdTexture = null;
-
-      const commandEncoder = device.createCommandEncoder();
-      const outputSnapshot = this.outputRouter.captureSnapshot();
-      this.outputRouter.routeCachedFrame({
-        commandEncoder,
-        bindGroup,
-        time,
-        snapshot: outputSnapshot,
-        targetIds: outputSnapshot.activeCompositionTargetIds,
-      });
-      this.recordMainPreviewFrame('ram-cpu-cache', undefined, {
-        targetTimeMs: Math.round(time * 1000),
-        displayedTimeMs: Math.round(time * 1000),
-      });
-      device.queue.submit([commandEncoder.finish()]);
-      return true;
-    } catch (e) {
-      createdTexture?.destroy();
-      log.warn('Failed to render cached frame', e);
-      return false;
-    }
+    return this.cachedFrameRenderer.renderCachedFrame(time);
   }
 }

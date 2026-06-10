@@ -754,6 +754,38 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
   `Preview` 2410->, and `ExportPanel` 2269->, with `MediaPanel` at 742.
 - Wave 12 verification:
   Orchestrator-verified: tsc clean; guards + adoption + preview + lease + mediaPanel + historyStore suites green.
+- Wave 13 closure completed:
+  `P7-SMOKE-SCENARIO-SPLIT-196` split `timelineCanvasSmoke` (3110) into a
+  27-line barrel plus `smokes/` runtime, fixtures, snapshots, frameLoop, and 8
+  scenario modules; `handlers/index.ts` stayed untouched.
+  `P5-PREVIEW-SPLIT-197` extracted scene-navigation input lifecycle into two
+  hooks (394+390) with event-capture parity; `Preview` fell 2410 -> 1993.
+  `P7-BRIDGE-TRANSPORT-VITEPLUGIN-198` extracted dev-bridge HTTP transport
+  from `vite.config.ts` (1215 -> 471) into `tools/devBridge` auth,
+  localFileEndpoints, supportEndpoints, and vitePlugin modules with identical
+  token contract; runtime was orchestrator-verified by server boot, 401 on bad
+  token, and valid token reaching HMR wait. Token-rotation collision remains a
+  follow-up.
+- Wave 13 verification:
+  Orchestrator-verified: tsc clean; guards + aiToolPolicy + registry + mediaPanel + historyStore suites green; bridge runtime probe passed (boot, 401 auth, valid-token HMR wait).
+- Wave 14 closure completed:
+  `P7-BRIDGE-BROWSER-SPLIT-199` split `bridge.ts` (2995) into a thin HMR entry
+  plus `devBridge/browser/` client, presence, guidedOptions, debugState, and 7
+  debugActions modules; storage keys and HMR guard were preserved.
+  `P2-DOCKSTORE-INDEX-FINAL-200` extracted initial state, left `index.ts` at 93
+  lines, preserved SHA-identical persist config, and put the dockStore folder
+  fully under budget; an earlier stale line-count caused an orchestrator
+  stop-the-line check that the tiny diff resolved, and measurement now trusts
+  worktree state over report history.
+  `P2-HISTORYSTORE-INDEX-FINAL-201` extracted snapshot capture/apply plus
+  debug, facade, restore, and project-state modules; `index.ts` fell 1042 ->
+  439, all 71 history tests were green, and the historyStore folder is under
+  budget except the 439-line index, within the 450 allowance for the
+  cross-store root.
+- Wave 14 guard event:
+  6 new barrel imports redirected; ratchet held at 557.
+- Wave 14 verification:
+  Orchestrator-verified: tsc clean; guards + policy + registry + history + dock suites green (101 tests).
 
 ## High-Conflict Ownership Snapshot
 
@@ -774,18 +806,17 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 
 ## Active Packet
 
-Wave 13 running: bridge transport split with explicit `vite.config.ts` grant,
-smoke scenario split, and Preview split 2.
+Wave 15 running: RenderDispatcher facet split, WebCodecsPlayer split, and audio
+ownership scout.
 
 ## Queued Packets
 
-- Continue bridge transport split from `vite.config.ts` into the quarantined
-  P7 module tree.
-- Continue smoke scenario split.
-- Continue Preview split 2 after the 2410-line checkpoint.
+- Continue RenderDispatcher facet split.
+- Continue WebCodecsPlayer split.
+- Continue audio ownership scout.
 
 ## Immediate Next Step
 
-Finish wave 13 active packets under their bounded write sets; do not reopen
-completed wave 11/12 Preview, ExportPanel, MediaPanel, proxy lease, or bridge
-scout packets.
+Finish wave 15 active packets under their bounded write sets; do not reopen
+completed wave 13/14 smoke, Preview, bridge, dockStore, or historyStore
+packets.

@@ -3,68 +3,16 @@
 // Export mode delegated to WebCodecsExportMode
 
 import { Logger } from '../services/logger';
-import { wcPipelineMonitor } from '../services/wcPipelineMonitor';
 import { vfPipelineMonitor } from '../services/vfPipelineMonitor';
 const log = Logger.create('WebCodecsPlayer');
 
-import * as MP4BoxModule from 'mp4box';
-
-const MP4Box = MP4BoxModule as unknown as {
-  createFile: typeof MP4BoxModule.createFile;
-  DataStream: {
-    new (buffer?: unknown, byteOffset?: number, endianness?: number): {
-      buffer: ArrayBuffer;
-      position?: number;
-    };
-    BIG_ENDIAN: number;
-  };
-};
-
-import type { Sample, MP4VideoTrack, MP4ArrayBuffer, MP4File } from './webCodecsTypes';
+import type { Sample, MP4VideoTrack, MP4File } from './webCodecsTypes';
 import { WebCodecsExportMode } from './WebCodecsExportMode';
 import type { ExportModePlayer } from './WebCodecsExportMode';
-
-type MediaStreamTrackProcessorConstructor = new (init: { track: MediaStreamTrack }) => {
-  readable: ReadableStream<VideoFrame>;
-};
-
-type WebCodecsWindow = Window & typeof globalThis & {
-  MediaStreamTrackProcessor?: MediaStreamTrackProcessorConstructor;
-};
-
-interface CodecConfigurationBox {
-  write: (stream: { buffer: ArrayBuffer; position?: number }) => void;
-}
-
-interface MP4TrackDetails {
-  mdia?: {
-    minf?: {
-      stbl?: {
-        stsd?: {
-          entries?: Array<{
-            avcC?: CodecConfigurationBox;
-            hvcC?: CodecConfigurationBox;
-            vpcC?: CodecConfigurationBox;
-            av1C?: CodecConfigurationBox;
-          }>;
-        };
-      };
-    };
-  };
-}
-
-type MP4FileWithTrackLookup = MP4File & {
-  getTrackById: (id: number) => MP4TrackDetails | undefined;
-};
-
-type VideoFrameCallbackVideo = HTMLVideoElement & {
-  requestVideoFrameCallback: (callback: () => void) => number;
-  cancelVideoFrameCallback: (handle: number) => void;
-};
-
-function hasVideoFrameCallback(video: HTMLVideoElement): video is VideoFrameCallbackVideo {
-  return 'requestVideoFrameCallback' in video;
-}
+import { HtmlVideoFrameSource } from './webcodecs/htmlVideoFrameSource';
+import { loadMp4ForWebCodecs } from './webcodecs/mp4DemuxLoader';
+import { WebCodecsSampleTimeline } from './webcodecs/sampleTimeline';
+import { webCodecsTelemetry } from './webcodecs/webCodecsTelemetry';
 
 export interface WebCodecsPlayerOptions {
   loop?: boolean;
@@ -80,7 +28,7 @@ export interface WebCodecsPlayerOptions {
 type SeekPreviewMode = 'strict' | 'interactive';
 
 export class WebCodecsPlayer implements ExportModePlayer {
-  private mp4File: MP4File | null = null;
+  private mp4FileRef: { current: MP4File | null } = { current: null };
   private decoder: VideoDecoder | null = null;
   private currentFrame: VideoFrame | null = null;
   private samples: Sample[] = [];
@@ -114,8 +62,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
 
   // Simple mode (VideoFrame from HTMLVideoElement)
   private useSimpleMode = false;
-  private videoElement: HTMLVideoElement | null = null;
-  private videoFrameCallbackId: number | null = null;
+  private simpleSource: HtmlVideoFrameSource;
 
   public width = 0;
   public height = 0;
@@ -125,10 +72,6 @@ export class WebCodecsPlayer implements ExportModePlayer {
   private onReady?: (width: number, height: number) => void;
   private onError?: (error: Error) => void;
 
-  // Stream mode (MediaStreamTrackProcessor)
-  private streamReader: ReadableStreamDefaultReader<VideoFrame> | null = null;
-  private streamActive = false;
-
   // Export mode (delegated to WebCodecsExportMode)
   private exportMode: WebCodecsExportMode;
   private frameResolve: (() => void) | null = null;
@@ -136,9 +79,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
   private pendingDecodeFirstFrame = false;
   private loadResolve: (() => void) | null = null;
 
-  // CTS-sorted sample index for O(log n) time lookup (built lazily)
-  private ctsSorted: { idx: number; cts: number }[] = [];
-  private ctsSortedSampleCount = 0;
+  private sampleTimeline = new WebCodecsSampleTimeline(() => this.samples);
 
   // Seek target filtering: during a seek, intermediate GOP frames are decoded
   // before the target. This prevents the renderer from showing them.
@@ -155,7 +96,6 @@ export class WebCodecsPlayer implements ExportModePlayer {
   private pendingSeekPreviewMode: SeekPreviewMode = 'strict';
   private pendingSeekFallbackFrame: VideoFrame | null = null;
   private pendingSeekFallbackDiffUs = Number.POSITIVE_INFINITY;
-  private pendingSimpleSeekHandler: (() => void) | null = null;
   private strictPausedSeekFlushToken = 0;
   private lastInteractivePreviewPublishAtMs = Number.NEGATIVE_INFINITY;
   private playbackStartupWarmupStartedAtMs: number | null = null;
@@ -209,7 +149,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
   isDecodePending(): boolean { return this.trackedDecodeQueueSize > 0; }
   /** True when an advance seek is in flight (decoder reset, target frame not yet produced) */
   isAdvanceSeekPending(): boolean { return this.pendingAdvanceSeekTargetIdx !== null; }
-  getVideoElement(): HTMLVideoElement | null { return this.videoElement; }
+  getVideoElement(): HTMLVideoElement | null { return this.simpleSource.getVideoElement(); }
 
   constructor(options: WebCodecsPlayerOptions = {}) {
     this.exportMode = new WebCodecsExportMode(this);
@@ -218,84 +158,40 @@ export class WebCodecsPlayer implements ExportModePlayer {
     this.onReady = options.onReady;
     this.onError = options.onError;
     this.useSimpleMode = options.useSimpleMode ?? false;
+    this.simpleSource = new HtmlVideoFrameSource({
+      closeCurrentFrame: () => {
+        if (this.currentFrame) {
+          this.currentFrame.close();
+        }
+      },
+      getIsPlaying: () => this._isPlaying,
+      onFrame: (frame) => this.onFrame?.(frame),
+      onReady: (width, height) => this.onReady?.(width, height),
+      setCurrentFrame: (frame) => {
+        this.currentFrame = frame;
+        this.currentFrameTimestampUs = frame.timestamp;
+      },
+      setDimensions: (width, height) => {
+        this.width = width;
+        this.height = height;
+      },
+      setFrameRate: (frameRate) => {
+        this.frameRate = frameRate;
+        this.frameInterval = 1000 / this.frameRate;
+      },
+      setIsPlaying: (isPlaying) => {
+        this._isPlaying = isPlaying;
+      },
+      setReady: (ready) => {
+        this.ready = ready;
+      },
+    });
   }
 
   // Stream mode: Use captureStream + MediaStreamTrackProcessor for best performance
   // This gives us VideoFrames without blocking the main thread
   async attachWithStream(video: HTMLVideoElement): Promise<void> {
-    if (!('MediaStreamTrackProcessor' in window)) {
-      throw new Error('MediaStreamTrackProcessor not supported');
-    }
-
-    this.isAttachedToExternal = true;
-    this.videoElement = video;
-    this.width = video.videoWidth;
-    this.height = video.videoHeight;
-
-    // Capture stream from video
-    // Note: captureStream is not in the standard HTMLVideoElement type but exists in browsers
-    const stream = (video as HTMLVideoElement & { captureStream(): MediaStream }).captureStream();
-    const videoTrack = stream.getVideoTracks()[0];
-
-    if (!videoTrack) {
-      throw new Error('No video track in stream');
-    }
-
-    // Create processor to get VideoFrames
-    const Processor = (window as WebCodecsWindow).MediaStreamTrackProcessor;
-    if (!Processor) {
-      throw new Error('MediaStreamTrackProcessor not supported');
-    }
-    const processor = new Processor({ track: videoTrack });
-    this.streamReader = processor.readable.getReader();
-
-    this.ready = true;
-    log.info(`Stream attached: ${this.width}x${this.height}`);
-
-    // Start reading frames
-    this.startStreamCapture();
-
-    this.onReady?.(this.width, this.height);
-  }
-
-  private async startStreamCapture(): Promise<void> {
-    if (!this.streamReader || this.streamActive) return;
-
-    this.streamActive = true;
-    log.debug('Starting stream frame capture');
-
-    try {
-      while (this.streamActive) {
-        const { value: frame, done } = await this.streamReader.read();
-
-        if (done) {
-          log.debug('Stream ended');
-          break;
-        }
-
-        if (frame) {
-          // Close previous frame
-          if (this.currentFrame) {
-            this.currentFrame.close();
-          }
-          this.currentFrame = frame;
-          this.currentFrameTimestampUs = frame.timestamp;
-          this.onFrame?.(frame);
-        }
-      }
-    } catch (e) {
-      log.warn('Error reading frames from stream', e);
-    }
-
-    this.streamActive = false;
-  }
-
-  private stopStreamCapture(): void {
-    this.streamActive = false;
-    if (this.streamReader) {
-      this.streamReader.cancel().catch(() => {});
-      this.streamReader = null;
-    }
+    await this.simpleSource.attachWithStream(video);
   }
 
   async loadFile(file: File): Promise<void> {
@@ -306,7 +202,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
 
     // Simple mode: use HTMLVideoElement + VideoFrame (no MP4Box parsing needed)
     if (this.useSimpleMode) {
-      await this.loadFileSimple(file);
+      await this.simpleSource.loadFile(file, this.loop);
       return;
     }
 
@@ -319,12 +215,6 @@ export class WebCodecsPlayer implements ExportModePlayer {
     await this.loadArrayBuffer(arrayBuffer);
   }
 
-  // Track if we're attached to an external video (Timeline's video element)
-  private isAttachedToExternal = false;
-  private boundOnPlay: (() => void) | null = null;
-  private boundOnPause: (() => void) | null = null;
-  private boundOnSeeked: (() => void) | null = null;
-
   // Use an existing video element instead of creating one (for timeline integration)
   attachToVideoElement(video: HTMLVideoElement): void {
     if (!('VideoFrame' in window)) {
@@ -332,230 +222,24 @@ export class WebCodecsPlayer implements ExportModePlayer {
     }
 
     this.useSimpleMode = true;
-    this.isAttachedToExternal = true;
-    this.videoElement = video;
-    this.width = video.videoWidth;
-    this.height = video.videoHeight;
-    this.ready = true;
-
-    log.info(`Simple mode attached to existing video: ${this.width}x${this.height}`);
-
-    // Listen to video element events - Timeline controls the video, we just capture frames
-    this.boundOnPlay = () => {
-      if (this._isPlaying) return; // Already playing
-      log.debug('Video play event - starting frame capture');
-      this._isPlaying = true;
-      this.startSimpleFrameCapture();
-    };
-    this.boundOnPause = () => {
-      if (!this._isPlaying) return; // Already paused
-      log.debug('Video pause event');
-      this._isPlaying = false;
-      this.stopSimpleFrameCapture();
-      // Capture the paused frame
-      this.captureCurrentFrame();
-    };
-    this.boundOnSeeked = () => {
-      vfPipelineMonitor.record('vf_seek_done', {
-        currentTime: Math.round(video.currentTime * 1000) / 1000,
-        readyState: video.readyState,
-      });
-      // Only capture on seek if not playing (playing captures continuously)
-      if (!this._isPlaying) {
-        this.captureCurrentFrame();
-      }
-    };
-    // No timeupdate listener - requestVideoFrameCallback is more efficient
-
-    video.addEventListener('play', this.boundOnPlay);
-    video.addEventListener('pause', this.boundOnPause);
-    video.addEventListener('seeked', this.boundOnSeeked);
-
-    // Capture initial frame
-    if (video.readyState >= 2) {
-      this.captureCurrentFrame();
-    }
-
-    // If video is already playing, start capture
-    if (!video.paused) {
-      this._isPlaying = true;
-      this.startSimpleFrameCapture();
-    }
-  }
-
-  // Simple mode: Create VideoFrames directly from HTMLVideoElement
-  private async loadFileSimple(file: File): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const video = document.createElement('video');
-      video.src = URL.createObjectURL(file);
-      video.muted = true;
-      video.playsInline = true;
-      video.preload = 'auto';
-      video.loop = this.loop;
-
-      const timeout = setTimeout(() => {
-        reject(new Error('Video load timeout'));
-      }, 10000);
-
-      video.onloadedmetadata = () => {
-        this.width = video.videoWidth;
-        this.height = video.videoHeight;
-        this.videoElement = video;
-
-        // Estimate frame rate (assume 30fps if unknown)
-        this.frameRate = 30;
-        this.frameInterval = 1000 / this.frameRate;
-
-        log.debug(`Video loaded: ${this.width}x${this.height}`);
-      };
-
-      video.oncanplay = () => {
-        clearTimeout(timeout);
-        this.ready = true;
-
-        // Create initial frame
-        this.captureCurrentFrame();
-
-        log.info(`Simple mode READY: ${this.width}x${this.height}`);
-        this.onReady?.(this.width, this.height);
-        resolve();
-      };
-
-      video.onerror = () => {
-        clearTimeout(timeout);
-        reject(new Error('Failed to load video'));
-      };
-
-      video.load();
-    });
-  }
-
-  // Capture current video frame as VideoFrame
-  private captureCurrentFrame(): void {
-    if (!this.videoElement || this.videoElement.readyState < 2) return;
-
-    // Close previous frame
-    if (this.currentFrame) {
-      this.currentFrame.close();
-    }
-
-    // Create new VideoFrame from video element
-    try {
-      this.currentFrame = new VideoFrame(this.videoElement, {
-        timestamp: this.videoElement.currentTime * 1_000_000,
-      });
-      this.currentFrameTimestampUs = this.currentFrame.timestamp;
-      vfPipelineMonitor.record('vf_capture', {
-        videoTime: Math.round(this.videoElement.currentTime * 1000) / 1000,
-        readyState: this.videoElement.readyState,
-      });
-      this.onFrame?.(this.currentFrame);
-    } catch (e) {
-      vfPipelineMonitor.record('vf_drop', {
-        readyState: this.videoElement?.readyState ?? -1,
-        reason: 'capture_error',
-      });
-    }
+    this.simpleSource.attachToVideoElement(video);
   }
 
   async loadArrayBuffer(buffer: ArrayBuffer): Promise<void> {
-    const endLoad = log.time('loadArrayBuffer');
-    return new Promise((resolve, reject) => {
-      log.info(`Parsing MP4 (${(buffer.byteLength / 1024 / 1024).toFixed(1)}MB)...`);
-
-      // Reduced timeout - we only wait for codec info now, not all samples
-      const timeout = setTimeout(() => {
-        reject(new Error('MP4 parsing timeout - file may have unsupported metadata'));
-      }, 5000);
-
-      this.mp4File = MP4Box.createFile() as unknown as MP4File;
-      const mp4File = this.mp4File!;
-      let resolved = false;
-
-      mp4File.onReady = (info) => {
-        log.info(`MP4 onReady: ${info.videoTracks.length} video tracks`);
-        const videoTrack = info.videoTracks[0];
-        if (!videoTrack) {
-          clearTimeout(timeout);
-          reject(new Error('No video track found in file'));
-          return;
-        }
-
+    return loadMp4ForWebCodecs(buffer, {
+      log,
+      onMp4FileCreated: (mp4File) => {
+        this.mp4FileRef.current = mp4File;
+      },
+      onTrackReady: ({ videoTrack, codecConfig, width, height, frameRate, frameInterval }) => {
         this.videoTrack = videoTrack;
-        this.width = videoTrack.video.width;
-        this.height = videoTrack.video.height;
-        this.frameRate = videoTrack.nb_samples / (videoTrack.duration / videoTrack.timescale);
-        this.frameInterval = 1000 / this.frameRate;
-
-        // Build codec string
-        const codec = this.getCodecString(videoTrack);
-
-        // Extract codec-specific description (avcC for H.264, hvcC for H.265, etc.)
-        // This is REQUIRED for AVC/HEVC to work properly
-        let description: ArrayBuffer | undefined;
-
-        // Get the track structure from mp4File to access codec config boxes
-        try {
-          const trak = (mp4File as MP4FileWithTrackLookup).getTrackById(videoTrack.id);
-          if (trak?.mdia?.minf?.stbl?.stsd?.entries?.[0]) {
-            const entry = trak.mdia.minf.stbl.stsd.entries[0];
-
-            // Try to extract codec-specific configuration
-            const configBox = entry.avcC || entry.hvcC || entry.vpcC || entry.av1C;
-            if (configBox) {
-              const stream = new MP4Box.DataStream(undefined, 0, MP4Box.DataStream.BIG_ENDIAN);
-              configBox.write(stream);
-              // The write() includes the box header (8 bytes: size + type), we need to skip it
-              description = stream.buffer.slice(8);
-              log.debug(`Extracted codec description: ${description!.byteLength} bytes from ${entry.avcC ? 'avcC' : entry.hvcC ? 'hvcC' : entry.vpcC ? 'vpcC' : 'av1C'}`);
-            } else {
-              log.warn('No codec config box found in sample entry', Object.keys(entry));
-            }
-          }
-        } catch (e) {
-          log.warn('Failed to extract codec description', e);
-        }
-
-        this.codecConfig = {
-          codec,
-          codedWidth: videoTrack.video.width,
-          codedHeight: videoTrack.video.height,
-          hardwareAcceleration: 'prefer-hardware',
-          optimizeForLatency: true,
-          description,
-        };
-
-        // Set extraction options and start BEFORE codec check (to not miss samples)
-        mp4File.setExtractionOptions(videoTrack.id, null, {
-          nbSamples: Infinity,
-        });
-        mp4File.start();
-        log.debug(`Extraction started for track ${videoTrack.id}`);
-
-        // Check if codec is supported (async, but extraction already started)
-        VideoDecoder.isConfigSupported(this.codecConfig).then((support) => {
-          if (!support.supported) {
-            clearTimeout(timeout);
-            reject(new Error(`Codec ${codec} not supported`));
-            return;
-          }
-
-          log.debug(`Codec ${codec} supported`, support.config);
-          this.initDecoder();
-
-          // RESOLVE IMMEDIATELY after decoder is configured - don't wait for samples!
-          // Samples will continue loading in background
-          if (!resolved) {
-            resolved = true;
-            clearTimeout(timeout);
-            endLoad();
-            log.info(`Decoder configured: ${this.width}x${this.height} @ ${this.frameRate.toFixed(1)}fps (samples loading in background)`);
-            resolve();
-          }
-        });
-      };
-
-      mp4File.onSamples = (_trackId, _ref, samples) => {
+        this.codecConfig = codecConfig;
+        this.width = width;
+        this.height = height;
+        this.frameRate = frameRate;
+        this.frameInterval = frameInterval;
+      },
+      onSamples: (samples) => {
         this.samples.push(...samples);
 
         // Mark ready when we have samples and decoder (for playback mode)
@@ -569,49 +253,14 @@ export class WebCodecsPlayer implements ExportModePlayer {
           // Samples received but decoder not ready yet
           this.pendingDecodeFirstFrame = true;
         }
-      };
-
-      mp4File.onError = (e) => {
-        clearTimeout(timeout);
-        const error = new Error(`MP4 parsing error: ${e}`);
+      },
+      onConfigSupported: () => {
+        this.initDecoder();
+      },
+      onError: (error) => {
         this.onError?.(error);
-        reject(error);
-      };
-
-      // Feed the buffer to mp4box
-      const mp4Buffer = buffer as MP4ArrayBuffer;
-      mp4Buffer.fileStart = 0;
-      try {
-        const appendedBytes = mp4File.appendBuffer(mp4Buffer);
-        log.debug(`Appended ${appendedBytes} bytes to MP4Box`);
-        mp4File.flush();
-        log.debug('Flushed MP4Box, waiting for callbacks...');
-      } catch (e) {
-        clearTimeout(timeout);
-        reject(new Error(`MP4Box appendBuffer failed: ${e}`));
-      }
+      },
     });
-  }
-
-  private getCodecString(track: MP4VideoTrack): string {
-    const dominated = track.codec;
-
-    // Handle common codecs
-    if (dominated.startsWith('avc1') || dominated.startsWith('avc3')) {
-      // H.264/AVC
-      return dominated;
-    } else if (dominated.startsWith('hvc1') || dominated.startsWith('hev1')) {
-      // H.265/HEVC
-      return dominated;
-    } else if (dominated.startsWith('vp09')) {
-      // VP9
-      return dominated;
-    } else if (dominated.startsWith('av01')) {
-      // AV1
-      return dominated;
-    }
-
-    return dominated;
   }
 
   private initDecoder(): void {
@@ -760,12 +409,12 @@ export class WebCodecsPlayer implements ExportModePlayer {
 
     this.setDisplayedFrame(fallbackFrame);
     this.clearPendingSeekFallback(fallbackFrame);
-    wcPipelineMonitor.record('seek_publish', {
-      targetUs: Math.round(targetUs),
-      frameUs: Math.round(fallbackFrame.timestamp),
-      diffUs: Math.round(fallbackDiffUs),
-      mode: 'playback_start_fallback',
-    });
+    webCodecsTelemetry.seekPublish(
+      targetUs,
+      fallbackFrame.timestamp,
+      fallbackDiffUs,
+      'playback_start_fallback'
+    );
     this.onFrame?.(fallbackFrame);
     return true;
   }
@@ -837,12 +486,12 @@ export class WebCodecsPlayer implements ExportModePlayer {
 
     this.setDisplayedFrame(frame);
     this.clearPendingSeekFallback(frame);
-    wcPipelineMonitor.record('seek_publish', {
-      targetUs: Math.round(this.seekTargetUs),
-      frameUs: Math.round(frame.timestamp),
-      diffUs: Math.round(diffUs),
-      mode: 'strict_flush_fallback',
-    });
+    webCodecsTelemetry.seekPublish(
+      this.seekTargetUs,
+      frame.timestamp,
+      diffUs,
+      'strict_flush_fallback'
+    );
 
     this.seekTargetUs = null;
     this.seekTargetToleranceUs = 0;
@@ -860,10 +509,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
 
   private handleDecodedFrame(frame: VideoFrame): void {
     const queueSize = this.noteDecodeDequeued();
-    wcPipelineMonitor.record('decode_output', {
-      ts: frame.timestamp,
-      queueSize,
-    });
+    webCodecsTelemetry.decodeOutput(frame.timestamp, queueSize);
 
     if (this.exportMode.isInExportMode) {
       this.exportMode.handleDecoderOutput(frame);
@@ -884,12 +530,12 @@ export class WebCodecsPlayer implements ExportModePlayer {
         this.setDisplayedFrame(frame);
         this.clearPendingSeekFallback(frame);
         this.lastInteractivePreviewPublishAtMs = performance.now();
-        wcPipelineMonitor.record('seek_publish', {
-          targetUs: Math.round(this.seekTargetUs),
-          frameUs: Math.round(frame.timestamp),
-          diffUs: Math.round(diff),
-          mode: publishPreview ? 'interactive_preview' : 'resolved',
-        });
+        webCodecsTelemetry.seekPublish(
+          this.seekTargetUs,
+          frame.timestamp,
+          diff,
+          publishPreview ? 'interactive_preview' : 'resolved'
+        );
 
         if (diff <= this.seekTargetToleranceUs) {
           this.seekTargetUs = null;
@@ -912,11 +558,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
         this.onFrame?.(frame);
       } else {
         if (!this.rememberPendingSeekFallback(frame, diff)) {
-          wcPipelineMonitor.record('frame_drop', {
-            reason: 'seek_intermediate',
-            frameUs: Math.round(frame.timestamp),
-            targetUs: Math.round(this.seekTargetUs),
-          });
+          webCodecsTelemetry.frameDropSeekIntermediate(frame.timestamp, this.seekTargetUs);
           frame.close();
         }
         // Don't return early — fall through so feedPendingSeekSamples
@@ -957,17 +599,12 @@ export class WebCodecsPlayer implements ExportModePlayer {
     this.clearPausedPreroll();
 
     if (!this.useSimpleMode) {
-      wcPipelineMonitor.record('play');
+      webCodecsTelemetry.play();
     }
 
-    if (this.useSimpleMode && this.videoElement) {
+    if (this.useSimpleMode && this.simpleSource.hasVideoElement()) {
       vfPipelineMonitor.record('vf_play');
-      // If attached to external video, don't control it - just ensure frame capture is running
-      // Timeline controls the video element, we get notified via events
-      if (!this.isAttachedToExternal) {
-        this.videoElement.play().catch(() => {});
-      }
-      this.startSimpleFrameCapture();
+      this.simpleSource.play();
     } else {
       // Sync feedIndex to sampleIndex on play start
       if (this.feedIndex < this.sampleIndex) {
@@ -981,10 +618,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
 
   pause(): void {
     if (this._isPlaying && !this.useSimpleMode) {
-      wcPipelineMonitor.record('pause', {
-        buffered: this.frameBuffer.length,
-        seeking: this.seekTargetUs !== null ? 'true' : 'false',
-      });
+      webCodecsTelemetry.pause(this.frameBuffer.length, this.seekTargetUs !== null);
     }
     if (this._isPlaying && this.useSimpleMode) {
       vfPipelineMonitor.record('vf_pause');
@@ -992,12 +626,8 @@ export class WebCodecsPlayer implements ExportModePlayer {
     this._isPlaying = false;
     this.playbackStartupWarmupStartedAtMs = null;
 
-    if (this.useSimpleMode && this.videoElement) {
-      // If attached to external video, don't control it - Timeline controls it
-      if (!this.isAttachedToExternal) {
-        this.videoElement.pause();
-      }
-      this.stopSimpleFrameCapture();
+    if (this.useSimpleMode && this.simpleSource.hasVideoElement()) {
+      this.simpleSource.pause();
     } else {
       if (this.animationId !== null) {
         cancelAnimationFrame(this.animationId);
@@ -1012,7 +642,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
         this.clearFrameBuffer();
       }
       if (this.seekTargetUs !== null) {
-        wcPipelineMonitor.record('seek_cancel', { reason: 'pause' });
+        webCodecsTelemetry.seekCancelPause();
         if (this.pendingSeekKind === 'seek') {
           this.endPendingSeek('cancelled');
         }
@@ -1027,11 +657,8 @@ export class WebCodecsPlayer implements ExportModePlayer {
   stop(): void {
     this.pause();
 
-    if (this.useSimpleMode && this.videoElement) {
-      // If attached to external video, don't control it
-      if (!this.isAttachedToExternal) {
-        this.videoElement.currentTime = 0;
-      }
+    if (this.useSimpleMode && this.simpleSource.hasVideoElement()) {
+      this.simpleSource.stopToStart();
     } else {
       this.sampleIndex = 0;
       this.feedIndex = 0;
@@ -1053,48 +680,6 @@ export class WebCodecsPlayer implements ExportModePlayer {
     this.currentFrameTimestampUs = null;
   }
 
-  // Simple mode frame capture using requestVideoFrameCallback
-  private startSimpleFrameCapture(): void {
-    if (!this.videoElement || !('requestVideoFrameCallback' in this.videoElement)) {
-      // Fallback to requestAnimationFrame
-      this.startSimpleFrameCaptureRAF();
-      return;
-    }
-
-    const captureFrame = () => {
-      if (!this._isPlaying || !this.videoElement) return;
-
-      this.captureCurrentFrame();
-
-      this.videoFrameCallbackId = this.videoElement.requestVideoFrameCallback(captureFrame);
-    };
-
-    this.videoFrameCallbackId = this.videoElement.requestVideoFrameCallback(captureFrame);
-  }
-
-  private startSimpleFrameCaptureRAF(): void {
-    const captureFrame = () => {
-      if (!this._isPlaying) return;
-
-      this.captureCurrentFrame();
-
-      this.animationId = requestAnimationFrame(captureFrame);
-    };
-
-    this.animationId = requestAnimationFrame(captureFrame);
-  }
-
-  private stopSimpleFrameCapture(): void {
-    if (this.videoFrameCallbackId !== null && this.videoElement && hasVideoFrameCallback(this.videoElement)) {
-      this.videoElement.cancelVideoFrameCallback(this.videoFrameCallbackId);
-      this.videoFrameCallbackId = null;
-    }
-    if (this.animationId !== null) {
-      cancelAnimationFrame(this.animationId);
-      this.animationId = null;
-    }
-  }
-
   private lastRAFTime = 0;
 
   private scheduleNextFrame(): void {
@@ -1105,7 +690,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
       if (this.lastRAFTime > 0) {
         const rafGap = now - this.lastRAFTime;
         if (rafGap > 100) {
-          wcPipelineMonitor.record('rAF_gap', { gapMs: Math.round(rafGap) });
+          webCodecsTelemetry.rafGap(rafGap);
         }
       }
       this.lastRAFTime = now;
@@ -1145,11 +730,11 @@ export class WebCodecsPlayer implements ExportModePlayer {
       try {
         this.decoder.decode(chunk);
         const queueSize = this.decoder.decodeQueueSize;
-        wcPipelineMonitor.record('decode_feed', {
-          sampleIdx: this.feedIndex,
-          type: sample.is_sync ? 'key' : 'delta',
-          queueSize,
-        });
+        webCodecsTelemetry.decodeFeed(
+          this.feedIndex,
+          sample.is_sync ? 'key' : 'delta',
+          queueSize
+        );
       } catch {
         // Skip decode errors
       }
@@ -1209,38 +794,14 @@ export class WebCodecsPlayer implements ExportModePlayer {
 
   // === Render-loop-driven playback (replaces internal animation loop) ===
 
-  /** Lazy-build CTS-sorted index for O(log n) sample lookup */
-  private ensureCtsIndex(): void {
-    if (this.ctsSortedSampleCount === this.samples.length) return;
-    this.ctsSorted = this.samples.map((s, i) => ({ idx: i, cts: s.cts }));
-    this.ctsSorted.sort((a, b) => a.cts - b.cts);
-    this.ctsSortedSampleCount = this.samples.length;
-  }
-
   /** Binary search for sample index whose CTS is closest to target */
   private findSampleNearCts(targetCts: number): number {
-    this.ensureCtsIndex();
-    const sorted = this.ctsSorted;
-    if (sorted.length === 0) return 0;
-
-    let lo = 0, hi = sorted.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (sorted[mid].cts < targetCts) lo = mid + 1;
-      else hi = mid;
-    }
-    if (lo > 0 && Math.abs(sorted[lo - 1].cts - targetCts) < Math.abs(sorted[lo].cts - targetCts)) {
-      return sorted[lo - 1].idx;
-    }
-    return sorted[lo].idx;
+    return this.sampleTimeline.findSampleNearCts(targetCts);
   }
 
   /** Find nearest keyframe at or before the given sample index (DTS order) */
   private findKeyframeBefore(sampleIndex: number): number {
-    for (let i = Math.min(sampleIndex, this.samples.length - 1); i >= 0; i--) {
-      if (this.samples[i].is_sync) return i;
-    }
-    return 0;
+    return this.sampleTimeline.findKeyframeBefore(sampleIndex);
   }
 
   private getCurrentFrameSampleIndex(): number | null {
@@ -1252,11 +813,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
   }
 
   private getSampleTimestampUs(index: number): number | null {
-    if (index < 0 || index >= this.samples.length) {
-      return null;
-    }
-    const sample = this.samples[index];
-    return (sample.cts * 1_000_000) / sample.timescale;
+    return this.sampleTimeline.getSampleTimestampUs(index);
   }
 
   private beginPendingSeek(kind: 'seek' | 'advance', targetUs: number): void {
@@ -1271,10 +828,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
     this.pendingSeekStartedAtMs = performance.now();
     this.pendingSeekKind = kind;
     this.pendingSeekTargetDebugUs = targetUs;
-    wcPipelineMonitor.record('pending_seek_start', {
-      kind,
-      targetUs: Math.round(targetUs),
-    });
+    webCodecsTelemetry.pendingSeekStart(kind, targetUs);
   }
 
   private endPendingSeek(reason: 'resolved' | 'cancelled' | 'replaced' | 'cleared' | 'fallback'): void {
@@ -1283,12 +837,12 @@ export class WebCodecsPlayer implements ExportModePlayer {
       this.pendingSeekPreviewMode = 'strict';
       return;
     }
-    wcPipelineMonitor.record('pending_seek_end', {
-      kind: this.pendingSeekKind ?? 'unknown',
-      durationMs: Math.round(performance.now() - this.pendingSeekStartedAtMs),
-      targetUs: Math.round(this.pendingSeekTargetDebugUs ?? 0),
-      reason,
-    });
+    webCodecsTelemetry.pendingSeekEnd(
+      this.pendingSeekKind ?? 'unknown',
+      performance.now() - this.pendingSeekStartedAtMs,
+      this.pendingSeekTargetDebugUs ?? 0,
+      reason
+    );
     this.pendingSeekStartedAtMs = null;
     this.pendingSeekKind = null;
     this.pendingSeekTargetDebugUs = null;
@@ -1307,7 +861,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
   }
 
   private recordDecoderReset(reason: 'loop' | 'advance_seek' | 'seek' | 'fast_seek'): void {
-    wcPipelineMonitor.record('decoder_reset', { reason });
+    webCodecsTelemetry.decoderReset(reason);
   }
 
   private clearAdvanceSeekState(reason: 'resolved' | 'cancelled' | 'replaced' | 'cleared' = 'cleared'): void {
@@ -1412,10 +966,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
         if (this.publishStrictSeekFallbackAfterFlush()) {
           return;
         }
-        wcPipelineMonitor.record('seek_skip', {
-          reason: 'strict_seek_flush_without_publish',
-          targetUs: Math.round(this.seekTargetUs),
-        });
+        webCodecsTelemetry.seekSkipStrictFlushWithoutPublish(this.seekTargetUs);
       }
     }).catch(() => {});
   }
@@ -1448,12 +999,12 @@ export class WebCodecsPlayer implements ExportModePlayer {
       try {
         this.decoder.decode(chunk);
         const queueSize = this.noteDecodeQueued();
-        wcPipelineMonitor.record('decode_feed', {
-          sampleIdx: this.feedIndex,
-          type: sample.is_sync ? 'key' : 'delta',
+        webCodecsTelemetry.decodeFeed(
+          this.feedIndex,
+          sample.is_sync ? 'key' : 'delta',
           queueSize,
-          mode,
-        });
+          mode
+        );
       } catch {
         // Skip decode errors
       }
@@ -1500,12 +1051,12 @@ export class WebCodecsPlayer implements ExportModePlayer {
       try {
         this.decoder.decode(chunk);
         const queueSize = this.noteDecodeQueued();
-        wcPipelineMonitor.record('decode_feed', {
-          sampleIdx: this.feedIndex,
-          type: sample.is_sync ? 'key' : 'delta',
+        webCodecsTelemetry.decodeFeed(
+          this.feedIndex,
+          sample.is_sync ? 'key' : 'delta',
           queueSize,
-          mode: 'pause_preroll',
-        });
+          'pause_preroll'
+        );
       } catch {
         // Skip decode errors
       }
@@ -1652,12 +1203,11 @@ export class WebCodecsPlayer implements ExportModePlayer {
       this.pendingSeekStartedAtMs !== null &&
       performance.now() - this.pendingSeekStartedAtMs > WebCodecsPlayer.ADVANCE_SEEK_MAX_PENDING_MS
     ) {
-      wcPipelineMonitor.record('seek_skip', {
-        reason: 'advance_pending_timeout',
+      webCodecsTelemetry.seekSkipAdvancePendingTimeout(
         targetIdx,
         pendingTargetIdx,
-        durationMs: Math.round(performance.now() - this.pendingSeekStartedAtMs),
-      });
+        performance.now() - this.pendingSeekStartedAtMs
+      );
       return false;
     }
 
@@ -1672,29 +1222,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
 
   /** Compute seek acceptance tolerance in microseconds with VFR-aware neighbor spacing. */
   private computeSeekToleranceUs(targetIndex: number): number {
-    const nominalFrameUs = 1_000_000 / Math.max(this.frameRate, 1);
-    const target = this.samples[targetIndex];
-    if (!target) return nominalFrameUs * 1.5;
-
-    let neighborDeltaUs = Infinity;
-
-    if (targetIndex > 0) {
-      const prev = this.samples[targetIndex - 1];
-      const prevDelta = Math.abs(target.cts - prev.cts) * 1_000_000 / target.timescale;
-      if (prevDelta > 0) neighborDeltaUs = Math.min(neighborDeltaUs, prevDelta);
-    }
-
-    if (targetIndex < this.samples.length - 1) {
-      const next = this.samples[targetIndex + 1];
-      const nextDelta = Math.abs(next.cts - target.cts) * 1_000_000 / target.timescale;
-      if (nextDelta > 0) neighborDeltaUs = Math.min(neighborDeltaUs, nextDelta);
-    }
-
-    const vfrAwareUs = Number.isFinite(neighborDeltaUs)
-      ? neighborDeltaUs * 0.75
-      : nominalFrameUs * 1.5;
-
-    return Math.max(2_000, Math.min(200_000, Math.max(vfrAwareUs, nominalFrameUs)));
+    return this.sampleTimeline.computeSeekToleranceUs(targetIndex, this.frameRate);
   }
 
   /**
@@ -1732,13 +1260,12 @@ export class WebCodecsPlayer implements ExportModePlayer {
         pendingPausedSeekAgeMs <= WebCodecsPlayer.ADVANCE_SEEK_MAX_PENDING_MS);
 
     if (shouldWaitForPendingPausedSeek) {
-      wcPipelineMonitor.record('seek_skip', {
-        reason: 'await_pending_paused_seek_for_play',
-        targetUs: Math.round(targetUs),
-        pendingTargetUs: Math.round(pendingPausedSeekUs),
-        diffUs: Math.round(Math.abs(pendingPausedSeekUs - targetUs)),
-        queueSize: this.getEffectiveDecodeQueueSize(),
-      });
+      webCodecsTelemetry.seekSkipAwaitPendingPausedSeekForPlay(
+        targetUs,
+        pendingPausedSeekUs,
+        Math.abs(pendingPausedSeekUs - targetUs),
+        this.getEffectiveDecodeQueueSize()
+      );
       return;
     }
     // Check if pipeline needs restart when starting playback.
@@ -1824,23 +1351,21 @@ export class WebCodecsPlayer implements ExportModePlayer {
       if (isFeedPositionedCorrectly && isDecoderReady && this.frameBuffer.length > 0) {
         // Decoder is configured, positioned correctly, AND has decoded frames
         // available — safe to skip the heavyweight reset+configure.
-        wcPipelineMonitor.record('seek_skip', {
-          reason: 'reset_already_positioned',
-          feedIndex: this.feedIndex,
-          keyframe: keyframeForTarget,
+        webCodecsTelemetry.seekSkipResetAlreadyPositioned(
+          this.feedIndex,
+          keyframeForTarget,
           targetIdx,
-          feedDist: feedDistFromKeyframe,
-        });
+          feedDistFromKeyframe
+        );
       } else if (canResumeFromHotPausedFrame) {
         keepHotResumeWarmupActive = !hasHotFutureFrame;
-        wcPipelineMonitor.record('seek_skip', {
-          reason: 'resume_hot_frame',
+        webCodecsTelemetry.seekSkipResumeHotFrame(
           targetIdx,
-          feedIndex: this.feedIndex,
-          queueSize: this.getEffectiveDecodeQueueSize(),
-          futureBuffered: hasHotFutureFrame ? 1 : 0,
-          warmup: keepHotResumeWarmupActive ? 1 : 0,
-        });
+          this.feedIndex,
+          this.getEffectiveDecodeQueueSize(),
+          hasHotFutureFrame,
+          keepHotResumeWarmupActive
+        );
       } else {
         restartNeedsReset = true;
       }
@@ -1873,14 +1398,13 @@ export class WebCodecsPlayer implements ExportModePlayer {
         : targetIdx;
 
     if (needsSeek && keepPendingAdvanceSeekAlive) {
-      wcPipelineMonitor.record('seek_skip', {
-        reason: 'advance_inflight',
-        target: Math.round(timeSeconds * 1000) / 1000,
+      webCodecsTelemetry.seekSkipAdvanceInflight(
+        timeSeconds,
         targetIdx,
-        pendingTargetIdx: activePendingAdvanceTargetIdx ?? -1,
-        coverageEnd: decodeCoverageEnd,
-        queueSize: this.getEffectiveDecodeQueueSize(),
-      });
+        activePendingAdvanceTargetIdx ?? -1,
+        decodeCoverageEnd,
+        this.getEffectiveDecodeQueueSize()
+      );
       needsSeek = false;
     }
 
@@ -1905,13 +1429,13 @@ export class WebCodecsPlayer implements ExportModePlayer {
       this.clearFrameBuffer();
       this.feedIndex = keyframe;
       this.setPendingAdvanceSeekTarget(advanceResolveTargetIdx);
-      wcPipelineMonitor.record('advance_seek', {
-        target: timeSeconds,
-        keyframeDist: targetIdx - keyframe,
+      webCodecsTelemetry.advanceSeek(
+        timeSeconds,
+        targetIdx - keyframe,
         forwardGap,
         currentFrameIdx,
-        reason: shouldRestartPlaybackPipeline ? 'playback_restart' : 'advance',
-      });
+        shouldRestartPlaybackPipeline ? 'playback_restart' : 'advance'
+      );
     }
 
     // Pump decoder: feed samples ahead of target position.
@@ -1947,37 +1471,33 @@ export class WebCodecsPlayer implements ExportModePlayer {
       try {
         this.decoder.decode(chunk);
         const queueSize = this.noteDecodeQueued();
-        wcPipelineMonitor.record('decode_feed', {
-          sampleIdx: this.feedIndex,
-          type: sample.is_sync ? 'key' : 'delta',
+        webCodecsTelemetry.decodeFeed(
+          this.feedIndex,
+          sample.is_sync ? 'key' : 'delta',
           queueSize,
-          mode: needsSeek
+          needsSeek
             ? 'advance_seek'
             : keepPendingAdvanceSeekAlive
               ? 'advance_pending'
               : keepHotResumeWarmupActive
                 ? 'advance_resume_warmup'
-              : 'advance',
-        });
+              : 'advance'
+        );
         // Only record queue_pressure when actually at the limit (not at 3)
         if (queueSize >= queueLimit) {
-          wcPipelineMonitor.record('queue_pressure', {
-            queueSize,
-            queueLimit,
-          });
+          webCodecsTelemetry.queuePressure(queueSize, queueLimit);
         }
       } catch { /* skip decode errors */ }
       this.feedIndex++;
     }
 
     if (needsSeek && hitQueueCap) {
-      wcPipelineMonitor.record('seek_skip', {
-        reason: 'advance_queue_cap',
-        target: Math.round(timeSeconds * 1000) / 1000,
+      webCodecsTelemetry.seekSkipAdvanceQueueCap(
+        timeSeconds,
         targetIdx,
-        queueSize: this.getEffectiveDecodeQueueSize(),
-        queueLimit,
-      });
+        this.getEffectiveDecodeQueueSize(),
+        queueLimit
+      );
     }
 
     this.sampleIndex = targetIdx;
@@ -2031,12 +1551,12 @@ export class WebCodecsPlayer implements ExportModePlayer {
         this.onFrame?.(frame);
         this.frameBuffer.splice(0, bestIdx + 1);
         if (startupWarmupPublishable) {
-          wcPipelineMonitor.record('seek_publish', {
-            targetUs: Math.round(selectionTargetUs),
-            frameUs: Math.round(frame.timestamp),
-            diffUs: Math.round(bestDiff),
-            mode: 'playback_startup_warmup',
-          });
+          webCodecsTelemetry.seekPublish(
+            selectionTargetUs,
+            frame.timestamp,
+            bestDiff,
+            'playback_startup_warmup'
+          );
         } else {
           this.playbackStartupWarmupStartedAtMs = null;
         }
@@ -2113,24 +1633,8 @@ export class WebCodecsPlayer implements ExportModePlayer {
 
   seek(timeSeconds: number, options?: { previewMode?: SeekPreviewMode }): void {
     // Simple mode: direct seek on video element
-    if (this.useSimpleMode && this.videoElement) {
-      // Remove previous pending seek listener to avoid accumulation during rapid scrubbing
-      if (this.pendingSimpleSeekHandler && this.videoElement) {
-        this.videoElement.removeEventListener('seeked', this.pendingSimpleSeekHandler);
-      }
-
-      this.videoElement.currentTime = timeSeconds;
-      // Capture frame immediately and after seek completes
-      this.captureCurrentFrame();
-
-      // Also capture when seeked event fires
-      const onSeeked = () => {
-        this.captureCurrentFrame();
-        this.videoElement?.removeEventListener('seeked', onSeeked);
-        this.pendingSimpleSeekHandler = null;
-      };
-      this.pendingSimpleSeekHandler = onSeeked;
-      this.videoElement.addEventListener('seeked', onSeeked);
+    if (this.useSimpleMode && this.simpleSource.hasVideoElement()) {
+      this.simpleSource.seek(timeSeconds);
       return;
     }
 
@@ -2163,18 +1667,15 @@ export class WebCodecsPlayer implements ExportModePlayer {
     this.beginPendingSeek('seek', this.seekTargetUs);
     this.pendingSeekPreviewMode = previewMode;
 
-    wcPipelineMonitor.record('seek_start', {
-      target: timeSeconds,
-      keyframeDist: framesDecoded,
-    });
+    webCodecsTelemetry.seekStart(timeSeconds, framesDecoded);
 
     if (canReusePipeline) {
-      wcPipelineMonitor.record('seek_skip', {
-        reason: canExtendPendingSeek ? 'seek_extend_pending' : 'seek_reuse_pipeline',
-        targetIdx: targetIndex,
-        currentFrameIdx: this.getCurrentFrameSampleIndex() ?? -1,
-        feedIndex: this.feedIndex,
-      });
+      webCodecsTelemetry.seekSkipReuse(
+        canExtendPendingSeek ? 'seek_extend_pending' : 'seek_reuse_pipeline',
+        targetIndex,
+        this.getCurrentFrameSampleIndex() ?? -1,
+        this.feedIndex
+      );
 
       this.sampleIndex = targetIndex;
       if (!canExtendPendingSeek) {
@@ -2205,11 +1706,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
     // preventing the seek from ever reaching its target.  The flush is
     // triggered later by feedPendingSeekSamples once all samples are fed.
 
-    wcPipelineMonitor.record('seek_end', {
-      target: timeSeconds,
-      framesDecoded,
-      durationMs: Math.round(performance.now() - seekStart),
-    });
+    webCodecsTelemetry.seekEnd(timeSeconds, framesDecoded, performance.now() - seekStart);
   }
 
   /**
@@ -2217,21 +1714,8 @@ export class WebCodecsPlayer implements ExportModePlayer {
    * Use during fast scrubbing for instant feedback — shows nearest I-frame.
    */
   fastSeek(timeSeconds: number): void {
-    if (this.useSimpleMode && this.videoElement) {
-      const vid = this.videoElement;
-      const fastSeek = (vid as { fastSeek?: (timeSeconds: number) => void }).fastSeek;
-      if (typeof fastSeek === 'function') {
-        fastSeek.call(vid, timeSeconds);
-        vfPipelineMonitor.record('vf_seek_fast', {
-          target: Math.round(timeSeconds * 1000) / 1000,
-        });
-      } else {
-        vid.currentTime = timeSeconds;
-        vfPipelineMonitor.record('vf_seek_precise', {
-          target: Math.round(timeSeconds * 1000) / 1000,
-        });
-      }
-      this.captureCurrentFrame();
+    if (this.useSimpleMode && this.simpleSource.hasVideoElement()) {
+      this.simpleSource.fastSeek(timeSeconds);
       return;
     }
 
@@ -2295,92 +1779,8 @@ export class WebCodecsPlayer implements ExportModePlayer {
    */
   async seekAsync(timeSeconds: number): Promise<void> {
     // Simple mode: seek video element and wait for frame
-    if (this.useSimpleMode && this.videoElement) {
-      return new Promise<void>((resolve) => {
-        const video = this.videoElement!;
-        let resolved = false;
-
-        const doResolve = () => {
-          if (resolved) return;
-          resolved = true;
-          this.captureCurrentFrame();
-          resolve();
-        };
-
-        // Longer timeout for export - we need accurate frames
-        const timeout = setTimeout(() => {
-          if (!resolved) {
-            log.warn(`seekAsync timeout at ${timeSeconds}, readyState: ${video.readyState}`);
-            doResolve();
-          }
-        }, 2000);
-
-        // Wait for video to have enough data (readyState >= 2 means HAVE_CURRENT_DATA)
-        const waitForReady = (callback: () => void) => {
-          if (video.readyState >= 2 && !video.seeking) {
-            callback();
-            return;
-          }
-          // Poll until ready or timeout
-          let retries = 0;
-          const maxRetries = 60; // 60 * 16ms ≈ 1 second
-          const checkReady = () => {
-            retries++;
-            if (video.readyState >= 2 && !video.seeking) {
-              callback();
-            } else if (retries < maxRetries) {
-              requestAnimationFrame(checkReady);
-            } else {
-              // Give up waiting for readyState, proceed anyway
-              log.warn(`waitForReady gave up after ${retries} retries, readyState: ${video.readyState}`);
-              callback();
-            }
-          };
-          requestAnimationFrame(checkReady);
-        };
-
-        const waitForFrame = () => {
-          // First ensure video has data, then wait for frame callback
-          waitForReady(() => {
-            // Use requestVideoFrameCallback if available for precise frame timing
-            if (hasVideoFrameCallback(video)) {
-              video.requestVideoFrameCallback(() => {
-                clearTimeout(timeout);
-                doResolve();
-              });
-              // Also set a shorter backup timeout since rvfc may not fire when paused
-              setTimeout(() => {
-                if (!resolved && video.readyState >= 2) {
-                  clearTimeout(timeout);
-                  doResolve();
-                }
-              }, 100);
-            } else {
-              // Fallback: wait two animation frames
-              requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                  clearTimeout(timeout);
-                  doResolve();
-                });
-              });
-            }
-          });
-        };
-
-        const onSeeked = () => {
-          video.removeEventListener('seeked', onSeeked);
-          waitForFrame();
-        };
-
-        if (Math.abs(video.currentTime - timeSeconds) < 0.01 && !video.seeking) {
-          // Already at position, just wait for frame
-          waitForFrame();
-          return;
-        }
-
-        video.addEventListener('seeked', onSeeked);
-        video.currentTime = timeSeconds;
-      });
+    if (this.useSimpleMode && this.simpleSource.hasVideoElement()) {
+      return this.simpleSource.seekAsync(timeSeconds);
     }
 
     // Full mode: decode and flush
@@ -2455,8 +1855,9 @@ export class WebCodecsPlayer implements ExportModePlayer {
   }
 
   get duration(): number {
-    if (this.useSimpleMode && this.videoElement) {
-      return this.videoElement.duration || 0;
+    const videoElement = this.simpleSource.getVideoElement();
+    if (this.useSimpleMode && videoElement) {
+      return videoElement.duration || 0;
     }
     if (!this.videoTrack) return 0;
     return this.videoTrack.duration / this.videoTrack.timescale;
@@ -2467,8 +1868,9 @@ export class WebCodecsPlayer implements ExportModePlayer {
   }
 
   get currentTime(): number {
-    if (this.useSimpleMode && this.videoElement) {
-      return this.videoElement.currentTime;
+    const videoElement = this.simpleSource.getVideoElement();
+    if (this.useSimpleMode && videoElement) {
+      return videoElement.currentTime;
     }
     if (this.currentFrameTimestampUs !== null) {
       return this.currentFrameTimestampUs / 1_000_000;
@@ -2483,33 +1885,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
     this.stop();
     this.invalidateStrictPausedSeekFlush();
 
-    // Stream mode cleanup
-    this.stopStreamCapture();
-
-    // Simple mode cleanup
-    if (this.videoElement) {
-      // Clean up pending seek listener
-      if (this.pendingSimpleSeekHandler) {
-        this.videoElement.removeEventListener('seeked', this.pendingSimpleSeekHandler);
-        this.pendingSimpleSeekHandler = null;
-      }
-      // Remove event listeners if attached to external video
-      if (this.isAttachedToExternal) {
-        if (this.boundOnPlay) this.videoElement.removeEventListener('play', this.boundOnPlay);
-        if (this.boundOnPause) this.videoElement.removeEventListener('pause', this.boundOnPause);
-        if (this.boundOnSeeked) this.videoElement.removeEventListener('seeked', this.boundOnSeeked);
-        this.boundOnPlay = null;
-        this.boundOnPause = null;
-        this.boundOnSeeked = null;
-        // Don't clear src or pause - Timeline owns the video element
-      } else {
-        this.videoElement.pause();
-        this.videoElement.src = '';
-      }
-      this.videoElement = null;
-    }
-
-    this.isAttachedToExternal = false;
+    this.simpleSource.destroy();
 
     // Full mode cleanup
     if (this.decoder) {
@@ -2532,7 +1908,7 @@ export class WebCodecsPlayer implements ExportModePlayer {
     }
     this.currentFrameTimestampUs = null;
 
-    this.mp4File = null;
+    this.mp4FileRef.current = null;
     this.samples = [];
     this.ready = false;
   }

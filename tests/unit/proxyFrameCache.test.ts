@@ -7,6 +7,8 @@ import { useMediaStore } from '../../src/stores/mediaStore';
 vi.unmock('../../src/services/proxyFrameCache');
 
 import { proxyFrameCache } from '../../src/services/proxyFrameCache';
+import { mediaRuntimeObjectUrlLeaseOwner } from '../../src/services/mediaRuntime/objectUrlLeases';
+import { mediaRuntimeScrubAudioLeaseOwner } from '../../src/services/mediaRuntime/scrubAudioLeases';
 
 type ProxyFrameCacheInternals = typeof proxyFrameCache & {
   cache: Map<string, {
@@ -23,7 +25,6 @@ type ProxyFrameCacheInternals = typeof proxyFrameCache & {
   }>;
   audioCache: Map<string, HTMLAudioElement>;
   audioLoadingPromises: Map<string, Promise<HTMLAudioElement | null>>;
-  ownedAudioUrls: Set<string>;
   audioBufferCache: Map<string, AudioBuffer>;
   preloadQueue: string[];
   isPreloading: boolean;
@@ -49,7 +50,10 @@ function resetProxyFrameCacheInternals(): void {
   }
   cache.audioCache.clear();
   cache.audioLoadingPromises.clear();
-  cache.ownedAudioUrls.clear();
+  // Owned-audio object URLs moved behind the mediaRuntime lease owners
+  // (packet 193); reset them through the new seam instead of an internal set.
+  mediaRuntimeObjectUrlLeaseOwner.clear();
+  mediaRuntimeScrubAudioLeaseOwner.clear();
   cache.cache.clear();
   for (const entry of cache.videoFrameCache.values()) {
     entry.frame.close();
