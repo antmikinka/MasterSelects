@@ -2,28 +2,20 @@
 // Each slot grid layer (A-D) can have an active composition; this service loads their media elements
 // and provides layers for rendering. The primary (editor) composition is handled by the timeline store.
 
-import type { TimelineClip, TimelineTrack, Layer, NestedCompositionData, BlendMode } from '../types';
+import type { TimelineClip, Layer, NestedCompositionData } from '../types';
 import { engine } from '../engine/WebGPUEngine';
-import type { Composition, SlotClipEndBehavior } from '../stores/mediaStore/types';
 import { useMediaStore } from '../stores/mediaStore';
 import { useTimelineStore } from '../stores/timeline';
-import { DEFAULT_TRANSFORM } from '../stores/timeline/constants';
-import type { RuntimeProviderDemand } from '../timeline';
 import {
   bindSourceRuntimeForOwner,
   planSourceRuntimeBindingForOwner,
 } from './mediaRuntime/clipBindings';
 import { mediaRuntimeRegistry } from './mediaRuntime/registry';
-import {
-  getRuntimeFrameProvider,
-  updateRuntimePlaybackTime,
-} from './mediaRuntime/runtimePlayback';
 import { flags } from '../engine/featureFlags';
 import { Logger } from './logger';
 import { slotDeckManager } from './slotDeckManager';
 import { vectorAnimationRuntimeManager } from './vectorAnimation/VectorAnimationRuntimeManager';
 import { isVectorAnimationSourceType, type VectorAnimationProvider } from '../types/vectorAnimation';
-import { getEffectiveScale } from '../utils/transformScale';
 import {
   releaseReportedClipRuntimeResources,
   reportClipRuntimeResources,
@@ -33,47 +25,20 @@ import {
   startTimelineImageHydration,
   type TimelineImageHydrationHandle,
 } from './timeline/imageRuntimeHydrator';
+import { createLayerTimelineClip } from './layerPlayback/clipHydration';
+import { buildBackgroundInnerLayers } from './layerPlayback/innerLayerBuilder';
+import type { LayerCompState, LayerPlaybackInfo, PlaybackWindow } from './layerPlayback/layerPlaybackState';
+import {
+  getAnchoredLayerTime,
+  resolveInitialLayerTime,
+  resolveLayerPlaybackDecision,
+  resolvePlaybackWindow,
+} from './layerPlayback/playbackTiming';
+import { syncAudioClipToPlayback, syncVideoClipToPlayback } from './layerPlayback/mediaSync';
+import { createActiveLayerState } from './layerPlayback/stateFactory';
+import { createBackgroundImageDemand, getRuntimeSrcKind } from './layerPlayback/runtimeDemand';
 
 const log = Logger.create('LayerPlayback');
-
-function getRuntimeSrcKind(url: string): 'blob-url' | 'remote-url' | 'media-source' | 'unknown' {
-  if (!url) return 'unknown';
-  if (url.startsWith('blob:')) return 'blob-url';
-  if (url.startsWith('http')) return 'remote-url';
-  if (url.startsWith('mediastream:')) return 'media-source';
-  return 'unknown';
-}
-
-function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined)
-  ) as T;
-}
-
-interface LayerCompState {
-  compositionId: string;
-  composition: Composition;
-  clips: TimelineClip[];
-  tracks: TimelineTrack[];
-  duration: number;
-  // Anchor-based transport for slot playback.
-  anchorTime: number;
-  anchorStartedAt: number;
-  playbackState: 'playing' | 'paused' | 'stopped';
-  clearRequested: boolean;
-  resourceOwnership: 'layer' | 'slot-deck';
-  slotIndex: number | null;
-}
-
-interface LayerPlaybackInfo {
-  compositionId: string;
-  currentTime: number;
-  trimIn: number;
-  trimOut: number;
-  endBehavior: SlotClipEndBehavior;
-  playbackState: LayerCompState['playbackState'];
-  shouldRender: boolean;
-}
 
 class LayerPlaybackManager {
   private pendingImageHydrations = new Map<string, TimelineImageHydrationHandle>();
@@ -127,19 +92,17 @@ class LayerPlaybackManager {
       const adopted = slotDeckManager.adoptDeckToLayer(options.slotIndex, layerIndex, initialElapsed);
       if (adopted) {
         const initialTime = this.getInitialLayerTime(compositionId, preparedDeck.duration, initialElapsed);
-        this.layerStates.set(layerIndex, {
+        this.layerStates.set(layerIndex, createActiveLayerState({
           compositionId,
           composition: preparedDeck.composition,
           clips: preparedDeck.clips,
           tracks: preparedDeck.tracks,
           duration: preparedDeck.duration,
-          anchorTime: initialTime,
-          anchorStartedAt: performance.now(),
-          playbackState: 'playing',
-          clearRequested: false,
+          initialTime,
+          nowMs: performance.now(),
           resourceOwnership: 'slot-deck',
           slotIndex: options.slotIndex,
-        });
+        }));
         log.info(`Adopted warm slot deck ${options.slotIndex} onto layer ${layerIndex}`);
         return;
       }
@@ -156,19 +119,17 @@ class LayerPlaybackManager {
     if (!timelineData || !timelineData.clips || timelineData.clips.length === 0) {
       log.info(`Composition ${comp.name} has no timeline data, activating with empty state`);
       const initialTime = this.getInitialLayerTime(compositionId, comp.duration, initialElapsed);
-      this.layerStates.set(layerIndex, {
+      this.layerStates.set(layerIndex, createActiveLayerState({
         compositionId,
         composition: comp,
         clips: [],
         tracks: timelineData?.tracks || [],
         duration: comp.duration,
-        anchorTime: initialTime,
-        anchorStartedAt: performance.now(),
-        playbackState: 'playing',
-        clearRequested: false,
+        initialTime,
+        nowMs: performance.now(),
         resourceOwnership: 'layer',
         slotIndex: null,
-      });
+      }));
       return;
     }
 
@@ -177,24 +138,7 @@ class LayerPlaybackManager {
 
     for (const serializedClip of timelineData.clips) {
       const mediaFile = files.find(f => f.id === serializedClip.mediaFileId);
-      const clip: TimelineClip = {
-        id: serializedClip.id,
-        trackId: serializedClip.trackId,
-        name: serializedClip.name,
-        file: mediaFile?.file ?? new File([], serializedClip.name),
-        startTime: serializedClip.startTime,
-        duration: serializedClip.duration,
-        inPoint: serializedClip.inPoint,
-        outPoint: serializedClip.outPoint,
-        source: null,
-        transform: serializedClip.transform || { ...DEFAULT_TRANSFORM },
-        effects: serializedClip.effects || [],
-        mediaFileId: serializedClip.mediaFileId,
-        reversed: serializedClip.reversed,
-        isComposition: serializedClip.isComposition,
-        compositionId: serializedClip.compositionId,
-        masks: serializedClip.masks,
-      };
+      const clip = createLayerTimelineClip(serializedClip, mediaFile);
 
       if (!mediaFile && !serializedClip.isComposition) {
         // Can't load without media file (unless it's a nested comp)
@@ -232,19 +176,17 @@ class LayerPlaybackManager {
     }
 
     const initialTime = this.getInitialLayerTime(compositionId, comp.duration, initialElapsed);
-    this.layerStates.set(layerIndex, {
+    this.layerStates.set(layerIndex, createActiveLayerState({
       compositionId,
       composition: comp,
       clips: hydratedClips,
       tracks: timelineData.tracks,
       duration: comp.duration,
-      anchorTime: initialTime,
-      anchorStartedAt: performance.now(),
-      playbackState: 'playing',
-      clearRequested: false,
+      initialTime,
+      nowMs: performance.now(),
       resourceOwnership: 'layer',
       slotIndex: null,
-    });
+    }));
 
     log.info(`Activated layer ${layerIndex} with composition "${comp.name}" (${hydratedClips.length} clips, initialElapsed=${initialElapsed ?? 0}s)`);
   }
@@ -396,7 +338,12 @@ class LayerPlaybackManager {
     }
 
     const layerTime = playback.currentTime;
-    const innerLayers = this.buildInnerLayers(state, layerTime);
+    const innerLayers = buildBackgroundInnerLayers(
+      state,
+      layerTime,
+      (clipId, clipLocalTime) =>
+        useTimelineStore.getState().getInterpolatedVectorAnimationSettings(clipId, clipLocalTime)
+    );
     if (innerLayers.length === 0) return null;
 
     const nestedCompData: NestedCompositionData = {
@@ -427,67 +374,16 @@ class LayerPlaybackManager {
     return layer;
   }
 
-  private getPlaybackWindow(state: LayerCompState): {
-    trimIn: number;
-    trimOut: number;
-    endBehavior: SlotClipEndBehavior;
-  } {
+  private getPlaybackWindow(state: LayerCompState): PlaybackWindow {
     const slotClipSettings = useMediaStore.getState().slotClipSettings ?? {};
     const configured = slotClipSettings[state.compositionId];
-    const safeDuration = Math.max(state.duration, 0.05);
-
-    if (!configured) {
-      return {
-        trimIn: 0,
-        trimOut: safeDuration,
-        endBehavior: 'loop',
-      };
-    }
-
-    if (safeDuration <= 0.05) {
-      return {
-        trimIn: 0,
-        trimOut: safeDuration,
-        endBehavior: configured.endBehavior,
-      };
-    }
-
-    const trimIn = Math.max(0, Math.min(configured.trimIn, safeDuration - 0.05));
-    const trimOut = Math.max(trimIn + 0.05, Math.min(configured.trimOut, safeDuration));
-
-    return {
-      trimIn,
-      trimOut,
-      endBehavior: configured.endBehavior,
-    };
+    return resolvePlaybackWindow(state.duration, configured);
   }
 
   private getInitialLayerTime(compositionId: string, duration: number, initialElapsed?: number): number {
-    const safeDuration = Math.max(duration, 0.05);
     const slotClipSettings = useMediaStore.getState().slotClipSettings ?? {};
     const configured = slotClipSettings[compositionId];
-    if (!configured) {
-      return Math.max(0, Math.min(initialElapsed ?? 0, safeDuration));
-    }
-
-    const trimIn = Math.max(0, Math.min(configured.trimIn, safeDuration));
-    const trimOut = Math.max(trimIn, Math.min(configured.trimOut, safeDuration));
-    const candidate = initialElapsed ?? trimIn;
-
-    if (candidate < trimIn || candidate > trimOut) {
-      return trimIn;
-    }
-
-    return candidate;
-  }
-
-  private getAnchoredTime(state: LayerCompState): number {
-    if (state.playbackState === 'playing') {
-      const elapsed = (performance.now() - state.anchorStartedAt) / 1000;
-      return state.anchorTime + elapsed;
-    }
-
-    return state.anchorTime;
+    return resolveInitialLayerTime(duration, configured, initialElapsed);
   }
 
   private requestClearLayer(layerIndex: number, state: LayerCompState): void {
@@ -501,74 +397,29 @@ class LayerPlaybackManager {
   }
 
   private resolveLayerPlayback(state: LayerCompState, layerIndex: number): LayerPlaybackInfo {
-    const { trimIn, trimOut, endBehavior } = this.getPlaybackWindow(state);
-    const rawTime = this.getAnchoredTime(state);
+    const playbackWindow = this.getPlaybackWindow(state);
+    const rawTime = getAnchoredLayerTime(state, performance.now());
+    const decision = resolveLayerPlaybackDecision(state, playbackWindow, rawTime);
 
-    if (state.playbackState !== 'playing') {
-      return {
-        compositionId: state.compositionId,
-        currentTime: Math.max(trimIn, Math.min(rawTime, trimOut)),
-        trimIn,
-        trimOut,
-        endBehavior,
-        playbackState: state.playbackState,
-        shouldRender: !state.clearRequested,
-      };
-    }
-
-    if (endBehavior === 'loop') {
-      const span = Math.max(trimOut - trimIn, 0.05);
-      const wrappedTime = trimIn + ((((rawTime - trimIn) % span) + span) % span);
-      return {
-        compositionId: state.compositionId,
-        currentTime: Math.max(trimIn, Math.min(wrappedTime, trimOut)),
-        trimIn,
-        trimOut,
-        endBehavior,
-        playbackState: state.playbackState,
-        shouldRender: true,
-      };
-    }
-
-    if (rawTime <= trimOut) {
-      return {
-        compositionId: state.compositionId,
-        currentTime: Math.max(trimIn, rawTime),
-        trimIn,
-        trimOut,
-        endBehavior,
-        playbackState: state.playbackState,
-        shouldRender: true,
-      };
-    }
-
-    if (endBehavior === 'hold') {
-      state.anchorTime = trimOut;
+    if (decision.endAction === 'hold') {
+      state.anchorTime = decision.nextAnchorTime ?? playbackWindow.trimOut;
       state.anchorStartedAt = performance.now();
-      state.playbackState = 'paused';
-      return {
-        compositionId: state.compositionId,
-        currentTime: trimOut,
-        trimIn,
-        trimOut,
-        endBehavior,
-        playbackState: state.playbackState,
-        shouldRender: true,
-      };
+      state.playbackState = decision.nextPlaybackState ?? 'paused';
+    } else if (decision.endAction === 'clear') {
+      state.anchorTime = decision.nextAnchorTime ?? playbackWindow.trimIn;
+      state.anchorStartedAt = performance.now();
+      state.playbackState = decision.nextPlaybackState ?? 'stopped';
+      this.requestClearLayer(layerIndex, state);
     }
 
-    state.anchorTime = trimIn;
-    state.anchorStartedAt = performance.now();
-    state.playbackState = 'stopped';
-    this.requestClearLayer(layerIndex, state);
     return {
-      compositionId: state.compositionId,
-      currentTime: trimOut,
-      trimIn,
-      trimOut,
-      endBehavior,
-      playbackState: state.playbackState,
-      shouldRender: false,
+      compositionId: decision.compositionId,
+      currentTime: decision.currentTime,
+      trimIn: decision.trimIn,
+      trimOut: decision.trimOut,
+      endBehavior: decision.endBehavior,
+      playbackState: decision.playbackState,
+      shouldRender: decision.shouldRender,
     };
   }
 
@@ -580,146 +431,14 @@ class LayerPlaybackManager {
   }
 
   /**
-   * Build inner layers for a background composition (same logic as buildNestedLayers)
-   */
-  private buildInnerLayers(state: LayerCompState, playheadPosition: number): Layer[] {
-    const layers: Layer[] = [];
-    const videoTracks = state.tracks.filter(t => t.type === 'video' && t.visible !== false);
-
-    // Clamp playhead to composition duration
-    const time = Math.max(0, Math.min(playheadPosition, state.duration));
-
-    for (const track of videoTracks) {
-      // Find clip on this track at current time
-      const clip = state.clips.find(
-        c => c.trackId === track.id && time >= c.startTime && time < c.startTime + c.duration
-      );
-      if (!clip || clip.isLoading) continue;
-
-      const clipLocalTime = time - clip.startTime;
-
-      // Build transform
-      const transform = clip.transform || DEFAULT_TRANSFORM;
-      if (isVectorAnimationSourceType(clip.source?.type)) {
-        vectorAnimationRuntimeManager.renderClipAtTime(
-          clip,
-          time,
-          useTimelineStore.getState().getInterpolatedVectorAnimationSettings(clip.id, clipLocalTime),
-        );
-      }
-      const clipTime = clip.reversed
-        ? clip.outPoint - clipLocalTime
-        : clipLocalTime + clip.inPoint;
-      const layer = this.buildClipLayer(clip, clipTime, transform);
-      if (layer) {
-        layers.push(layer);
-      }
-    }
-
-    return layers;
-  }
-
-  /**
-   * Build a single layer from a clip
-   */
-  private buildClipLayer(
-    clip: TimelineClip,
-    clipTime: number,
-    transform: typeof DEFAULT_TRANSFORM
-  ): Layer | null {
-    const baseLayer = {
-      id: `bg-clip-${clip.id}`,
-      name: clip.name,
-      visible: true,
-      opacity: transform.opacity ?? 1,
-      blendMode: (transform.blendMode || 'normal') as BlendMode,
-      effects: clip.effects || [],
-      position: {
-        x: transform.position?.x || 0,
-        y: transform.position?.y || 0,
-        z: transform.position?.z || 0,
-      },
-      scale: getEffectiveScale(transform.scale),
-      rotation: {
-        x: ((transform.rotation?.x || 0) * Math.PI) / 180,
-        y: ((transform.rotation?.y || 0) * Math.PI) / 180,
-        z: ((transform.rotation?.z || 0) * Math.PI) / 180,
-      },
-    };
-
-    if (clip.source?.videoElement) {
-      updateRuntimePlaybackTime(clip.source, clipTime, 'background');
-      const runtimeProvider =
-        getRuntimeFrameProvider(clip.source, 'background') ??
-        clip.source.webCodecsPlayer;
-      return {
-        ...baseLayer,
-        source: {
-          type: 'video',
-          videoElement: clip.source.videoElement,
-          webCodecsPlayer: runtimeProvider ?? undefined,
-          runtimeSourceId: clip.source.runtimeSourceId,
-          runtimeSessionKey: clip.source.runtimeSessionKey,
-        },
-      } as Layer;
-    }
-
-    if (clip.source?.imageElement) {
-      return {
-        ...baseLayer,
-        source: { type: 'image', imageElement: clip.source.imageElement },
-      } as Layer;
-    }
-
-    if (clip.source?.textCanvas) {
-      return {
-        ...baseLayer,
-        source: { type: 'text', textCanvas: clip.source.textCanvas },
-      } as Layer;
-    }
-
-    return null;
-  }
-
-  /**
    * Sync video elements for all background layers (each uses its own independent time)
    */
   syncVideoElements(_playheadPosition: number, _isPlaying: boolean): void {
     for (const [layerIndex, state] of this.layerStates) {
       const playback = this.resolveLayerPlayback(state, layerIndex);
-      const time = playback.currentTime;
 
       for (const clip of state.clips) {
-        if (!clip.source?.videoElement) continue;
-
-        const video = clip.source.videoElement;
-        const isActive = time >= clip.startTime && time < clip.startTime + clip.duration;
-
-        if (!playback.shouldRender || !isActive) {
-          if (!video.paused) video.pause();
-          continue;
-        }
-
-        const clipLocalTime = time - clip.startTime;
-        const clipTime = clip.reversed
-          ? clip.outPoint - clipLocalTime
-          : clipLocalTime + clip.inPoint;
-
-        const timeDiff = Math.abs(video.currentTime - clipTime);
-
-        if (timeDiff > 0.5) {
-          video.currentTime = clipTime;
-        }
-
-        if (playback.playbackState === 'playing') {
-          if (video.paused) video.play().catch(() => {});
-        } else if (!video.paused) {
-          video.pause();
-        }
-
-        if (playback.playbackState !== 'playing' && timeDiff > 0.05) {
-          video.currentTime = clipTime;
-        }
+        syncVideoClipToPlayback(clip, playback);
       }
     }
   }
@@ -730,39 +449,9 @@ class LayerPlaybackManager {
   syncAudioElements(_playheadPosition: number, _isPlaying: boolean): void {
     for (const [layerIndex, state] of this.layerStates) {
       const playback = this.resolveLayerPlayback(state, layerIndex);
-      const time = playback.currentTime;
 
       for (const clip of state.clips) {
-        if (!clip.source?.audioElement) continue;
-
-        const audio = clip.source.audioElement;
-        const isActive = time >= clip.startTime && time < clip.startTime + clip.duration;
-
-        if (!playback.shouldRender || !isActive) {
-          if (!audio.paused) audio.pause();
-          continue;
-        }
-
-        const clipLocalTime = time - clip.startTime;
-        const clipTime = clip.reversed
-          ? clip.outPoint - clipLocalTime
-          : clipLocalTime + clip.inPoint;
-
-        const timeDiff = Math.abs(audio.currentTime - clipTime);
-
-        if (timeDiff > 0.3) {
-          audio.currentTime = clipTime;
-        }
-
-        if (playback.playbackState === 'playing') {
-          if (audio.paused) audio.play().catch(() => {});
-        } else if (!audio.paused) {
-          audio.pause();
-        }
-
-        if (playback.playbackState !== 'playing' && timeDiff > 0.05) {
-          audio.currentTime = clipTime;
-        }
+        syncAudioClipToPlayback(clip, playback);
       }
     }
   }
@@ -968,7 +657,7 @@ class LayerPlaybackManager {
     const handle = startTimelineImageHydration({
       url,
       resource: {
-        demand: this.createBackgroundImageDemand(layerIndex, clip, ownerId, url),
+        demand: createBackgroundImageDemand(layerIndex, clip, ownerId, url),
         imageId: `${ownerId}:image`,
         label: 'Background image hydration',
         tags: ['background', 'image'],
@@ -1016,41 +705,6 @@ class LayerPlaybackManager {
       return;
     }
     this.pendingImageHydrations.set(ownerId, handle);
-  }
-
-  private createBackgroundImageDemand(
-    layerIndex: number,
-    clip: TimelineClip,
-    ownerId: string,
-    url: string
-  ): RuntimeProviderDemand {
-    const resourceId = `timeline-runtime:background:${ownerId}:image-canvas:image`;
-    return {
-      id: resourceId,
-      facetId: `${resourceId}:facet`,
-      resourceKind: 'image-canvas',
-      policyId: 'background',
-      leasePolicy: 'lease-visible',
-      owner: removeUndefinedValues({
-        ownerId,
-        ownerType: 'clip' as const,
-        clipId: clip.id,
-        trackId: clip.trackId,
-        mediaFileId: clip.mediaFileId,
-      }),
-      source: removeUndefinedValues({
-        sourceId: clip.mediaFileId,
-        mediaFileId: clip.mediaFileId,
-        clipId: clip.id,
-        trackId: clip.trackId,
-        previewPath: url,
-      }),
-      dimensions: {
-        durationSeconds: clip.duration,
-      },
-      priority: 'background',
-      tags: ['background', 'image', `layer-${layerIndex}`],
-    };
   }
 
   private loadVectorAnimationForClip(

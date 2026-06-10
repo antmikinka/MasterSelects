@@ -157,7 +157,10 @@ export const classCHardTargets = [
   { path: 'src/engine/render/dispatcher/targetPreviewRenderer.ts', maxCurrentHits: 1 },
   { path: 'src/engine/scene/SceneCameraUtils.ts', maxCurrentHits: 7 },
   { path: 'src/engine/scene/SceneEffectorUtils.ts', maxCurrentHits: 2 },
-  { path: 'src/engine/WebGPUEngine.ts', maxCurrentHits: 12 },
+  // Packet 254 split: 7 hits moved into the output-window controller
+  // (12 -> 5 + 7, cluster total conserved).
+  { path: 'src/engine/WebGPUEngine.ts', maxCurrentHits: 5 },
+  { path: 'src/engine/engineCore/outputWindowController.ts', maxCurrentHits: 7 },
   { path: 'src/hooks/useEngine.ts', maxCurrentHits: 25 },
   { path: 'src/hooks/useGlobalHistory.ts', maxCurrentHits: 3 },
   { path: 'src/services/audio/audioDiagnostics.ts', maxCurrentHits: 1 },
@@ -196,7 +199,8 @@ export const classCHardTargets = [
   { path: 'src/services/sceneDescriber.ts', maxCurrentHits: 5 },
   { path: 'src/services/shortcutRegistry.ts', maxCurrentHits: 1 },
   { path: 'src/services/slotDeckManager.ts', maxCurrentHits: 6 },
-  { path: 'src/services/thumbnailRenderer.ts', maxCurrentHits: 1 },
+  // Packet 253 split: the single hit moved into the sampling module.
+  { path: 'src/services/thumbnailRender/sampling.ts', maxCurrentHits: 1 },
   { path: 'src/services/timeline/renderTargetRuntimeReporting.ts', maxCurrentHits: 3 },
   { path: 'src/services/timeline/timelineAudioArtifactGenerationWarmup.ts', maxCurrentHits: 3 },
   { path: 'src/services/timeline/timelineExternalDropCommandExecutor.ts', maxCurrentHits: 2 },
@@ -279,7 +283,9 @@ export const getStateAccessPolicyBaselines = {
   // 199 -> 203: packet-239 LayerCollector entry replaced by five collector
   // modules (7 -> 1+1+1+1+3, total conserved).
   // 203 -> 205: packet-246 nestedComp modules (10 -> 1+8+1, total conserved).
-  classCHardTargetFileCount: 205,
+  // 205 -> 206: packet-254 output-window controller entry (12 -> 5+7);
+  // packet-253 thumbnail entry replaced by sampling module (1 -> 1).
+  classCHardTargetFileCount: 206,
   // 669 -> 665 (packet 188 Preview cut) -> 664 (packet 209 retired one hit)
   // -> 659 (packet 231 retired the dispatcher ceiling slack: 16 -> 11 actual)
   // -> 658 (packet 237 retired one compositionRenderer hit).

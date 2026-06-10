@@ -1,145 +1,40 @@
 // IndexedDB service for project persistence
 // Stores media file blobs and project data
 
-import { Logger } from './logger';
 import type { ArtifactManifest } from '../artifacts/types';
+import { Logger } from './logger';
+import * as analysisCache from './projectDb/analysisCache';
+import * as artifactStores from './projectDb/artifacts';
+import * as coreStores from './projectDb/coreStores';
+import * as handleStores from './projectDb/handles';
+import * as proxyFrameStores from './projectDb/proxyFrames';
+import { STORES } from './projectDb/stores';
+import * as thumbnailStores from './projectDb/thumbnails';
+import type {
+  StoredAnalysis,
+  StoredMediaFile,
+  StoredProject,
+  StoredProxyFrame,
+  StoredSourceThumbnail,
+  StoredThumbnail,
+} from './projectDb/types';
+
+export type {
+  ProxyMetadata,
+  StoredAnalysis,
+  StoredArtifactBlob,
+  StoredArtifactManifest,
+  StoredMediaFile,
+  StoredProject,
+  StoredProxyFrame,
+  StoredSourceThumbnail,
+  StoredThumbnail,
+} from './projectDb/types';
 
 const log = Logger.create('ProjectDB');
 
 const DB_NAME = 'MASterSelectsDB';
 const DB_VERSION = 8; // Upgraded for content-addressed artifact manifests and blobs
-
-// Store names
-const STORES = {
-  MEDIA_FILES: 'mediaFiles',
-  PROJECTS: 'projects',
-  PROXY_FRAMES: 'proxyFrames', // Legacy proxy-frame store kept for cleanup/migration
-  FS_HANDLES: 'fsHandles', // Store for FileSystemHandles (directories, files)
-  ANALYSIS_CACHE: 'analysisCache', // Cache for clip analysis data
-  THUMBNAILS: 'thumbnails', // Deduplicated thumbnails by file hash
-  SOURCE_THUMBNAILS: 'sourceThumbnails', // 1-per-second source thumbnail cache
-  ARTIFACTS: 'artifacts', // Content-addressed artifact manifest index
-  ARTIFACT_BLOBS: 'artifactBlobs', // Content-addressed artifact bytes
-} as const;
-
-// Source thumbnail: 1 per second per source media file
-export interface StoredSourceThumbnail {
-  id: string;            // Format: "${mediaFileId}_${secondIndex}" e.g., "abc123_000042"
-  mediaFileId: string;   // Source media file ID
-  fileHash?: string;     // For deduplication across re-imports
-  secondIndex: number;   // Which second (0-based)
-  blob: Blob;            // JPEG blob (~2-5KB each at 160x90)
-}
-
-// Thumbnail stored by file hash for deduplication
-export interface StoredThumbnail {
-  fileHash: string; // Primary key
-  blob: Blob;
-  width?: number;
-  height?: number;
-  createdAt: number;
-}
-
-export interface StoredMediaFile {
-  id: string;
-  name: string;
-  type: 'video' | 'audio' | 'image' | 'lottie' | 'rive';
-  // No longer storing blob - only metadata and file hash for deduplication
-  fileHash?: string; // SHA-256 hash for proxy/thumbnail deduplication
-  duration?: number;
-  width?: number;
-  height?: number;
-  fps?: number;
-  codec?: string;
-  container?: string;
-  fileSize?: number;
-  createdAt: number;
-}
-
-// Proxy frame data - stores frames for a media file
-export interface StoredProxyFrame {
-  id: string; // Format: fileHash_frameIndex (e.g., "abc123_0042")
-  mediaFileId: string; // Legacy: kept for backwards compatibility
-  fileHash?: string; // SHA-256 hash of file content (for deduplication)
-  frameIndex: number;
-  blob: Blob; // WebP image blob
-}
-
-// Proxy metadata stored with media file
-export interface ProxyMetadata {
-  mediaFileId: string;
-  frameCount: number;
-  fps: number;
-  width: number;
-  height: number;
-  createdAt: number;
-}
-
-// Cached analysis data for a media file
-export interface StoredAnalysis {
-  mediaFileId: string;
-  // Analysis data per time range (key: "inPoint-outPoint")
-  // Allows caching different trim ranges of the same file
-  analyses: {
-    [rangeKey: string]: {
-      frames: Array<{
-        timestamp: number;
-        motion: number;
-        globalMotion: number;
-        localMotion: number;
-        focus: number;
-        faceCount: number;
-        isSceneCut?: boolean;
-      }>;
-      sampleInterval: number;
-      createdAt: number;
-    };
-  };
-}
-
-export interface StoredProject {
-  id: string;
-  name: string;
-  createdAt: number;
-  updatedAt: number;
-  // Full project state
-  data: {
-    compositions: unknown[];
-    folders: unknown[];
-    activeCompositionId: string | null;
-    openCompositionIds?: string[];
-    expandedFolderIds: string[];
-    // Media file IDs (actual blobs stored separately)
-    mediaFileIds: string[];
-    // Text, solid, and mesh items
-    textItems?: unknown[];
-    solidItems?: unknown[];
-    meshItems?: unknown[];
-    cameraItems?: unknown[];
-    splatEffectorItems?: unknown[];
-    mathSceneItems?: unknown[];
-    motionShapeItems?: unknown[];
-    signalAssets?: unknown[];
-    signalArtifacts?: unknown[];
-    signalGraphs?: unknown[];
-    signalOperators?: unknown[];
-  };
-}
-
-export interface StoredArtifactManifest {
-  artifactId: string;
-  hash: string;
-  sourceRefs: string[];
-  manifest: ArtifactManifest;
-  updatedAt: number;
-}
-
-export interface StoredArtifactBlob {
-  hash: string;
-  artifactId: string;
-  blob: Blob;
-  updatedAt: number;
-}
 
 class ProjectDatabase {
   private db: IDBDatabase | null = null;
@@ -282,595 +177,175 @@ class ProjectDatabase {
 
   // ============ Media Files ============
 
-  // Store a media file blob
   async saveMediaFile(file: StoredMediaFile): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.MEDIA_FILES, 'readwrite');
-      const store = transaction.objectStore(STORES.MEDIA_FILES);
-      const request = store.put(file);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    return coreStores.saveMediaFile(await this.init(), file);
   }
 
-  // Get a media file by ID
   async getMediaFile(id: string): Promise<StoredMediaFile | undefined> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.MEDIA_FILES, 'readonly');
-      const store = transaction.objectStore(STORES.MEDIA_FILES);
-      const request = store.get(id);
-
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    return coreStores.getMediaFile(await this.init(), id);
   }
 
-  // Get all media files
   async getAllMediaFiles(): Promise<StoredMediaFile[]> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.MEDIA_FILES, 'readonly');
-      const store = transaction.objectStore(STORES.MEDIA_FILES);
-      const request = store.getAll();
-
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    return coreStores.getAllMediaFiles(await this.init());
   }
 
-  // Delete a media file
   async deleteMediaFile(id: string): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.MEDIA_FILES, 'readwrite');
-      const store = transaction.objectStore(STORES.MEDIA_FILES);
-      const request = store.delete(id);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    return coreStores.deleteMediaFile(await this.init(), id);
   }
 
   // ============ Projects ============
 
-  // Save a project
   async saveProject(project: StoredProject): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.PROJECTS, 'readwrite');
-      const store = transaction.objectStore(STORES.PROJECTS);
-      const request = store.put(project);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    return coreStores.saveProject(await this.init(), project);
   }
 
-  // Get a project by ID
   async getProject(id: string): Promise<StoredProject | undefined> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.PROJECTS, 'readonly');
-      const store = transaction.objectStore(STORES.PROJECTS);
-      const request = store.get(id);
-
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    return coreStores.getProject(await this.init(), id);
   }
 
-  // Get all projects (metadata only, not full data)
   async getAllProjects(): Promise<StoredProject[]> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.PROJECTS, 'readonly');
-      const store = transaction.objectStore(STORES.PROJECTS);
-      const request = store.getAll();
-
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    return coreStores.getAllProjects(await this.init());
   }
 
-  // Delete a project
   async deleteProject(id: string): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.PROJECTS, 'readwrite');
-      const store = transaction.objectStore(STORES.PROJECTS);
-      const request = store.delete(id);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    return coreStores.deleteProject(await this.init(), id);
   }
 
   // ============ Artifact Manifests ============
 
   async saveArtifactManifest(manifest: ArtifactManifest): Promise<void> {
-    const db = await this.init();
-    const record: StoredArtifactManifest = {
-      artifactId: manifest.artifactId,
-      hash: manifest.hash,
-      sourceRefs: manifest.sourceRefs,
-      manifest,
-      updatedAt: Date.now(),
-    };
-
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.ARTIFACTS, 'readwrite');
-      const store = transaction.objectStore(STORES.ARTIFACTS);
-      const request = store.put(record);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    return artifactStores.saveArtifactManifest(await this.init(), manifest);
   }
 
   async saveArtifact(manifest: ArtifactManifest, blob: Blob): Promise<void> {
-    const db = await this.init();
-    const now = Date.now();
-    const manifestRecord: StoredArtifactManifest = {
-      artifactId: manifest.artifactId,
-      hash: manifest.hash,
-      sourceRefs: manifest.sourceRefs,
-      manifest,
-      updatedAt: now,
-    };
-    const blobRecord: StoredArtifactBlob = {
-      hash: manifest.hash,
-      artifactId: manifest.artifactId,
-      blob,
-      updatedAt: now,
-    };
-
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction([STORES.ARTIFACTS, STORES.ARTIFACT_BLOBS], 'readwrite');
-      transaction.objectStore(STORES.ARTIFACTS).put(manifestRecord);
-      transaction.objectStore(STORES.ARTIFACT_BLOBS).put(blobRecord);
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-    });
+    return artifactStores.saveArtifact(await this.init(), manifest, blob);
   }
 
   async getArtifactManifest(artifactId: string): Promise<ArtifactManifest | undefined> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.ARTIFACTS, 'readonly');
-      const store = transaction.objectStore(STORES.ARTIFACTS);
-      const request = store.get(artifactId);
-
-      request.onsuccess = () => {
-        const record = request.result as StoredArtifactManifest | undefined;
-        resolve(record?.manifest);
-      };
-      request.onerror = () => reject(request.error);
-    });
+    return artifactStores.getArtifactManifest(await this.init(), artifactId);
   }
 
   async listArtifactManifests(): Promise<ArtifactManifest[]> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.ARTIFACTS, 'readonly');
-      const store = transaction.objectStore(STORES.ARTIFACTS);
-      const request = store.getAll();
-
-      request.onsuccess = () => {
-        const records = request.result as StoredArtifactManifest[];
-        resolve(records.map((record) => record.manifest));
-      };
-      request.onerror = () => reject(request.error);
-    });
+    return artifactStores.listArtifactManifests(await this.init());
   }
 
   async listArtifactManifestsBySource(sourceRef: string): Promise<ArtifactManifest[]> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.ARTIFACTS, 'readonly');
-      const store = transaction.objectStore(STORES.ARTIFACTS);
-
-      try {
-        const index = store.index('sourceRefs');
-        const request = index.getAll(sourceRef);
-        request.onsuccess = () => {
-          const records = request.result as StoredArtifactManifest[];
-          resolve(records.map((record) => record.manifest));
-        };
-        request.onerror = () => reject(request.error);
-      } catch {
-        const request = store.getAll();
-        request.onsuccess = () => {
-          const records = request.result as StoredArtifactManifest[];
-          resolve(records
-            .filter((record) => record.sourceRefs.includes(sourceRef))
-            .map((record) => record.manifest));
-        };
-        request.onerror = () => reject(request.error);
-      }
-    });
+    return artifactStores.listArtifactManifestsBySource(await this.init(), sourceRef);
   }
 
   async deleteArtifactManifest(artifactId: string): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.ARTIFACTS, 'readwrite');
-      const store = transaction.objectStore(STORES.ARTIFACTS);
-      const request = store.delete(artifactId);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    return artifactStores.deleteArtifactManifest(await this.init(), artifactId);
   }
 
   async getArtifactBlob(hash: string): Promise<Blob | undefined> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.ARTIFACT_BLOBS, 'readonly');
-      const store = transaction.objectStore(STORES.ARTIFACT_BLOBS);
-      const request = store.get(hash);
-
-      request.onsuccess = () => {
-        const record = request.result as StoredArtifactBlob | undefined;
-        resolve(record?.blob);
-      };
-      request.onerror = () => reject(request.error);
-    });
+    return artifactStores.getArtifactBlob(await this.init(), hash);
   }
 
   async deleteArtifactBlob(hash: string): Promise<boolean> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.ARTIFACT_BLOBS, 'readwrite');
-      const store = transaction.objectStore(STORES.ARTIFACT_BLOBS);
-      const getRequest = store.get(hash);
-
-      getRequest.onsuccess = () => {
-        if (!getRequest.result) {
-          resolve(false);
-          return;
-        }
-
-        const deleteRequest = store.delete(hash);
-        deleteRequest.onsuccess = () => resolve(true);
-        deleteRequest.onerror = () => reject(deleteRequest.error);
-      };
-      getRequest.onerror = () => reject(getRequest.error);
-    });
+    return artifactStores.deleteArtifactBlob(await this.init(), hash);
   }
 
   // ============ Utilities ============
 
-  // Clear all data (for debugging/reset)
   async clearAll(): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction([STORES.MEDIA_FILES, STORES.PROJECTS], 'readwrite');
-
-      transaction.objectStore(STORES.MEDIA_FILES).clear();
-      transaction.objectStore(STORES.PROJECTS).clear();
-
-      transaction.oncomplete = () => {
-        log.info('All data cleared');
-        resolve();
-      };
-      transaction.onerror = () => reject(transaction.error);
-    });
+    return coreStores.clearAll(await this.init(), log);
   }
 
-  // Get database stats
   async getStats(): Promise<{ mediaFiles: number; projects: number; proxyFrames: number }> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction([STORES.MEDIA_FILES, STORES.PROJECTS, STORES.PROXY_FRAMES], 'readonly');
-
-      const mediaRequest = transaction.objectStore(STORES.MEDIA_FILES).count();
-      const projectRequest = transaction.objectStore(STORES.PROJECTS).count();
-      const proxyRequest = transaction.objectStore(STORES.PROXY_FRAMES).count();
-
-      let mediaCount = 0;
-      let projectCount = 0;
-      let proxyCount = 0;
-
-      mediaRequest.onsuccess = () => { mediaCount = mediaRequest.result; };
-      projectRequest.onsuccess = () => { projectCount = projectRequest.result; };
-      proxyRequest.onsuccess = () => { proxyCount = proxyRequest.result; };
-
-      transaction.oncomplete = () => {
-        resolve({ mediaFiles: mediaCount, projects: projectCount, proxyFrames: proxyCount });
-      };
-      transaction.onerror = () => reject(transaction.error);
-    });
+    return coreStores.getStats(await this.init());
   }
 
   // ============ Proxy Frames ============
 
-  // Save a single proxy frame
   async saveProxyFrame(frame: StoredProxyFrame): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.PROXY_FRAMES, 'readwrite');
-      const store = transaction.objectStore(STORES.PROXY_FRAMES);
-      const request = store.put(frame);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    return proxyFrameStores.saveProxyFrame(await this.init(), frame);
   }
 
-  // Save multiple proxy frames in a batch (more efficient)
   async saveProxyFramesBatch(frames: StoredProxyFrame[]): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.PROXY_FRAMES, 'readwrite');
-      const store = transaction.objectStore(STORES.PROXY_FRAMES);
-
-      for (const frame of frames) {
-        store.put(frame);
-      }
-
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-    });
+    return proxyFrameStores.saveProxyFramesBatch(await this.init(), frames);
   }
 
-  // Get a specific proxy frame
   async getProxyFrame(mediaFileId: string, frameIndex: number): Promise<StoredProxyFrame | undefined> {
-    const db = await this.init();
-    const id = `${mediaFileId}_${frameIndex.toString().padStart(6, '0')}`;
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.PROXY_FRAMES, 'readonly');
-      const store = transaction.objectStore(STORES.PROXY_FRAMES);
-      const request = store.get(id);
-
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    return proxyFrameStores.getProxyFrame(await this.init(), mediaFileId, frameIndex);
   }
 
-  // Get all proxy frames for a media file
   async getProxyFramesForMedia(mediaFileId: string): Promise<StoredProxyFrame[]> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.PROXY_FRAMES, 'readonly');
-      const store = transaction.objectStore(STORES.PROXY_FRAMES);
-      const index = store.index('mediaFileId');
-      const request = index.getAll(mediaFileId);
-
-      request.onsuccess = () => {
-        // Sort by frame index
-        const frames = request.result.sort((a, b) => a.frameIndex - b.frameIndex);
-        resolve(frames);
-      };
-      request.onerror = () => reject(request.error);
-    });
+    return proxyFrameStores.getProxyFramesForMedia(await this.init(), mediaFileId);
   }
 
-  // Check if proxy exists for a media file
   async hasProxy(mediaFileId: string): Promise<boolean> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.PROXY_FRAMES, 'readonly');
-      const store = transaction.objectStore(STORES.PROXY_FRAMES);
-      const index = store.index('mediaFileId');
-      const request = index.count(mediaFileId);
-
-      request.onsuccess = () => resolve(request.result > 0);
-      request.onerror = () => reject(request.error);
-    });
+    return proxyFrameStores.hasProxy(await this.init(), mediaFileId);
   }
 
-  // Get proxy frame count for a media file
   async getProxyFrameCount(mediaFileId: string): Promise<number> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.PROXY_FRAMES, 'readonly');
-      const store = transaction.objectStore(STORES.PROXY_FRAMES);
-      const index = store.index('mediaFileId');
-      const request = index.count(mediaFileId);
-
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    return proxyFrameStores.getProxyFrameCount(await this.init(), mediaFileId);
   }
 
-  // Delete all proxy frames for a media file
   async deleteProxyFrames(mediaFileId: string): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.PROXY_FRAMES, 'readwrite');
-      const store = transaction.objectStore(STORES.PROXY_FRAMES);
-      const index = store.index('mediaFileId');
-      const request = index.openCursor(mediaFileId);
-
-      request.onsuccess = (event) => {
-        const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
-        if (cursor) {
-          cursor.delete();
-          cursor.continue();
-        }
-      };
-
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-    });
+    return proxyFrameStores.deleteProxyFrames(await this.init(), mediaFileId);
   }
 
-  // Clear all proxy frames (for all media)
   async clearAllProxyFrames(): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.PROXY_FRAMES, 'readwrite');
-      const store = transaction.objectStore(STORES.PROXY_FRAMES);
-      const request = store.clear();
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    return proxyFrameStores.clearAllProxyFrames(await this.init());
   }
 
   // ============ Hash-based Proxy Deduplication ============
 
-  // Get proxy frame count by file hash (for deduplication)
   async getProxyFrameCountByHash(fileHash: string): Promise<number> {
-    const db = await this.init();
-    return new Promise((resolve, _reject) => {
-      const transaction = db.transaction(STORES.PROXY_FRAMES, 'readonly');
-      const store = transaction.objectStore(STORES.PROXY_FRAMES);
-      try {
-        const index = store.index('fileHash');
-        const request = index.count(fileHash);
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => resolve(0); // Fallback if index doesn't exist
-      } catch {
-        resolve(0); // Index doesn't exist yet
-      }
-    });
+    return proxyFrameStores.getProxyFrameCountByHash(await this.init(), fileHash);
   }
 
-  // Get a proxy frame by file hash
   async getProxyFrameByHash(fileHash: string, frameIndex: number): Promise<StoredProxyFrame | undefined> {
-    const db = await this.init();
-    const id = `${fileHash}_${frameIndex.toString().padStart(6, '0')}`;
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.PROXY_FRAMES, 'readonly');
-      const store = transaction.objectStore(STORES.PROXY_FRAMES);
-      const request = store.get(id);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    return proxyFrameStores.getProxyFrameByHash(await this.init(), fileHash, frameIndex);
   }
 
-  // Check if proxy exists by file hash
   async hasProxyByHash(fileHash: string): Promise<boolean> {
-    const count = await this.getProxyFrameCountByHash(fileHash);
-    return count > 0;
+    return proxyFrameStores.hasProxyByHash(await this.init(), fileHash);
   }
 
   // ============ Thumbnail Deduplication ============
 
-  // Save thumbnail by file hash
   async saveThumbnail(thumbnail: StoredThumbnail): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.THUMBNAILS, 'readwrite');
-      const store = transaction.objectStore(STORES.THUMBNAILS);
-      const request = store.put(thumbnail);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    return thumbnailStores.saveThumbnail(await this.init(), thumbnail);
   }
 
-  // Get thumbnail by file hash
   async getThumbnail(fileHash: string): Promise<StoredThumbnail | undefined> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.THUMBNAILS, 'readonly');
-      const store = transaction.objectStore(STORES.THUMBNAILS);
-      const request = store.get(fileHash);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
+    return thumbnailStores.getThumbnail(await this.init(), fileHash);
   }
 
-  // Check if thumbnail exists by hash
   async hasThumbnail(fileHash: string): Promise<boolean> {
-    const thumbnail = await this.getThumbnail(fileHash);
-    return !!thumbnail;
+    return thumbnailStores.hasThumbnail(await this.init(), fileHash);
   }
 
-  // Delete thumbnail by file hash
   async deleteThumbnail(fileHash: string): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.THUMBNAILS, 'readwrite');
-      const store = transaction.objectStore(STORES.THUMBNAILS);
-      const request = store.delete(fileHash);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    return thumbnailStores.deleteThumbnail(await this.init(), fileHash);
   }
 
   // ============ File System Handles ============
 
-  // Store a FileSystemHandle (directory or file)
   async storeHandle(key: string, handle: FileSystemHandle): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.FS_HANDLES, 'readwrite');
-      const store = transaction.objectStore(STORES.FS_HANDLES);
-      const request = store.put({ key, handle });
-
-      request.onsuccess = () => {
-        log.debug('Stored handle:', key);
-        resolve();
-      };
-      request.onerror = () => reject(request.error);
-    });
+    return handleStores.storeHandle(await this.init(), log, key, handle);
   }
 
-  // Get a stored FileSystemHandle
   async getStoredHandle(key: string): Promise<FileSystemHandle | null> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.FS_HANDLES, 'readonly');
-      const store = transaction.objectStore(STORES.FS_HANDLES);
-      const request = store.get(key);
-
-      request.onsuccess = () => {
-        const result = request.result;
-        resolve(result?.handle ?? null);
-      };
-      request.onerror = () => reject(request.error);
-    });
+    return handleStores.getStoredHandle(await this.init(), key);
   }
 
-  // Delete a stored handle
   async deleteHandle(key: string): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.FS_HANDLES, 'readwrite');
-      const store = transaction.objectStore(STORES.FS_HANDLES);
-      const request = store.delete(key);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    return handleStores.deleteHandle(await this.init(), key);
   }
 
-  // List all stored handle keys (for debugging)
   async listHandleKeys(): Promise<string[]> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.FS_HANDLES, 'readonly');
-      const store = transaction.objectStore(STORES.FS_HANDLES);
-      const request = store.getAllKeys();
-
-      request.onsuccess = () => resolve(request.result as string[]);
-      request.onerror = () => reject(request.error);
-    });
+    return handleStores.listHandleKeys(await this.init());
   }
 
-  // Get all stored handles
   async getAllHandles(): Promise<Array<{ key: string; handle: FileSystemHandle }>> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.FS_HANDLES, 'readonly');
-      const store = transaction.objectStore(STORES.FS_HANDLES);
-      const request = store.getAll();
-
-      request.onsuccess = () => resolve(request.result || []);
-      request.onerror = () => reject(request.error);
-    });
+    return handleStores.getAllHandles(await this.init());
   }
 
-  // Check if there's a stored last project handle (for determining if welcome overlay should show)
   async hasLastProject(): Promise<boolean> {
     try {
-      const handle = await this.getStoredHandle('lastProject');
-      return handle !== null;
+      return handleStores.hasLastProject(await this.init());
     } catch {
       return false;
     }
@@ -878,23 +353,6 @@ class ProjectDatabase {
 
   // ============ Analysis Cache ============
 
-  /**
-   * Generate a range key for analysis cache
-   * @param inPoint Start time in seconds
-   * @param outPoint End time in seconds
-   */
-  private getAnalysisRangeKey(inPoint: number, outPoint: number): string {
-    return `${inPoint.toFixed(2)}-${outPoint.toFixed(2)}`;
-  }
-
-  /**
-   * Save analysis data for a media file
-   * @param mediaFileId The media file ID
-   * @param inPoint Start time of analyzed range
-   * @param outPoint End time of analyzed range
-   * @param frames The analysis frame data
-   * @param sampleInterval Sample interval in milliseconds
-   */
   async saveAnalysis(
     mediaFileId: string,
     inPoint: number,
@@ -902,205 +360,53 @@ class ProjectDatabase {
     frames: StoredAnalysis['analyses'][string]['frames'],
     sampleInterval: number
   ): Promise<void> {
-    const db = await this.init();
-    const rangeKey = this.getAnalysisRangeKey(inPoint, outPoint);
-
-    // First, get existing analysis data for this media file
-    const existing = await this.getAnalysisRecord(mediaFileId);
-
-    const record: StoredAnalysis = existing || {
-      mediaFileId,
-      analyses: {},
-    };
-
-    // Add or update the analysis for this range
-    record.analyses[rangeKey] = {
-      frames,
-      sampleInterval,
-      createdAt: Date.now(),
-    };
-
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.ANALYSIS_CACHE, 'readwrite');
-      const store = transaction.objectStore(STORES.ANALYSIS_CACHE);
-      const request = store.put(record);
-
-      request.onsuccess = () => {
-        log.debug(`Saved analysis for ${mediaFileId} (range: ${rangeKey})`);
-        resolve();
-      };
-      request.onerror = () => reject(request.error);
-    });
+    return analysisCache.saveAnalysis(await this.init(), log, mediaFileId, inPoint, outPoint, frames, sampleInterval);
   }
 
-  /**
-   * Get analysis record for a media file
-   */
-  private async getAnalysisRecord(mediaFileId: string): Promise<StoredAnalysis | undefined> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.ANALYSIS_CACHE, 'readonly');
-      const store = transaction.objectStore(STORES.ANALYSIS_CACHE);
-      const request = store.get(mediaFileId);
-
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-  }
-
-  /**
-   * Get cached analysis for a specific time range
-   * @param mediaFileId The media file ID
-   * @param inPoint Start time of analyzed range
-   * @param outPoint End time of analyzed range
-   * @returns The cached analysis or undefined if not found
-   */
   async getAnalysis(
     mediaFileId: string,
     inPoint: number,
     outPoint: number
   ): Promise<StoredAnalysis['analyses'][string] | undefined> {
-    const record = await this.getAnalysisRecord(mediaFileId);
-    if (!record) return undefined;
-
-    const rangeKey = this.getAnalysisRangeKey(inPoint, outPoint);
-    return record.analyses[rangeKey];
+    return analysisCache.getAnalysis(await this.init(), mediaFileId, inPoint, outPoint);
   }
 
-  /**
-   * Check if analysis exists for a specific time range
-   */
   async hasAnalysis(mediaFileId: string, inPoint: number, outPoint: number): Promise<boolean> {
-    const analysis = await this.getAnalysis(mediaFileId, inPoint, outPoint);
-    return !!analysis;
+    return analysisCache.hasAnalysis(await this.init(), mediaFileId, inPoint, outPoint);
   }
 
-  /**
-   * Get all cached analysis ranges for a media file
-   */
   async getAnalysisRanges(mediaFileId: string): Promise<string[]> {
-    const record = await this.getAnalysisRecord(mediaFileId);
-    if (!record) return [];
-    return Object.keys(record.analyses);
+    return analysisCache.getAnalysisRanges(await this.init(), mediaFileId);
   }
 
-  /**
-   * Delete all cached analysis for a media file
-   */
   async deleteAnalysis(mediaFileId: string): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.ANALYSIS_CACHE, 'readwrite');
-      const store = transaction.objectStore(STORES.ANALYSIS_CACHE);
-      const request = store.delete(mediaFileId);
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    return analysisCache.deleteAnalysis(await this.init(), mediaFileId);
   }
 
-  /**
-   * Clear all cached analysis data
-   */
   async clearAllAnalysis(): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.ANALYSIS_CACHE, 'readwrite');
-      const store = transaction.objectStore(STORES.ANALYSIS_CACHE);
-      const request = store.clear();
-
-      request.onsuccess = () => {
-        log.info('All analysis cache cleared');
-        resolve();
-      };
-      request.onerror = () => reject(request.error);
-    });
+    return analysisCache.clearAllAnalysis(await this.init(), log);
   }
+
   // ============ Source Thumbnails (1-per-second cache) ============
 
-  /** Save a batch of source thumbnails */
   async saveSourceThumbnailsBatch(frames: StoredSourceThumbnail[]): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.SOURCE_THUMBNAILS, 'readwrite');
-      const store = transaction.objectStore(STORES.SOURCE_THUMBNAILS);
-
-      for (const frame of frames) {
-        store.put(frame);
-      }
-
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-    });
+    return thumbnailStores.saveSourceThumbnailsBatch(await this.init(), frames);
   }
 
-  /** Get all source thumbnails for a media file */
   async getSourceThumbnails(mediaFileId: string): Promise<StoredSourceThumbnail[]> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.SOURCE_THUMBNAILS, 'readonly');
-      const store = transaction.objectStore(STORES.SOURCE_THUMBNAILS);
-      try {
-        const index = store.index('mediaFileId');
-        const request = index.getAll(mediaFileId);
-        request.onsuccess = () => resolve(request.result || []);
-        request.onerror = () => reject(request.error);
-      } catch {
-        resolve([]);
-      }
-    });
+    return thumbnailStores.getSourceThumbnails(await this.init(), mediaFileId);
   }
 
-  /** Get source thumbnails by file hash (for deduplication) */
   async getSourceThumbnailsByHash(fileHash: string): Promise<StoredSourceThumbnail[]> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.SOURCE_THUMBNAILS, 'readonly');
-      const store = transaction.objectStore(STORES.SOURCE_THUMBNAILS);
-      try {
-        const index = store.index('fileHash');
-        const request = index.getAll(fileHash);
-        request.onsuccess = () => resolve(request.result || []);
-        request.onerror = () => reject(request.error);
-      } catch {
-        resolve([]);
-      }
-    });
+    return thumbnailStores.getSourceThumbnailsByHash(await this.init(), fileHash);
   }
 
-  /** Delete all source thumbnails for a media file */
   async deleteSourceThumbnails(mediaFileId: string): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.SOURCE_THUMBNAILS, 'readwrite');
-      const store = transaction.objectStore(STORES.SOURCE_THUMBNAILS);
-      const index = store.index('mediaFileId');
-      const request = index.openCursor(mediaFileId);
-
-      request.onsuccess = (event) => {
-        const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
-        if (cursor) {
-          cursor.delete();
-          cursor.continue();
-        }
-      };
-
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error);
-    });
+    return thumbnailStores.deleteSourceThumbnails(await this.init(), mediaFileId);
   }
 
-  /** Clear all source thumbnails */
   async clearAllSourceThumbnails(): Promise<void> {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORES.SOURCE_THUMBNAILS, 'readwrite');
-      const store = transaction.objectStore(STORES.SOURCE_THUMBNAILS);
-      const request = store.clear();
-
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
+    return thumbnailStores.clearAllSourceThumbnails(await this.init());
   }
 }
 
