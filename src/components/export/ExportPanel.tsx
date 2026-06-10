@@ -7,14 +7,12 @@ import { downloadFCPXML } from '../../services/export/fcpxmlExport';
 import { projectFileService } from '../../services/projectFileService';
 
 const log = Logger.create('ExportPanel');
-import { FrameExporter, downloadBlob } from '../../engine/export';
+import { FrameExporter, RESOLUTION_PRESETS, downloadBlob } from '../../engine/export';
 import type { VideoCodec, ContainerFormat } from '../../engine/export';
 import { AudioExportPipeline, encodeAudioBufferToWavBlob } from '../../engine/audio';
 import { useShallow } from 'zustand/react/shallow';
 import { useTimelineStore } from '../../stores/timeline';
 import { useMediaStore } from '../../stores/mediaStore';
-import { engine } from '../../engine/WebGPUEngine';
-import { syncExportMaskTextures } from '../../engine/export/ExportMaskTextures';
 import {
   blobToUint8Array,
   createImageSequenceZip,
@@ -36,6 +34,11 @@ import {
 } from '../../engine/ffmpeg';
 import { CodecSelector } from './CodecSelector';
 import { encodeBrowserGif } from '../../engine/export/BrowserGifExporter';
+import {
+  ExportFrameCaptureUnavailableError,
+  ExportRenderSessionImpl,
+} from '../../engine/export/ExportRenderSessionImpl';
+import type { ExportFrameCapture } from '../../engine/render/contracts/exportRenderSession';
 import {
   GIF_COLOR_PRESETS,
   GIF_DITHER_OPTIONS,
@@ -192,9 +195,19 @@ async function encodeImageDataToBlob(
   );
 }
 
+function getReadbackPixels(capture: ExportFrameCapture): Uint8ClampedArray {
+  if (capture.kind === 'rgba-pixels') {
+    return capture.pixels;
+  }
+
+  capture.frame.close();
+  throw new Error('Failed to read frame from GPU');
+}
+
 export function ExportPanel() {
   const ffmpegFrameRendererRef = useRef<FFmpegFrameRenderer | null>(null);
   const ffmpegAudioPipelineRef = useRef<AudioExportPipeline | null>(null);
+  const exportRenderSessionRef = useRef<ExportRenderSessionImpl | null>(null);
   const summaryHighlightTimeoutsRef = useRef<Map<HTMLElement, number>>(new Map());
   const [setupStatus, setSetupStatus] = useState<string | null>(null);
   const { duration, inPoint, outPoint, playheadPosition, startExport, setExportProgress, endExport } = useTimelineStore(useShallow(s => ({
@@ -391,6 +404,7 @@ export function ExportPanel() {
       const ffmpeg = getFFmpegBridge();
       ffmpeg.cancel();
     }
+    exportRenderSessionRef.current?.cancel('Export cancelled');
     setIsExporting(false);
     setExportPhase('idle');
     // End export progress in timeline
@@ -410,7 +424,6 @@ export function ExportPanel() {
     const actualWidth = useCustomResolution ? customWidth : width;
     const actualHeight = useCustomResolution ? customHeight : height;
     const exportFps = useCustomFps ? customFps : fps;
-    const originalDimensions = engine.getOutputDimensions();
     const frameRenderer = new FFmpegFrameRenderer({
       width: actualWidth,
       height: actualHeight,
@@ -422,6 +435,18 @@ export function ExportPanel() {
       runtimeExportKind: 'browser-gif',
     });
     ffmpegFrameRendererRef.current = frameRenderer;
+    let renderSession: ExportRenderSessionImpl | null = null;
+    const disposeRenderSession = () => {
+      if (!renderSession) {
+        return;
+      }
+      const session = renderSession;
+      session.dispose();
+      renderSession = null;
+      if (exportRenderSessionRef.current === session) {
+        exportRenderSessionRef.current = null;
+      }
+    };
 
     startExport(startTime, endTime);
 
@@ -432,45 +457,50 @@ export function ExportPanel() {
       const totalFrames = Math.ceil((endTime - startTime) * exportFps);
       const frameDuration = 1 / exportFps;
 
-      engine.setExporting(true);
-      engine.setResolution(actualWidth, actualHeight);
+      renderSession = new ExportRenderSessionImpl({
+        runId: frameRenderer.getRuntimeRunId() ?? createExportRunId(),
+        width: actualWidth,
+        height: actualHeight,
+        stackedAlpha: false,
+        preferZeroCopy: false,
+      });
+      exportRenderSessionRef.current = renderSession;
 
-      for (let i = 0; i < totalFrames; i++) {
-        if (frameRenderer.isCancelled()) {
-          return;
+      try {
+        renderSession.begin();
+
+        for (let i = 0; i < totalFrames; i++) {
+          if (frameRenderer.isCancelled()) {
+            return;
+          }
+
+          const time = startTime + i * frameDuration;
+          const layers = await frameRenderer.buildLayersAtTime(time);
+
+          const capture = await renderSession.renderFrame({
+            time,
+            layers,
+          });
+          const pixels = getReadbackPixels(capture);
+
+          const frameCopy = new Uint8Array(pixels.length);
+          frameCopy.set(pixels);
+          frames.push(frameCopy);
+
+          const percent = ((i + 1) / totalFrames) * 60;
+          setProgress({
+            phase: 'video',
+            currentFrame: i + 1,
+            totalFrames,
+            percent,
+            estimatedTimeRemaining: 0,
+            currentTime: time,
+          });
+          setExportProgress(percent, time);
         }
-
-        const time = startTime + i * frameDuration;
-        const layers = await frameRenderer.buildLayersAtTime(time);
-
-        engine.setRenderTimeOverride(time);
-        syncExportMaskTextures(layers, actualWidth, actualHeight);
-        await engine.ensureExportLayersReady(layers);
-        engine.render(layers);
-
-        const pixels = await engine.readPixels();
-        if (!pixels) {
-          throw new Error('Failed to read frame from GPU');
-        }
-
-        const frameCopy = new Uint8Array(pixels.length);
-        frameCopy.set(pixels);
-        frames.push(frameCopy);
-
-        const percent = ((i + 1) / totalFrames) * 60;
-        setProgress({
-          phase: 'video',
-          currentFrame: i + 1,
-          totalFrames,
-          percent,
-          estimatedTimeRemaining: 0,
-          currentTime: time,
-        });
-        setExportProgress(percent, time);
+      } finally {
+        disposeRenderSession();
       }
-
-      engine.setExporting(false);
-      engine.setResolution(originalDimensions.width, originalDimensions.height);
 
       if (frames.length === 0) {
         throw new Error('No frames rendered');
@@ -508,11 +538,9 @@ export function ExportPanel() {
       log.error('Browser GIF export failed', e);
       setError(e instanceof Error ? e.message : 'GIF export failed');
     } finally {
+      disposeRenderSession();
       frameRenderer.cleanup();
       ffmpegFrameRendererRef.current = null;
-      engine.setRenderTimeOverride(null);
-      engine.setExporting(false);
-      engine.setResolution(originalDimensions.width, originalDimensions.height);
       setIsExporting(false);
       endExport();
     }
@@ -574,7 +602,6 @@ export function ExportPanel() {
       endTime,
       timelineState.masterAudioState,
     );
-    const originalDimensions = engine.getOutputDimensions();
     const ffmpegFrameRenderer = new FFmpegFrameRenderer({
       width: actualWidth,
       height: actualHeight,
@@ -586,6 +613,18 @@ export function ExportPanel() {
       includeAudio: shouldIncludeAudio,
     });
     ffmpegFrameRendererRef.current = ffmpegFrameRenderer;
+    let renderSession: ExportRenderSessionImpl | null = null;
+    const disposeRenderSession = () => {
+      if (!renderSession) {
+        return;
+      }
+      const session = renderSession;
+      session.dispose();
+      renderSession = null;
+      if (exportRenderSessionRef.current === session) {
+        exportRenderSessionRef.current = null;
+      }
+    };
 
     // Start export progress in timeline
     startExport(startTime, endTime);
@@ -622,48 +661,70 @@ export function ExportPanel() {
 
       log.info(`Total frames: ${totalFrames}, duration: ${frameDuration.toFixed(4)}s per frame`);
 
-      // Set engine to export mode and correct resolution
-      engine.setExporting(true);
-      engine.setResolution(actualWidth, actualHeight);
+      renderSession = new ExportRenderSessionImpl({
+        runId: ffmpegFrameRenderer.getRuntimeRunId() ?? createExportRunId(),
+        width: actualWidth,
+        height: actualHeight,
+        stackedAlpha: false,
+        preferZeroCopy: false,
+      });
+      exportRenderSessionRef.current = renderSession;
 
       const frameStartTime = performance.now();
 
-      for (let i = 0; i < totalFrames; i++) {
-        if (ffmpegFrameRenderer.isCancelled()) {
-          log.info('FFmpeg export cancelled during frame rendering');
-          return;
-        }
+      try {
+        renderSession.begin();
 
-        const time = startTime + i * frameDuration;
+        for (let i = 0; i < totalFrames; i++) {
+          if (ffmpegFrameRenderer.isCancelled()) {
+            log.info('FFmpeg export cancelled during frame rendering');
+            return;
+          }
 
-        if (i === 0) log.debug('Frame 0: Building layers...');
+          const time = startTime + i * frameDuration;
 
-        // Build layers at this time and render
-        const layers = await ffmpegFrameRenderer.buildLayersAtTime(time);
+          if (i === 0) log.debug('Frame 0: Building layers...');
 
-        if (i === 0) log.debug(`Frame 0: Got ${layers.length} layers`);
+          // Build layers at this time and render
+          const layers = await ffmpegFrameRenderer.buildLayersAtTime(time);
 
-        if (layers.length === 0) {
-          log.warn(`No layers at time ${time.toFixed(3)}`);
-        }
+          if (i === 0) log.debug(`Frame 0: Got ${layers.length} layers`);
 
-        engine.setRenderTimeOverride(time);
-        syncExportMaskTextures(layers, actualWidth, actualHeight);
-        await engine.ensureExportLayersReady(layers);
-        engine.render(layers);
+          if (layers.length === 0) {
+            log.warn(`No layers at time ${time.toFixed(3)}`);
+          }
 
-        if (i === 0) log.debug('Frame 0: Render complete, reading pixels...');
+          if (i === 0) log.debug('Frame 0: Render complete, reading pixels...');
 
-        // Read pixels
-        const pixels = await engine.readPixels();
+          // Read pixels
+          let pixels: Uint8ClampedArray | null = null;
+          try {
+            const capture = await renderSession.renderFrame({
+              time,
+              layers,
+            });
+            pixels = getReadbackPixels(capture);
+          } catch (renderError) {
+            if (ffmpegFrameRenderer.isCancelled()) {
+              log.info('FFmpeg export cancelled after frame render');
+              return;
+            }
+            if (
+              renderError instanceof ExportFrameCaptureUnavailableError &&
+              renderError.captureKind === 'rgba-pixels'
+            ) {
+              if (i === 0) log.debug('Frame 0: Got pixels: null');
+              continue;
+            }
+            throw renderError;
+          }
 
-        if (ffmpegFrameRenderer.isCancelled()) {
-          log.info('FFmpeg export cancelled after frame render');
-          return;
-        }
+          if (ffmpegFrameRenderer.isCancelled()) {
+            log.info('FFmpeg export cancelled after frame render');
+            return;
+          }
 
-        if (i === 0) log.debug(`Frame 0: Got pixels: ${pixels ? pixels.length : 'null'}`);
-        if (pixels) {
+          if (i === 0) log.debug(`Frame 0: Got pixels: ${pixels ? pixels.length : 'null'}`);
           // Make a COPY of pixels (not a view) to ensure each frame is unique
           const frameCopy = new Uint8Array(pixels.length);
           frameCopy.set(pixels);
@@ -674,34 +735,32 @@ export function ExportPanel() {
             const sample = [pixels[0], pixels[1], pixels[2], pixels[3], pixels[1000], pixels[2000]];
             log.debug(`Frame ${i} sample pixels: [${sample.join(', ')}]`);
           }
-        }
 
-        // Log progress every 30 frames or on first frame
-        if (i === 0 || i % 30 === 0) {
-          const elapsed = (performance.now() - frameStartTime) / 1000;
-          const renderFps = (i + 1) / elapsed;
-          log.debug(`Frame ${i + 1}/${totalFrames} at ${time.toFixed(3)}s, ${renderFps.toFixed(1)} fps, ${layers.length} layers`);
-        }
+          // Log progress every 30 frames or on first frame
+          if (i === 0 || i % 30 === 0) {
+            const elapsed = (performance.now() - frameStartTime) / 1000;
+            const renderFps = (i + 1) / elapsed;
+            log.debug(`Frame ${i + 1}/${totalFrames} at ${time.toFixed(3)}s, ${renderFps.toFixed(1)} fps, ${layers.length} layers`);
+          }
 
-        // Update progress during rendering (0-30% - frame capture is fast, encoding is slow)
-        const percent = ((i + 1) / totalFrames) * 30;
-        setFfmpegProgress({
-          percent,
-          frame: i + 1,
-          fps: 0,
-          time: time,
-          speed: 0,
-          bitrate: 0,
-          size: 0,
-          eta: 0,
-        });
-        // Update timeline export progress
-        setExportProgress(percent, time);
+          // Update progress during rendering (0-30% - frame capture is fast, encoding is slow)
+          const percent = ((i + 1) / totalFrames) * 30;
+          setFfmpegProgress({
+            percent,
+            frame: i + 1,
+            fps: 0,
+            time: time,
+            speed: 0,
+            bitrate: 0,
+            size: 0,
+            eta: 0,
+          });
+          // Update timeline export progress
+          setExportProgress(percent, time);
+        }
+      } finally {
+        disposeRenderSession();
       }
-
-      // Reset export mode
-      engine.setExporting(false);
-      engine.setResolution(originalDimensions.width, originalDimensions.height);
 
       if (frames.length === 0) {
         throw new Error('No frames rendered');
@@ -819,13 +878,10 @@ export function ExportPanel() {
       setError(msg);
       log.error('FFmpeg export error', e);
     } finally {
+      disposeRenderSession();
       ffmpegAudioPipelineRef.current = null;
       ffmpegFrameRenderer.cleanup();
       ffmpegFrameRendererRef.current = null;
-      engine.setRenderTimeOverride(null);
-      // Always reset export mode
-      engine.setExporting(false);
-      engine.setResolution(originalDimensions.width, originalDimensions.height);
       setIsExporting(false);
       setExportPhase('idle');
       // End export progress in timeline
@@ -1034,7 +1090,6 @@ export function ExportPanel() {
     const exportTime = playheadPosition;
     const exportFps = useCustomFps ? customFps : fps;
     const selectedImageFormat = IMAGE_FORMATS.find(({ id }) => id === imageFormat) ?? IMAGE_FORMATS[0];
-    const originalDimensions = engine.getOutputDimensions();
     const frameRenderer = new FFmpegFrameRenderer({
       width: actualWidth,
       height: actualHeight,
@@ -1042,22 +1097,48 @@ export function ExportPanel() {
       startTime: exportTime,
       endTime: exportTime + (1 / Math.max(exportFps, 1)),
     });
+    let renderSession: ExportRenderSessionImpl | null = null;
+    const disposeRenderSession = () => {
+      if (!renderSession) {
+        return;
+      }
+      const session = renderSession;
+      session.dispose();
+      renderSession = null;
+      if (exportRenderSessionRef.current === session) {
+        exportRenderSessionRef.current = null;
+      }
+    };
 
     try {
       await frameRenderer.initialize();
-      engine.setExporting(true);
-      engine.setResolution(actualWidth, actualHeight);
-      engine.setRenderTimeOverride(exportTime);
+      renderSession = new ExportRenderSessionImpl({
+        runId: frameRenderer.getRuntimeRunId() ?? createExportRunId(),
+        width: actualWidth,
+        height: actualHeight,
+        stackedAlpha: false,
+        preferZeroCopy: false,
+      });
+      exportRenderSessionRef.current = renderSession;
+      renderSession.begin();
 
       const layers = await frameRenderer.buildLayersAtTime(exportTime);
-      syncExportMaskTextures(layers, actualWidth, actualHeight);
-      await engine.ensureExportLayersReady(layers);
-      engine.render(layers);
-
-      const pixels = await engine.readPixels();
-      if (!pixels) {
-        setError('Failed to read frame from GPU');
-        return;
+      let pixels: Uint8ClampedArray;
+      try {
+        const capture = await renderSession.renderFrame({
+          time: exportTime,
+          layers,
+        });
+        pixels = getReadbackPixels(capture);
+      } catch (renderError) {
+        if (
+          renderError instanceof ExportFrameCaptureUnavailableError &&
+          renderError.captureKind === 'rgba-pixels'
+        ) {
+          setError('Failed to read frame from GPU');
+          return;
+        }
+        throw renderError;
       }
 
       const imageData = new ImageData(new Uint8ClampedArray(pixels), actualWidth, actualHeight);
@@ -1068,10 +1149,8 @@ export function ExportPanel() {
       log.error('Frame render failed', e);
       setError(e instanceof Error ? e.message : 'Frame render failed');
     } finally {
+      disposeRenderSession();
       frameRenderer.cleanup();
-      engine.setRenderTimeOverride(null);
-      engine.setExporting(false);
-      engine.setResolution(originalDimensions.width, originalDimensions.height);
     }
   }, [
     width, height, customWidth, customHeight, useCustomResolution,
@@ -1097,7 +1176,6 @@ export function ExportPanel() {
     const frameDuration = 1 / Math.max(exportFps, 1);
     const totalFrames = Math.max(1, Math.ceil(Math.max(0, endTime - startTime) * exportFps));
     const selectedImageFormat = IMAGE_FORMATS.find(({ id }) => id === imageFormat) ?? IMAGE_FORMATS[0];
-    const originalDimensions = engine.getOutputDimensions();
     const folderExportSupported = isImageSequenceFolderExportSupported();
     const sequenceFolderName = getImageSequenceFolderName(filename, imageFormat);
     const frameRenderer = new FFmpegFrameRenderer({
@@ -1112,6 +1190,18 @@ export function ExportPanel() {
     });
     ffmpegFrameRendererRef.current = frameRenderer;
     let timelineExportStarted = false;
+    let renderSession: ExportRenderSessionImpl | null = null;
+    const disposeRenderSession = () => {
+      if (!renderSession) {
+        return;
+      }
+      const session = renderSession;
+      session.dispose();
+      renderSession = null;
+      if (exportRenderSessionRef.current === session) {
+        exportRenderSessionRef.current = null;
+      }
+    };
 
     try {
       const outputDirectory: ImageSequenceDirectoryHandle | null = folderExportSupported
@@ -1124,8 +1214,15 @@ export function ExportPanel() {
 
       const sequenceEntries: ImageSequenceEntry[] = [];
       const startedAt = performance.now();
-      engine.setExporting(true);
-      engine.setResolution(actualWidth, actualHeight);
+      renderSession = new ExportRenderSessionImpl({
+        runId: frameRenderer.getRuntimeRunId() ?? createExportRunId(),
+        width: actualWidth,
+        height: actualHeight,
+        stackedAlpha: false,
+        preferZeroCopy: false,
+      });
+      exportRenderSessionRef.current = renderSession;
+      renderSession.begin();
 
       for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
         if (frameRenderer.isCancelled()) {
@@ -1135,15 +1232,11 @@ export function ExportPanel() {
         const frameTime = startTime + frameIndex * frameDuration;
         const layers = await frameRenderer.buildLayersAtTime(frameTime);
 
-        engine.setRenderTimeOverride(frameTime);
-        syncExportMaskTextures(layers, actualWidth, actualHeight);
-        await engine.ensureExportLayersReady(layers);
-        engine.render(layers);
-
-        const pixels = await engine.readPixels();
-        if (!pixels) {
-          throw new Error('Failed to read frame from GPU');
-        }
+        const capture = await renderSession.renderFrame({
+          time: frameTime,
+          layers,
+        });
+        const pixels = getReadbackPixels(capture);
 
         const imageData = new ImageData(new Uint8ClampedArray(pixels), actualWidth, actualHeight);
         const blob = await encodeImageDataToBlob(imageData, selectedImageFormat, imageQuality);
@@ -1213,11 +1306,9 @@ export function ExportPanel() {
       log.error('Image sequence export failed', e);
       setError(e instanceof Error ? e.message : 'Image sequence export failed');
     } finally {
+      disposeRenderSession();
       frameRenderer.cleanup();
       ffmpegFrameRendererRef.current = null;
-      engine.setRenderTimeOverride(null);
-      engine.setExporting(false);
-      engine.setResolution(originalDimensions.width, originalDimensions.height);
       setExportPhase('idle');
       setIsExporting(false);
       if (timelineExportStarted) {
@@ -1513,7 +1604,7 @@ export function ExportPanel() {
       ];
   const showRangeInVideo = isVideoMode;
   const showRangeInAudio = isAudioOnlyMode && includeAudio;
-  const quickResolutionPresets = FrameExporter.getPresetResolutions();
+  const quickResolutionPresets = RESOLUTION_PRESETS;
   const quickFrameRatePresets = [24, 30, 60];
   const gifContainerFormat = CONTAINER_FORMATS.find(({ id }) => id === 'gif');
   const videoContainerFormats = isWebCodecsEncoder && gifContainerFormat
@@ -2942,7 +3033,7 @@ export function ExportPanel() {
                   disabled={useCustomResolution}
                   style={{ flex: 1 }}
                 >
-                  {FrameExporter.getPresetResolutions().map(({ label, width: w, height: h }) => (
+                  {RESOLUTION_PRESETS.map(({ label, width: w, height: h }) => (
                     <option key={`${w}x${h}`} value={`${w}x${h}`}>
                       {label}
                     </option>

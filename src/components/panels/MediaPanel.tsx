@@ -2,16 +2,9 @@
 
 import React, { useCallback, useMemo, useRef, useState, useEffect, useLayoutEffect } from 'react';
 import './MediaPanel.css';
-import { CompositionSettingsDialog } from './media/CompositionSettingsDialog';
-import { SolidSettingsDialog } from './media/SolidSettingsDialog';
-import { LabelColorPicker } from './media/LabelColorPicker';
 import { isImportedMediaFileItem } from './media/itemTypeGuards';
-import { renderMediaAnnotationContextMenuMount } from './media/context/MediaAnnotationContextMenuMount';
-import { MediaPanelProjectContextMenuMount } from './media/context/MediaPanelProjectContextMenuMount';
 import type { MediaContextSolidSettingsDialogState } from './media/context/useMediaContextLocalHandlers';
 import { formatMediaDuration as formatDuration } from './media/grid/format';
-import { MediaFloatingFeedbackPortal } from './media/panel/MediaFloatingFeedbackPortal';
-import { MediaGenerationTrayMount } from './media/panel/MediaGenerationTrayMount';
 import {
   formatMediaPanelBitrate as formatBitrate,
   formatMediaPanelFileSize as formatFileSize,
@@ -21,10 +14,12 @@ import {
   getMediaFileContainerLabel,
 } from './media/list/classicListPlanning';
 import { useMediaClassicListUiState } from './media/list/useMediaClassicListUiState';
-import { MediaDropOverlay } from './media/panel/MediaDropOverlay';
-import { MediaDeleteConfirmationDialog } from './media/panel/MediaDeleteConfirmationDialog';
 import { MediaPanelContentView } from './media/panel/MediaPanelContentView';
 import { MediaPanelHeader } from './media/panel/MediaPanelHeader';
+import {
+  MediaPanelOverlayMounts,
+  type MediaPanelCompositionSettingsDialogState,
+} from './media/panel/MediaPanelOverlayMounts';
 import { useMediaPanelCommandBindings } from './media/panel/useMediaPanelCommandBindings';
 import { useMediaPanelContextMenuState } from './media/panel/useMediaPanelContextMenuState';
 import { useMediaPanelDragDropMarquee, type MediaPanelMarquee } from './media/panel/useMediaPanelDragDropMarquee';
@@ -41,7 +36,6 @@ import { useMediaBoardAnnotationCommands } from './media/board/useMediaBoardAnno
 import { useMediaBoardAnnotationGestures } from './media/board/useMediaBoardAnnotationGestures';
 import { useMediaBoardAnnotationState } from './media/board/useMediaBoardAnnotationState';
 import {
-  MEDIA_BOARD_ANNOTATION_COLOR_OPTIONS,
   getVisibleMediaBoardAnnotations,
 } from './media/board/annotations';
 import {
@@ -118,7 +112,6 @@ import type {
   ProjectItem,
 } from '../../stores/mediaStore';
 import { useTimelineStore } from '../../stores/timeline';
-import { RelinkDialog } from '../common/RelinkDialog';
 import { mediaNeedsRelink } from '../../services/project/relinkMedia';
 import {
   clearExternalDragPayload,
@@ -245,7 +238,7 @@ export function MediaPanel() {
 
   // Marquee selection state
   const [marquee, setMarquee] = useState<MediaPanelMarquee | null>(null);
-  const [settingsDialog, setSettingsDialog] = useState<{ compositionId: string; width: number; height: number; frameRate: number; duration: number } | null>(null);
+  const [settingsDialog, setSettingsDialog] = useState<MediaPanelCompositionSettingsDialogState | null>(null);
   const [solidSettingsDialog, setSolidSettingsDialog] = useState<MediaContextSolidSettingsDialogState | null>(null);
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
   const [internalDragId, setInternalDragId] = useState<string | null>(null);
@@ -2344,7 +2337,6 @@ export function MediaPanel() {
       onMouseMove={handleMediaPanelMouseMove}
       onClick={() => { if (contextMenu) closeContextMenu(); }}
     >
-      <MediaFloatingFeedbackPortal items={floatingTexts} />
       {/* Header */}
       <MediaPanelHeader
         query={mediaSearchQuery}
@@ -2428,145 +2420,78 @@ export function MediaPanel() {
         renderBoard={renderMediaBoardView}
       />
 
-      <MediaGenerationTrayMount
-        suppressed={isMediaBoardDeepZoomActive && !isGenerativeTrayExpanded}
-        expanded={isGenerativeTrayExpanded}
-        onExpandedChange={setGenerativeTrayExpanded}
-      />
-      {/* Drop overlay - shown when dragging files from outside */}
-      {isExternalDragOver && (
-        <MediaDropOverlay />
-      )}
-
-      {/* Context Menu */}
-      {contextMenu && (() => {
-        const annotationContextMenu = renderMediaAnnotationContextMenuMount({
-          annotationId: contextMenu.annotationId,
-          annotations: mediaBoardAnnotations,
-          colorOptions: MEDIA_BOARD_ANNOTATION_COLOR_OPTIONS,
-          menuRef: contextMenuRef,
-          x: contextMenuPosition?.x ?? contextMenu.x,
-          y: contextMenuPosition?.y ?? contextMenu.y,
-          onUpdateColor: (annotationId, target, value) => {
-            updateMediaBoardAnnotation(annotationId, { [target]: value });
-          },
+      <MediaPanelOverlayMounts
+        floatingTexts={floatingTexts}
+        isMediaBoardDeepZoomActive={isMediaBoardDeepZoomActive}
+        isGenerativeTrayExpanded={isGenerativeTrayExpanded}
+        setGenerativeTrayExpanded={setGenerativeTrayExpanded}
+        isExternalDragOver={isExternalDragOver}
+        contextMenu={contextMenu}
+        contextMenuRef={contextMenuRef}
+        contextMenuPosition={contextMenuPosition}
+        mediaBoardAnnotations={mediaBoardAnnotations}
+        updateMediaBoardAnnotation={updateMediaBoardAnnotation}
+        closeContextMenu={closeContextMenu}
+        selectedIds={selectedIds}
+        allProjectItems={allProjectItems}
+        files={files}
+        folders={folders}
+        composerReferenceMediaFileIds={composerReferenceMediaFileIds}
+        viewMode={viewMode}
+        hasClipboard={hasMediaClipboard()}
+        proxyFolderName={proxyFolderName}
+        projectContextActions={{
+          onNewBoardAnnotation: handleNewMediaBoardAnnotation,
           onClose: closeContextMenu,
-        });
-
-        if (annotationContextMenu) {
-          return annotationContextMenu;
-        }
-
-        return (
-          <MediaPanelProjectContextMenuMount
-            contextMenu={contextMenu}
-            menuRef={contextMenuRef}
-            x={contextMenuPosition?.x ?? contextMenu.x}
-            y={contextMenuPosition?.y ?? contextMenu.y}
-            selectedIds={selectedIds}
-            items={allProjectItems}
-            files={files}
-            folders={folders}
-            composerReferenceMediaFileIds={composerReferenceMediaFileIds}
-            viewMode={viewMode}
-            hasClipboard={hasMediaClipboard()}
-            proxyFolderName={proxyFolderName}
-            actions={{
-              onNewBoardAnnotation: handleNewMediaBoardAnnotation,
-              onClose: closeContextMenu,
-              onImport: handleImport,
-              onPaste: handlePasteItems,
-              onToggleAiPromptReferences: handleToggleAiPromptReferences,
-              onStartRename: startRename,
-              onMoveToFolder: mediaContextLocalHandlers.onMoveToFolder,
-              onOpenCompositionSettings: openCompositionSettings,
-              onOpenSolidSettings: mediaContextLocalHandlers.onOpenSolidSettings,
-              onCancelProxyGeneration: cancelProxyGeneration,
-              onGenerateProxy: generateProxy,
-              onRegenerateThumbnails: handleRegenerateMediaThumbnails,
-              onRegenerateAudioProxy: handleRegenerateMediaAudioProxy,
-              onRegenerateWaveform: handleRegenerateMediaWaveform,
-              onRegenerateSpectrogram: handleRegenerateMediaSpectrogram,
-              onShowRawInExplorer: mediaContextExplorerHandlers.onShowRawInExplorer,
-              onShowProxyInExplorer: mediaContextExplorerHandlers.onShowProxyInExplorer,
-              onPickProxyFolder: mediaContextExplorerHandlers.onPickProxyFolder,
-              onCopy: handleCopySelected,
-              onDuplicate: handleDuplicateSelected,
-              onDelete: handleDelete,
-              onNewComposition: handleNewComposition,
-              onNewFolder: handleNewFolder,
-              onNewText: handleNewText,
-              onNewSolid: handleNewSolid,
-              onNewMesh: handleNewMesh,
-              onNewText3D: handleNewText3D,
-              onNewCamera: handleNewCamera,
-              onNewSplatEffector: handleNewSplatEffector,
-              onImportGaussianSplat: handleImportGaussianSplat,
-              onNewMathScene: handleNewMathScene,
-              onNewMotionShape: handleNewMotionShape,
-            }}
-          />
-        );
-      })()}
-
-      {/* Media Delete Confirmation */}
-      {deleteConfirmation && (
-        <MediaDeleteConfirmationDialog
-          deleteConfirmation={deleteConfirmation}
-          deleteConfirmationBusy={deleteConfirmationBusy}
-          setDeleteConfirmation={setDeleteConfirmation}
-          confirmMediaDelete={confirmMediaDelete}
-        />
-      )}
-
-      {/* Composition Settings Dialog */}
-      {settingsDialog && (
-        <CompositionSettingsDialog
-          settings={settingsDialog}
-          onSettingsChange={setSettingsDialog}
-          onSave={saveCompositionSettings}
-          onCancel={() => setSettingsDialog(null)}
-        />
-      )}
-
-      {/* Solid Settings Dialog */}
-      {solidSettingsDialog && (
-        <SolidSettingsDialog
-          settings={solidSettingsDialog}
-          onSettingsChange={setSolidSettingsDialog}
-          onSave={() => {
-            if (solidSettingsDialog) {
-              updateSolidItem(solidSettingsDialog.solidItemId, {
-                color: solidSettingsDialog.color,
-                width: solidSettingsDialog.width,
-                height: solidSettingsDialog.height,
-              });
-              setSolidSettingsDialog(null);
-            }
-          }}
-          onCancel={() => setSolidSettingsDialog(null)}
-        />
-      )}
-
-      {/* Label Color Picker */}
-      {labelPickerItemId && labelPickerPos && (
-        <LabelColorPicker
-          position={labelPickerPos}
-          selectedIds={selectedIds}
-          labelPickerItemId={labelPickerItemId}
-          onSelect={(ids, colorKey) => {
-            setLabelColor(ids, colorKey);
-            setLabelPickerItemId(null);
-            setLabelPickerPos(null);
-          }}
-          onClose={() => { setLabelPickerItemId(null); setLabelPickerPos(null); }}
-        />
-      )}
-
-      {/* Relink Dialog */}
-      {showRelinkDialog && (
-        <RelinkDialog onClose={closeRelinkDialog} />
-      )}
+          onImport: handleImport,
+          onPaste: handlePasteItems,
+          onToggleAiPromptReferences: handleToggleAiPromptReferences,
+          onStartRename: startRename,
+          onMoveToFolder: mediaContextLocalHandlers.onMoveToFolder,
+          onOpenCompositionSettings: openCompositionSettings,
+          onOpenSolidSettings: mediaContextLocalHandlers.onOpenSolidSettings,
+          onCancelProxyGeneration: cancelProxyGeneration,
+          onGenerateProxy: generateProxy,
+          onRegenerateThumbnails: handleRegenerateMediaThumbnails,
+          onRegenerateAudioProxy: handleRegenerateMediaAudioProxy,
+          onRegenerateWaveform: handleRegenerateMediaWaveform,
+          onRegenerateSpectrogram: handleRegenerateMediaSpectrogram,
+          onShowRawInExplorer: mediaContextExplorerHandlers.onShowRawInExplorer,
+          onShowProxyInExplorer: mediaContextExplorerHandlers.onShowProxyInExplorer,
+          onPickProxyFolder: mediaContextExplorerHandlers.onPickProxyFolder,
+          onCopy: handleCopySelected,
+          onDuplicate: handleDuplicateSelected,
+          onDelete: handleDelete,
+          onNewComposition: handleNewComposition,
+          onNewFolder: handleNewFolder,
+          onNewText: handleNewText,
+          onNewSolid: handleNewSolid,
+          onNewMesh: handleNewMesh,
+          onNewText3D: handleNewText3D,
+          onNewCamera: handleNewCamera,
+          onNewSplatEffector: handleNewSplatEffector,
+          onImportGaussianSplat: handleImportGaussianSplat,
+          onNewMathScene: handleNewMathScene,
+          onNewMotionShape: handleNewMotionShape,
+        }}
+        deleteConfirmation={deleteConfirmation}
+        deleteConfirmationBusy={deleteConfirmationBusy}
+        setDeleteConfirmation={setDeleteConfirmation}
+        confirmMediaDelete={confirmMediaDelete}
+        settingsDialog={settingsDialog}
+        setSettingsDialog={setSettingsDialog}
+        saveCompositionSettings={saveCompositionSettings}
+        solidSettingsDialog={solidSettingsDialog}
+        setSolidSettingsDialog={setSolidSettingsDialog}
+        updateSolidItem={updateSolidItem}
+        labelPickerItemId={labelPickerItemId}
+        labelPickerPos={labelPickerPos}
+        setLabelPickerItemId={setLabelPickerItemId}
+        setLabelPickerPos={setLabelPickerPos}
+        setLabelColor={setLabelColor}
+        showRelinkDialog={showRelinkDialog}
+        closeRelinkDialog={closeRelinkDialog}
+      />
     </div>
   );
 }
