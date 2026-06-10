@@ -2,13 +2,9 @@
 
 import './Preview.css';
 import './PreviewEditMode.css';
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useRef, useState, useCallback } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { Logger } from '../../services/logger';
-
-const log = Logger.create('Preview');
 import { useEngine } from '../../hooks/useEngine';
-import { useShortcut } from '../../hooks/useShortcut';
 import {
   selectActiveGaussianSplatLoadProgress,
   selectSceneNavClipId,
@@ -17,9 +13,7 @@ import {
   selectSceneNavNoKeyframes,
   useEngineStore,
 } from '../../stores/engineStore';
-import type { SceneCameraLiveOverride } from '../../stores/engineStore';
 import { useTimelineStore } from '../../stores/timeline';
-import { DEFAULT_SCENE_CAMERA_SETTINGS, type SceneCameraSettings } from '../../stores/mediaStore/types';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { startBatch, endBatch } from '../../stores/historyStore';
 import { PreviewControls } from './PreviewControls';
@@ -27,63 +21,21 @@ import { PreviewCanvasMount } from './PreviewCanvasMount';
 import { useEditModeOverlay } from './useEditModeOverlay';
 import { useLayerDrag } from './useLayerDrag';
 import { useSAM2Store } from '../../stores/sam2Store';
-import { engine } from '../../engine/WebGPUEngine';
-import { resolveOrbitCameraPose } from '../../engine/gaussian/core/SplatCameraUtils';
-import { resolveSharedSceneCameraConfig } from '../../engine/scene/SceneCameraUtils';
-import type { SceneCameraConfig, SceneVector3, SceneViewport } from '../../engine/scene/types';
-import type { ClipTransform, TimelineClip, TimelineTrack } from '../../types';
 import type { PreviewPanelSource } from '../../types/dock';
-import {
-  registerPreviewTarget,
-  setPreviewTargetTransparency,
-  unregisterPreviewTarget,
-} from '../../services/render/previewTargetRegistration';
-import {
-  fullFrameFocalLengthMmToFov,
-} from '../../utils/cameraLens';
 import { getFirstEditablePreviewPanelId, getPreviewPanelIdFromElement } from './previewPanelDom';
-import {
-  EDIT_CAMERA_ORTHO_MAX_SCALE,
-  addSceneVectors,
-  clampEditCameraOrthoScale,
-  cloneSceneVector,
-  getEditCameraOrthoBasis,
-  getSharedSceneDefaultCameraDistance,
-  scaleSceneVector,
-  type EditCameraOrthoViewMode,
-  type EditCameraViewMode,
-} from './previewSceneCameraMath';
 import { usePreviewDropdownState } from './usePreviewDropdownState';
-import { usePreviewContextMenu } from './usePreviewContextMenu';
+import { usePreviewEditCameraController } from './usePreviewEditCameraController';
+import { useActiveCameraClipAtPlayhead, usePreviewModeState } from './usePreviewModeState';
+import { usePreviewPanelInputBindings } from './usePreviewPanelInputBindings';
 import { usePreviewMouseRouting } from './usePreviewMouseRouting';
 import { usePreviewPlaybackDisplay } from './usePreviewPlaybackDisplay';
+import { usePreviewRenderTargetRegistration } from './usePreviewRenderTargetRegistration';
 import { usePreviewSceneNavigation } from './usePreviewSceneNavigation';
 import { usePreviewSourceConfig } from './usePreviewSourceConfig';
 import { usePreviewViewGeometry } from './usePreviewViewGeometry';
 import { usePreviewViewport } from './usePreviewViewport';
 import { usePreviewWheelHandler } from './usePreviewWheelHandler';
 
-const EDIT_CAMERA_BLEND_MS = 320;
-const TIMELINE_TIME_EPSILON = 1e-4;
-const DEFAULT_EDIT_CAMERA_FOCAL_LENGTH_MM = 35;
-const DEFAULT_EDIT_CAMERA_SETTINGS: SceneCameraSettings = {
-  ...DEFAULT_SCENE_CAMERA_SETTINGS,
-  fov: fullFrameFocalLengthMmToFov(DEFAULT_EDIT_CAMERA_FOCAL_LENGTH_MM),
-};
-
-interface EditCameraOrthoFrame {
-  clipId: string;
-  mode: EditCameraOrthoViewMode;
-  center: SceneVector3;
-  scale: number;
-}
-
-const EDIT_CAMERA_VIEW_LABELS: Record<EditCameraViewMode, string> = {
-  camera: 'Camera',
-  front: 'Front',
-  side: 'Side',
-  top: 'Top',
-};
 const SCENE_OBJECT_INTERACTION_SELECTOR = [
   '.preview-scene-object-handle',
   '.preview-scene-gizmo-axis',
@@ -91,258 +43,8 @@ const SCENE_OBJECT_INTERACTION_SELECTOR = [
   '.preview-scene-gizmo-toolbar',
 ].join(',');
 
-function cloneClipTransform(transform: ClipTransform): ClipTransform {
-  return {
-    opacity: transform.opacity,
-    blendMode: transform.blendMode,
-    position: { ...transform.position },
-    scale: { ...transform.scale },
-    rotation: { ...transform.rotation },
-  };
-}
-
-function applySceneCameraLiveOverrideToTransform(
-  transform: ClipTransform,
-  override: SceneCameraLiveOverride | null | undefined,
-): ClipTransform {
-  if (!override) {
-    return transform;
-  }
-
-  return {
-    ...transform,
-    position: {
-      x: transform.position.x + (override.position?.x ?? 0),
-      y: transform.position.y + (override.position?.y ?? 0),
-      z: transform.position.z + (override.position?.z ?? 0),
-    },
-    scale: {
-      ...transform.scale,
-      all: (transform.scale.all ?? 1) + (override.scale?.all ?? 0),
-      x: transform.scale.x + (override.scale?.x ?? 0),
-      y: transform.scale.y + (override.scale?.y ?? override.scale?.x ?? 0),
-      ...(transform.scale.z !== undefined || override.scale?.z !== undefined
-        ? { z: (transform.scale.z ?? 0) + (override.scale?.z ?? 0) }
-        : {}),
-    },
-    rotation: {
-      x: transform.rotation.x + (override.rotation?.x ?? 0),
-      y: transform.rotation.y + (override.rotation?.y ?? 0),
-      z: transform.rotation.z + (override.rotation?.z ?? 0),
-    },
-  };
-}
-
-function cloneSceneCameraConfig(config: SceneCameraConfig): SceneCameraConfig {
-  return {
-    ...config,
-    position: { ...config.position },
-    target: { ...config.target },
-    up: { ...config.up },
-  };
-}
-
-function easeInOutCubic(t: number): number {
-  return t < 0.5
-    ? 4 * t * t * t
-    : 1 - Math.pow(-2 * t + 2, 3) / 2;
-}
-
-function lerpNumber(from: number, to: number, t: number): number {
-  return from + (to - from) * t;
-}
-
 function isSceneObjectInteractionTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest(SCENE_OBJECT_INTERACTION_SELECTOR));
-}
-
-function getSceneCameraDistance(config: SceneCameraConfig): number {
-  return Math.max(
-    0.001,
-    Math.hypot(
-      config.position.x - config.target.x,
-      config.position.y - config.target.y,
-      config.position.z - config.target.z,
-    ),
-  );
-}
-
-function createDefaultEditCameraOrthoFrame(
-  mode: EditCameraOrthoViewMode,
-  clipId: string,
-  cameraConfig: SceneCameraConfig,
-): EditCameraOrthoFrame {
-  const distance = getSceneCameraDistance(cameraConfig);
-  const perspectiveHeight = 2 * Math.tan((Math.max(1, cameraConfig.fov) * Math.PI / 180) * 0.5) * distance;
-  return {
-    clipId,
-    mode,
-    center: cloneSceneVector(cameraConfig.target),
-    scale: clampEditCameraOrthoScale(Math.max(2, perspectiveHeight, distance * 1.35)),
-  };
-}
-
-function buildEditCameraOrthographicConfig(
-  mode: EditCameraOrthoViewMode,
-  frame: EditCameraOrthoFrame,
-  cameraConfig: SceneCameraConfig,
-): SceneCameraConfig {
-  const basis = getEditCameraOrthoBasis(mode);
-  const viewDistance = Math.max(
-    10,
-    Math.min(Math.max(cameraConfig.far * 0.25, frame.scale * 4), EDIT_CAMERA_ORTHO_MAX_SCALE),
-  );
-  return {
-    position: addSceneVectors(frame.center, scaleSceneVector(basis.eyeDirection, viewDistance)),
-    target: cloneSceneVector(frame.center),
-    up: cloneSceneVector(basis.up),
-    fov: cameraConfig.fov,
-    near: cameraConfig.near,
-    far: cameraConfig.far,
-    applyDefaultDistance: false,
-    projection: 'orthographic',
-    orthographicScale: frame.scale,
-  };
-}
-
-function lerpSceneCameraConfig(from: SceneCameraConfig, to: SceneCameraConfig, t: number): SceneCameraConfig {
-  const projection = to.projection ?? 'perspective';
-  return {
-    position: {
-      x: lerpNumber(from.position.x, to.position.x, t),
-      y: lerpNumber(from.position.y, to.position.y, t),
-      z: lerpNumber(from.position.z, to.position.z, t),
-    },
-    target: {
-      x: lerpNumber(from.target.x, to.target.x, t),
-      y: lerpNumber(from.target.y, to.target.y, t),
-      z: lerpNumber(from.target.z, to.target.z, t),
-    },
-    up: {
-      x: lerpNumber(from.up.x, to.up.x, t),
-      y: lerpNumber(from.up.y, to.up.y, t),
-      z: lerpNumber(from.up.z, to.up.z, t),
-    },
-    fov: lerpNumber(from.fov, to.fov, t),
-    near: lerpNumber(from.near, to.near, t),
-    far: lerpNumber(from.far, to.far, t),
-    applyDefaultDistance: false,
-    projection,
-    ...(projection === 'orthographic'
-      ? {
-          orthographicScale: lerpNumber(
-            from.orthographicScale ?? to.orthographicScale ?? 2,
-            to.orthographicScale ?? from.orthographicScale ?? 2,
-            t,
-          ),
-        }
-      : {}),
-  };
-}
-
-function buildEditCameraOrbitSceneBounds(center: SceneVector3 | null): {
-  min: [number, number, number];
-  max: [number, number, number];
-} | undefined {
-  if (!center) return undefined;
-  return {
-    min: [center.x, center.y, center.z],
-    max: [center.x, center.y, center.z],
-  };
-}
-
-function findActiveCameraClipAtTime(
-  clips: TimelineClip[],
-  tracks: TimelineTrack[],
-  timelineTime: number,
-): TimelineClip | null {
-  const trackById = new Map(tracks.map((track, index) => [track.id, { track, index }]));
-  const activeCameraClips = clips
-    .filter((clip) => {
-      const trackInfo = trackById.get(clip.trackId);
-      if (trackInfo?.track.type === 'audio') return false;
-      return (
-        clip.source?.type === 'camera' &&
-        timelineTime >= clip.startTime - TIMELINE_TIME_EPSILON &&
-        timelineTime < clip.startTime + clip.duration + TIMELINE_TIME_EPSILON
-      );
-    })
-    .toSorted((a, b) => (trackById.get(b.trackId)?.index ?? -1) - (trackById.get(a.trackId)?.index ?? -1));
-
-  return (
-    activeCameraClips.find((clip) => trackById.get(clip.trackId)?.track.visible !== false) ??
-    activeCameraClips[0] ??
-    null
-  );
-}
-
-function isSharedSceneOverlayClip(clip: TimelineClip): boolean {
-  const sourceType = clip.source?.type;
-  return (
-    sourceType === 'camera' ||
-    sourceType === 'model' ||
-    sourceType === 'gaussian-splat' ||
-    sourceType === 'splat-effector' ||
-    Boolean(clip.is3D && sourceType !== 'audio')
-  );
-}
-
-function hasActiveSharedSceneOverlayContent(
-  clips: TimelineClip[],
-  tracks: TimelineTrack[],
-  timelineTime: number,
-): boolean {
-  const trackById = new Map(tracks.map((track) => [track.id, track]));
-  return clips.some((clip) => {
-    const track = trackById.get(clip.trackId);
-    if (!track || track.type === 'audio' || track.visible === false) return false;
-    if (!isSharedSceneOverlayClip(clip)) return false;
-    return (
-      timelineTime >= clip.startTime - TIMELINE_TIME_EPSILON &&
-      timelineTime < clip.startTime + clip.duration + TIMELINE_TIME_EPSILON
-    );
-  });
-}
-
-function buildPreviewCameraConfigFromTransform(
-  clip: TimelineClip,
-  transform: ClipTransform,
-  viewport: SceneViewport,
-  orbitCenter: SceneVector3 | null = null,
-  cameraSettingsOverride?: SceneCameraSettings,
-): SceneCameraConfig | null {
-  if (clip.source?.type !== 'camera') return null;
-
-  const timelineState = cameraSettingsOverride ? null : useTimelineStore.getState();
-  const cameraSettings = cameraSettingsOverride ?? timelineState?.getInterpolatedCameraSettings(
-    clip.id,
-    timelineState.playheadPosition - clip.startTime,
-  ) ?? DEFAULT_EDIT_CAMERA_SETTINGS;
-  const pose = resolveOrbitCameraPose(
-    {
-      position: transform.position,
-      scale: transform.scale,
-      rotation: transform.rotation,
-    },
-    {
-      nearPlane: cameraSettings.near,
-      farPlane: cameraSettings.far,
-      fov: cameraSettings.fov,
-      minimumDistance: getSharedSceneDefaultCameraDistance(cameraSettings.fov),
-    },
-    viewport,
-    buildEditCameraOrbitSceneBounds(orbitCenter),
-  );
-
-  return {
-    position: pose.eye,
-    target: pose.target,
-    up: pose.up,
-    fov: pose.fovDegrees,
-    near: pose.near,
-    far: pose.far,
-    applyDefaultDistance: false,
-  };
 }
 
 interface PreviewProps {
@@ -456,35 +158,14 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [, setCompReady] = useState(false);
 
-  // Unified RenderTarget registration
-  useEffect(() => {
-    if (!isEngineReady || !canvasRef.current) return;
-
-    const isIndependent = stableRenderSource.type !== 'activeComp';
-
-    log.debug(`[${panelId}] Registering render target`, { source: stableRenderSource, isIndependent });
-
-    const registered = registerPreviewTarget({
-      id: panelId,
-      name: 'Preview',
-      source: stableRenderSource,
-      showTransparencyGrid,
-      canvas: canvasRef.current,
-      onIndependentRegistered: () => setCompReady(true),
-    });
-    if (!registered) return;
-
-    return () => {
-      log.debug(`[${panelId}] Unregistering render target`);
-      unregisterPreviewTarget(panelId, stableRenderSource);
-    };
-  }, [isEngineReady, panelId, stableRenderSource, showTransparencyGrid]);
-
-  // Sync per-tab transparency grid flag
-  useEffect(() => {
-    if (!isEngineReady) return;
-    setPreviewTargetTransparency(panelId, showTransparencyGrid);
-  }, [isEngineReady, panelId, showTransparencyGrid]);
+  usePreviewRenderTargetRegistration({
+    canvasRef,
+    isEngineReady,
+    panelId,
+    setCompReady,
+    showTransparencyGrid,
+    stableRenderSource,
+  });
 
   const {
     dropdownRef,
@@ -506,9 +187,6 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
   // between layer transform (move/scale handles) and text typing. Double-click
   // enters typing; Escape returns to transform.
   const [textTyping, setTextTyping] = useState(false);
-  const [editCameraViewMode, setEditCameraViewMode] = useState<EditCameraViewMode>('camera');
-  const [editCameraOrthoFrame, setEditCameraOrthoFrame] = useState<EditCameraOrthoFrame | null>(null);
-  const [isEditCameraOrthoPanning, setIsEditCameraOrthoPanning] = useState(false);
   const [sceneObjectOverlayEnabled, setSceneObjectOverlayEnabled] = useState(true);
   const [viewZoom, setViewZoom] = useState(1);
   const [viewPan, setViewPan] = useState({ x: 0, y: 0 });
@@ -550,170 +228,13 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
   const gaussianKeyboardFrameRef = useRef<number | null>(null);
   const gaussianKeyboardLastTimeRef = useRef<number | null>(null);
   const gaussianKeyboardBatchActiveRef = useRef(false);
-  const editCameraOrthoPanStart = useRef({
-    x: 0,
-    y: 0,
-    center: { x: 0, y: 0, z: 0 } as SceneVector3,
-    scale: 1,
-    mode: 'front' as EditCameraOrthoViewMode,
-  });
   const sceneNavHistoryBatchActiveRef = useRef(false);
-  const editCameraTransformRef = useRef<ClipTransform | null>(null);
-  const editCameraClipIdRef = useRef<string | null>(null);
-  const editCameraSettingsRef = useRef<SceneCameraSettings>({ ...DEFAULT_EDIT_CAMERA_SETTINGS });
-  const editCameraOrbitCenterRef = useRef<SceneVector3 | null>(null);
-  const editCameraAnimationRef = useRef<number | null>(null);
-  const editCameraViewTransitionRef = useRef(false);
-  const editCameraModeActiveRef = useRef(false);
-  const activeSharedSceneOverlayContent = useMemo(
-    () => hasActiveSharedSceneOverlayContent(clips, tracks, playheadPosition),
-    [clips, playheadPosition, tracks],
-  );
-
-  useEffect(() => {
-    return () => {
-      setSceneGizmoVisible(true);
-    };
-  }, [setSceneGizmoVisible]);
-
-  useEffect(() => {
-    setSceneGizmoVisible(sceneObjectOverlayEnabled && activeSharedSceneOverlayContent && isEditableSource && !sourceMonitorActive);
-    if (isEngineReady) {
-      engine.requestRender();
-    }
-  }, [
-    activeSharedSceneOverlayContent,
-    isEditableSource,
-    isEngineReady,
-    sceneObjectOverlayEnabled,
-    setSceneGizmoVisible,
-    sourceMonitorActive,
-  ]);
-
-  useEffect(() => {
-    if (!isEditableSource) {
-      setEditMode(false);
-    }
-  }, [isEditableSource]);
-
-  const selectedClip = useMemo(
-    () => (selectedClipId ? clips.find((clip) => clip.id === selectedClipId) ?? null : null),
-    [clips, selectedClipId],
-  );
-  const selectedTextLayer = useMemo(
-    () => (
-      selectedClip?.source?.type === 'text'
-        ? layers.find((layer) => layer?.sourceClipId === selectedClip.id && layer.source?.textCanvas) ?? null
-        : null
-    ),
-    [layers, selectedClip],
-  );
-  const selectedTextBounds = useMemo(
-    () => (
-      selectedClip?.textProperties
-        ? getInterpolatedTextBounds(selectedClip.id, playheadPosition - selectedClip.startTime)
-        : undefined
-    ),
-    [getInterpolatedTextBounds, playheadPosition, selectedClip],
-  );
-
-  const selectedSceneNavClip = useMemo(
-    () => (selectedClip?.source?.type === 'camera' ? selectedClip : null),
-    [selectedClip],
-  );
-  const activeCameraClipAtPlayhead = useMemo(
-    () => findActiveCameraClipAtTime(clips, tracks, playheadPosition),
-    [clips, playheadPosition, tracks],
-  );
+  const activeCameraClipAtPlayhead = useActiveCameraClipAtPlayhead(clips, tracks, playheadPosition);
   const editCameraModeActive = Boolean(
     isEditableSource &&
     editMode &&
     activeCameraClipAtPlayhead,
   );
-  const editCameraOrthoMode: EditCameraOrthoViewMode | null =
-    editCameraViewMode === 'camera' ? null : editCameraViewMode;
-  const editCameraOrthoViewActive = editCameraModeActive && editCameraOrthoMode !== null;
-  const navigationSceneNavClip = editCameraModeActive
-    ? activeCameraClipAtPlayhead
-    : selectedSceneNavClip;
-
-  // Read fresh scene-nav transform at call-site to avoid stale closure after keyframe edits.
-  const getFreshSceneNavTransform = useCallback((clip: TimelineClip | null) => {
-    if (!clip) return null;
-    if (editCameraModeActive && editCameraTransformRef.current && clip.id === editCameraClipIdRef.current) {
-      return cloneClipTransform(editCameraTransformRef.current);
-    }
-    const { playheadPosition: ph, getInterpolatedTransform } = useTimelineStore.getState();
-    const clipLocalTime = ph - clip.startTime;
-    const transform = getInterpolatedTransform(clip.id, clipLocalTime);
-    if (!sceneNavNoKeyframes) {
-      return transform;
-    }
-
-    return applySceneCameraLiveOverrideToTransform(
-      transform,
-      useEngineStore.getState().sceneCameraLiveOverrides[clip.id],
-    );
-  }, [editCameraModeActive, sceneNavNoKeyframes]);
-
-  const sceneNavEnabled = Boolean(
-    isEditableSource &&
-    navigationSceneNavClip &&
-    (
-      (editCameraModeActive && !editCameraOrthoViewActive) ||
-      (!editMode && sceneNavClipId === navigationSceneNavClip.id)
-    ),
-  );
-  const layerEditMode = editMode && !editCameraModeActive;
-  const maskTabActive = isEditableSource && maskPanelActive;
-  const maskNavigationMode = layerEditMode && maskTabActive;
-  const textClipEditMode = Boolean(layerEditMode && !maskTabActive && selectedClip?.textProperties && selectedTextLayer);
-  // #206: a text clip lives inside the layer-edit mode. Show the layer move/scale
-  // handles unless the user is actively typing (entered via double-click).
-  const textTypingActive = textClipEditMode && textTyping;
-  const layerTransformMode = layerEditMode && !maskNavigationMode && (!textClipEditMode || !textTypingActive);
-  const freeCanvasNavigationMode = layerTransformMode || maskNavigationMode || textClipEditMode;
-  const effectiveSceneNavFpsMode = sceneNavFpsMode && !editCameraModeActive;
-  const editCameraClipSelected = Boolean(
-    editCameraModeActive &&
-    activeCameraClipAtPlayhead &&
-    selectedClipIds.has(activeCameraClipAtPlayhead.id),
-  );
-  const activeEditCameraOrthoFrame =
-    editCameraOrthoMode &&
-    activeCameraClipAtPlayhead &&
-    editCameraOrthoFrame?.clipId === activeCameraClipAtPlayhead.id &&
-    editCameraOrthoFrame.mode === editCameraOrthoMode
-      ? editCameraOrthoFrame
-      : null;
-
-  useEffect(() => {
-    let overrideClipId: string | null = null;
-    if (editCameraModeActive && selectedClipId && selectedClipId !== activeCameraClipAtPlayhead?.id) {
-      overrideClipId = selectedClipId;
-    } else if (editCameraClipSelected) {
-      overrideClipId = activeCameraClipAtPlayhead?.id ?? null;
-    }
-    setSceneGizmoClipIdOverride(overrideClipId);
-    return () => {
-      setSceneGizmoClipIdOverride(null);
-    };
-  }, [
-    activeCameraClipAtPlayhead?.id,
-    editCameraClipSelected,
-    editCameraModeActive,
-    selectedClipId,
-    setSceneGizmoClipIdOverride,
-  ]);
-
-  const activeEditCameraClipId = editCameraModeActive ? activeCameraClipAtPlayhead?.id ?? null : null;
-  useEffect(() => {
-    editCameraSettingsRef.current = { ...DEFAULT_EDIT_CAMERA_SETTINGS };
-    editCameraOrbitCenterRef.current = null;
-    setEditCameraViewMode('camera');
-    setEditCameraOrthoFrame(null);
-    setIsEditCameraOrthoPanning(false);
-  }, [activeEditCameraClipId]);
 
   const getSceneNavPointerLockTarget = useCallback(() => {
     return canvasWrapperRef.current ?? containerRef.current;
@@ -758,324 +279,6 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
     endSceneNavHistoryBatch();
   }, [endSceneNavHistoryBatch]);
 
-  const applySceneCameraValues = useCallback((clipId: string, values: {
-    positionX?: number;
-    positionY?: number;
-    positionZ?: number;
-    rotationX?: number;
-    rotationY?: number;
-  }) => {
-    const engineState = useEngineStore.getState();
-    const timelineState = useTimelineStore.getState();
-    const clip = timelineState.clips.find((candidate) => candidate.id === clipId);
-    if (engineState.sceneNavNoKeyframes && clip?.source?.type === 'camera') {
-      const clipLocalTime = timelineState.playheadPosition - clip.startTime;
-      const baseTransform = timelineState.getInterpolatedTransform(clipId, clipLocalTime);
-      engineState.setSceneCameraLiveOverride(clipId, {
-        ...(values.positionX !== undefined || values.positionY !== undefined
-          || values.positionZ !== undefined
-          ? {
-              position: {
-                ...(values.positionX !== undefined ? { x: values.positionX - baseTransform.position.x } : {}),
-                ...(values.positionY !== undefined ? { y: values.positionY - baseTransform.position.y } : {}),
-                ...(values.positionZ !== undefined ? { z: values.positionZ - baseTransform.position.z } : {}),
-              },
-            }
-          : {}),
-        ...(values.rotationX !== undefined || values.rotationY !== undefined
-          ? {
-              rotation: {
-                ...(values.rotationX !== undefined ? { x: values.rotationX - baseTransform.rotation.x } : {}),
-                ...(values.rotationY !== undefined ? { y: values.rotationY - baseTransform.rotation.y } : {}),
-              },
-            }
-          : {}),
-      });
-      engine.requestRender();
-      return;
-    }
-
-    const propertyUpdates: Array<readonly [property: 'position.x' | 'position.y' | 'position.z' | 'rotation.x' | 'rotation.y', value: number]> = [];
-
-    if (values.positionX !== undefined) {
-      propertyUpdates.push(['position.x', values.positionX]);
-    }
-    if (values.positionY !== undefined) {
-      propertyUpdates.push(['position.y', values.positionY]);
-    }
-    if (values.positionZ !== undefined) {
-      propertyUpdates.push(['position.z', values.positionZ]);
-    }
-    if (values.rotationX !== undefined) {
-      propertyUpdates.push(['rotation.x', values.rotationX]);
-    }
-    if (values.rotationY !== undefined) {
-      propertyUpdates.push(['rotation.y', values.rotationY]);
-    }
-
-    const needsKeyframePath = propertyUpdates.some(([property]) =>
-      hasKeyframes(clipId, property) || isRecording(clipId, property),
-    );
-
-    if (needsKeyframePath) {
-      for (const [property, value] of propertyUpdates) {
-        addKeyframe(clipId, property, value);
-      }
-    } else {
-      const currentClip = useTimelineStore.getState().clips.find((clip) => clip.id === clipId);
-      const currentTransform = currentClip?.transform;
-      updateClipTransform(clipId, {
-        ...(values.positionX !== undefined || values.positionY !== undefined || values.positionZ !== undefined
-          ? {
-              position: {
-                x: values.positionX ?? currentTransform?.position.x ?? 0,
-                y: values.positionY ?? currentTransform?.position.y ?? 0,
-                z: values.positionZ ?? currentTransform?.position.z ?? 0,
-              },
-            }
-          : {}),
-        ...(values.rotationX !== undefined || values.rotationY !== undefined
-          ? {
-              rotation: {
-                x: values.rotationX ?? currentTransform?.rotation.x ?? 0,
-                y: values.rotationY ?? currentTransform?.rotation.y ?? 0,
-                z: currentTransform?.rotation.z ?? 0,
-              },
-            }
-          : {}),
-      });
-    }
-
-    engine.requestRender();
-  }, [addKeyframe, hasKeyframes, isRecording, updateClipTransform]);
-
-  const resolveCameraClipTransformAtPlayhead = useCallback((clip: TimelineClip): ClipTransform => {
-    const { playheadPosition: ph, getInterpolatedTransform } = useTimelineStore.getState();
-    return cloneClipTransform(getInterpolatedTransform(clip.id, ph - clip.startTime));
-  }, []);
-
-  const getActualSceneCameraConfig = useCallback((): SceneCameraConfig => {
-    return resolveSharedSceneCameraConfig(
-      { width: effectiveResolution.width, height: effectiveResolution.height },
-      useTimelineStore.getState().playheadPosition,
-      {
-        clips: useTimelineStore.getState().clips,
-        tracks: useTimelineStore.getState().tracks,
-        clipKeyframes: useTimelineStore.getState().clipKeyframes,
-        compositionId: displayedCompId,
-        sceneNavClipId: null,
-        previewCameraOverride: null,
-      },
-    );
-  }, [displayedCompId, effectiveResolution.height, effectiveResolution.width]);
-
-  const getEditSceneCameraConfig = useCallback((clip: TimelineClip | null = activeCameraClipAtPlayhead): SceneCameraConfig | null => {
-    if (!clip || !editCameraTransformRef.current) return null;
-    const cameraConfig = buildPreviewCameraConfigFromTransform(
-      clip,
-      editCameraTransformRef.current,
-      { width: effectiveResolution.width, height: effectiveResolution.height },
-      editCameraOrbitCenterRef.current,
-      editCameraSettingsRef.current,
-    );
-    if (!cameraConfig) return null;
-    if (
-      editCameraOrthoMode &&
-      editCameraOrthoFrame?.clipId === clip.id &&
-      editCameraOrthoFrame.mode === editCameraOrthoMode
-    ) {
-      return buildEditCameraOrthographicConfig(editCameraOrthoMode, editCameraOrthoFrame, cameraConfig);
-    }
-    return cameraConfig;
-  }, [
-    activeCameraClipAtPlayhead,
-    editCameraOrthoFrame,
-    editCameraOrthoMode,
-    effectiveResolution.height,
-    effectiveResolution.width,
-  ]);
-
-  const stopEditCameraAnimation = useCallback(() => {
-    if (editCameraAnimationRef.current === null) return;
-    window.cancelAnimationFrame(editCameraAnimationRef.current);
-    editCameraAnimationRef.current = null;
-  }, []);
-
-  const animatePreviewCameraOverride = useCallback((
-    fromConfig: SceneCameraConfig,
-    toConfig: SceneCameraConfig,
-    clearAtEnd: boolean,
-  ) => {
-    stopEditCameraAnimation();
-    const from = cloneSceneCameraConfig(fromConfig);
-    const to = cloneSceneCameraConfig(toConfig);
-    const startedAt = performance.now();
-
-    const tick = (now: number) => {
-      const rawT = Math.min(1, (now - startedAt) / EDIT_CAMERA_BLEND_MS);
-      const easedT = easeInOutCubic(rawT);
-      setPreviewCameraOverride(lerpSceneCameraConfig(from, to, easedT));
-      engine.requestRender();
-
-      if (rawT < 1) {
-        editCameraAnimationRef.current = window.requestAnimationFrame(tick);
-        return;
-      }
-
-      editCameraAnimationRef.current = null;
-      setPreviewCameraOverride(clearAtEnd ? null : cloneSceneCameraConfig(to));
-      engine.requestRender();
-    };
-
-    setPreviewCameraOverride(cloneSceneCameraConfig(from));
-    engine.requestRender();
-    editCameraAnimationRef.current = window.requestAnimationFrame(tick);
-  }, [setPreviewCameraOverride, stopEditCameraAnimation]);
-
-  const setEditCameraView = useCallback((mode: EditCameraViewMode) => {
-    if (!activeCameraClipAtPlayhead || !editCameraTransformRef.current) return;
-    if (mode === editCameraViewMode) return;
-
-    const cameraConfig = buildPreviewCameraConfigFromTransform(
-      activeCameraClipAtPlayhead,
-      editCameraTransformRef.current,
-      { width: effectiveResolution.width, height: effectiveResolution.height },
-      editCameraOrbitCenterRef.current,
-      editCameraSettingsRef.current,
-    );
-    if (!cameraConfig) return;
-
-    const fromConfig = useEngineStore.getState().previewCameraOverride ?? getEditSceneCameraConfig(activeCameraClipAtPlayhead);
-    if (!fromConfig) return;
-
-    let toConfig = cameraConfig;
-    let nextFrame: EditCameraOrthoFrame | null = null;
-    if (mode !== 'camera') {
-      nextFrame = editCameraOrthoFrame?.clipId === activeCameraClipAtPlayhead.id
-        ? {
-            ...editCameraOrthoFrame,
-            mode,
-          }
-        : createDefaultEditCameraOrthoFrame(mode, activeCameraClipAtPlayhead.id, cameraConfig);
-      toConfig = buildEditCameraOrthographicConfig(mode, nextFrame, cameraConfig);
-    }
-
-    editCameraViewTransitionRef.current = true;
-    setEditCameraViewMode(mode);
-    setEditCameraOrthoFrame(nextFrame);
-    animatePreviewCameraOverride(fromConfig, toConfig, false);
-  }, [
-    activeCameraClipAtPlayhead,
-    animatePreviewCameraOverride,
-    editCameraOrthoFrame,
-    editCameraViewMode,
-    effectiveResolution.height,
-    effectiveResolution.width,
-    getEditSceneCameraConfig,
-  ]);
-
-  const applyNavigationCameraValues = useCallback((clip: TimelineClip, values: {
-    positionX?: number;
-    positionY?: number;
-    positionZ?: number;
-    rotationX?: number;
-    rotationY?: number;
-  }) => {
-    if (!editCameraModeActive || clip.id !== editCameraClipIdRef.current || !editCameraTransformRef.current) {
-      applySceneCameraValues(clip.id, values);
-      return;
-    }
-
-    stopEditCameraAnimation();
-    const current = editCameraTransformRef.current;
-    const next: ClipTransform = {
-      ...current,
-      position: {
-        x: values.positionX ?? current.position.x,
-        y: values.positionY ?? current.position.y,
-        z: values.positionZ ?? current.position.z,
-      },
-      scale: {
-        all: current.scale.all ?? 1,
-        x: current.scale.x,
-        y: current.scale.y,
-        ...(current.scale.z !== undefined ? { z: current.scale.z } : {}),
-      },
-      rotation: {
-        x: values.rotationX ?? current.rotation.x,
-        y: values.rotationY ?? current.rotation.y,
-        z: current.rotation.z,
-      },
-    };
-
-    editCameraTransformRef.current = next;
-    const nextCameraConfig = buildPreviewCameraConfigFromTransform(
-      clip,
-      next,
-      { width: effectiveResolution.width, height: effectiveResolution.height },
-      editCameraOrbitCenterRef.current,
-      editCameraSettingsRef.current,
-    );
-    if (nextCameraConfig) {
-      setPreviewCameraOverride(nextCameraConfig);
-      engine.requestRender();
-    }
-  }, [
-    applySceneCameraValues,
-    editCameraModeActive,
-    effectiveResolution.height,
-    effectiveResolution.width,
-    setPreviewCameraOverride,
-    stopEditCameraAnimation,
-  ]);
-
-  useEffect(() => {
-    const wasEditCameraModeActive = editCameraModeActiveRef.current;
-
-    if (editCameraModeActive && activeCameraClipAtPlayhead) {
-      const clipChanged = editCameraClipIdRef.current !== activeCameraClipAtPlayhead.id;
-      if (clipChanged || !editCameraTransformRef.current) {
-        editCameraClipIdRef.current = activeCameraClipAtPlayhead.id;
-        editCameraTransformRef.current = resolveCameraClipTransformAtPlayhead(activeCameraClipAtPlayhead);
-      }
-
-      const editCameraConfig = getEditSceneCameraConfig(activeCameraClipAtPlayhead);
-      if (!editCameraConfig) return;
-
-      editCameraModeActiveRef.current = true;
-      if (!wasEditCameraModeActive || clipChanged) {
-        const fromConfig = useEngineStore.getState().previewCameraOverride ?? getActualSceneCameraConfig();
-        animatePreviewCameraOverride(fromConfig, editCameraConfig, false);
-      } else if (editCameraViewTransitionRef.current) {
-        editCameraViewTransitionRef.current = false;
-      } else {
-        setPreviewCameraOverride(editCameraConfig);
-        engine.requestRender();
-      }
-      return;
-    }
-
-    editCameraModeActiveRef.current = false;
-    if (wasEditCameraModeActive) {
-      const fromConfig = useEngineStore.getState().previewCameraOverride ?? getActualSceneCameraConfig();
-      animatePreviewCameraOverride(fromConfig, getActualSceneCameraConfig(), true);
-    }
-  }, [
-    activeCameraClipAtPlayhead,
-    animatePreviewCameraOverride,
-    editCameraModeActive,
-    getActualSceneCameraConfig,
-    getEditSceneCameraConfig,
-    resolveCameraClipTransformAtPlayhead,
-    setPreviewCameraOverride,
-  ]);
-
-  useEffect(() => () => {
-    stopEditCameraAnimation();
-    setPreviewCameraOverride(null);
-    engine.requestRender();
-  }, [setPreviewCameraOverride, stopEditCameraAnimation]);
-
   const scheduleGaussianWheelBatchEnd = useCallback(() => {
     if (gaussianWheelBatchTimerRef.current === null) {
       startSceneNavHistoryBatch('Camera position');
@@ -1087,29 +290,6 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
       endSceneNavHistoryBatch();
     }, 180);
   }, [endSceneNavHistoryBatch, startSceneNavHistoryBatch]);
-
-  const getSceneNavSolveSettings = useCallback((clip: TimelineClip | null) => {
-    if (clip?.source?.type !== 'camera') return null;
-
-    const timelineState = useTimelineStore.getState();
-    const cameraSettings = editCameraModeActiveRef.current && clip.id === editCameraClipIdRef.current
-      ? editCameraSettingsRef.current
-      : timelineState.getInterpolatedCameraSettings(
-          clip.id,
-          timelineState.playheadPosition - clip.startTime,
-        );
-    return {
-      settings: {
-        nearPlane: cameraSettings.near,
-        farPlane: cameraSettings.far,
-        fov: cameraSettings.fov,
-        minimumDistance: getSharedSceneDefaultCameraDistance(cameraSettings.fov),
-      },
-      sceneBounds: editCameraModeActiveRef.current && clip.id === editCameraClipIdRef.current
-        ? buildEditCameraOrbitSceneBounds(editCameraOrbitCenterRef.current)
-        : undefined,
-    };
-  }, []);
 
   const finishGaussianKeyboardBatch = useCallback(() => {
     if (!gaussianKeyboardBatchActiveRef.current) return;
@@ -1150,97 +330,94 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
     }
   }, [endSceneNavHistoryBatch, getSceneNavPointerLockTarget]);
 
-  const focusEditCameraOnSceneObject = useCallback((object: {
-    clipId: string;
-    kind: string;
-    worldPosition: SceneVector3;
-  }): boolean => {
-    if (
-      !editCameraModeActive ||
-      !activeCameraClipAtPlayhead ||
-      !editCameraTransformRef.current ||
-      object.kind === 'camera' ||
-      object.clipId === activeCameraClipAtPlayhead.id
-    ) {
-      return false;
-    }
-
-    const viewport = { width: effectiveResolution.width, height: effectiveResolution.height };
-    const currentTransform = editCameraTransformRef.current;
-    const fromConfig = useEngineStore.getState().previewCameraOverride
-      ?? getEditSceneCameraConfig(activeCameraClipAtPlayhead);
-    const nextOrbitCenter = cloneSceneVector(object.worldPosition);
-    const nextTransform: ClipTransform = {
-      ...currentTransform,
-      position: {
-        ...currentTransform.position,
-        x: 0,
-        y: 0,
-      },
-      scale: {
-        ...currentTransform.scale,
-        z: 0,
-      },
-    };
-    const nextCameraConfig = buildPreviewCameraConfigFromTransform(
-      activeCameraClipAtPlayhead,
-      nextTransform,
-      viewport,
-      nextOrbitCenter,
-      editCameraSettingsRef.current,
-    );
-    if (!fromConfig || !nextCameraConfig) return false;
-
-    stopGaussianFpsLook();
-    stopGaussianKeyboardMovement();
-    endGaussianWheelBatch();
-    if (gaussianOrbitStart.current.clipId) {
-      gaussianOrbitStart.current.clipId = null;
-      setIsGaussianOrbiting(false);
-      endSceneNavHistoryBatch();
-    }
-    if (gaussianPanStart.current.clipId) {
-      gaussianPanStart.current.clipId = null;
-      setIsGaussianPanning(false);
-      endSceneNavHistoryBatch();
-    }
-    setIsEditCameraOrthoPanning(false);
-    containerRef.current?.focus({ preventScroll: true });
-
-    editCameraOrbitCenterRef.current = nextOrbitCenter;
-    editCameraTransformRef.current = nextTransform;
-    let toConfig: SceneCameraConfig = nextCameraConfig;
-    if (editCameraOrthoMode) {
-      const baseFrame = activeEditCameraOrthoFrame
-        ?? createDefaultEditCameraOrthoFrame(editCameraOrthoMode, activeCameraClipAtPlayhead.id, nextCameraConfig);
-      const nextFrame: EditCameraOrthoFrame = {
-        ...baseFrame,
-        clipId: activeCameraClipAtPlayhead.id,
-        mode: editCameraOrthoMode,
-        center: cloneSceneVector(nextOrbitCenter),
-      };
-      editCameraViewTransitionRef.current = true;
-      setEditCameraOrthoFrame(nextFrame);
-      toConfig = buildEditCameraOrthographicConfig(editCameraOrthoMode, nextFrame, nextCameraConfig);
-    }
-
-    animatePreviewCameraOverride(fromConfig, toConfig, false);
-    engine.requestRender();
-    return true;
-  }, [
-    activeCameraClipAtPlayhead,
+  const {
     activeEditCameraOrthoFrame,
-    animatePreviewCameraOverride,
-    editCameraModeActive,
+    applyNavigationCameraValues,
+    editCameraClipIdRef,
+    editCameraGizmoTransform,
+    editCameraModeActiveRef,
+    editCameraOrthoFrame,
+    editCameraOrthoHint,
     editCameraOrthoMode,
-    effectiveResolution.height,
-    effectiveResolution.width,
+    editCameraOrthoPanStart,
+    editCameraOrthoViewActive,
+    editCameraSettingsRef,
+    focusEditCameraOnSceneObject,
+    getFreshSceneNavTransform,
+    getSceneNavSolveSettings,
+    isEditCameraOrthoPanning,
+    sceneObjectWorldGridPlane,
+    setEditCameraOrthoFrame,
+    setEditCameraView,
+    setIsEditCameraOrthoPanning,
+  } = usePreviewEditCameraController({
+    activeCameraClipAtPlayhead,
+    addKeyframe,
+    containerRef,
+    displayedCompId,
+    editCameraModeActive,
+    effectiveResolution,
     endGaussianWheelBatch,
     endSceneNavHistoryBatch,
-    getEditSceneCameraConfig,
+    gaussianOrbitStart,
+    gaussianPanStart,
+    hasKeyframes,
+    isRecording,
+    sceneNavNoKeyframes,
+    setIsGaussianOrbiting,
+    setIsGaussianPanning,
+    setPreviewCameraOverride,
     stopGaussianFpsLook,
     stopGaussianKeyboardMovement,
-  ]);
+    updateClipTransform,
+  });
+
+  const {
+    activeSharedSceneOverlayContent,
+    effectiveSceneNavFpsMode,
+    freeCanvasNavigationMode,
+    layerTransformMode,
+    maskNavigationMode,
+    navigationSceneNavClip,
+    sceneNavEnabled,
+    sceneObjectOverlaySelectedClipId,
+    selectedClip,
+    selectedTextBounds,
+    selectedTextLayer,
+    showSceneObjectOverlay,
+    textClipEditMode,
+    textPreviewEditorEnabled,
+    textTypingActive,
+  } = usePreviewModeState({
+    activeCameraClipAtPlayhead,
+    clips,
+    editCameraModeActive,
+    editCameraOrthoFrame,
+    editCameraOrthoMode,
+    editCameraOrthoViewActive,
+    editMode,
+    getInterpolatedTextBounds,
+    isEditableSource,
+    isEngineReady,
+    isPlaying,
+    layers,
+    maskPanelActive,
+    playheadPosition,
+    sceneNavClipId,
+    sceneObjectOverlayEnabled,
+    sceneNavFpsMode,
+    selectedClipId,
+    selectedClipIds,
+    selectedLayerId,
+    selectLayer,
+    setEditMode,
+    setSceneGizmoClipIdOverride,
+    setSceneGizmoVisible,
+    setTextTyping,
+    sourceMonitorActive,
+    textTyping,
+    tracks,
+  });
 
   const { handleSceneNavBlur, handleSceneNavKeyDown, handleSceneNavKeyUp } = usePreviewSceneNavigation({
     applyNavigationCameraValues,
@@ -1277,19 +454,6 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
     stopGaussianKeyboardLoop,
     stopGaussianKeyboardMovement,
   });
-
-  // Sync layer selection when clip is selected in timeline (for edit mode)
-  useEffect(() => {
-    if (!selectedClipId || !layerEditMode) return;
-
-    const clip = clips.find(c => c.id === selectedClipId);
-    if (clip) {
-      const layer = layers.find(l => l?.name === clip.name);
-      if (layer && layer.id !== selectedLayerId) {
-        selectLayer(layer.id);
-      }
-    }
-  }, [selectedClipId, layerEditMode, clips, layers, selectedLayerId, selectLayer]);
 
   const {
     exportPreviewDisplaySize,
@@ -1386,37 +550,16 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
     viewPan,
   });
 
-  useEffect(() => {
-    const element = containerRef.current;
-    if (!element) return;
-
-    const handleNativeWheel = (event: WheelEvent) => {
-      handleWheel(event);
-    };
-
-    element.addEventListener('wheel', handleNativeWheel, { capture: true, passive: false });
-    return () => element.removeEventListener('wheel', handleNativeWheel, { capture: true });
-  }, [handleWheel]);
-
-  const toggleEditModeFromShortcut = useCallback(() => {
-    if (!isPreviewShortcutTarget()) return;
-    containerRef.current?.focus({ preventScroll: true });
-    setEditMode(prev => !prev);
-  }, [isPreviewShortcutTarget]);
-
-  // Tab key to toggle edit mode (via shortcut registry)
-  useShortcut('preview.editMode', toggleEditModeFromShortcut, { enabled: isEditableSource });
-
-  const { handleContextMenu, handleAuxClick } = usePreviewContextMenu({
+  const { handleContextMenu, handleAuxClick, setPanelEditMode } = usePreviewPanelInputBindings({
+    containerRef,
     editCameraOrthoViewActive,
+    handleWheel,
     isCanvasInteractionTarget,
+    isEditableSource,
+    isPreviewShortcutTarget,
     sceneNavEnabled,
+    setEditMode,
   });
-
-  const setPanelEditMode = useCallback((value: boolean) => {
-    containerRef.current?.focus({ preventScroll: true });
-    setEditMode(value);
-  }, []);
 
   const { canvasInContainer, viewTransform } = usePreviewViewGeometry({
     canvasSize,
@@ -1439,54 +582,28 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
       calculateLayerBounds, findLayerAtPosition, findHandleAtPosition,
     });
 
-  const showSceneObjectOverlay = sceneObjectOverlayEnabled && activeSharedSceneOverlayContent && isEditableSource && !isPlaying;
-  const textPreviewEditorEnabled = Boolean(
-    isEditableSource &&
-    !sourceMonitorActive &&
-    !isPlaying &&
-    textClipEditMode &&
-    textTypingActive &&
-    !sceneNavEnabled &&
-    selectedClip?.textProperties &&
-    selectedTextLayer,
-  );
-  const sceneObjectOverlaySelectedClipId =
-    editCameraModeActive &&
-    editCameraOrthoViewActive &&
-    selectedClipId === activeCameraClipAtPlayhead?.id
-      ? null
-      : selectedClipId;
-  const editCameraGizmoTransform = editCameraModeActive && activeCameraClipAtPlayhead
-    ? resolveCameraClipTransformAtPlayhead(activeCameraClipAtPlayhead)
-    : null;
-  const editCameraOrthoHint = editCameraOrthoViewActive && activeEditCameraOrthoFrame
-    ? `${EDIT_CAMERA_VIEW_LABELS[activeEditCameraOrthoFrame.mode]} Ortho | 1 Front | 2 Side | 3 Top | 4 Camera | Wheel Zoom | Shift+Drag/MMB Pan`
-    : null;
-  const sceneObjectWorldGridPlane =
-    editCameraModeActive && editCameraViewMode === 'front'
-      ? 'xy'
-      : editCameraModeActive && editCameraViewMode === 'side'
-        ? 'yz'
-        : 'xz';
-
-  // #206: leave text typing when the selection changes or edit mode is exited.
-  useEffect(() => {
-    setTextTyping(false);
-  }, [selectedClipId, editMode]);
-
-  // #206: Escape returns from text typing to the layer transform handles.
-  useEffect(() => {
-    if (!textTyping) return undefined;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        event.stopPropagation();
-        setTextTyping(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [textTyping]);
+  const previewCanvasMountProps = {
+    activeSharedSceneOverlayContent, activeSplatLoadProgress, canvasInContainer, canvasRef,
+    canvasSize, canvasWrapperRef, clips, closeSourceMonitor, containerSize, displayedCompId,
+    dragHandle, dragMode, editCameraGizmoTransform, editCameraModeActive, editCameraOrthoHint,
+    editMode, effectiveResolution, effectiveSceneNavFpsMode, engineInitError, engineInitFailed,
+    engineStats, exportPreviewCanvasRef, exportPreviewDisplaySize, exportPreviewFrame,
+    focusEditCameraOnSceneObject, getCursorForHandle, handleOverlayMouseDown,
+    handleOverlayMouseMove, handleOverlayMouseUp, hoverHandle, isDragging, isEditableSource,
+    isEngineReady, isExporting, layerTransformMode, maskEditMode, maskNavigationMode,
+    maskPanelActive, overlayRef, playbackWaiterVideoCount, previewCameraOverride,
+    previewQuality, qualityDropdownRef, qualityOpen, sam2Active, sceneGizmoToolbarTarget,
+    sceneNavClipId, sceneNavEnabled, sceneObjectOverlaySelectedClipId, selectClip,
+    selectedClip, selectedTextBounds, selectedTextLayer, setPropertyValue, setPreviewQuality,
+    setQualityOpen, setSceneGizmoToolbarTarget, setTextTyping, showPlaybackWaiter,
+    showSceneObjectOverlay, showTransparencyGrid, sourceMonitorActive, sourceMonitorFile,
+    sourceMonitorPlaybackRequestId, statsExpanded, textClipEditMode, textPreviewEditorEnabled,
+    textTypingActive, toggleTransparency, tracks, updateTextBoundsVertex,
+    updateTextBoundsVertices, updateTextProperties, viewTransform, viewZoom,
+    editCameraClip: activeCameraClipAtPlayhead,
+    worldGridPlane: sceneObjectWorldGridPlane,
+    onToggleStats: () => setStatsExpanded(!statsExpanded),
+  };
 
   return (
     <div
@@ -1545,86 +662,7 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
         setPanelSource={setPanelSource}
       />
 
-      <PreviewCanvasMount
-        activeSharedSceneOverlayContent={activeSharedSceneOverlayContent}
-        activeSplatLoadProgress={activeSplatLoadProgress}
-        canvasInContainer={canvasInContainer}
-        canvasRef={canvasRef}
-        canvasSize={canvasSize}
-        canvasWrapperRef={canvasWrapperRef}
-        clips={clips}
-        closeSourceMonitor={closeSourceMonitor}
-        containerSize={containerSize}
-        displayedCompId={displayedCompId}
-        dragHandle={dragHandle}
-        dragMode={dragMode}
-        editCameraClip={activeCameraClipAtPlayhead}
-        editCameraGizmoTransform={editCameraGizmoTransform}
-        editCameraModeActive={editCameraModeActive}
-        editCameraOrthoHint={editCameraOrthoHint}
-        editMode={editMode}
-        effectiveResolution={effectiveResolution}
-        effectiveSceneNavFpsMode={effectiveSceneNavFpsMode}
-        engineInitError={engineInitError}
-        engineInitFailed={engineInitFailed}
-        engineStats={engineStats}
-        exportPreviewCanvasRef={exportPreviewCanvasRef}
-        exportPreviewDisplaySize={exportPreviewDisplaySize}
-        exportPreviewFrame={exportPreviewFrame}
-        focusEditCameraOnSceneObject={focusEditCameraOnSceneObject}
-        getCursorForHandle={getCursorForHandle}
-        handleOverlayMouseDown={handleOverlayMouseDown}
-        handleOverlayMouseMove={handleOverlayMouseMove}
-        handleOverlayMouseUp={handleOverlayMouseUp}
-        hoverHandle={hoverHandle}
-        isDragging={isDragging}
-        isEditableSource={isEditableSource}
-        isEngineReady={isEngineReady}
-        isExporting={isExporting}
-        layerTransformMode={layerTransformMode}
-        maskEditMode={maskEditMode}
-        maskNavigationMode={maskNavigationMode}
-        maskPanelActive={maskPanelActive}
-        overlayRef={overlayRef}
-        playbackWaiterVideoCount={playbackWaiterVideoCount}
-        previewCameraOverride={previewCameraOverride}
-        previewQuality={previewQuality}
-        qualityDropdownRef={qualityDropdownRef}
-        qualityOpen={qualityOpen}
-        sam2Active={sam2Active}
-        sceneGizmoToolbarTarget={sceneGizmoToolbarTarget}
-        sceneNavClipId={sceneNavClipId}
-        sceneNavEnabled={sceneNavEnabled}
-        sceneObjectOverlaySelectedClipId={sceneObjectOverlaySelectedClipId}
-        selectClip={selectClip}
-        selectedClip={selectedClip}
-        selectedTextBounds={selectedTextBounds}
-        selectedTextLayer={selectedTextLayer}
-        setPropertyValue={setPropertyValue}
-        setPreviewQuality={setPreviewQuality}
-        setQualityOpen={setQualityOpen}
-        setSceneGizmoToolbarTarget={setSceneGizmoToolbarTarget}
-        setTextTyping={setTextTyping}
-        showPlaybackWaiter={showPlaybackWaiter}
-        showSceneObjectOverlay={showSceneObjectOverlay}
-        showTransparencyGrid={showTransparencyGrid}
-        sourceMonitorActive={sourceMonitorActive}
-        sourceMonitorFile={sourceMonitorFile}
-        sourceMonitorPlaybackRequestId={sourceMonitorPlaybackRequestId}
-        statsExpanded={statsExpanded}
-        textClipEditMode={textClipEditMode}
-        textPreviewEditorEnabled={textPreviewEditorEnabled}
-        textTypingActive={textTypingActive}
-        toggleTransparency={toggleTransparency}
-        tracks={tracks}
-        updateTextBoundsVertex={updateTextBoundsVertex}
-        updateTextBoundsVertices={updateTextBoundsVertices}
-        updateTextProperties={updateTextProperties}
-        viewTransform={viewTransform}
-        viewZoom={viewZoom}
-        worldGridPlane={sceneObjectWorldGridPlane}
-        onToggleStats={() => setStatsExpanded(!statsExpanded)}
-      />
+      <PreviewCanvasMount {...previewCanvasMountProps} />
     </div>
   );
 }

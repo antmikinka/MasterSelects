@@ -83,7 +83,12 @@ export const classCHardTargets = [
   // Ratchet trail: 27 -> 23 (packet 188, adapter layer), -> 20+3 (191,
   // source config), -> 17+3+2 (209, wheel handler). Cluster total 22 (one
   // hit retired entirely in 209).
-  { path: 'src/components/preview/Preview.tsx', maxCurrentHits: 17 },
+  // Packet 227 moved 16 hits into the edit-camera/scene-camera hooks;
+  // Preview.tsx keeps 1. Cluster total still 22.
+  { path: 'src/components/preview/Preview.tsx', maxCurrentHits: 1 },
+  { path: 'src/components/preview/usePreviewEditCameraController.ts', maxCurrentHits: 8 },
+  { path: 'src/components/preview/usePreviewSceneCameraActions.ts', maxCurrentHits: 7 },
+  { path: 'src/components/preview/usePreviewEditCameraConfig.ts', maxCurrentHits: 1 },
   { path: 'src/components/preview/usePreviewSourceConfig.ts', maxCurrentHits: 3 },
   { path: 'src/components/preview/usePreviewWheelHandler.ts', maxCurrentHits: 2 },
   { path: 'src/components/preview/SAM2Overlay.tsx', maxCurrentHits: 2 },
@@ -252,7 +257,9 @@ export const getStateAccessPolicyBaselines = {
   // only (669 -> 665 via the packet-188 Preview ceiling cut).
   // 192 -> 193: packet-218 redistribution added the composition-settings hook
   // entry (MediaPanel 4 -> 3, hook 1; cluster total conserved).
-  classCHardTargetFileCount: 193,
+  // 193 -> 196: packet-227 Preview redistribution added three camera-hook
+  // entries (Preview 17 -> 1; cluster total conserved).
+  classCHardTargetFileCount: 196,
   // 669 -> 665 (packet 188 Preview cut) -> 664 (packet 209 retired one hit).
   classCHardTargetMaxHits: 664,
 } as const;

@@ -6,9 +6,7 @@ import type {
   TimelineClip,
 } from '../../types';
 import { Logger } from '../logger';
-import { textRenderer } from '../textRenderer';
 import { getCanvasVersion, markDynamicCanvasUpdated } from '../canvasVersion';
-import { extractAINodeGeneratedCode } from './aiNodeDefinition';
 import { buildClipNodeGraph } from './clipGraphProjection';
 import { timelineRuntimeCoordinator } from '../timeline/timelineRuntimeCoordinator';
 import type { RenderResourceDescriptor } from '../timeline/runtimeCoordinatorTypes';
@@ -29,14 +27,23 @@ import {
   createRuntimeTextSignal,
   createRuntimeTime,
   createSerializableGraph,
-  type AINodeRuntimeContext,
   type AINodeRuntimeInputValue,
 } from './aiNodeRuntimeGraphSignals';
+import {
+  resolveCurrentTextProperties,
+  runGeneratedNode,
+} from './aiNodeRuntimeGeneratedNode';
+import {
+  getConnectedRunnableCustomNodes,
+  getNodeProcessPixelBudget,
+  isPixelSortNode,
+  sortPixelsTexture,
+} from './aiNodeRuntimeRunnableNodes';
+
+export { sortPixelsTexture } from './aiNodeRuntimeRunnableNodes';
 
 const log = Logger.create('AINodeRuntime');
 
-const PIXEL_SORT_MAX_PIXELS = 320 * 180;
-const GENERATED_NODE_MAX_PIXELS = 96 * 54;
 const AI_NODE_RUNTIME_CACHE_ENTRY_LIMIT = 24;
 const AI_NODE_RUNTIME_CACHE_BYTE_LIMIT = 96 * 1024 * 1024;
 
@@ -46,15 +53,6 @@ export interface AINodeRuntimeTexture {
   height: number;
   metadata?: Record<string, unknown>;
   text?: string | Partial<TextClipProperties>;
-}
-
-type AINodeProcessFunction = (
-  input: Record<string, AINodeRuntimeInputValue>,
-  context: AINodeRuntimeContext,
-) => { output?: AINodeRuntimeTexture } | AINodeRuntimeTexture | undefined;
-
-interface AINodeExecutable {
-  process?: AINodeProcessFunction;
 }
 
 interface RuntimeCacheEntry {
@@ -69,48 +67,7 @@ interface RuntimeCacheEntry {
 type AINodeParamResolver = (nodeId: string) => Record<string, ClipCustomNodeParamValue>;
 
 const runtimeCache = new Map<string, RuntimeCacheEntry>();
-const executableCache = new Map<string, AINodeExecutable | null>();
 let runtimeCacheBytes = 0;
-
-function isRunnableCustomNode(definition: ClipCustomNodeDefinition): boolean {
-  return definition.bypassed !== true &&
-    definition.status === 'ready' &&
-    !!extractAINodeGeneratedCode(definition.ai.generatedCode ?? '');
-}
-
-function getConnectedRunnableCustomNodes(clip: TimelineClip): ClipCustomNodeDefinition[] {
-  const runnableById = new Map(
-    (clip.nodeGraph?.customNodes ?? [])
-      .filter(isRunnableCustomNode)
-      .map((definition) => [definition.id, definition]),
-  );
-
-  if (runnableById.size === 0) {
-    return [];
-  }
-
-  const graph = buildClipNodeGraph(clip);
-  const incomingEdges = new Map(graph.edges.map((edge) => [`${edge.toNodeId}:${edge.toPortId}`, edge]));
-  const chain: ClipCustomNodeDefinition[] = [];
-  const visitedNodes = new Set<string>();
-  let incomingEdge = incomingEdges.get('output:input');
-
-  while (incomingEdge && incomingEdge.type === 'texture' && incomingEdge.fromNodeId !== 'source') {
-    if (visitedNodes.has(incomingEdge.fromNodeId)) {
-      return [];
-    }
-    visitedNodes.add(incomingEdge.fromNodeId);
-
-    const customNode = runnableById.get(incomingEdge.fromNodeId);
-    if (customNode) {
-      chain.unshift(customNode);
-    }
-
-    incomingEdge = incomingEdges.get(`${incomingEdge.fromNodeId}:input`);
-  }
-
-  return incomingEdge?.fromNodeId === 'source' && incomingEdge.type === 'texture' ? chain : [];
-}
 
 export function hasRunnableAINodes(clip: TimelineClip): boolean {
   return getConnectedRunnableCustomNodes(clip).length > 0;
@@ -171,17 +128,6 @@ function getProcessSize(width: number, height: number, maxPixels: number): { wid
     width: Math.max(1, Math.round(width * scale)),
     height: Math.max(1, Math.round(height * scale)),
   };
-}
-
-function getNodeProcessPixelBudget(
-  clip: TimelineClip,
-  sourceSize: { width: number; height: number },
-  hasPixelSortNode: boolean,
-): number {
-  if (clip.textProperties) {
-    return sourceSize.width * sourceSize.height;
-  }
-  return hasPixelSortNode ? PIXEL_SORT_MAX_PIXELS : GENERATED_NODE_MAX_PIXELS;
 }
 
 function hashString(value: string): string {
@@ -478,58 +424,6 @@ function ensureCacheEntry(
   return entry;
 }
 
-function copyTexture(texture: AINodeRuntimeTexture): AINodeRuntimeTexture {
-  return {
-    data: new Uint8ClampedArray(texture.data),
-    width: texture.width,
-    height: texture.height,
-  };
-}
-
-function isRuntimeTexture(value: unknown): value is AINodeRuntimeTexture {
-  const candidate = value as Partial<AINodeRuntimeTexture> | null;
-  return !!candidate &&
-    candidate.data instanceof Uint8ClampedArray &&
-    typeof candidate.width === 'number' &&
-    candidate.width > 0 &&
-    typeof candidate.height === 'number' &&
-    candidate.height > 0;
-}
-
-export function sortPixelsTexture(texture: AINodeRuntimeTexture): AINodeRuntimeTexture {
-  const output = copyTexture(texture);
-  const pixelCount = texture.width * texture.height;
-  const pixels = new Array<number>(pixelCount);
-
-  for (let i = 0; i < pixelCount; i += 1) {
-    const base = i * 4;
-    pixels[i] = (
-      (texture.data[base] << 24) |
-      (texture.data[base + 1] << 16) |
-      (texture.data[base + 2] << 8) |
-      texture.data[base + 3]
-    ) >>> 0;
-  }
-
-  pixels.sort((a, b) => a - b);
-
-  for (let i = 0; i < pixelCount; i += 1) {
-    const base = i * 4;
-    const value = pixels[i];
-    output.data[base] = (value >>> 24) & 0xff;
-    output.data[base + 1] = (value >>> 16) & 0xff;
-    output.data[base + 2] = (value >>> 8) & 0xff;
-    output.data[base + 3] = value & 0xff;
-  }
-
-  return output;
-}
-
-function isPixelSortNode(definition: ClipCustomNodeDefinition): boolean {
-  const haystack = `${definition.ai.prompt}\n${definition.ai.generatedCode ?? ''}`;
-  return /sort(?:ing)?\s+(?:all\s+)?pixels|pixels?\s+sort/i.test(haystack);
-}
-
 function stableStringifyParams(params: Record<string, ClipCustomNodeParamValue>): string {
   return Object.keys(params)
     .sort()
@@ -564,198 +458,6 @@ function createSourceContentSignature(source: LayerSource): string {
     source.targetMediaTime ?? '',
     source.previewPath ?? '',
   ].join(':');
-}
-
-function getRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' ? value as Record<string, unknown> : null;
-}
-
-function getReturnedTextValue(output: AINodeRuntimeTexture | undefined): string | Partial<TextClipProperties> | undefined {
-  if (!output) {
-    return undefined;
-  }
-
-  if (typeof output.text === 'string' || getRecord(output.text)) {
-    return output.text;
-  }
-
-  const metadata = getRecord(output.metadata);
-  const metadataText = getRecord(metadata?.text);
-  const content = metadataText?.content;
-  if (typeof content === 'string') {
-    return content;
-  }
-
-  const text = metadataText?.text;
-  return typeof text === 'string' ? text : undefined;
-}
-
-function mergeReturnedMetadata(
-  base: Record<string, unknown>,
-  output: AINodeRuntimeTexture | undefined,
-  result?: unknown,
-): Record<string, unknown> {
-  const resultMetadata = getRecord(getRecord(result)?.metadata);
-  if (!output?.metadata && !resultMetadata) {
-    return base;
-  }
-  return {
-    ...base,
-    ...(resultMetadata ?? {}),
-    ...(output?.metadata ?? {}),
-  };
-}
-
-function getTopLevelReturnedText(result: unknown): string | Partial<TextClipProperties> | undefined {
-  const text = getRecord(result)?.text;
-  return typeof text === 'string' || getRecord(text) ? text as string | Partial<TextClipProperties> : undefined;
-}
-
-function renderTextSignalToTexture(
-  texture: AINodeRuntimeTexture,
-  baseText: TextClipProperties | undefined,
-  returnedText: string | Partial<TextClipProperties> | undefined,
-): AINodeRuntimeTexture {
-  if (!baseText || returnedText === undefined || typeof document === 'undefined') {
-    return texture;
-  }
-
-  const textPatch = typeof returnedText === 'string'
-    ? { text: returnedText }
-    : returnedText;
-  const textPatchRecord = getRecord(textPatch);
-  const normalizedTextPatch = textPatchRecord &&
-    typeof textPatchRecord.content === 'string' &&
-    typeof textPatchRecord.text !== 'string'
-    ? { ...textPatch, text: textPatchRecord.content }
-    : textPatch;
-  const nextText = {
-    ...baseText,
-    ...normalizedTextPatch,
-  };
-  const canvas = textRenderer.createCanvas(texture.width, texture.height);
-  textRenderer.render(nextText, canvas);
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  if (!context) {
-    return texture;
-  }
-
-  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-  return {
-    ...texture,
-    data: imageData.data,
-    width: imageData.width,
-    height: imageData.height,
-    text: returnedText,
-    metadata: mergeReturnedMetadata(texture.metadata ?? {}, texture),
-  };
-}
-
-function resolveCurrentTextProperties(
-  baseText: TextClipProperties | undefined,
-  texture: AINodeRuntimeTexture,
-): TextClipProperties | undefined {
-  if (!baseText || texture.text === undefined) {
-    return baseText;
-  }
-
-  if (typeof texture.text === 'string') {
-    return {
-      ...baseText,
-      text: texture.text,
-    };
-  }
-
-  return {
-    ...baseText,
-    ...texture.text,
-  };
-}
-
-function compileGeneratedNode(code: string, cacheKey: string): AINodeExecutable | null {
-  const cached = executableCache.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-
-  let executable: AINodeExecutable | null = null;
-  const defineNode = (definition: AINodeExecutable) => {
-    executable = definition;
-    return definition;
-  };
-
-  try {
-    const run = new Function('defineNode', `"use strict";\n${code}\n;`);
-    run(defineNode);
-  } catch (error) {
-    log.warn('Failed to compile generated AI node code', error);
-  }
-
-  executableCache.set(cacheKey, executable);
-  return executable;
-}
-
-function runGeneratedNode(
-  definition: ClipCustomNodeDefinition,
-  texture: AINodeRuntimeTexture,
-  context: AINodeRuntimeContext,
-  connectedInputs: Record<string, AINodeRuntimeInputValue> = {},
-): AINodeRuntimeTexture {
-  const code = extractAINodeGeneratedCode(definition.ai.generatedCode ?? '');
-  if (!code) {
-    return texture;
-  }
-
-  const executable = compileGeneratedNode(code, `${definition.id}:${code}`);
-  if (!executable?.process) {
-    return texture;
-  }
-
-  try {
-    const result = executable.process(
-      {
-        input: texture,
-        texture,
-        time: createRuntimeTime(context),
-        metadata: context.metadata,
-        params: context.params,
-        clip: context.clip,
-        source: context.source,
-        graph: context.graph,
-        node: context.node,
-        signals: context.signals,
-        audio: context.audio,
-        audioAnalysis: context.signals.audioAnalysis,
-        frequencyBands: context.signals.frequencyBands,
-        beats: context.signals.beats,
-        onsets: context.signals.onsets,
-        audioMetadata: context.signals.audioMetadata,
-        audioRepairSuggestions: context.signals.audioRepairSuggestions,
-        text: context.text,
-        connectedInputs,
-        ...connectedInputs,
-      },
-      context,
-    );
-    const output = 'output' in (result ?? {}) ? (result as { output?: AINodeRuntimeTexture }).output : result;
-    if (!isRuntimeTexture(output)) {
-      return texture;
-    }
-
-    const metadata = mergeReturnedMetadata(context.metadata, output, result);
-    const returnedText = getReturnedTextValue(output) ?? getTopLevelReturnedText(result);
-    return renderTextSignalToTexture(
-      {
-        ...output,
-        metadata,
-      },
-      context.text,
-      returnedText,
-    );
-  } catch (error) {
-    log.warn('Generated AI node failed during render; passing input through', error);
-    return texture;
-  }
 }
 
 function processTexture(
