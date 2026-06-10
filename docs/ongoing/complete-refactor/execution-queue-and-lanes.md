@@ -864,6 +864,32 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
   `SceneObjectOverlay` 814.
 - Wave 18 verification:
   Orchestrator-verified: tsc clean; 14 suites green (212 tests).
+- Wave 19 closure completed:
+  `DOCS-CLOSURE-219`; `P6-CLIPAUDIORENDERSERVICE-SPLIT-220` split
+  `ClipAudioRenderService` 2098 -> 286 with 15 `services/audio/clipRender/`
+  modules; `P6-AUDIORECORDINGSERVICE-SPLIT-221` split
+  `AudioRecordingService` 2058 -> 607 with 11 `services/audio/recording/`
+  modules and conserved handle lifecycles; `P6-AUDIOEFFECTRENDERER-SPLIT-222`
+  split `AudioEffectRenderer` 1991 -> 306 with 8
+  `engine/audio/effectRender/` modules;
+  `P6-PROXYFRAMECACHE-STRUCTURE-SPLIT-223` split `proxyFrameCache` 3394 -> 2324
+  with 7 `services/proxyFrame/` modules, keeping lease and test surfaces
+  frozen.
+- Wave 19 verification:
+  Orchestrator-verified: tsc clean; 13-suite net green.
+- Wave 20 closure completed:
+  `P6-AUDIOROUTINGMANAGER-SPLIT-224` split `audioRoutingManager` 1925 -> 564
+  with 11 `services/audio/routing/` modules and closed the audio census series;
+  `P6-WEBCODECSPLAYER-SPLIT-225` split `WebCodecsPlayer` 1915 -> 176 with 10
+  `engine/webCodecsPlayer/` modules, conserving `close()` 16/16 and monitor
+  hooks; `P5-EXPORTPANEL-SPLIT-226` split `ExportPanel` 1890 -> 984 with 8
+  `components/export/panel/` modules; `P5-PREVIEW-SPLIT-227` split `Preview`
+  1630 -> 668 with 6 hooks; `P6-AUDIODECODE-SERVICE-SPLIT-228` split
+  `AudioDecodeService` 996 -> 683; `P7-AINODE-RUNTIME-FOLLOWUP-229` split
+  `aiNodeRuntime` 960 -> 662.
+- Wave 20 verification:
+  Orchestrator-verified: tsc clean; 10-suite net green (70 tests). Over-700
+  count is now 99.
 
 ## High-Conflict Ownership Snapshot
 
@@ -882,35 +908,42 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 | `src/engine/**`, `src/components/preview/**`, `src/components/export/**` | later P5/P6 joint packets | read, smoke only | render snapshot/output-router contracts frozen |
 | `src/services/aiTools/**` | later P7 smoke quarantine packets | read, smoke inventory only | Phase 0 smoke thresholds accepted |
 
-## Active Wave 19
+## Active Wave 21
 
-Wave 19 packets are dispatched in parallel with docs-only
-`DOCS-CLOSURE-219`. Keep write sets disjoint and report any needed scope
+Wave 21 packets are dispatched in parallel with docs-only
+`DOCS-CLOSURE-235`. Keep write sets disjoint and report any needed scope
 extension instead of self-extending.
 
-- `P6-CLIPAUDIORENDERSERVICE-SPLIT-220`: split `ClipAudioRenderService`
-  (currently 2098 raw lines).
-- `P6-AUDIORECORDINGSERVICE-SPLIT-221`: split `AudioRecordingService`.
-- `P6-AUDIOEFFECTRENDERER-SPLIT-222`: split `AudioEffectRenderer` (currently
-  1991 raw lines).
-- `P6-PROXYFRAMECACHE-STRUCTURE-SPLIT-223`: split `proxyFrameCache` structure.
+- `P6-PROXYFRAMECACHE-FOLLOWUP-230`: continue `proxyFrameCache` split
+  (currently 2324 raw lines).
+- `P6-RENDERDISPATCHER-SPLIT-231`: split `RenderDispatcher` (currently 2050
+  raw lines).
+- `P5-FLEXEQUALIZERCONTROL-SPLIT-232`: split `FlexEqualizerControl`
+  (currently 1831 raw lines).
+- `P5-NODEWORKSPACEPANEL-SPLIT-233`: split `NodeWorkspacePanel` (currently
+  1817 raw lines).
+- `P7-AICHATPANEL-SPLIT-234`: split `AIChatPanel` (currently 1677 raw lines).
 
 ## Queued Packets
 
-- `P6-AUDIOROUTINGMANAGER-SPLIT`: split `audioRoutingManager` after the
-  facade merge made it the single live audio owner.
-- `P6-AUDIODECODE-SERVICE-SPLIT`: split `AudioDecodeService` (currently 996
-  raw lines) after wave 18 decode-island consolidation.
+- `P6-SCRUBBINGCACHE-SPLIT`: split `ScrubbingCache` (currently 1595 raw
+  lines).
+- `P6-COMPOSITIONRENDERER-SPLIT`: split `compositionRenderer` (currently 1591
+  raw lines).
+- `P7-NATIVEHELPERCLIENT-SPLIT`: split `NativeHelperClient` (currently 1573
+  raw lines).
+- `P6-LAYERCOLLECTOR-SPLIT`: split `LayerCollector` (currently 1553 raw
+  lines).
+- `P6-PARALLELDECODEMANAGER-SPLIT`: split `ParallelDecodeManager` (currently
+  1512 raw lines).
+- `P5-EXPORTPANEL-FOLLOWUP`: continue `ExportPanel` split (currently 984 raw
+  lines), including advanced sections.
 - `P5-SCENE-OBJECT-OVERLAY-FOLLOWUP`: extract pointer-lock/listener
   orchestration from `SceneObjectOverlay` (currently 814 raw lines).
-- `P7-AINODE-RUNTIME-FOLLOWUP`: continue the `aiNodeRuntime` split (currently
-  960 raw lines).
-- Continue `WebCodecsPlayer`, `ExportPanel`, `Preview`, and `RenderDispatcher`
-  monolith reductions through bounded write sets.
-- `P6-AUDIOEXTRACTOR-DECODE-OWNER-FOLLOWUP`: move remaining AudioExtractor
-  decode ownership onto the chosen decode boundary.
+- `P8-RETIRED-PATH-LEDGER-PASS`: refresh retired-path ledger status.
+- `P8-FINAL-FULL-CHAIN`: run final full chain when the refactor wave is ready.
 
 ## Immediate Next Step
 
-Track wave 19 packet reports and keep this file to the active wave plus the
-next few queued packets. Do not reopen completed wave 13-18 packets.
+Track wave 21 packet reports and keep this file to the active wave plus the
+next queued packets. Do not reopen completed wave 19-20 packets.

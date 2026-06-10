@@ -33,15 +33,16 @@ import {
   getVideoFrameCacheStats,
 } from './proxyFrame/runtimeResources';
 import {
-  HUM_NOTCH_MAX_HARMONICS,
-  normalizeScrubDynamicsReductionDb,
-  reconnectScrubCustomProcessor,
-  scrubProcessorSignature,
-  updateScrubProcessorNode,
-  type ScrubProcessorNode,
-} from './proxyFrame/scrubAudioProcessing';
-import { attachScrubSampleProcessor } from './proxyFrame/scrubAudioSampleProcessors';
-import type { ScrubAudioOptions, ScrubGrain } from './proxyFrame/scrubAudioModels';
+  createProxyFramePreloadState,
+  enqueueProxyFramesAroundPosition,
+  preloadAllProxyFrames,
+  processProxyFramePreloadQueue,
+  scheduleProxyFramePreload,
+  SCRUB_PRELOAD_RANGE,
+  updateProxyFrameScrubDirection,
+} from './proxyFrame/preloadScheduler';
+import { ScrubAudioPlaybackController } from './proxyFrame/scrubAudioPlayback';
+import type { ScrubAudioOptions } from './proxyFrame/scrubAudioModels';
 import {
   decodeProxyVideoFrameFromSource,
   parseProxyVideoFile,
@@ -52,36 +53,16 @@ export type { ProxyCachedFrame, ProxyCachedVideoFrame } from './proxyFrame/frame
 const log = Logger.create('ProxyFrameCache');
 import { fileSystemService } from './fileSystemService';
 import { useMediaStore } from '../stores/mediaStore';
-import { clampAudioPan } from '../engine/audio/audioMath';
 import { timelineRuntimeCoordinator } from './timeline/timelineRuntimeCoordinator';
 import type { TimelineRuntimeAdmissionDecision } from './timeline/runtimeCoordinatorTypes';
-import type { LiveAudioRouteProcessor } from './audio/audioGraphRouteSettings';
-import type { AudioDynamicsReductionSnapshot, AudioMeterSnapshot } from '../types';
-import { calculateAudioMeterSnapshot } from './audio/audioMetering';
+import type { AudioMeterSnapshot } from '../types';
 
 // Cache settings - tuned for fast scrubbing
 const MAX_CACHE_SIZE = 900; // 30 seconds at 30fps - larger cache for scrubbing
 const MAX_VIDEO_FRAME_CACHE_SIZE = 120;
 const JPEG_PROXY_FRAMES_ENABLED = true;
-const PRELOAD_AHEAD_FRAMES = 60; // 2 seconds ahead for playback
-const PRELOAD_BEHIND_FRAMES = 30; // 1 second behind for reverse scrubbing
-const PARALLEL_LOAD_COUNT = 16; // More parallel loads for faster preload
-const SCRUB_PRELOAD_RANGE = 90; // 3 seconds around scrub position
-const SCRUB_TELEPORT_SECONDS = 2; // Large jumps should abandon stale queued scrub preloads
-const SCRUB_STATIONARY_EPSILON_SECONDS = 0.003;
-const SCRUB_STATIONARY_STOP_MS = 140;
-const SCRUB_GRAIN_DURATION_SECONDS = 0.09;
-const SCRUB_GRAIN_SPACING_SECONDS = 0.075;
-const SCRUB_GRAIN_FADE_SECONDS = 0.008;
-const SCRUB_GRAIN_SCHEDULE_AHEAD_SECONDS = 0.075;
-const SCRUB_GRAIN_PEAK_GAIN = 0.42;
-const SCRUB_RESYNC_POSITION_DELTA_SECONDS = 0.045;
-const SCRUB_RESYNC_FADE_OUT_SECONDS = 0.012;
-const SCRUB_FAST_VELOCITY_SECONDS_PER_SECOND = 2.5;
-const SCRUB_REVERSE_THRESHOLD_SECONDS_PER_SECOND = -0.04;
 const MAX_AUDIO_BUFFER_CACHE_BYTES = 192 * 1024 * 1024;
 const MAX_AUDIO_BUFFER_CACHE_ENTRIES = 3;
-const EQ_FREQUENCIES = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 
 
 
@@ -102,8 +83,11 @@ class ProxyFrameCache {
   private loadingPromises: Map<string, Promise<HTMLImageElement | null>> = new Map();
   private videoFrameLoadingPromises: Map<string, Promise<VideoFrame | null>> = new Map();
   private proxyVideoSourcePromises: Map<string, Promise<ProxyVideoSourceState | null>> = new Map();
-  private preloadQueue: string[] = [];
-  private isPreloading = false;
+  private readonly preloadState = createProxyFramePreloadState();
+  private readonly scrubPlayback = new ScrubAudioPlaybackController(
+    () => this.resetScrubState(),
+    (message) => log.debug(message),
+  );
   private objectUrlLeaseSequence = 0;
   private scrubAudioLeaseSequence = 0;
 
@@ -116,15 +100,58 @@ class ProxyFrameCache {
   private audioBufferCache: Map<string, AudioBuffer> = new Map();
   private audioBufferFailed: Set<string> = new Set(); // Track files with no audio
   private audioContext: AudioContext | null = null;
-  private scrubGain: GainNode | null = null;
-  private scrubAnalyser: AnalyserNode | null = null;
-  private scrubStereoSplitter: ChannelSplitterNode | null = null;
-  private scrubLeftAnalyser: AnalyserNode | null = null;
-  private scrubRightAnalyser: AnalyserNode | null = null;
-  private scrubMeterBuffer: Float32Array<ArrayBuffer> | null = null;
-  private scrubLeftMeterBuffer: Float32Array<ArrayBuffer> | null = null;
-  private scrubRightMeterBuffer: Float32Array<ArrayBuffer> | null = null;
-  private scrubFrequencyBuffer: Float32Array<ArrayBuffer> | null = null;
+
+  get preloadQueue(): string[] {
+    return this.preloadState.preloadQueue;
+  }
+
+  set preloadQueue(value: string[]) {
+    this.preloadState.preloadQueue = value;
+  }
+
+  get isPreloading(): boolean {
+    return this.preloadState.isPreloading;
+  }
+
+  set isPreloading(value: boolean) {
+    this.preloadState.isPreloading = value;
+  }
+
+  get lastScrubFrame(): number {
+    return this.preloadState.lastScrubFrame;
+  }
+
+  set lastScrubFrame(value: number) {
+    this.preloadState.lastScrubFrame = value;
+  }
+
+  get scrubDirection(): number {
+    return this.preloadState.scrubDirection;
+  }
+
+  set scrubDirection(value: number) {
+    this.preloadState.scrubDirection = value;
+  }
+
+  get isScrubbing(): boolean {
+    return this.preloadState.isScrubbing;
+  }
+
+  set isScrubbing(value: boolean) {
+    this.preloadState.isScrubbing = value;
+  }
+
+  get scrubPreloadQueueDrops(): number {
+    return this.preloadState.scrubPreloadQueueDrops;
+  }
+
+  set scrubPreloadQueueDrops(value: number) {
+    this.preloadState.scrubPreloadQueueDrops = value;
+  }
+
+  get scrubIsActive(): boolean {
+    return this.scrubPlayback.isActive;
+  }
 
   // Get cache key
   private getKey(mediaFileId: string, frameIndex: number): string {
@@ -806,168 +833,42 @@ class ProxyFrameCache {
     }
   }
 
-  // Scrub tracking for smart preloading
-  private lastScrubFrame = -1;
-  private scrubDirection = 0; // -1 = backward, 0 = stopped, 1 = forward
-  private isScrubbing = false;
-  private scrubPreloadQueueDrops = 0;
-
-  private removeQueuedPreloadsForMedia(mediaFileId: string): number {
-    const prefix = `${mediaFileId}_`;
-    const before = this.preloadQueue.length;
-    this.preloadQueue = this.preloadQueue.filter((key) => !key.startsWith(prefix));
-    return before - this.preloadQueue.length;
-  }
-
-  private parsePreloadKey(key: string): { mediaFileId: string; frameIndex: number } | null {
-    const separatorIndex = key.lastIndexOf('_');
-    if (separatorIndex <= 0 || separatorIndex >= key.length - 1) {
-      return null;
-    }
-
-    const frameIndex = Number.parseInt(key.slice(separatorIndex + 1), 10);
-    if (!Number.isFinite(frameIndex)) {
-      return null;
-    }
-
-    return {
-      mediaFileId: key.slice(0, separatorIndex),
-      frameIndex,
-    };
-  }
-
   // Schedule preloading of frames around current position (bidirectional)
   private schedulePreload(mediaFileId: string, currentFrameIndex: number, fps: number) {
-    // Detect scrub direction
-    if (this.lastScrubFrame >= 0) {
-      const delta = currentFrameIndex - this.lastScrubFrame;
-      const teleportThresholdFrames = Math.max(
-        SCRUB_PRELOAD_RANGE,
-        Math.floor(Math.max(1, fps) * SCRUB_TELEPORT_SECONDS)
-      );
-      if (Math.abs(delta) >= teleportThresholdFrames) {
-        const dropped = this.removeQueuedPreloadsForMedia(mediaFileId);
-        if (dropped > 0) {
-          this.scrubPreloadQueueDrops += dropped;
-        }
-        this.scrubDirection = delta > 0 ? 1 : -1;
-        this.isScrubbing = true;
-      } else if (Math.abs(delta) > 0) {
-        this.scrubDirection = delta > 0 ? 1 : -1;
-        this.isScrubbing = true;
-      }
-    }
-    this.lastScrubFrame = currentFrameIndex;
-
-    // Calculate preload range based on scrubbing state
-    const preloadAhead = this.isScrubbing ? SCRUB_PRELOAD_RANGE : PRELOAD_AHEAD_FRAMES;
-    const preloadBehind = this.isScrubbing ? SCRUB_PRELOAD_RANGE : PRELOAD_BEHIND_FRAMES;
-
-    // Priority queue: current frame first, then direction-based loading
-    const framesToPreload: number[] = [currentFrameIndex];
-
-    // Add frames in scrub direction first (higher priority)
-    if (this.scrubDirection >= 0) {
-      // Forward or stopped: prioritize ahead
-      for (let i = 1; i <= preloadAhead; i++) {
-        framesToPreload.push(currentFrameIndex + i);
-      }
-      for (let i = 1; i <= preloadBehind; i++) {
-        if (currentFrameIndex - i >= 0) {
-          framesToPreload.push(currentFrameIndex - i);
-        }
-      }
-    } else {
-      // Backward scrubbing: prioritize behind
-      for (let i = 1; i <= preloadBehind; i++) {
-        if (currentFrameIndex - i >= 0) {
-          framesToPreload.push(currentFrameIndex - i);
-        }
-      }
-      for (let i = 1; i <= preloadAhead; i++) {
-        framesToPreload.push(currentFrameIndex + i);
-      }
-    }
-
-    // Add to preload queue
-    for (let i = 0; i < framesToPreload.length; i++) {
-      const frameIndex = framesToPreload[i];
-      if (frameIndex < 0) continue;
-
-      const key = this.getKey(mediaFileId, frameIndex);
-
-      // Skip if already cached or in queue
-      if (!this.cache.has(key) && !this.preloadQueue.includes(key)) {
-        // Insert current frame at front of queue for priority loading
-        if (i === 0) {
-          this.preloadQueue.unshift(key);
-        } else {
-          this.preloadQueue.push(key);
-        }
-      }
-    }
-
-    // Start preloading if not already
-    if (!this.isPreloading) {
-      this.processPreloadQueue();
-    }
+    scheduleProxyFramePreload({
+      state: this.preloadState,
+      mediaFileId,
+      currentFrameIndex,
+      fps,
+      getKey: (id, frame) => this.getKey(id, frame),
+      hasCachedFrame: (key) => this.cache.has(key),
+      startPreloading: () => {
+        void this.processPreloadQueue();
+      },
+    });
   }
 
   private updateScrubDirection(currentFrameIndex: number): void {
-    if (this.lastScrubFrame >= 0) {
-      const delta = currentFrameIndex - this.lastScrubFrame;
-      if (Math.abs(delta) > 0) {
-        this.scrubDirection = delta > 0 ? 1 : -1;
-        this.isScrubbing = true;
-      }
-    }
-    this.lastScrubFrame = currentFrameIndex;
+    updateProxyFrameScrubDirection(this.preloadState, currentFrameIndex);
   }
 
   // Call this when scrubbing stops to reset state
   resetScrubState(): void {
-    this.isScrubbing = false;
-    this.scrubDirection = 0;
-    this.lastScrubFrame = -1;
+    this.preloadState.isScrubbing = false;
+    this.preloadState.scrubDirection = 0;
+    this.preloadState.lastScrubFrame = -1;
   }
 
   // Process preload queue with parallel loading for speed
   private async processPreloadQueue() {
-    this.isPreloading = true;
-
-    while (this.preloadQueue.length > 0) {
-      // Load multiple frames in parallel for faster preloading
-      const batch: string[] = [];
-      while (batch.length < PARALLEL_LOAD_COUNT && this.preloadQueue.length > 0) {
-        const key = this.preloadQueue.shift();
-        if (key && !this.cache.has(key)) {
-          batch.push(key);
-        }
-      }
-
-      if (batch.length === 0) continue;
-
-      // Load batch in parallel
-      const loadPromises = batch.map(async (key) => {
-        const parsed = this.parsePreloadKey(key);
-        if (!parsed) {
-          return { key, success: false };
-        }
-
-        const image = await this.loadFrame(parsed.mediaFileId, parsed.frameIndex);
-        if (image) {
-          this.addToCache(parsed.mediaFileId, parsed.frameIndex, image);
-        }
-        return { key, success: !!image };
-      });
-
-      await Promise.all(loadPromises);
-
-      // Brief yield to main thread between batches
-      await new Promise((r) => setTimeout(r, 0));
-    }
-
-    this.isPreloading = false;
+    await processProxyFramePreloadQueue({
+      state: this.preloadState,
+      hasCachedFrame: (key) => this.cache.has(key),
+      loadFrame: (id, frame) => this.loadFrame(id, frame),
+      addToCache: (id, frame, image) => {
+        this.addToCache(id, frame, image);
+      },
+    });
   }
 
   // ============================================
@@ -1102,26 +1003,6 @@ class ProxyFrameCache {
   // Overlapping short grains with fades for smoother timeline scrub feedback
   // ============================================
 
-  // Granular scrub audio state
-  private scrubSource: AudioBufferSourceNode | null = null;
-  private scrubGrains = new Set<ScrubGrain>();
-  private scrubSourceGain: GainNode | null = null;
-  private scrubPanNode: StereoPannerNode | null = null;
-  private scrubEqFilters: BiquadFilterNode[] = [];
-  private scrubProcessorNodes: ScrubProcessorNode[] = [];
-  private scrubProcessorSignature = '';
-  private scrubCurrentMediaId: string | null = null;
-  private scrubLastPosition = 0;
-  private scrubLastTime = 0;
-  private scrubLastMovementTime = 0;
-  private scrubNextGrainTime = 0;
-  private scrubSmoothedVelocity = 0;
-  private scrubLastDirection: 1 | -1 = 1;
-  private scrubPausedMediaId: string | null = null;
-  private scrubPausedPosition: number | null = null;
-  private scrubStationaryTimer: ReturnType<typeof setTimeout> | null = null;
-  private scrubIsActive = false;
-
   /**
    * Get or create AudioContext for scrubbing
    */
@@ -1137,14 +1018,7 @@ class ProxyFrameCache {
         throw new Error('Scrub audio context lease did not acquire a context');
       }
       this.audioContext = audioContext;
-      this.scrubGain = this.audioContext.createGain();
-      this.scrubAnalyser = this.audioContext.createAnalyser();
-      this.scrubAnalyser.fftSize = 1024;
-      this.scrubAnalyser.smoothingTimeConstant = 0.2;
-      this.scrubMeterBuffer = new Float32Array(this.scrubAnalyser.fftSize);
-      this.scrubAnalyser.connect(this.scrubGain);
-      this.scrubGain.connect(this.audioContext.destination);
-      this.scrubGain.gain.value = 1;
+      this.scrubPlayback.initializeAudioContext(this.audioContext);
       log.debug(`AudioContext created, state: ${this.audioContext.state}`);
     }
     return this.audioContext;
@@ -1377,419 +1251,24 @@ class ProxyFrameCache {
       return;
     }
 
-    if (!this.scrubIsActive) {
-      log.debug(`Granular scrub starting at ${targetTime.toFixed(2)}s`);
-    }
-
-    const ctx = this.getAudioContext();
-    if (ctx.state === 'suspended') {
-      ctx.resume();
-    }
-
-    const scrubVolume = Math.max(0, Math.min(4, options?.volume ?? 1));
-    const scrubMasterVolume = Math.max(0, Math.min(4, options?.masterRoute?.volume ?? 1));
-    const scrubEqGains = options?.eqGains ?? [];
-    const scrubPan = clampAudioPan(options?.pan);
-    const scrubProcessors = options?.processors ?? [];
-    const processorSignature = scrubProcessorSignature(scrubProcessors);
-    const now = performance.now();
-    const maxTargetTime = Math.max(0, buffer.duration - SCRUB_GRAIN_DURATION_SECONDS);
-    const clampedTarget = Math.max(0, Math.min(targetTime, maxTargetTime));
-
-    const hasPreviousScrubSample = this.scrubLastTime > 0 && Number.isFinite(this.scrubLastPosition);
-    const timeDelta = hasPreviousScrubSample ? (now - this.scrubLastTime) / 1000 : 0;
-    const posDelta = hasPreviousScrubSample ? clampedTarget - this.scrubLastPosition : 0;
-    const sameScrubMedia = this.scrubCurrentMediaId === mediaFileId || this.scrubPausedMediaId === mediaFileId;
-    const targetMoved = !hasPreviousScrubSample ||
-      !sameScrubMedia ||
-      Math.abs(posDelta) > SCRUB_STATIONARY_EPSILON_SECONDS;
-
-    if (targetMoved) {
-      this.scrubLastMovementTime = now;
-      this.scrubPausedMediaId = null;
-      this.scrubPausedPosition = null;
-    } else if (
-      this.scrubPausedMediaId === mediaFileId &&
-      this.scrubPausedPosition !== null &&
-      Math.abs(clampedTarget - this.scrubPausedPosition) <= SCRUB_STATIONARY_EPSILON_SECONDS
-    ) {
-      this.scrubLastPosition = clampedTarget;
-      this.scrubLastTime = now;
-      return;
-    } else if (
-      this.scrubLastMovementTime > 0 &&
-      now - this.scrubLastMovementTime >= SCRUB_STATIONARY_STOP_MS
-    ) {
-      this.scrubLastPosition = clampedTarget;
-      this.scrubLastTime = now;
-      this.pauseStationaryScrubAudio(mediaFileId, clampedTarget);
-      return;
-    }
-
-    this.scrubLastPosition = clampedTarget;
-    this.scrubLastTime = now;
-
-    const needsNewEffectChain =
-      !this.scrubSourceGain ||
-      this.scrubCurrentMediaId !== mediaFileId ||
-      this.scrubProcessorSignature !== processorSignature;
-
-    if (needsNewEffectChain) {
-      this.stopScrubAudio({ keepMotionTracking: true });
-      this.attachScrubEffectChain(ctx, scrubVolume, scrubEqGains, scrubPan, scrubProcessors);
-      this.scrubCurrentMediaId = mediaFileId;
-      this.scrubNextGrainTime = ctx.currentTime;
-      this.scrubSmoothedVelocity = 0;
-    } else {
-      this.updateScrubEffects(scrubVolume, scrubEqGains, scrubPan, scrubProcessors);
-    }
-
-    if (this.scrubGain && Math.abs(this.scrubGain.gain.value - scrubMasterVolume) > 0.001) {
-      this.scrubGain.gain.value = scrubMasterVolume;
-    }
-
-    if (targetMoved) {
-      const rawVelocity = timeDelta > 0.001 ? posDelta / timeDelta : 0;
-      const previousVelocity = this.scrubSmoothedVelocity;
-      this.scrubSmoothedVelocity =
-        this.scrubSmoothedVelocity === 0
-          ? rawVelocity
-          : this.scrubSmoothedVelocity + (rawVelocity - this.scrubSmoothedVelocity) * 0.35;
-      if (this.scrubSmoothedVelocity < SCRUB_REVERSE_THRESHOLD_SECONDS_PER_SECOND) {
-        this.scrubLastDirection = -1;
-      } else if (this.scrubSmoothedVelocity > Math.abs(SCRUB_REVERSE_THRESHOLD_SECONDS_PER_SECOND)) {
-        this.scrubLastDirection = 1;
-      }
-      if (this.shouldResyncScrubSchedule(posDelta, rawVelocity, previousVelocity)) {
-        this.resyncScrubGrainSchedule(ctx.currentTime);
-      }
-      this.scheduleScrubGrains(ctx, buffer, clampedTarget, this.scrubSmoothedVelocity);
-      this.scheduleStationaryScrubStop(mediaFileId, clampedTarget);
-    }
-  }
-
-  private shouldResyncScrubSchedule(
-    positionDelta: number,
-    rawVelocity: number,
-    previousVelocity: number,
-  ): boolean {
-    if (Math.abs(positionDelta) >= SCRUB_RESYNC_POSITION_DELTA_SECONDS) return true;
-    if (Math.abs(rawVelocity) >= SCRUB_FAST_VELOCITY_SECONDS_PER_SECOND) return true;
-    if (Math.abs(previousVelocity) < 0.001 || Math.abs(rawVelocity) < 0.001) return false;
-    return Math.sign(previousVelocity) !== Math.sign(rawVelocity);
-  }
-
-  private resyncScrubGrainSchedule(currentTime: number): void {
-    this.stopScrubGrainsForResync(currentTime);
-    this.scrubNextGrainTime = currentTime;
-  }
-
-  private stopScrubGrainsForResync(currentTime: number): void {
-    for (const grain of Array.from(this.scrubGrains)) {
-      if (grain.startTime <= currentTime) {
-        this.fadeOutScrubGrain(grain, currentTime);
-        continue;
-      }
-      try {
-        grain.source.onended = null;
-        grain.source.stop();
-      } catch { /* ignore */ }
-      this.cleanupScrubGrain(grain);
-    }
-  }
-
-  private fadeOutScrubGrain(grain: ScrubGrain, currentTime: number): void {
-    const stopTime = currentTime + SCRUB_RESYNC_FADE_OUT_SECONDS;
-    try {
-      grain.gain.gain.cancelScheduledValues(currentTime);
-      grain.gain.gain.setValueAtTime(Math.max(0, grain.gain.gain.value), currentTime);
-      grain.gain.gain.linearRampToValueAtTime(0, stopTime);
-      grain.source.stop(stopTime);
-    } catch {
-      try {
-        grain.source.onended = null;
-        grain.source.stop();
-      } catch { /* ignore */ }
-      this.cleanupScrubGrain(grain);
-    }
-  }
-
-  private scheduleScrubGrains(
-    ctx: AudioContext,
-    buffer: AudioBuffer,
-    targetPosition: number,
-    velocity: number,
-  ): void {
-    if (!this.scrubSourceGain) return;
-
-    const scheduleUntil = ctx.currentTime + SCRUB_GRAIN_SCHEDULE_AHEAD_SECONDS;
-    if (this.scrubNextGrainTime < ctx.currentTime) {
-      this.scrubNextGrainTime = ctx.currentTime;
-    }
-
-    let scheduledCount = 0;
-    while (this.scrubNextGrainTime < scheduleUntil) {
-      const leadSeconds = Math.max(0, this.scrubNextGrainTime - ctx.currentTime);
-      const grainPosition = targetPosition + velocity * leadSeconds;
-      this.scheduleScrubGrain(ctx, buffer, grainPosition, velocity, this.scrubNextGrainTime);
-      this.scrubNextGrainTime += SCRUB_GRAIN_SPACING_SECONDS;
-      scheduledCount += 1;
-    }
-
-    if (scheduledCount === 0 && Math.abs(velocity) >= SCRUB_FAST_VELOCITY_SECONDS_PER_SECOND) {
-      this.resyncScrubGrainSchedule(ctx.currentTime);
-      this.scheduleScrubGrain(ctx, buffer, targetPosition, velocity, this.scrubNextGrainTime);
-      this.scrubNextGrainTime += SCRUB_GRAIN_SPACING_SECONDS;
-    }
-  }
-
-  private scheduleScrubGrain(
-    ctx: AudioContext,
-    buffer: AudioBuffer,
-    position: number,
-    velocity: number,
-    startTime: number,
-  ): void {
-    const direction: 1 | -1 =
-      velocity < SCRUB_REVERSE_THRESHOLD_SECONDS_PER_SECOND ? -1 : this.scrubLastDirection;
-    const grainDuration = Math.min(
-      SCRUB_GRAIN_DURATION_SECONDS,
-      Math.max(0.01, buffer.duration || SCRUB_GRAIN_DURATION_SECONDS),
-    );
-    const sourceBuffer = direction < 0
-      ? this.createReverseScrubGrainBuffer(ctx, buffer, position, grainDuration)
-      : buffer;
-    const offset = direction < 0
-      ? 0
-      : this.getScrubGrainOffset(buffer, position, grainDuration);
-    const playbackDuration = Math.min(grainDuration, sourceBuffer.duration);
-    const source = ctx.createBufferSource();
-    const gain = ctx.createGain();
-
-    source.buffer = sourceBuffer;
-    source.playbackRate.value = 1;
-    this.shapeScrubGrainGain(gain.gain, startTime, playbackDuration);
-
-    source.connect(gain);
-    gain.connect(this.scrubSourceGain!);
-
-    const grain: ScrubGrain = { source, gain, startTime };
-    this.scrubGrains.add(grain);
-    this.scrubSource = source;
-    this.scrubIsActive = true;
-
-    source.onended = () => {
-      this.cleanupScrubGrain(grain);
-      if (this.scrubSource === source) {
-        this.scrubSource = null;
-      }
-      if (this.scrubGrains.size === 0 && this.scrubPausedMediaId !== null) {
-        this.scrubIsActive = false;
-      }
-    };
-
-    source.start(startTime, offset, playbackDuration);
-  }
-
-  private getScrubGrainOffset(
-    buffer: AudioBuffer,
-    position: number,
-    duration: number,
-  ): number {
-    const maxOffset = Math.max(0, buffer.duration - duration);
-    return Math.max(0, Math.min(position, maxOffset));
-  }
-
-  private shapeScrubGrainGain(gain: AudioParam, startTime: number, duration: number): void {
-    const fadeSeconds = Math.min(SCRUB_GRAIN_FADE_SECONDS, duration / 3);
-    const peakStart = startTime + fadeSeconds;
-    const peakEnd = Math.max(peakStart, startTime + duration - fadeSeconds);
-    gain.cancelScheduledValues(startTime);
-    gain.setValueAtTime(0, startTime);
-    gain.linearRampToValueAtTime(SCRUB_GRAIN_PEAK_GAIN, peakStart);
-    gain.setValueAtTime(SCRUB_GRAIN_PEAK_GAIN, peakEnd);
-    gain.linearRampToValueAtTime(0, startTime + duration);
-  }
-
-  private createReverseScrubGrainBuffer(
-    ctx: AudioContext,
-    buffer: AudioBuffer,
-    position: number,
-    duration: number,
-  ): AudioBuffer {
-    const sampleCount = Math.max(
-      1,
-      Math.min(buffer.length, Math.ceil(duration * buffer.sampleRate)),
-    );
-    const reversed = ctx.createBuffer(buffer.numberOfChannels, sampleCount, buffer.sampleRate);
-    const endSample = Math.max(
-      sampleCount,
-      Math.min(buffer.length, Math.round(position * buffer.sampleRate)),
-    );
-    const startSample = endSample - sampleCount;
-
-    for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
-      const source = buffer.getChannelData(channel);
-      const target = reversed.getChannelData(channel);
-      for (let i = 0; i < sampleCount; i += 1) {
-        target[i] = source[startSample + sampleCount - 1 - i] ?? 0;
-      }
-    }
-
-    return reversed;
-  }
-
-  private scheduleStationaryScrubStop(mediaFileId: string, position: number): void {
-    this.clearScrubStationaryTimer();
-    this.scrubStationaryTimer = setTimeout(() => {
-      this.scrubStationaryTimer = null;
-      const now = performance.now();
-      const sameMedia = this.scrubCurrentMediaId === mediaFileId || this.scrubPausedMediaId === mediaFileId;
-      const samePosition = Math.abs(this.scrubLastPosition - position) <= SCRUB_STATIONARY_EPSILON_SECONDS;
-
-      if (
-        sameMedia &&
-        samePosition &&
-        this.scrubLastMovementTime > 0 &&
-        now - this.scrubLastMovementTime >= SCRUB_STATIONARY_STOP_MS
-      ) {
-        this.scrubLastTime = now;
-        this.pauseStationaryScrubAudio(mediaFileId, position);
-      }
-    }, SCRUB_STATIONARY_STOP_MS);
-  }
-
-  private pauseStationaryScrubAudio(mediaFileId: string, position: number): void {
-    this.clearScrubStationaryTimer();
-    this.scrubPausedMediaId = mediaFileId;
-    this.scrubPausedPosition = position;
-    this.scrubLastPosition = position;
-  }
-
-  private clearScrubStationaryTimer(): void {
-    if (this.scrubStationaryTimer !== null) {
-      clearTimeout(this.scrubStationaryTimer);
-      this.scrubStationaryTimer = null;
-    }
+    this.scrubPlayback.playScrubAudio({
+      mediaFileId,
+      targetTime,
+      buffer,
+      getAudioContext: () => this.getAudioContext(),
+      options,
+    });
   }
 
   /**
    * Stop scrub audio - call when scrubbing ends
    */
   stopScrubAudio(options: { keepMotionTracking?: boolean } = {}): void {
-    this.clearScrubStationaryTimer();
-
-    for (const grain of Array.from(this.scrubGrains)) {
-      try {
-        grain.source.onended = null;
-        grain.source.stop();
-      } catch { /* ignore */ }
-      this.cleanupScrubGrain(grain);
-    }
-    this.scrubSource = null;
-    if (this.scrubSourceGain) {
-      try {
-        this.scrubSourceGain.disconnect();
-      } catch { /* ignore */ }
-      this.scrubSourceGain = null;
-    }
-    if (this.scrubPanNode) {
-      try {
-        this.scrubPanNode.disconnect();
-      } catch { /* ignore */ }
-      this.scrubPanNode = null;
-    }
-    if (this.scrubStereoSplitter) {
-      try {
-        this.scrubStereoSplitter.disconnect();
-      } catch { /* ignore */ }
-      this.scrubStereoSplitter = null;
-    }
-    if (this.scrubLeftAnalyser) {
-      try {
-        this.scrubLeftAnalyser.disconnect();
-      } catch { /* ignore */ }
-      this.scrubLeftAnalyser = null;
-    }
-    if (this.scrubRightAnalyser) {
-      try {
-        this.scrubRightAnalyser.disconnect();
-      } catch { /* ignore */ }
-      this.scrubRightAnalyser = null;
-    }
-    this.scrubLeftMeterBuffer = null;
-    this.scrubRightMeterBuffer = null;
-    this.scrubFrequencyBuffer = null;
-    for (const processor of this.scrubProcessorNodes) {
-      for (const node of processor.nodes) {
-        try {
-          node.disconnect();
-        } catch { /* ignore */ }
-      }
-    }
-    for (const filter of this.scrubEqFilters) {
-      try {
-        filter.disconnect();
-      } catch { /* ignore */ }
-    }
-    this.scrubProcessorNodes = [];
-    this.scrubProcessorSignature = '';
-    this.scrubEqFilters = [];
-    this.scrubIsActive = false;
-    this.scrubCurrentMediaId = null;
-
-    // Also reset frame scrub tracking state
-    this.resetScrubState();
-
-    if (!options.keepMotionTracking) {
-      this.scrubLastPosition = 0;
-      this.scrubLastTime = 0;
-      this.scrubLastMovementTime = 0;
-      this.scrubNextGrainTime = 0;
-      this.scrubSmoothedVelocity = 0;
-      this.scrubLastDirection = 1;
-      this.scrubPausedMediaId = null;
-      this.scrubPausedPosition = null;
-      this.scrubStationaryTimer = null;
-    }
-  }
-
-  private cleanupScrubGrain(grain: ScrubGrain): void {
-    this.scrubGrains.delete(grain);
-    try {
-      grain.source.disconnect();
-    } catch { /* ignore */ }
-    try {
-      grain.gain.disconnect();
-    } catch { /* ignore */ }
+    this.scrubPlayback.stopScrubAudio(options);
   }
 
   getScrubMeterSnapshot(updatedAt = performance.now()): AudioMeterSnapshot | null {
-    if (!this.scrubAnalyser || !this.scrubMeterBuffer || !this.scrubIsActive) return null;
-    this.scrubAnalyser.getFloatTimeDomainData(this.scrubMeterBuffer);
-    if (!this.scrubFrequencyBuffer || this.scrubFrequencyBuffer.length !== this.scrubAnalyser.frequencyBinCount) {
-      this.scrubFrequencyBuffer = new Float32Array(this.scrubAnalyser.frequencyBinCount);
-    }
-    this.scrubAnalyser.getFloatFrequencyData(this.scrubFrequencyBuffer);
-    const leftAnalyser = this.scrubLeftAnalyser;
-    const rightAnalyser = this.scrubRightAnalyser;
-    const leftMeterBuffer = this.scrubLeftMeterBuffer;
-    const rightMeterBuffer = this.scrubRightMeterBuffer;
-    let stereoSamples;
-
-    if (leftAnalyser && rightAnalyser && leftMeterBuffer && rightMeterBuffer) {
-      leftAnalyser.getFloatTimeDomainData(leftMeterBuffer);
-      rightAnalyser.getFloatTimeDomainData(rightMeterBuffer);
-      stereoSamples = { left: leftMeterBuffer, right: rightMeterBuffer };
-    }
-
-    return calculateAudioMeterSnapshot(
-      this.scrubMeterBuffer,
-      updatedAt,
-      this.getScrubDynamicsSnapshot(updatedAt),
-      stereoSamples,
-      new Float32Array(this.scrubFrequencyBuffer),
-    );
+    return this.scrubPlayback.getScrubMeterSnapshot(updatedAt);
   }
 
   /**
@@ -1804,216 +1283,6 @@ class ProxyFrameCache {
     if (!cached) return null;
     this.touchAudioBufferCacheEntry(mediaFileId, cached);
     return cached;
-  }
-
-  private attachScrubEffectChain(
-    ctx: AudioContext,
-    volume: number,
-    eqGains: number[],
-    pan: number,
-    processors: readonly LiveAudioRouteProcessor[]
-  ): void {
-    this.scrubSourceGain = ctx.createGain();
-    this.scrubSourceGain.gain.value = volume;
-    this.scrubPanNode = ctx.createStereoPanner();
-    this.scrubPanNode.pan.value = pan;
-    this.scrubStereoSplitter = ctx.createChannelSplitter(2);
-    this.scrubLeftAnalyser = ctx.createAnalyser();
-    this.scrubRightAnalyser = ctx.createAnalyser();
-    this.scrubLeftAnalyser.fftSize = this.scrubAnalyser?.fftSize ?? 1024;
-    this.scrubRightAnalyser.fftSize = this.scrubAnalyser?.fftSize ?? 1024;
-    this.scrubLeftAnalyser.smoothingTimeConstant = this.scrubAnalyser?.smoothingTimeConstant ?? 0.2;
-    this.scrubRightAnalyser.smoothingTimeConstant = this.scrubAnalyser?.smoothingTimeConstant ?? 0.2;
-    this.scrubLeftMeterBuffer = new Float32Array(this.scrubLeftAnalyser.fftSize);
-    this.scrubRightMeterBuffer = new Float32Array(this.scrubRightAnalyser.fftSize);
-    this.scrubFrequencyBuffer = new Float32Array(this.scrubAnalyser?.frequencyBinCount ?? 512);
-    this.scrubProcessorNodes = processors.map(processor => this.createScrubProcessorNode(ctx, processor));
-
-    this.scrubEqFilters = EQ_FREQUENCIES.map((frequency, index) => {
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'peaking';
-      filter.frequency.value = frequency;
-      filter.Q.value = 1.4;
-      filter.gain.value = eqGains[index] ?? 0;
-      return filter;
-    });
-
-    let tail: AudioNode = this.scrubSourceGain;
-    for (const processor of this.scrubProcessorNodes) {
-      if (processor.inputNode && processor.outputNode) {
-        reconnectScrubCustomProcessor(processor);
-        tail.connect(processor.inputNode);
-        tail = processor.outputNode;
-      } else {
-        for (const node of processor.nodes) {
-          tail.connect(node);
-          tail = node;
-        }
-      }
-    }
-    tail.connect(this.scrubEqFilters[0]);
-    for (let i = 0; i < this.scrubEqFilters.length - 1; i++) {
-      this.scrubEqFilters[i].connect(this.scrubEqFilters[i + 1]);
-    }
-    this.scrubEqFilters[this.scrubEqFilters.length - 1].connect(this.scrubPanNode);
-    this.scrubPanNode.connect(this.scrubStereoSplitter);
-    this.scrubStereoSplitter.connect(this.scrubLeftAnalyser, 0);
-    this.scrubStereoSplitter.connect(this.scrubRightAnalyser, 1);
-    this.scrubPanNode.connect(this.scrubAnalyser!);
-  }
-
-  private updateScrubEffects(
-    volume: number,
-    eqGains: number[],
-    pan: number,
-    processors: readonly LiveAudioRouteProcessor[],
-  ): void {
-    if (this.scrubSourceGain) {
-      this.scrubSourceGain.gain.value = Math.max(0, Math.min(4, volume));
-    }
-    if (this.scrubPanNode) {
-      this.scrubPanNode.pan.value = clampAudioPan(pan);
-    }
-
-    for (let i = 0; i < this.scrubEqFilters.length; i++) {
-      this.scrubEqFilters[i].gain.value = eqGains[i] ?? 0;
-    }
-
-    const ctx = this.audioContext;
-    if (!ctx) return;
-    processors.forEach((processor, index) => {
-      const node = this.scrubProcessorNodes[index];
-      if (node) updateScrubProcessorNode(ctx, node, processor);
-    });
-  }
-
-  private createScrubProcessorNode(
-    ctx: BaseAudioContext,
-    processor: LiveAudioRouteProcessor,
-  ): ScrubProcessorNode {
-    if (processor.type === 'pan') {
-      const panner = ctx.createStereoPanner();
-      const node: ScrubProcessorNode = {
-        id: processor.id,
-        type: 'pan',
-        nodes: [panner],
-        panner,
-      };
-      updateScrubProcessorNode(ctx, node, processor);
-      return node;
-    }
-
-    if (
-      processor.type === 'high-pass' ||
-      processor.type === 'low-pass' ||
-      processor.type === 'parametric-eq' ||
-      processor.type === 'biquad-filter'
-    ) {
-      const filter = ctx.createBiquadFilter();
-      const node: ScrubProcessorNode = {
-        id: processor.id,
-        type: processor.type,
-        nodes: [filter],
-        filter,
-      };
-      updateScrubProcessorNode(ctx, node, processor);
-      return node;
-    }
-
-    if (processor.type === 'hum-notch') {
-      const input = ctx.createGain();
-      const dryGain = ctx.createGain();
-      const filters = Array.from({ length: HUM_NOTCH_MAX_HARMONICS }, () => ctx.createBiquadFilter());
-      const wetGain = ctx.createGain();
-      const output = ctx.createGain();
-      const node: ScrubProcessorNode = {
-        id: processor.id,
-        type: 'hum-notch',
-        nodes: [input, dryGain, ...filters, wetGain, output],
-        inputNode: input,
-        outputNode: output,
-        dryGain,
-        wetGain,
-        filters,
-      };
-      updateScrubProcessorNode(ctx, node, processor);
-      return node;
-    }
-
-    if (
-      processor.type === 'limiter' ||
-      processor.type === 'noise-gate' ||
-      processor.type === 'expander' ||
-      processor.type === 'de-click' ||
-      processor.type === 'noise-reduction' ||
-      processor.type === 'spectral-gate' ||
-      processor.type === 'dynamic-eq-band' ||
-      processor.type === 'saturation' ||
-      processor.type === 'polarity-invert' ||
-      processor.type === 'mono-sum' ||
-      processor.type === 'channel-swap' ||
-      processor.type === 'stereo-split'
-    ) {
-      const scriptProcessor = ctx.createScriptProcessor(1024, 2, 2);
-      const node: ScrubProcessorNode = {
-        id: processor.id,
-        type: processor.type,
-        nodes: [scriptProcessor],
-        scriptProcessor,
-        sampleProcessor: processor,
-      };
-      attachScrubSampleProcessor(node);
-      updateScrubProcessorNode(ctx, node, processor);
-      return node;
-    }
-
-    if (processor.type !== 'compressor') {
-      const gain = ctx.createGain();
-      return {
-        id: processor.id,
-        type: processor.type,
-        nodes: [gain],
-      };
-    }
-
-    const compressor = ctx.createDynamicsCompressor();
-    const makeupGain = ctx.createGain();
-    const node: ScrubProcessorNode = {
-      id: processor.id,
-      type: 'compressor',
-      nodes: [compressor, makeupGain],
-      compressor,
-      makeupGain,
-    };
-    updateScrubProcessorNode(ctx, node, processor);
-    return node;
-  }
-
-  private getScrubDynamicsSnapshot(updatedAt: number): Record<string, AudioDynamicsReductionSnapshot> | undefined {
-    const dynamics: Record<string, AudioDynamicsReductionSnapshot> = {};
-
-    for (const processor of this.scrubProcessorNodes) {
-      if (processor.type === 'compressor' && processor.compressor) {
-        dynamics[processor.id] = {
-          effectId: processor.id,
-          processorType: 'compressor',
-          gainReductionDb: normalizeScrubDynamicsReductionDb(processor.compressor.reduction),
-          updatedAt,
-        };
-        continue;
-      }
-
-      if ((processor.type === 'limiter' || processor.type === 'noise-gate' || processor.type === 'expander' || processor.type === 'dynamic-eq-band') && processor.scriptProcessor) {
-        dynamics[processor.id] = {
-          effectId: processor.id,
-          processorType: processor.type,
-          gainReductionDb: normalizeScrubDynamicsReductionDb(processor.gainReductionDb ?? 0),
-          updatedAt,
-        };
-      }
-    }
-
-    return Object.keys(dynamics).length > 0 ? dynamics : undefined;
   }
 
   // Clear cache for a specific media file
@@ -2109,15 +1378,7 @@ class ProxyFrameCache {
       );
     }
     this.audioContext = null;
-    this.scrubGain = null;
-    this.scrubAnalyser = null;
-    this.scrubStereoSplitter = null;
-    this.scrubLeftAnalyser = null;
-    this.scrubRightAnalyser = null;
-    this.scrubMeterBuffer = null;
-    this.scrubLeftMeterBuffer = null;
-    this.scrubRightMeterBuffer = null;
-    this.scrubFrequencyBuffer = null;
+    this.scrubPlayback.disposeAudioContextState();
 
     // Clear audio buffer cache (buffers are tied to the old context)
     const audioBufferMediaIds = Array.from(this.audioBufferCache.keys());
@@ -2133,28 +1394,18 @@ class ProxyFrameCache {
 
   // Bulk preload frames around a position - call when scrubbing starts
   async preloadAroundPosition(mediaFileId: string, frameIndex: number, _fps: number = 30, range: number = SCRUB_PRELOAD_RANGE): Promise<void> {
-    const framesToPreload: string[] = [];
-
-    // Generate list of frames to preload (current position +/- range)
-    for (let i = -range; i <= range; i++) {
-      const frame = frameIndex + i;
-      if (frame < 0) continue;
-
-      const key = this.getKey(mediaFileId, frame);
-      if (!this.cache.has(key) && !this.preloadQueue.includes(key)) {
-        framesToPreload.push(key);
-      }
-    }
-
-    // Add all to front of queue (highest priority)
-    this.preloadQueue = [...framesToPreload, ...this.preloadQueue];
-
-    // Start preloading if not already
-    if (!this.isPreloading) {
-      this.processPreloadQueue();
-    }
-
-    log.debug(`Bulk preload started: ${framesToPreload.length} frames around frame ${frameIndex}`);
+    enqueueProxyFramesAroundPosition({
+      state: this.preloadState,
+      mediaFileId,
+      frameIndex,
+      range,
+      getKey: (id, frame) => this.getKey(id, frame),
+      hasCachedFrame: (key) => this.cache.has(key),
+      startPreloading: () => {
+        void this.processPreloadQueue();
+      },
+      logDebug: (message) => log.debug(message),
+    });
   }
 
   // Preload ALL frames for a media file (for manual cache button)
@@ -2166,48 +1417,18 @@ class ProxyFrameCache {
     _fps: number,
     onProgress?: (loaded: number, total: number) => void
   ): Promise<void> {
-    log.info(`Starting full preload for ${mediaFileId}: ${totalFrames} frames`);
-
-    let loadedCount = 0;
-    const batchSize = 32; // Load 32 frames at a time
-
-    for (let startFrame = 0; startFrame < totalFrames; startFrame += batchSize) {
-      const endFrame = Math.min(startFrame + batchSize, totalFrames);
-      const batch: Promise<void>[] = [];
-
-      for (let frame = startFrame; frame < endFrame; frame++) {
-        const key = this.getKey(mediaFileId, frame);
-
-        // Skip if already cached
-        if (this.cache.has(key)) {
-          loadedCount++;
-          continue;
-        }
-
-        // Load frame
-        batch.push(
-          this.loadFrame(mediaFileId, frame).then(image => {
-            if (image) {
-              this.addToCache(mediaFileId, frame, image);
-            }
-            loadedCount++;
-          })
-        );
-      }
-
-      // Wait for batch to complete
-      await Promise.all(batch);
-
-      // Report progress
-      if (onProgress) {
-        onProgress(loadedCount, totalFrames);
-      }
-
-      // Yield to main thread
-      await new Promise(r => setTimeout(r, 0));
-    }
-
-    log.info(`Full preload complete for ${mediaFileId}: ${loadedCount}/${totalFrames} frames cached`);
+    await preloadAllProxyFrames({
+      mediaFileId,
+      totalFrames,
+      getKey: (id, frame) => this.getKey(id, frame),
+      hasCachedFrame: (key) => this.cache.has(key),
+      loadFrame: (id, frame) => this.loadFrame(id, frame),
+      addToCache: (id, frame, image) => {
+        this.addToCache(id, frame, image);
+      },
+      onProgress,
+      logInfo: (message) => log.info(message),
+    });
   }
 
   // Cancel ongoing preload (for when user clicks stop or navigates away)

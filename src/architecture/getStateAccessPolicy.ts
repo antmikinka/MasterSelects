@@ -139,7 +139,12 @@ export const classCHardTargets = [
   { path: 'src/engine/managers/OutputWindowManager.ts', maxCurrentHits: 6 },
   { path: 'src/engine/render/LayerCollector.ts', maxCurrentHits: 7 },
   { path: 'src/engine/render/NestedCompRenderer.ts', maxCurrentHits: 10 },
-  { path: 'src/engine/render/RenderDispatcher.ts', maxCurrentHits: 16 },
+  // Packet 231 moved 5 hits into the scene-3D/target-preview facets and the
+  // old 16-ceiling slack (actual was 11) is retired: 16 -> 6 + 2 + 2 + 1.
+  { path: 'src/engine/render/RenderDispatcher.ts', maxCurrentHits: 6 },
+  { path: 'src/engine/render/dispatcher/sharedScene3DProcessor.ts', maxCurrentHits: 2 },
+  { path: 'src/engine/render/dispatcher/targetPreviewLayerCollector.ts', maxCurrentHits: 2 },
+  { path: 'src/engine/render/dispatcher/targetPreviewRenderer.ts', maxCurrentHits: 1 },
   { path: 'src/engine/scene/SceneCameraUtils.ts', maxCurrentHits: 7 },
   { path: 'src/engine/scene/SceneEffectorUtils.ts', maxCurrentHits: 2 },
   { path: 'src/engine/WebGPUEngine.ts', maxCurrentHits: 12 },
@@ -259,7 +264,9 @@ export const getStateAccessPolicyBaselines = {
   // entry (MediaPanel 4 -> 3, hook 1; cluster total conserved).
   // 193 -> 196: packet-227 Preview redistribution added three camera-hook
   // entries (Preview 17 -> 1; cluster total conserved).
-  classCHardTargetFileCount: 196,
-  // 669 -> 665 (packet 188 Preview cut) -> 664 (packet 209 retired one hit).
-  classCHardTargetMaxHits: 664,
+  // 196 -> 199: packet-231 dispatcher facets (16 -> 6+2+2+1).
+  classCHardTargetFileCount: 199,
+  // 669 -> 665 (packet 188 Preview cut) -> 664 (packet 209 retired one hit)
+  // -> 659 (packet 231 retired the dispatcher ceiling slack: 16 -> 11 actual).
+  classCHardTargetMaxHits: 659,
 } as const;

@@ -19,10 +19,10 @@ orchestrator or worker-agent execution run starts.
 - Source implementation: current bounded source packet has explicit write set,
   forbidden files, and gates
 - Current bounded packets:
-  Wave 19 source packets 220-223 are dispatched in parallel for
-  ClipAudioRenderService, AudioRecordingService, AudioEffectRenderer, and
-  proxyFrameCache splits; docs closure packet `DOCS-CLOSURE-219` is
-  bookkeeping-only.
+  Wave 21 source packets 230-234 are dispatched in parallel for
+  proxyFrameCache follow-up, RenderDispatcher, FlexEqualizerControl,
+  NodeWorkspacePanel, and AIChatPanel splits; docs closure packet
+  `DOCS-CLOSURE-235` is bookkeeping-only.
 - Completed source/tooling packet: `P0-REG-001`; focused registry checks passed.
 - Completed bounded packet: `P0-BASELINE-REFRESH-001`, read-only plus docs.
 - Completed bounded packet: `P1-CONTRACT-001`, contracts and focused boundary
@@ -2290,6 +2290,44 @@ orchestrator or worker-agent execution run starts.
   `SceneObjectOverlay` 814.
 - Wave 18 verification:
   Orchestrator-verified: tsc clean; 14 suites green (212 tests).
+- Wave 19 closure completed:
+  `DOCS-CLOSURE-219` closed wave 18 bookkeeping.
+  `P6-CLIPAUDIORENDERSERVICE-SPLIT-220` split `ClipAudioRenderService` from
+  2098 to 286 raw lines with 15 modules under `src/services/audio/clipRender/`
+  and redistributed one getState hit to `clipRender/spectralImageMaskProvider`.
+  `P6-AUDIORECORDINGSERVICE-SPLIT-221` split `AudioRecordingService` from
+  2058 to 607 raw lines with 11 modules under `src/services/audio/recording/`,
+  conserved handle lifecycles, and moved the adapter grant to
+  `recording/commitRecording.ts` (`adapter paths 21 -> 22`).
+  `P6-AUDIOEFFECTRENDERER-SPLIT-222` split `AudioEffectRenderer` from 1991 to
+  306 raw lines with 8 modules under `src/engine/audio/effectRender/`.
+  `P6-PROXYFRAMECACHE-STRUCTURE-SPLIT-223` split `proxyFrameCache` from 3394
+  to 2324 raw lines with 7 modules under `src/services/proxyFrame/`; lease and
+  test surfaces remain frozen.
+- Wave 19 verification:
+  Orchestrator-verified: tsc clean; 13-suite net green.
+- Wave 20 closure completed:
+  `P6-AUDIOROUTINGMANAGER-SPLIT-224` split `audioRoutingManager` from 1925 to
+  564 raw lines with 11 modules under `src/services/audio/routing/`, closing
+  the audio census series for the four audio monoliths.
+  `P6-WEBCODECSPLAYER-SPLIT-225` split `WebCodecsPlayer` from 1915 to 176 raw
+  lines with 10 modules under `src/engine/webCodecsPlayer/`, conserving
+  `close()` coverage at 16/16 and monitor hooks. `P5-EXPORTPANEL-SPLIT-226`
+  split `ExportPanel` from 1890 to 984 raw lines with 8 modules under
+  `src/components/export/panel/`; advanced sections remain a follow-up.
+  `P5-PREVIEW-SPLIT-227` split `Preview` from 1630 to 668 raw lines with 6
+  hooks, conserving the getState cluster at 22 total while reducing
+  Preview-local hits from 17 to 1. `P6-AUDIODECODE-SERVICE-SPLIT-228` split
+  `AudioDecodeService` from 996 to 683 raw lines with 4 modules under
+  `src/services/audio/decode/`. `P7-AINODE-RUNTIME-FOLLOWUP-229` split
+  `aiNodeRuntime` from 960 to 662 raw lines.
+- Wave 20 audit refresh:
+  Over-700 count is now 99. `MediaPanel`, `Preview`, `AudioDecodeService`, and
+  `aiNodeRuntime` are off the over-700 list; `ExportPanel` remains a tracked
+  follow-up at 984, `SceneObjectOverlay` remains a tracked follow-up at 814,
+  and `proxyFrameCache` remains a tracked follow-up at 2324.
+- Wave 20 verification:
+  Orchestrator-verified: tsc clean; 10-suite net green (70 tests).
 - Product source refactors remain bounded by approved packet write sets.
 
 ## Document Map
@@ -2961,8 +2999,8 @@ Gates and subchecks:
   - [ ] thumbnail rendering separated from proxy cache ownership
 - [x] `P6_AUDIO_CONTEXT_OWNERSHIP_MAP`
   - [x] playback, scrub, recording, export, diagnostics owners listed
-- [ ] `P6_AUDIO_RECORDING_AND_ROUTE_BOUNDARY`
-  - [ ] recording/worklet/routing boundaries defined
+- [x] `P6_AUDIO_RECORDING_AND_ROUTE_BOUNDARY`
+  - [x] recording/worklet/routing boundaries defined
 - [x] `P6_SCRUB_AUDIOCONTEXT_DISPOSED`
   - [x] census AudioContext leak gaps fixed with disposer/beforeunload and
         try/finally state-guard closes
