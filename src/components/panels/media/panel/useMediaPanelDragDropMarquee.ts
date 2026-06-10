@@ -66,6 +66,61 @@ export function useMediaPanelDragDropMarquee({
 }: UseMediaPanelDragDropMarqueeInput) {
   const marqueeRef = useRef<{ startX: number; startY: number; initialSelection: string[] } | null>(null);
   const nativeDragGuardsRef = useRef<(() => void) | null>(null);
+  const externalOverGuardsRef = useRef<(() => void) | null>(null);
+
+  const removeExternalOverGuards = useCallback(() => {
+    externalOverGuardsRef.current?.();
+    externalOverGuardsRef.current = null;
+  }, []);
+
+  const clearExternalDragOver = useCallback(() => {
+    setIsExternalDragOver(false);
+    removeExternalOverGuards();
+  }, [removeExternalOverGuards, setIsExternalDragOver]);
+
+  // OS file drags fire no dragend in the page and dragleave coordinates are
+  // unreliable in Chromium, so the panel-local leave check alone can strand
+  // the import overlay. Watch the whole document while the overlay is up.
+  const installExternalOverGuards = useCallback((panelEl: HTMLElement) => {
+    if (externalOverGuardsRef.current) return;
+
+    const handleDocumentDragOver = (event: DragEvent) => {
+      if (!(event.target instanceof Node) || !panelEl.contains(event.target)) {
+        clearExternalDragOver();
+      }
+    };
+    const handleDrop = () => {
+      window.setTimeout(clearExternalDragOver, 0);
+    };
+    const handleWindowDragLeave = (event: DragEvent) => {
+      if (event.relatedTarget) return;
+      if (
+        event.clientX <= 0 ||
+        event.clientY <= 0 ||
+        event.clientX >= window.innerWidth ||
+        event.clientY >= window.innerHeight
+      ) {
+        clearExternalDragOver();
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') clearExternalDragOver();
+    };
+
+    document.addEventListener('dragover', handleDocumentDragOver, true);
+    document.addEventListener('drop', handleDrop, true);
+    document.addEventListener('dragend', clearExternalDragOver, true);
+    document.addEventListener('dragleave', handleWindowDragLeave, true);
+    document.addEventListener('keydown', handleKeyDown, true);
+
+    externalOverGuardsRef.current = () => {
+      document.removeEventListener('dragover', handleDocumentDragOver, true);
+      document.removeEventListener('drop', handleDrop, true);
+      document.removeEventListener('dragend', clearExternalDragOver, true);
+      document.removeEventListener('dragleave', handleWindowDragLeave, true);
+      document.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [clearExternalDragOver]);
 
   const removeNativeDragGuards = useCallback(() => {
     nativeDragGuardsRef.current?.();
@@ -75,14 +130,14 @@ export function useMediaPanelDragDropMarquee({
   const clearMediaPanelDragSession = useCallback(() => {
     setInternalDragId(null);
     setDragOverFolderId(null);
-    setIsExternalDragOver(false);
+    clearExternalDragOver();
     clearMediaBoardInsertionPreview();
     clearExternalDragPayload();
   }, [
+    clearExternalDragOver,
     clearMediaBoardInsertionPreview,
     setDragOverFolderId,
     setInternalDragId,
-    setIsExternalDragOver,
   ]);
 
   const finishNativeDragSession = useCallback(() => {
@@ -143,7 +198,8 @@ export function useMediaPanelDragDropMarquee({
 
   useEffect(() => () => {
     removeNativeDragGuards();
-  }, [removeNativeDragGuards]);
+    removeExternalOverGuards();
+  }, [removeExternalOverGuards, removeNativeDragGuards]);
 
   const handleExternalDropImport = useCallback(async (dataTransfer: DataTransfer, targetParentId: string | null) => {
     const droppedFiles = await collectDroppedMediaFiles(dataTransfer);
@@ -182,8 +238,11 @@ export function useMediaPanelDragDropMarquee({
     if (hasFiles && !isInternalDrag) {
       e.dataTransfer.dropEffect = 'copy';
       setIsExternalDragOver(true);
+      if (e.currentTarget instanceof HTMLElement) {
+        installExternalOverGuards(e.currentTarget);
+      }
     }
-  }, [setIsExternalDragOver]);
+  }, [installExternalOverGuards, setIsExternalDragOver]);
 
   const handleDragLeave = useCallback((e: ReactDragEvent) => {
     e.preventDefault();
@@ -192,9 +251,9 @@ export function useMediaPanelDragDropMarquee({
     const x = e.clientX;
     const y = e.clientY;
     if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
-      setIsExternalDragOver(false);
+      clearExternalDragOver();
     }
-  }, [setIsExternalDragOver]);
+  }, [clearExternalDragOver]);
 
   const handleMarqueeMouseDown = useCallback((e: ReactMouseEvent) => {
     if (e.button !== 0) return;
