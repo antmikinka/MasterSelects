@@ -1,4 +1,5 @@
 import type { TimelineClipCanvasWorkerWaveformResource } from '../utils/timelineClipCanvasWorkerContract';
+import { drawTransientPeakSpikes } from '../utils/timelineClipCanvasWaveformSpikes';
 
 export function drawWorkerWaveformCenterLine(
   context: OffscreenCanvasRenderingContext2D,
@@ -94,4 +95,7 @@ export function drawWorkerWaveformColumns(
   }
 
   drawWorkerWaveformCenterLine(context, width, height, mode === 'compact' ? 0.12 : 0.16);
+  if (mode === 'detailed') {
+    drawTransientPeakSpikes(context, columnCount, columnAt, width, height);
+  }
 }

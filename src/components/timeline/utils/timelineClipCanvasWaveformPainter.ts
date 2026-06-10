@@ -13,6 +13,7 @@ import {
   buildCanvasSmoothEnvelopePath,
 } from './timelineClipCanvasWaveformEnvelopePath';
 import { resolveTimelineClipCanvasWaveformChannelIndexes } from './timelineClipCanvasWaveformResource';
+import { drawTransientPeakSpikes } from './timelineClipCanvasWaveformSpikes';
 
 function drawCanvasWaveformCenterLine(
   ctx: CanvasRenderingContext2D,
@@ -47,6 +48,7 @@ function drawDetailedCanvasWaveform(ctx: CanvasRenderingContext2D, columns: Wave
   ctx.fill();
 
   drawCanvasWaveformCenterLine(ctx, width, height);
+  drawTransientPeakSpikes(ctx, columns.length, (index) => columns[index], width, height);
 }
 
 function drawCompactCanvasWaveform(ctx: CanvasRenderingContext2D, columns: WaveformColumn[], width: number, height: number): void {
