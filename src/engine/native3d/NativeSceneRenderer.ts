@@ -6,42 +6,45 @@ import type {
   SceneCamera,
   SceneGizmoRenderOptions,
   SceneLayer3DData,
-  SceneModelLayer,
   ScenePlaneLayer,
   SceneSplatEffectorRuntimeData,
   SceneSplatLayer,
 } from '../scene/types';
 import type { ModelSequenceData } from '../../types';
 import type { MaskTextureManager } from '../texture/MaskTextureManager';
-import { ModelRuntimeCache, type ModelRuntimePreloadOptions } from './assets/ModelRuntimeCache';
+import { ModelRuntimeCache } from './assets/ModelRuntimeCache';
 import { EffectorCompute } from './passes/EffectorCompute';
 import { GizmoPass } from './passes/GizmoPass';
 import { MeshPass, type SceneNativeMeshLayer } from './passes/MeshPass';
 import { PlanePass } from './passes/PlanePass';
 import { SplatPass } from './passes/SplatPass';
-import planeShaderSource from './shaders/PlanePass.wgsl?raw';
-import compositeShaderSource from './shaders/SceneTextureComposite.wgsl?raw';
+import {
+  PLANE_UNIFORM_SIZE,
+  SCENE_COLOR_FORMAT,
+  SCENE_DEPTH_FORMAT,
+  SPLAT_SOFT_DEPTH_ALPHA_CUTOFF,
+} from './sceneRenderer/constants';
+import {
+  canRenderNativeScene,
+  sortBySceneLayerDepth,
+  splitMeshLayers,
+  splitPlaneLayers,
+} from './sceneRenderer/drawPlan';
+import {
+  collectRetainedModelUrls,
+  getModelSequencePreloadOptions,
+  prepareModelLayerForRender,
+} from './sceneRenderer/modelSequence';
+import {
+  createCompositeResources,
+  createPlaneResources,
+  createPlaneWhiteMaskResource,
+} from './sceneRenderer/pipelineResources';
+import { buildPlaneMvp, buildPlaneUniformData } from './sceneRenderer/planeUniforms';
+import { resolvePlaneTextureSource, type CachedPlaneTexture } from './sceneRenderer/planeTextureSources';
+import { createSceneTargets, hasMatchingSceneTargets } from './sceneRenderer/targets';
 
 const log = Logger.create('NativeSceneRenderer');
-const PLANE_UNIFORM_SIZE = 80;
-const SCENE_DEPTH_FORMAT: GPUTextureFormat = 'depth24plus';
-const WORLD_HEIGHT = 2.0;
-const SPLAT_SOFT_DEPTH_ALPHA_CUTOFF = 0.42;
-const MODEL_SEQUENCE_CPU_PRELOAD_AHEAD = 4;
-const MODEL_SEQUENCE_CPU_PRELOAD_BEHIND = 1;
-const MODEL_SEQUENCE_MAX_NEW_PRELOADS_PER_FRAME = 1;
-const MODEL_SEQUENCE_MAX_REALTIME_LOADS = 1;
-const MODEL_SEQUENCE_GPU_RETAIN_AHEAD = 8;
-const MODEL_SEQUENCE_GPU_RETAIN_BEHIND = 3;
-
-interface CachedPlaneTexture {
-  source: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement | VideoFrame;
-  texture: GPUTexture;
-  view: GPUTextureView;
-  width: number;
-  height: number;
-  videoCanvas?: HTMLCanvasElement;
-}
 
 export class NativeSceneRenderer {
   private initialized = false;
@@ -89,7 +92,7 @@ export class NativeSceneRenderer {
     }
 
     this.modelRuntimeCache.touch(url, fileName);
-    return this.modelRuntimeCache.preload(url, fileName, this.getModelSequencePreloadOptions(modelSequence));
+    return this.modelRuntimeCache.preload(url, fileName, getModelSequencePreloadOptions(modelSequence));
   }
 
   renderScene(
@@ -110,12 +113,17 @@ export class NativeSceneRenderer {
     const splatLayers = this.splatPass.collect(layers);
     const preparedMeshLayers = meshLayers.map((layer) =>
       layer.kind === 'model'
-        ? this.prepareModelLayerForRender(layer, realtimePlayback)
+        ? prepareModelLayerForRender(
+            layer,
+            realtimePlayback,
+            this.modelRuntimeCache,
+            this.lastRenderableModelSequenceUrls,
+          )
         : layer,
     );
     const nativeMeshLayers = this.meshPass.collectNativeLayers(preparedMeshLayers);
 
-    if (!this.canRenderNativeScene(layers, planeLayers, nativeMeshLayers, splatLayers)) {
+    if (!canRenderNativeScene(layers, planeLayers, nativeMeshLayers, splatLayers)) {
       return null;
     }
 
@@ -171,45 +179,22 @@ export class NativeSceneRenderer {
   }
 
   private ensureSceneTargets(device: GPUDevice, width: number, height: number): void {
-    if (
-      this.sceneTexture &&
-      this.sceneTexture.width === width &&
-      this.sceneTexture.height === height &&
-      this.sceneView &&
-      this.sceneDepthTexture &&
-      this.sceneDepthTexture.width === width &&
-      this.sceneDepthTexture.height === height &&
-      this.sceneDepthView
-    ) {
+    if (hasMatchingSceneTargets({
+      texture: this.sceneTexture,
+      view: this.sceneView,
+      depthTexture: this.sceneDepthTexture,
+      depthView: this.sceneDepthView,
+    }, width, height)) {
       return;
     }
 
     this.sceneTexture?.destroy();
     this.sceneDepthTexture?.destroy();
-    this.sceneTexture = device.createTexture({
-      size: { width, height },
-      format: 'rgba8unorm',
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    this.sceneView = this.sceneTexture.createView();
-    this.sceneDepthTexture = device.createTexture({
-      size: { width, height },
-      format: SCENE_DEPTH_FORMAT,
-      usage: GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    this.sceneDepthView = this.sceneDepthTexture.createView();
-  }
-
-  private canRenderNativeScene(
-    layers: SceneLayer3DData[],
-    planeLayers: ScenePlaneLayer[],
-    nativeMeshLayers: SceneNativeMeshLayer[],
-    splatLayers: SceneSplatLayer[],
-  ): boolean {
-    return (
-      layers.length > 0 &&
-      layers.length === planeLayers.length + nativeMeshLayers.length + splatLayers.length
-    );
+    const targets = createSceneTargets(device, width, height);
+    this.sceneTexture = targets.texture;
+    this.sceneView = targets.view;
+    this.sceneDepthTexture = targets.depthTexture;
+    this.sceneDepthView = targets.depthView;
   }
 
   private renderNativeScene(
@@ -236,7 +221,7 @@ export class NativeSceneRenderer {
     this.ensureCompositeResources(device);
     this.ensurePlaneResources(device);
     this.meshPass.initialize(device, SCENE_DEPTH_FORMAT);
-    this.gizmoPass.initialize(device, 'rgba8unorm');
+    this.gizmoPass.initialize(device, SCENE_COLOR_FORMAT);
     if (
       !this.sceneTexture ||
       !this.sceneView ||
@@ -257,26 +242,18 @@ export class NativeSceneRenderer {
     if (layers.length > 0) {
       renderer.beginFrame();
     }
-    const sortedLayers = [...layers].sort((a, b) =>
-      this.getSceneLayerDepth(a.worldMatrix, camera.viewMatrix) -
-      this.getSceneLayerDepth(b.worldMatrix, camera.viewMatrix),
-    );
+    const sortedLayers = sortBySceneLayerDepth(layers, camera);
     const temporaryBuffers: GPUBuffer[] = [];
-    const opaqueMeshes = nativeMeshLayers.filter((layer) => !this.meshPass.isTransparent(layer, this.modelRuntimeCache));
-    const transparentMeshes = nativeMeshLayers
-      .filter((layer) => this.meshPass.isTransparent(layer, this.modelRuntimeCache))
-      .sort((a, b) =>
-        this.getSceneLayerDepth(a.worldMatrix, camera.viewMatrix) -
-        this.getSceneLayerDepth(b.worldMatrix, camera.viewMatrix),
-      );
-    const activeModelUrls = this.collectRetainedModelUrls(nativeMeshLayers);
-    const opaquePlanes = planeLayers.filter((layer) => this.isDepthWritingPlane(layer));
-    const transparentPlanes = planeLayers
-      .filter((layer) => !this.isDepthWritingPlane(layer))
-      .sort((a, b) =>
-        this.getSceneLayerDepth(a.worldMatrix, camera.viewMatrix) -
-        this.getSceneLayerDepth(b.worldMatrix, camera.viewMatrix),
-      );
+    const { opaqueMeshes, transparentMeshes } = splitMeshLayers(
+      nativeMeshLayers,
+      camera,
+      (layer) => this.meshPass.isTransparent(layer, this.modelRuntimeCache),
+    );
+    const activeModelUrls = collectRetainedModelUrls(
+      nativeMeshLayers,
+      this.lastRenderableModelSequenceUrls,
+    );
+    const { opaquePlanes, transparentPlanes } = splitPlaneLayers(planeLayers, camera);
     this.prunePlaneTextureCache(new Set(planeLayers.map((layer) => layer.layerId)));
     this.meshPass.pruneModelCache(activeModelUrls);
 
@@ -454,60 +431,10 @@ export class NativeSceneRenderer {
       return;
     }
 
-    this.compositeBindGroupLayout = device.createBindGroupLayout({
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
-        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} },
-        { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
-      ],
-      label: 'native-scene-composite-bind-group-layout',
-    });
-
-    const shaderModule = device.createShaderModule({
-      code: compositeShaderSource,
-      label: 'native-scene-composite-shader',
-    });
-
-    this.compositePipeline = device.createRenderPipeline({
-      layout: device.createPipelineLayout({
-        bindGroupLayouts: [this.compositeBindGroupLayout],
-        label: 'native-scene-composite-pipeline-layout',
-      }),
-      vertex: {
-        module: shaderModule,
-        entryPoint: 'vertexMain',
-      },
-      fragment: {
-        module: shaderModule,
-        entryPoint: 'fragmentMain',
-        targets: [
-          {
-            format: 'rgba8unorm',
-            blend: {
-              color: {
-                srcFactor: 'one',
-                dstFactor: 'one-minus-src-alpha',
-                operation: 'add',
-              },
-              alpha: {
-                srcFactor: 'one',
-                dstFactor: 'one-minus-src-alpha',
-                operation: 'add',
-              },
-            },
-          },
-        ],
-      },
-      primitive: {
-        topology: 'triangle-list',
-      },
-      label: 'native-scene-composite-pipeline',
-    });
-
-    this.compositeSampler = device.createSampler({
-      magFilter: 'linear',
-      minFilter: 'linear',
-    });
+    const resources = createCompositeResources(device);
+    this.compositePipeline = resources.pipeline;
+    this.compositeBindGroupLayout = resources.bindGroupLayout;
+    this.compositeSampler = resources.sampler;
   }
 
   private ensurePlaneResources(device: GPUDevice): void {
@@ -521,109 +448,15 @@ export class NativeSceneRenderer {
       return;
     }
 
-    this.planeBindGroupLayout = device.createBindGroupLayout({
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
-        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} },
-        {
-          binding: 2,
-          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-          buffer: { type: 'uniform' },
-        },
-        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },
-      ],
-      label: 'native-scene-plane-bind-group-layout',
-    });
-
-    const shaderModule = device.createShaderModule({
-      code: planeShaderSource,
-      label: 'native-scene-plane-shader',
-    });
-
-    const pipelineLayout = device.createPipelineLayout({
-      bindGroupLayouts: [this.planeBindGroupLayout],
-      label: 'native-scene-plane-pipeline-layout',
-    });
-
-    this.planePipelineOpaque = device.createRenderPipeline({
-      layout: pipelineLayout,
-      vertex: {
-        module: shaderModule,
-        entryPoint: 'vertexMain',
-      },
-      fragment: {
-        module: shaderModule,
-        entryPoint: 'fragmentMain',
-        targets: [
-          {
-            format: 'rgba8unorm',
-          },
-        ],
-      },
-      primitive: {
-        topology: 'triangle-list',
-        cullMode: 'none',
-      },
-      depthStencil: {
-        format: SCENE_DEPTH_FORMAT,
-        depthWriteEnabled: true,
-        depthCompare: 'less-equal',
-      },
-      label: 'native-scene-plane-opaque-pipeline',
-    });
-
-    this.planePipelineTransparent = device.createRenderPipeline({
-      layout: pipelineLayout,
-      vertex: {
-        module: shaderModule,
-        entryPoint: 'vertexMain',
-      },
-      fragment: {
-        module: shaderModule,
-        entryPoint: 'fragmentMain',
-        targets: [
-          {
-            format: 'rgba8unorm',
-            blend: {
-              color: {
-                srcFactor: 'one',
-                dstFactor: 'one-minus-src-alpha',
-                operation: 'add',
-              },
-              alpha: {
-                srcFactor: 'one',
-                dstFactor: 'one-minus-src-alpha',
-                operation: 'add',
-              },
-            },
-          },
-        ],
-      },
-      primitive: {
-        topology: 'triangle-list',
-        cullMode: 'none',
-      },
-      depthStencil: {
-        format: SCENE_DEPTH_FORMAT,
-        depthWriteEnabled: false,
-        depthCompare: 'less-equal',
-      },
-      label: 'native-scene-plane-transparent-pipeline',
-    });
-
-    this.planeSampler = device.createSampler({
-      magFilter: 'linear',
-      minFilter: 'linear',
-    });
-
+    const resources = createPlaneResources(device);
+    this.planePipelineOpaque = resources.opaquePipeline;
+    this.planePipelineTransparent = resources.transparentPipeline;
+    this.planeBindGroupLayout = resources.bindGroupLayout;
+    this.planeSampler = resources.sampler;
     this.planeWhiteMaskTexture?.destroy();
-    this.planeWhiteMaskTexture = device.createTexture({
-      size: { width: 1, height: 1 },
-      format: 'rgba8unorm',
-      usage: GPUTextureUsage.TEXTURE_BINDING,
-      label: 'native-scene-plane-white-mask-texture',
-    });
-    this.planeWhiteMaskView = this.planeWhiteMaskTexture.createView();
+    const whiteMask = createPlaneWhiteMaskResource(device);
+    this.planeWhiteMaskTexture = whiteMask.whiteMaskTexture;
+    this.planeWhiteMaskView = whiteMask.whiteMaskView;
   }
 
   private renderPlanePass(
@@ -682,8 +515,8 @@ export class NativeSceneRenderer {
         label: `native-scene-plane-uniform-${layer.layerId}`,
       });
       temporaryBuffers.push(uniformBuffer);
-      const uniformData = this.buildPlaneUniformData(
-        this.buildPlaneMvp(layer, camera),
+      const uniformData = buildPlaneUniformData(
+        buildPlaneMvp(layer, camera),
         layer.opacity,
         !transparent && layer.alphaMode === 'opaque',
         !!(layer.maskClipId && maskTextureManager?.hasMaskTexture(layer.maskClipId)),
@@ -724,7 +557,7 @@ export class NativeSceneRenderer {
     layer: ScenePlaneLayer,
   ): GPUTextureView | null {
     const current = this.planeTextures.get(layer.layerId);
-    const sourceState = this.resolvePlaneTextureSource(layer, current);
+    const sourceState = resolvePlaneTextureSource(layer, current);
     if (!sourceState) {
       return layer.videoElement || layer.videoFrame ? current?.view ?? null : null;
     }
@@ -781,375 +614,6 @@ export class NativeSceneRenderer {
     return cached.view;
   }
 
-  private getModelPreloadOptions(layer: SceneModelLayer): ModelRuntimePreloadOptions {
-    return this.getModelSequencePreloadOptions(layer.modelSequence);
-  }
-
-  private getModelSequencePreloadOptions(sequence: ModelSequenceData | undefined): ModelRuntimePreloadOptions {
-    if (!sequence || sequence.frames.length <= 1) {
-      return {};
-    }
-
-    const anchorFrame = sequence.frames.find((frame) => !!frame.modelUrl);
-    if (!anchorFrame?.modelUrl) {
-      return {};
-    }
-
-    const sequenceKey = [
-      sequence.sequenceName ?? 'model-sequence',
-      sequence.frameCount,
-      sequence.fps,
-      anchorFrame.name,
-      anchorFrame.modelUrl,
-    ].join('|');
-
-    return {
-      normalizationKey: sequenceKey,
-      anchorUrl: anchorFrame.modelUrl,
-      anchorFileName: anchorFrame.name,
-    };
-  }
-
-  private prepareModelLayerForRender(layer: SceneModelLayer, realtimePlayback: boolean): SceneModelLayer {
-    if (!layer.modelUrl) {
-      return layer;
-    }
-
-    const options = this.getModelPreloadOptions(layer);
-    this.modelRuntimeCache.touch(layer.modelUrl, layer.modelFileName);
-    if (!this.modelRuntimeCache.isLoaded(layer.modelUrl, options)) {
-      this.scheduleModelRuntimePreload(layer.modelUrl, layer.modelFileName, options, realtimePlayback && !!layer.modelSequence);
-    }
-    this.preloadNearbyModelSequenceFrames(layer, realtimePlayback, options);
-
-    const sequence = layer.modelSequence;
-    if (!sequence || sequence.frames.length <= 1) {
-      return layer;
-    }
-
-    if (this.modelRuntimeCache.isLoaded(layer.modelUrl, options)) {
-      this.lastRenderableModelSequenceUrls.set(layer.clipId, layer.modelUrl);
-      return layer;
-    }
-
-    if (!realtimePlayback) {
-      return layer;
-    }
-
-    const fallbackFrame = this.findRenderableModelSequenceFrame(layer, options);
-    if (!fallbackFrame?.modelUrl || fallbackFrame.modelUrl === layer.modelUrl) {
-      return layer;
-    }
-
-    return {
-      ...layer,
-      modelUrl: fallbackFrame.modelUrl,
-      modelFileName: fallbackFrame.name,
-    };
-  }
-
-  private findRenderableModelSequenceFrame(
-    layer: SceneModelLayer,
-    options: ModelRuntimePreloadOptions,
-  ): NonNullable<SceneModelLayer['modelSequence']>['frames'][number] | null {
-    const sequence = layer.modelSequence;
-    if (!sequence || sequence.frames.length === 0) {
-      return null;
-    }
-
-    const lastUrl = this.lastRenderableModelSequenceUrls.get(layer.clipId);
-    if (lastUrl && this.modelRuntimeCache.isLoaded(lastUrl, options)) {
-      return sequence.frames.find((frame) => frame.modelUrl === lastUrl) ?? null;
-    }
-
-    const currentIndex = layer.modelUrl
-      ? sequence.frames.findIndex((frame) => frame.modelUrl === layer.modelUrl)
-      : -1;
-    if (currentIndex < 0) {
-      return null;
-    }
-
-    for (let offset = 1; offset < sequence.frames.length; offset += 1) {
-      const previous = sequence.frames[currentIndex - offset];
-      if (previous?.modelUrl && this.modelRuntimeCache.isLoaded(previous.modelUrl, options)) {
-        return previous;
-      }
-      const next = sequence.frames[currentIndex + offset];
-      if (next?.modelUrl && this.modelRuntimeCache.isLoaded(next.modelUrl, options)) {
-        return next;
-      }
-    }
-
-    return null;
-  }
-
-  private preloadNearbyModelSequenceFrames(
-    layer: SceneModelLayer,
-    realtimePlayback: boolean,
-    options: ModelRuntimePreloadOptions,
-  ): void {
-    const sequence = layer.modelSequence;
-    if (!realtimePlayback || !sequence || sequence.frames.length <= 1 || !layer.modelUrl) {
-      return;
-    }
-
-    const currentIndex = sequence.frames.findIndex((frame) => frame.modelUrl === layer.modelUrl);
-    if (currentIndex < 0) {
-      return;
-    }
-
-    const offsets = [
-      ...Array.from({ length: MODEL_SEQUENCE_CPU_PRELOAD_AHEAD }, (_, index) => index + 1),
-      ...Array.from({ length: MODEL_SEQUENCE_CPU_PRELOAD_BEHIND }, (_, index) => -(index + 1)),
-    ];
-    let scheduled = 0;
-    for (const offset of offsets) {
-      if (scheduled >= MODEL_SEQUENCE_MAX_NEW_PRELOADS_PER_FRAME) {
-        break;
-      }
-      const frame = sequence.frames[currentIndex + offset];
-      if (
-        !frame?.modelUrl ||
-        this.modelRuntimeCache.isLoaded(frame.modelUrl, options) ||
-        this.modelRuntimeCache.isLoading(frame.modelUrl)
-      ) {
-        continue;
-      }
-      if (this.scheduleModelRuntimePreload(frame.modelUrl, frame.name, options, true)) {
-        scheduled += 1;
-      }
-    }
-  }
-
-  private scheduleModelRuntimePreload(
-    url: string,
-    fileName: string | undefined,
-    options: ModelRuntimePreloadOptions,
-    realtimeSequence: boolean,
-  ): boolean {
-    if (this.modelRuntimeCache.isLoaded(url, options) || this.modelRuntimeCache.isLoading(url)) {
-      return false;
-    }
-    if (realtimeSequence && this.modelRuntimeCache.loadingCount() >= MODEL_SEQUENCE_MAX_REALTIME_LOADS) {
-      return false;
-    }
-    void this.modelRuntimeCache.preload(url, fileName, options);
-    return true;
-  }
-
-  private collectRetainedModelUrls(nativeMeshLayers: SceneNativeMeshLayer[]): Set<string> {
-    const activeModelUrls = new Set<string>();
-    for (const layer of nativeMeshLayers) {
-      if (layer.kind !== 'model' || !layer.modelUrl) {
-        continue;
-      }
-
-      activeModelUrls.add(layer.modelUrl);
-      const lastUrl = this.lastRenderableModelSequenceUrls.get(layer.clipId);
-      if (lastUrl) {
-        activeModelUrls.add(lastUrl);
-      }
-
-      const sequence = layer.modelSequence;
-      if (!sequence || sequence.frames.length <= 1) {
-        continue;
-      }
-
-      const currentIndex = sequence.frames.findIndex((frame) => frame.modelUrl === layer.modelUrl);
-      if (currentIndex < 0) {
-        continue;
-      }
-
-      const start = Math.max(0, currentIndex - MODEL_SEQUENCE_GPU_RETAIN_BEHIND);
-      const end = Math.min(sequence.frames.length - 1, currentIndex + MODEL_SEQUENCE_GPU_RETAIN_AHEAD);
-      for (let index = start; index <= end; index += 1) {
-        const frameUrl = sequence.frames[index]?.modelUrl;
-        if (frameUrl) {
-          activeModelUrls.add(frameUrl);
-        }
-      }
-    }
-    return activeModelUrls;
-  }
-
-  private resolvePlaneTextureSource(
-    layer: ScenePlaneLayer,
-    cached?: CachedPlaneTexture,
-  ): {
-    source: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement | VideoFrame;
-    width: number;
-    height: number;
-    transient?: boolean;
-    videoCanvas?: HTMLCanvasElement;
-  } | null {
-    if (layer.videoFrame) {
-      const width = Math.max(
-        1,
-        Math.floor(layer.videoFrame.displayWidth || layer.videoFrame.codedWidth || layer.sourceWidth || 1),
-      );
-      const height = Math.max(
-        1,
-        Math.floor(layer.videoFrame.displayHeight || layer.videoFrame.codedHeight || layer.sourceHeight || 1),
-      );
-      return {
-        source: layer.videoFrame,
-        width,
-        height,
-        transient: true,
-      };
-    }
-
-    if (layer.videoElement) {
-      const width = Math.max(
-        1,
-        Math.floor(layer.videoElement.videoWidth || layer.sourceWidth || 1),
-      );
-      const height = Math.max(
-        1,
-        Math.floor(layer.videoElement.videoHeight || layer.sourceHeight || 1),
-      );
-      if ((layer.videoElement.readyState ?? 0) < 2) {
-        return null;
-      }
-
-      if (layer.preciseVideoSampling) {
-        if (typeof document === 'undefined') {
-          return null;
-        }
-        let videoCanvas = cached?.videoCanvas;
-        if (!videoCanvas || videoCanvas.width !== width || videoCanvas.height !== height) {
-          videoCanvas = document.createElement('canvas');
-          videoCanvas.width = width;
-          videoCanvas.height = height;
-        }
-        const context = videoCanvas.getContext('2d', {
-          alpha: true,
-          willReadFrequently: false,
-        });
-        if (!context) {
-          return null;
-        }
-        try {
-          context.clearRect(0, 0, width, height);
-          context.drawImage(layer.videoElement, 0, 0, width, height);
-        } catch (error) {
-          log.warn('Failed to draw precise native 3D video plane frame', {
-            layerId: layer.layerId,
-            error,
-          });
-          return null;
-        }
-        return {
-          source: videoCanvas,
-          width,
-          height,
-          videoCanvas,
-        };
-      }
-
-      return {
-        source: layer.videoElement,
-        width,
-        height,
-      };
-    }
-
-    if (layer.imageElement) {
-      const width = Math.max(
-        1,
-        Math.floor(layer.imageElement.naturalWidth || layer.sourceWidth || 1),
-      );
-      const height = Math.max(
-        1,
-        Math.floor(layer.imageElement.naturalHeight || layer.sourceHeight || 1),
-      );
-      return {
-        source: layer.imageElement,
-        width,
-        height,
-      };
-    }
-
-    if (layer.canvas) {
-      const width = Math.max(1, Math.floor(layer.canvas.width || layer.sourceWidth || 1));
-      const height = Math.max(1, Math.floor(layer.canvas.height || layer.sourceHeight || 1));
-      return {
-        source: layer.canvas,
-        width,
-        height,
-      };
-    }
-
-    return null;
-  }
-
-  private buildPlaneUniformData(
-    mvp: Float32Array,
-    opacity: number,
-    forceOpaqueAlpha: boolean,
-    hasMask: boolean,
-    maskInvert: boolean,
-  ): Float32Array {
-    const data = new Float32Array(PLANE_UNIFORM_SIZE / 4);
-    data.set(mvp, 0);
-    data[16] = opacity;
-    data[17] = forceOpaqueAlpha ? 1 : 0;
-    data[18] = hasMask ? 1 : 0;
-    data[19] = maskInvert ? 1 : 0;
-    return data;
-  }
-
-  private buildPlaneMvp(layer: ScenePlaneLayer, camera: SceneCamera): Float32Array {
-    const planeScale = this.createPlaneScaleMatrix(layer, camera.viewport);
-    const modelMatrix = this.multiplyMat4(layer.worldMatrix, planeScale);
-    const viewProjection = this.multiplyMat4(camera.projectionMatrix, camera.viewMatrix);
-    return this.multiplyMat4(viewProjection, modelMatrix);
-  }
-
-  private createPlaneScaleMatrix(
-    layer: ScenePlaneLayer,
-    viewport: { width: number; height: number },
-  ): Float32Array {
-    const outputAspect = viewport.width / Math.max(viewport.height, 1);
-    const sourceAspect = layer.sourceWidth / Math.max(layer.sourceHeight, 1);
-    let planeWidth: number;
-    let planeHeight: number;
-
-    if (sourceAspect >= outputAspect) {
-      planeWidth = WORLD_HEIGHT * outputAspect;
-      planeHeight = planeWidth / Math.max(sourceAspect, 1e-6);
-    } else {
-      planeHeight = WORLD_HEIGHT;
-      planeWidth = planeHeight * sourceAspect;
-    }
-
-    return new Float32Array([
-      planeWidth, 0, 0, 0,
-      0, planeHeight, 0, 0,
-      0, 0, 1, 0,
-      0, 0, 0, 1,
-    ]);
-  }
-
-  private isDepthWritingPlane(layer: ScenePlaneLayer): boolean {
-    if (layer.castsDepth === false) {
-      return false;
-    }
-    if (layer.opacity < 1) {
-      return false;
-    }
-    if (layer.maskClipId) {
-      return false;
-    }
-    if (layer.alphaMode === 'straight' || layer.alphaMode === 'premultiplied') {
-      return false;
-    }
-    if (layer.alphaMode === 'opaque') {
-      return true;
-    }
-    return !!(layer.videoElement || layer.videoFrame);
-  }
-
   private prunePlaneTextureCache(activeLayerIds: Set<string>): void {
     for (const [layerId, entry] of this.planeTextures) {
       if (!activeLayerIds.has(layerId)) {
@@ -1157,32 +621,6 @@ export class NativeSceneRenderer {
         this.planeTextures.delete(layerId);
       }
     }
-  }
-
-  private multiplyMat4(a: Float32Array, b: Float32Array): Float32Array {
-    const out = new Float32Array(16);
-    for (let col = 0; col < 4; col++) {
-      for (let row = 0; row < 4; row++) {
-        let sum = 0;
-        for (let k = 0; k < 4; k++) {
-          sum += a[k * 4 + row] * b[col * 4 + k];
-        }
-        out[col * 4 + row] = sum;
-      }
-    }
-    return out;
-  }
-
-  private getSceneLayerDepth(worldMatrix: Float32Array, viewMatrix: Float32Array): number {
-    const x = worldMatrix[12] ?? 0;
-    const y = worldMatrix[13] ?? 0;
-    const z = worldMatrix[14] ?? 0;
-    return (
-      (viewMatrix[2] ?? 0) * x +
-      (viewMatrix[6] ?? 0) * y +
-      (viewMatrix[10] ?? 0) * z +
-      (viewMatrix[14] ?? 0)
-    );
   }
 }
 

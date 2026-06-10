@@ -3,55 +3,57 @@
 // Supports two backends: FSA (Chrome) and Native Helper (Firefox)
 
 import { Logger } from '../logger';
-import { projectDB } from '../projectDB';
 import { FileStorageService, fileStorageService } from './core/FileStorageService';
 import { NativeFileStorageService, nativeFileStorageService } from './core/NativeFileStorageService';
 import { NativeProjectCoreService } from './core/NativeProjectCoreService';
 import { NativeHelperClient } from '../nativeHelper/NativeHelperClient';
-import { artifactService } from './domains/ArtifactService';
-import { getHashFromArtifactId, normalizeArtifactId } from '../../artifacts/ids';
 import { ProjectCoreService } from './core/ProjectCoreService';
 import { AnalysisService } from './domains/AnalysisService';
 import { TranscriptService } from './domains/TranscriptService';
 import { CacheService } from './domains/CacheService';
-import { getAudioProxyFileName, ProxyStorageService, type ProxyFrameScanProgressCallback, type ProxyFrameWriter } from './domains/ProxyStorageService';
+import { ProxyStorageService, type ProxyFrameScanProgressCallback, type ProxyFrameWriter } from './domains/ProxyStorageService';
 import { RawMediaService } from './domains/RawMediaService';
-import { PROJECT_FOLDERS, type ProjectFolderKey } from './core/constants';
-import {
-  addFileNameSuffix,
-  buildRawTargetPath,
-  getRawRelativePath,
-  parseRawRelativePath,
-} from './core/rawPath';
+import { PROJECT_FOLDERS } from './core/constants';
 import {
   clearRecentProjects,
-  getRecentProject,
   getRecentProjects,
   removeRecentProject,
   type RecentProjectEntry,
 } from './recentProjects';
 import type { ProjectFile, ProjectMediaFile, ProjectComposition, ProjectFolder } from './types';
+import * as artifactStorageDelegates from './fileService/artifactStorageDelegates';
+import * as rawMediaRouting from './fileService/rawMediaRouting';
+import {
+  deleteAudioArtifact as deleteProjectAudioArtifact,
+  deleteMediaFileArtifacts as deleteProjectMediaFileArtifacts,
+  type DeleteMediaFileArtifactsOptions,
+  type DeleteMediaFileArtifactsResult,
+  type MediaArtifactCleanupContext,
+} from './fileService/artifactCleanup';
+import {
+  deleteRoutedEntry,
+  deleteRoutedFile,
+  getRoutedFileHandle,
+  listRoutedFiles,
+  readRoutedFile,
+  routedFileExists,
+  type FileStorageRoutingContext,
+  writeRoutedFile,
+} from './fileService/fileStorageRouting';
+import { openRecentProject as openRecentProjectFromRecent } from './fileService/recentProjectOpening';
+import {
+  normalizeNativePath,
+  pickNativeFolder,
+} from './fileService/nativeBackend';
+
+export type {
+  DeleteMediaFileArtifactsOptions,
+  DeleteMediaFileArtifactsResult,
+} from './fileService/artifactCleanup';
 
 const log = Logger.create('ProjectFileService');
 
-type IterableDirectoryHandle = FileSystemDirectoryHandle & {
-  values(): AsyncIterableIterator<FileSystemDirectoryHandle | FileSystemFileHandle>;
-};
-
 export type ProjectBackend = 'fsa' | 'native';
-
-export interface DeleteMediaFileArtifactsOptions {
-  mediaId: string;
-  projectPath?: string;
-  fileHash?: string;
-  proxyStorageKeys?: string[];
-  audioArtifactRefs?: string[];
-}
-
-export interface DeleteMediaFileArtifactsResult {
-  deleted: string[];
-  failed: string[];
-}
 
 class ProjectFileService {
   // Domain services
@@ -78,14 +80,56 @@ class ProjectFileService {
     this.rawMediaService = new RawMediaService(this.fileStorage);
   }
 
-  private joinPath(...parts: string[]): string {
-    return parts
-      .map((part) => part.replace(/\\/g, '/').replace(/\/+$/, ''))
-      .join('/');
+  private get fileRoutingContext(): FileStorageRoutingContext {
+    return {
+      activeBackend: this._activeBackend,
+      coreService: this.coreService,
+      fileStorage: this.fileStorage,
+      nativeCoreService: this.nativeCoreService,
+      nativeFileStorage: this.nativeFileStorage,
+    };
   }
 
-  private normalizeNativePath(path: string): string {
-    return path.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  private get rawMediaRoutingContext(): rawMediaRouting.RawMediaRoutingContext {
+    return {
+      activeBackend: this._activeBackend,
+      coreService: this.coreService,
+      nativeCoreService: this.nativeCoreService,
+      rawMediaService: this.rawMediaService,
+      getProjectData: () => this.core.getProjectData(),
+      markDirty: () => this.core.markDirty(),
+      ensureNativeBackendReady: () => this.ensureNativeBackendReady(),
+    };
+  }
+
+  private get artifactStorageContext(): artifactStorageDelegates.ArtifactStorageContext {
+    return {
+      activeBackend: this._activeBackend,
+      getProjectHandle: () => this.coreService.getProjectHandle(),
+      getNativeProjectPath: () => this.nativeCoreService?.getProjectPath() ?? null,
+      cacheService: this.cacheService,
+      proxyStorageService: this.proxyStorageService,
+      analysisService: this.analysisService,
+      transcriptService: this.transcriptService,
+      deleteFile: (subFolder, fileName) => this.deleteFile(subFolder as keyof typeof PROJECT_FOLDERS, fileName),
+      deleteEntry: (subFolder, entryName, options) => this.deleteEntry(subFolder as keyof typeof PROJECT_FOLDERS, entryName, options),
+    };
+  }
+
+  private get artifactCleanupContext(): MediaArtifactCleanupContext {
+    return {
+      activeBackend: this._activeBackend,
+      getProjectHandle: () => this.coreService.getProjectHandle(),
+      deleteEntry: (subFolder, entryName, options) => this.deleteEntry(subFolder as keyof typeof PROJECT_FOLDERS, entryName, options),
+      deleteRawFile: (relativePath) => this.deleteRawFile(relativePath),
+      deleteThumbnail: (fileHash) => this.deleteThumbnail(fileHash),
+      listFiles: (subFolder) => this.listFiles(subFolder as keyof typeof PROJECT_FOLDERS),
+      deleteFile: (subFolder, fileName) => this.deleteFile(subFolder as keyof typeof PROJECT_FOLDERS, fileName),
+      deleteAnalysis: (mediaId) => this.deleteAnalysis(mediaId),
+      deleteTranscript: (mediaId) => this.deleteTranscript(mediaId),
+      deleteWaveform: (mediaId) => this.deleteWaveform(mediaId),
+      deleteProxy: (mediaId) => this.deleteProxy(mediaId),
+    };
   }
 
   private ensureNativeBackend(): NativeProjectCoreService {
@@ -115,251 +159,6 @@ class ProjectFileService {
     }
 
     return nativeCore;
-  }
-
-  private async pickNativeFolder(title: string, defaultPath?: string | null): Promise<string | null> {
-    const fallbackPath = defaultPath ? this.normalizeNativePath(defaultPath) : '';
-    const result = await NativeHelperClient.pickFolderDetailed(title, fallbackPath || undefined);
-
-    if (result.path) {
-      const selectedPath = this.normalizeNativePath(result.path);
-      await NativeHelperClient.grantPath(selectedPath);
-      return selectedPath;
-    }
-
-    if (result.cancelled) {
-      return null;
-    }
-
-    log.warn('Native folder picker unavailable, falling back to manual path entry', {
-      title,
-      error: result.error,
-    });
-
-    const detectedRoot = fallbackPath || (await NativeHelperClient.getProjectRoot());
-    const promptDefault = detectedRoot || '';
-    const enteredPath = window.prompt(
-      `${title}\n\nNative folder picker is unavailable here. Enter the folder path manually:`,
-      promptDefault,
-    );
-
-    if (!enteredPath?.trim()) {
-      return null;
-    }
-
-    const selectedPath = this.normalizeNativePath(enteredPath);
-    await NativeHelperClient.grantPath(selectedPath);
-    return selectedPath;
-  }
-
-  private getMimeTypeFromFileName(fileName: string): string {
-    const extension = fileName.split('.').pop()?.toLowerCase() ?? '';
-
-    switch (extension) {
-      case 'jpg':
-      case 'jpeg':
-        return 'image/jpeg';
-      case 'png':
-        return 'image/png';
-      case 'webp':
-        return 'image/webp';
-      case 'gif':
-        return 'image/gif';
-      case 'mp4':
-        return 'video/mp4';
-      case 'mov':
-        return 'video/quicktime';
-      case 'webm':
-        return 'video/webm';
-      case 'glb':
-        return 'model/gltf-binary';
-      case 'gltf':
-        return 'model/gltf+json';
-      case 'obj':
-        return 'model/obj';
-      case 'mp3':
-        return 'audio/mpeg';
-      case 'wav':
-        return 'audio/wav';
-      case 'm4a':
-        return 'audio/mp4';
-      default:
-        return 'application/octet-stream';
-    }
-  }
-
-  private async copyToRawFolderNative(
-    file: File,
-    fileName?: string,
-  ): Promise<{ handle?: FileSystemFileHandle; relativePath: string; alreadyExisted: boolean } | null> {
-    const projectPath = this.nativeCoreService?.getProjectPath();
-
-    if (!projectPath) {
-      log.warn('No native project open, cannot copy to Raw folder');
-      return null;
-    }
-
-    const rawFolderPath = this.joinPath(projectPath, PROJECT_FOLDERS.RAW);
-    const target = buildRawTargetPath(fileName, file.name);
-    const targetFolderPath = target.folderPath
-      ? this.joinPath(rawFolderPath, target.folderPath)
-      : rawFolderPath;
-
-    await NativeHelperClient.createDir(targetFolderPath);
-
-    const entries = await NativeHelperClient.listDir(targetFolderPath);
-
-    let finalName = target.fileName;
-    let counter = 0;
-    while (true) {
-      const existing = entries.find((entry) => entry.kind === 'file' && entry.name === finalName);
-      if (!existing) {
-        break;
-      }
-
-      if (existing.size === file.size) {
-        return {
-          relativePath: getRawRelativePath(target.folderPath, finalName),
-          alreadyExisted: true,
-        };
-      }
-
-      counter += 1;
-      finalName = addFileNameSuffix(target.fileName, counter);
-    }
-
-    const fullPath = this.joinPath(targetFolderPath, finalName);
-    const success = await NativeHelperClient.writeFileBinary(fullPath, file);
-
-    if (!success) {
-      return null;
-    }
-
-    return {
-      relativePath: getRawRelativePath(target.folderPath, finalName),
-      alreadyExisted: false,
-    };
-  }
-
-  private async getFileFromRawNative(
-    relativePath: string,
-  ): Promise<{ file: File; handle?: FileSystemFileHandle } | null> {
-    const projectPath = this.nativeCoreService?.getProjectPath();
-
-    if (!projectPath) {
-      return null;
-    }
-
-    const target = parseRawRelativePath(relativePath);
-    if (!target) {
-      return null;
-    }
-
-    const fullPath = this.joinPath(projectPath, target.relativePath);
-    const fileBuffer = await NativeHelperClient.getDownloadedFile(fullPath);
-
-    if (!fileBuffer) {
-      return null;
-    }
-
-    return {
-      file: new File([fileBuffer], target.fileName, {
-        type: this.getMimeTypeFromFileName(target.fileName),
-      }),
-    };
-  }
-
-  private async deleteRawFileNative(relativePath: string): Promise<boolean> {
-    const projectPath = this.nativeCoreService?.getProjectPath();
-
-    if (!projectPath) {
-      return false;
-    }
-
-    const target = parseRawRelativePath(relativePath);
-    if (!target) {
-      return false;
-    }
-
-    const fullPath = this.joinPath(projectPath, target.relativePath);
-    return NativeHelperClient.deleteFile(fullPath);
-  }
-
-  private createNativeFileHandle(fullPath: string, name: string): FileSystemFileHandle {
-    const handle = {
-      kind: 'file',
-      name,
-      getFile: async () => {
-        const fileBuffer = await NativeHelperClient.getDownloadedFile(fullPath);
-        if (!fileBuffer) {
-          throw new DOMException(`Could not read ${fullPath}`, 'NotFoundError');
-        }
-        return new File([fileBuffer], name, {
-          type: this.getMimeTypeFromFileName(name),
-        });
-      },
-      createWritable: async () => {
-        throw new DOMException('Native helper file handles are read-only', 'NotAllowedError');
-      },
-      isSameEntry: async (other: FileSystemHandle) => other === handle,
-      queryPermission: async () => 'granted' as PermissionState,
-      requestPermission: async () => 'granted' as PermissionState,
-    } as FileSystemFileHandle & { __nativePath?: string };
-
-    handle.__nativePath = fullPath;
-    return handle;
-  }
-
-  private async scanNativeFolder(rootPath: string): Promise<Map<string, FileSystemFileHandle>> {
-    const foundFiles = new Map<string, FileSystemFileHandle>();
-
-    const scanDirectory = async (directoryPath: string): Promise<void> => {
-      const entries = await NativeHelperClient.listDir(directoryPath);
-      for (const entry of entries) {
-        const fullPath = this.joinPath(directoryPath, entry.name);
-        if (entry.kind === 'file') {
-          const key = entry.name.toLowerCase();
-          if (!foundFiles.has(key)) {
-            foundFiles.set(key, this.createNativeFileHandle(fullPath, entry.name));
-          }
-        } else if (entry.kind === 'directory') {
-          await scanDirectory(fullPath);
-        }
-      }
-    };
-
-    try {
-      await scanDirectory(rootPath);
-    } catch (error) {
-      log.debug('Native folder scan failed', { rootPath, error });
-    }
-
-    return foundFiles;
-  }
-
-  private async scanDirectoryHandle(root: FileSystemDirectoryHandle): Promise<Map<string, FileSystemFileHandle>> {
-    const foundFiles = new Map<string, FileSystemFileHandle>();
-
-    const scanDirectory = async (directory: FileSystemDirectoryHandle): Promise<void> => {
-      for await (const entry of (directory as IterableDirectoryHandle).values()) {
-        if (entry.kind === 'file') {
-          const key = entry.name.toLowerCase();
-          if (!foundFiles.has(key)) {
-            foundFiles.set(key, entry);
-          }
-        } else if (entry.kind === 'directory') {
-          await scanDirectory(entry);
-        }
-      }
-    };
-
-    try {
-      await scanDirectory(root);
-    } catch (error) {
-      log.debug('Project folder scan failed', { folder: root.name, error });
-    }
-
-    return foundFiles;
   }
 
   // ============================================
@@ -469,7 +268,7 @@ class ProjectFileService {
       if (!nativeCore) return false;
 
       const projectRoot = await NativeHelperClient.getProjectRoot();
-      const parentPath = await this.pickNativeFolder(
+      const parentPath = await pickNativeFolder(
         'Choose where to save your project',
         projectRoot,
       );
@@ -494,7 +293,7 @@ class ProjectFileService {
     if (!nativeCore) return false;
 
     const projectRoot = await NativeHelperClient.getProjectRoot();
-    const projectPath = await this.pickNativeFolder(
+    const projectPath = await pickNativeFolder(
       'Select an existing project folder',
       projectRoot,
     );
@@ -516,61 +315,19 @@ class ProjectFileService {
   }
 
   async openRecentProject(id: string): Promise<boolean> {
-    const recentProject = getRecentProject(id);
-    if (!recentProject) {
-      return false;
-    }
-
-    if (recentProject.backend === 'native') {
-      if (!recentProject.path) {
-        await removeRecentProject(id);
-        return false;
-      }
-
-      const nativeCore = await this.ensureNativeBackendReady();
-      return nativeCore ? nativeCore.loadProject(recentProject.path) : false;
-    }
-
-    if (!this.isFsaAvailable || !recentProject.handleKey) {
-      return false;
-    }
-
-    let storedHandle: FileSystemHandle | null = null;
-    try {
-      storedHandle = await projectDB.getStoredHandle(recentProject.handleKey);
-    } catch (error) {
-      log.warn('Failed to read recent project handle', error);
-      return false;
-    }
-
-    if (!storedHandle || storedHandle.kind !== 'directory') {
-      await removeRecentProject(id);
-      return false;
-    }
-
-    const projectHandle = storedHandle as FileSystemDirectoryHandle;
-    let permission = await projectHandle.queryPermission({ mode: 'readwrite' });
-    if (permission !== 'granted') {
-      permission = await projectHandle.requestPermission({ mode: 'readwrite' });
-    }
-
-    if (permission !== 'granted') {
-      return false;
-    }
-
-    this.activateFsaBackend();
-    const loaded = await this.coreService.loadProject(projectHandle);
-    if (!loaded) {
-      await removeRecentProject(id);
-    }
-    return loaded;
+    return openRecentProjectFromRecent({
+      isFsaAvailable: this.isFsaAvailable,
+      coreService: this.coreService,
+      ensureNativeBackendReady: () => this.ensureNativeBackendReady(),
+      activateFsaBackend: () => this.activateFsaBackend(),
+    }, id);
   }
 
   async loadProject(handleOrPath: FileSystemDirectoryHandle | string): Promise<boolean> {
     if (typeof handleOrPath === 'string') {
       const nativeCore = await this.ensureNativeBackendReady();
       return nativeCore
-        ? nativeCore.loadProject(this.normalizeNativePath(handleOrPath))
+        ? nativeCore.loadProject(normalizeNativePath(handleOrPath))
         : false;
     }
     // FSA handle
@@ -635,10 +392,7 @@ class ProjectFileService {
     fileName: string,
     create = false
   ): Promise<FileSystemFileHandle | null> {
-    // Only FSA backend returns file handles
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return null;
-    return this.fileStorage.getFileHandle(handle, subFolder as ProjectFolderKey, fileName, create);
+    return getRoutedFileHandle(this.fileRoutingContext, subFolder, fileName, create);
   }
 
   async writeFile(
@@ -646,59 +400,28 @@ class ProjectFileService {
     fileName: string,
     content: Blob | string
   ): Promise<boolean> {
-    if (this._activeBackend === 'native' && this.nativeFileStorage && this.nativeCoreService) {
-      const path = this.nativeCoreService.getProjectPath();
-      if (!path) return false;
-      return this.nativeFileStorage.writeFile(path, subFolder as ProjectFolderKey, fileName, content);
-    }
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.fileStorage.writeFile(handle, subFolder as ProjectFolderKey, fileName, content);
+    return writeRoutedFile(this.fileRoutingContext, subFolder, fileName, content);
   }
 
   async readFile(
     subFolder: keyof typeof PROJECT_FOLDERS,
     fileName: string
   ): Promise<File | null> {
-    if (this._activeBackend === 'native' && this.nativeFileStorage && this.nativeCoreService) {
-      // Native backend: read via HTTP and wrap in File object
-      const path = this.nativeCoreService.getProjectPath();
-      if (!path) return null;
-      const buffer = await this.nativeFileStorage.readFileBinary(path, subFolder as ProjectFolderKey, fileName);
-      if (!buffer) return null;
-      return new File([buffer], fileName);
-    }
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return null;
-    return this.fileStorage.readFile(handle, subFolder as ProjectFolderKey, fileName);
+    return readRoutedFile(this.fileRoutingContext, subFolder, fileName);
   }
 
   async fileExists(
     subFolder: keyof typeof PROJECT_FOLDERS,
     fileName: string
   ): Promise<boolean> {
-    if (this._activeBackend === 'native' && this.nativeFileStorage && this.nativeCoreService) {
-      const path = this.nativeCoreService.getProjectPath();
-      if (!path) return false;
-      return this.nativeFileStorage.fileExists(path, subFolder as ProjectFolderKey, fileName);
-    }
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.fileStorage.fileExists(handle, subFolder as ProjectFolderKey, fileName);
+    return routedFileExists(this.fileRoutingContext, subFolder, fileName);
   }
 
   async deleteFile(
     subFolder: keyof typeof PROJECT_FOLDERS,
     fileName: string
   ): Promise<boolean> {
-    if (this._activeBackend === 'native' && this.nativeFileStorage && this.nativeCoreService) {
-      const path = this.nativeCoreService.getProjectPath();
-      if (!path) return false;
-      return this.nativeFileStorage.deleteFile(path, subFolder as ProjectFolderKey, fileName);
-    }
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.fileStorage.deleteFile(handle, subFolder as ProjectFolderKey, fileName);
+    return deleteRoutedFile(this.fileRoutingContext, subFolder, fileName);
   }
 
   async deleteEntry(
@@ -706,25 +429,11 @@ class ProjectFileService {
     entryName: string,
     options?: { recursive?: boolean }
   ): Promise<boolean> {
-    if (this._activeBackend === 'native' && this.nativeFileStorage && this.nativeCoreService) {
-      const path = this.nativeCoreService.getProjectPath();
-      if (!path) return false;
-      return this.nativeFileStorage.deleteEntry(path, subFolder as ProjectFolderKey, entryName, options);
-    }
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.fileStorage.deleteEntry(handle, subFolder as ProjectFolderKey, entryName, options);
+    return deleteRoutedEntry(this.fileRoutingContext, subFolder, entryName, options);
   }
 
   async listFiles(subFolder: keyof typeof PROJECT_FOLDERS): Promise<string[]> {
-    if (this._activeBackend === 'native' && this.nativeFileStorage && this.nativeCoreService) {
-      const path = this.nativeCoreService.getProjectPath();
-      if (!path) return [];
-      return this.nativeFileStorage.listFiles(path, subFolder as ProjectFolderKey);
-    }
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return [];
-    return this.fileStorage.listFiles(handle, subFolder as ProjectFolderKey);
+    return listRoutedFiles(this.fileRoutingContext, subFolder);
   }
 
   // ============================================
@@ -732,89 +441,35 @@ class ProjectFileService {
   // ============================================
 
   async copyToRawFolder(file: File, fileName?: string): Promise<{ handle?: FileSystemFileHandle; relativePath: string; alreadyExisted: boolean } | null> {
-    if (this._activeBackend === 'native' && this.nativeCoreService) {
-      return this.copyToRawFolderNative(file, fileName);
-    }
-
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) {
-      log.warn('No project open, cannot copy to Raw folder');
-      return null;
-    }
-    return this.rawMediaService.copyToRawFolder(handle, file, fileName);
+    return rawMediaRouting.copyToRawFolder(this.rawMediaRoutingContext, file, fileName);
   }
 
   async getFileFromRaw(relativePath: string): Promise<{ file: File; handle?: FileSystemFileHandle } | null> {
-    if (this._activeBackend === 'native' && this.nativeCoreService) {
-      return this.getFileFromRawNative(relativePath);
-    }
-
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return null;
-    return this.rawMediaService.getFileFromRaw(handle, relativePath);
+    return rawMediaRouting.getFileFromRaw(this.rawMediaRoutingContext, relativePath);
   }
 
   async deleteRawFile(relativePath: string | undefined): Promise<boolean> {
-    if (!relativePath) {
-      return false;
-    }
-
-    if (this._activeBackend === 'native' && this.nativeCoreService) {
-      return this.deleteRawFileNative(relativePath);
-    }
-
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.rawMediaService.deleteFromRaw(handle, relativePath);
+    return rawMediaRouting.deleteRawFile(this.rawMediaRoutingContext, relativePath);
   }
 
   resolveRawFilePath(relativePath: string | undefined): string | null {
-    if (this._activeBackend !== 'native' || !this.nativeCoreService || !relativePath) {
-      return null;
-    }
-
-    const projectPath = this.nativeCoreService.getProjectPath();
-    const target = parseRawRelativePath(relativePath);
-    if (!projectPath || !target) {
-      return null;
-    }
-
-    return this.joinPath(projectPath, target.relativePath);
+    return rawMediaRouting.resolveRawFilePath(this.rawMediaRoutingContext, relativePath);
   }
 
   resolveRawFileUrl(relativePath: string | undefined): string | null {
-    const fullPath = this.resolveRawFilePath(relativePath);
-    return fullPath ? NativeHelperClient.getFileReferenceUrl(fullPath) : null;
+    return rawMediaRouting.resolveRawFileUrl(this.rawMediaRoutingContext, relativePath);
   }
 
   async hasFileInRaw(fileName: string): Promise<boolean> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.rawMediaService.hasFileInRaw(handle, fileName);
+    return rawMediaRouting.hasFileInRaw(this.rawMediaRoutingContext, fileName);
   }
 
   async scanRawFolder(): Promise<Map<string, FileSystemFileHandle>> {
-    if (this._activeBackend === 'native' && this.nativeCoreService) {
-      const projectPath = this.nativeCoreService.getProjectPath();
-      if (!projectPath) return new Map();
-      return this.scanNativeFolder(this.joinPath(projectPath, PROJECT_FOLDERS.RAW));
-    }
-
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return new Map();
-    return this.rawMediaService.scanRawFolder(handle);
+    return rawMediaRouting.scanRawFolder(this.rawMediaRoutingContext);
   }
 
   async scanProjectFolder(): Promise<Map<string, FileSystemFileHandle>> {
-    if (this._activeBackend === 'native' && this.nativeCoreService) {
-      const projectPath = this.nativeCoreService.getProjectPath();
-      if (!projectPath) return new Map();
-      return this.scanNativeFolder(projectPath);
-    }
-
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return new Map();
-    return this.scanDirectoryHandle(handle);
+    return rawMediaRouting.scanProjectFolder(this.rawMediaRoutingContext);
   }
 
   async pickAndScanFolder(title = 'Search folder for media'): Promise<{
@@ -822,63 +477,23 @@ class ProjectFileService {
     path?: string;
     files: Map<string, FileSystemFileHandle>;
   } | null> {
-    if (this._activeBackend !== 'native') {
-      return null;
-    }
-
-    const nativeCore = await this.ensureNativeBackendReady();
-    if (!nativeCore) {
-      return null;
-    }
-
-    const defaultPath = nativeCore.getProjectPath() ?? await NativeHelperClient.getProjectRoot();
-    const folderPath = await this.pickNativeFolder(title, defaultPath);
-    if (!folderPath) {
-      return null;
-    }
-
-    const normalizedPath = this.normalizeNativePath(folderPath);
-    const name = normalizedPath.split('/').filter(Boolean).pop() ?? normalizedPath;
-    return {
-      name,
-      path: normalizedPath,
-      files: await this.scanNativeFolder(normalizedPath),
-    };
+    return rawMediaRouting.pickAndScanFolder(this.rawMediaRoutingContext, title);
   }
 
   async importMediaFile(file: File, fileHandle?: FileSystemFileHandle): Promise<ProjectMediaFile | null> {
-    const projectData = this.core.getProjectData();
-    if (!projectData) return null;
-
-    const mediaFile = await this.rawMediaService.importMediaFile(file, fileHandle);
-    if (!mediaFile) return null;
-
-    // Add to project
-    projectData.media.push(mediaFile);
-    this.core.markDirty();
-
-    return mediaFile;
+    return rawMediaRouting.importMediaFile(this.rawMediaRoutingContext, file, fileHandle);
   }
 
   async saveDownload(blob: Blob, title: string, platform: string): Promise<File | null> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) {
-      log.warn('No project open, cannot save download to project');
-      return null;
-    }
-    return this.rawMediaService.saveDownload(handle, blob, title, platform);
+    return rawMediaRouting.saveDownload(this.rawMediaRoutingContext, blob, title, platform);
   }
 
   async checkDownloadExists(title: string, platform: string): Promise<boolean> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.rawMediaService.checkDownloadExists(handle, title, platform);
+    return rawMediaRouting.checkDownloadExists(this.rawMediaRoutingContext, title, platform);
   }
 
   async getDownloadFile(title: string, platform: string): Promise<File | null> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return null;
-    return this.rawMediaService.getDownloadFile(handle, title, platform);
+    return rawMediaRouting.getDownloadFile(this.rawMediaRoutingContext, title, platform);
   }
 
   // ============================================
@@ -886,71 +501,43 @@ class ProjectFileService {
   // ============================================
 
   async saveThumbnail(fileHash: string, blob: Blob): Promise<boolean> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.cacheService.saveThumbnail(handle, fileHash, blob);
+    return artifactStorageDelegates.saveThumbnail(this.artifactStorageContext, fileHash, blob);
   }
 
   async getThumbnail(fileHash: string): Promise<Blob | null> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return null;
-    return this.cacheService.getThumbnail(handle, fileHash);
+    return artifactStorageDelegates.getThumbnail(this.artifactStorageContext, fileHash);
   }
 
   async hasThumbnail(fileHash: string): Promise<boolean> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.cacheService.hasThumbnail(handle, fileHash);
+    return artifactStorageDelegates.hasThumbnail(this.artifactStorageContext, fileHash);
   }
 
   async deleteThumbnail(fileHash: string): Promise<boolean> {
-    if (this._activeBackend === 'native') {
-      return this.deleteFile('CACHE_THUMBNAILS', `${fileHash}.jpg`);
-    }
-
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.cacheService.deleteThumbnail(handle, fileHash);
+    return artifactStorageDelegates.deleteThumbnail(this.artifactStorageContext, fileHash);
   }
 
   async saveGaussianSplatRuntime(fileHash: string, variant: string, blob: Blob): Promise<boolean> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.cacheService.saveGaussianSplatRuntime(handle, fileHash, variant, blob);
+    return artifactStorageDelegates.saveGaussianSplatRuntime(this.artifactStorageContext, fileHash, variant, blob);
   }
 
   async getGaussianSplatRuntime(fileHash: string, variant: string): Promise<File | null> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return null;
-    return this.cacheService.getGaussianSplatRuntime(handle, fileHash, variant);
+    return artifactStorageDelegates.getGaussianSplatRuntime(this.artifactStorageContext, fileHash, variant);
   }
 
   async hasGaussianSplatRuntime(fileHash: string, variant: string): Promise<boolean> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.cacheService.hasGaussianSplatRuntime(handle, fileHash, variant);
+    return artifactStorageDelegates.hasGaussianSplatRuntime(this.artifactStorageContext, fileHash, variant);
   }
 
   async saveWaveform(mediaId: string, waveformData: Float32Array): Promise<boolean> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.cacheService.saveWaveform(handle, mediaId, waveformData);
+    return artifactStorageDelegates.saveWaveform(this.artifactStorageContext, mediaId, waveformData);
   }
 
   async getWaveform(mediaId: string): Promise<Float32Array | null> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return null;
-    return this.cacheService.getWaveform(handle, mediaId);
+    return artifactStorageDelegates.getWaveform(this.artifactStorageContext, mediaId);
   }
 
   async deleteWaveform(mediaId: string): Promise<boolean> {
-    if (this._activeBackend === 'native') {
-      return this.deleteFile('CACHE_WAVEFORMS', `${mediaId}.waveform`);
-    }
-
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.cacheService.deleteWaveform(handle, mediaId);
+    return artifactStorageDelegates.deleteWaveform(this.artifactStorageContext, mediaId);
   }
 
   // ============================================
@@ -958,133 +545,55 @@ class ProjectFileService {
   // ============================================
 
   async saveProxyFrame(mediaId: string, frameIndex: number, blob: Blob): Promise<boolean> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) {
-      log.error('No project handle for proxy save!');
-      return false;
-    }
-    return this.proxyStorageService.saveProxyFrame(handle, mediaId, frameIndex, blob);
+    return artifactStorageDelegates.saveProxyFrame(this.artifactStorageContext, mediaId, frameIndex, blob);
   }
 
   async createProxyFrameWriter(mediaId: string): Promise<ProxyFrameWriter | null> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) {
-      log.error('No project handle for proxy writer!');
-      return null;
-    }
-    return this.proxyStorageService.createProxyFrameWriter(handle, mediaId);
+    return artifactStorageDelegates.createProxyFrameWriter(this.artifactStorageContext, mediaId);
   }
 
   async getProxyFrame(mediaId: string, frameIndex: number): Promise<Blob | null> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return null;
-    return this.proxyStorageService.getProxyFrame(handle, mediaId, frameIndex);
+    return artifactStorageDelegates.getProxyFrame(this.artifactStorageContext, mediaId, frameIndex);
   }
 
   async hasProxy(mediaId: string): Promise<boolean> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.proxyStorageService.hasProxy(handle, mediaId);
+    return artifactStorageDelegates.hasProxy(this.artifactStorageContext, mediaId);
   }
 
   async getProxyFrameCount(mediaId: string): Promise<number> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return 0;
-    return this.proxyStorageService.getProxyFrameCount(handle, mediaId);
+    return artifactStorageDelegates.getProxyFrameCount(this.artifactStorageContext, mediaId);
   }
 
   async getProxyFrameIndices(mediaId: string, onProgress?: ProxyFrameScanProgressCallback): Promise<Set<number>> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return new Set();
-    return this.proxyStorageService.getProxyFrameIndices(handle, mediaId, onProgress);
+    return artifactStorageDelegates.getProxyFrameIndices(this.artifactStorageContext, mediaId, onProgress);
   }
 
   async saveProxyVideo(mediaId: string, blob: Blob): Promise<boolean> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) {
-      log.error('No project handle for proxy video save!');
-      return false;
-    }
-    return this.proxyStorageService.saveProxyVideo(handle, mediaId, blob);
+    return artifactStorageDelegates.saveProxyVideo(this.artifactStorageContext, mediaId, blob);
   }
 
   async getProxyVideo(mediaId: string): Promise<File | null> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return null;
-    return this.proxyStorageService.getProxyVideo(handle, mediaId);
+    return artifactStorageDelegates.getProxyVideo(this.artifactStorageContext, mediaId);
   }
 
   async hasProxyVideo(mediaId: string): Promise<boolean> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.proxyStorageService.hasProxyVideo(handle, mediaId);
+    return artifactStorageDelegates.hasProxyVideo(this.artifactStorageContext, mediaId);
   }
 
   async saveProxyAudio(mediaId: string, blob: Blob): Promise<boolean> {
-    if (this._activeBackend === 'native' && this.nativeCoreService) {
-      const projectPath = this.nativeCoreService.getProjectPath();
-      if (!projectPath) {
-        log.error('No native project path for audio proxy save!');
-        return false;
-      }
-
-      const folderPath = this.joinPath(projectPath, PROJECT_FOLDERS.AUDIO_PROXIES);
-      await NativeHelperClient.createDir(folderPath);
-      return NativeHelperClient.writeFileBinary(
-        this.joinPath(folderPath, getAudioProxyFileName(mediaId)),
-        blob,
-      );
-    }
-
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) {
-      log.error('No project handle for audio proxy save!');
-      return false;
-    }
-    return this.proxyStorageService.saveProxyAudio(handle, mediaId, blob);
+    return artifactStorageDelegates.saveProxyAudio(this.artifactStorageContext, mediaId, blob);
   }
 
   async getProxyAudio(mediaId: string): Promise<File | null> {
-    if (this._activeBackend === 'native' && this.nativeCoreService) {
-      const projectPath = this.nativeCoreService.getProjectPath();
-      if (!projectPath) return null;
-      const fileName = getAudioProxyFileName(mediaId);
-      const fullPath = this.joinPath(projectPath, PROJECT_FOLDERS.AUDIO_PROXIES, fileName);
-      const buffer = await NativeHelperClient.getDownloadedFile(fullPath);
-      return buffer
-        ? new File([buffer], fileName, { type: 'audio/wav' })
-        : null;
-    }
-
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return null;
-    return this.proxyStorageService.getProxyAudio(handle, mediaId);
+    return artifactStorageDelegates.getProxyAudio(this.artifactStorageContext, mediaId);
   }
 
   async hasProxyAudio(mediaId: string): Promise<boolean> {
-    if (this._activeBackend === 'native' && this.nativeCoreService) {
-      const projectPath = this.nativeCoreService.getProjectPath();
-      if (!projectPath) return false;
-      const fullPath = this.joinPath(projectPath, PROJECT_FOLDERS.AUDIO_PROXIES, getAudioProxyFileName(mediaId));
-      const result = await NativeHelperClient.exists(fullPath);
-      return result.exists && result.kind === 'file';
-    }
-
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.proxyStorageService.hasProxyAudio(handle, mediaId);
+    return artifactStorageDelegates.hasProxyAudio(this.artifactStorageContext, mediaId);
   }
 
   async deleteProxy(mediaId: string): Promise<boolean> {
-    if (this._activeBackend === 'native') {
-      const deletedVideoProxy = await this.deleteEntry('PROXY', mediaId, { recursive: true });
-      const deletedAudioProxy = await this.deleteFile('AUDIO_PROXIES', getAudioProxyFileName(mediaId));
-      return deletedVideoProxy || deletedAudioProxy;
-    }
-
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.proxyStorageService.deleteProxy(handle, mediaId);
+    return artifactStorageDelegates.deleteProxy(this.artifactStorageContext, mediaId);
   }
 
   // ============================================
@@ -1098,9 +607,7 @@ class ProjectFileService {
     frames: unknown[],
     sampleInterval: number
   ): Promise<boolean> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.analysisService.saveAnalysis(handle, mediaId, inPoint, outPoint, frames, sampleInterval);
+    return artifactStorageDelegates.saveAnalysis(this.artifactStorageContext, mediaId, inPoint, outPoint, frames, sampleInterval);
   }
 
   async getAnalysis(
@@ -1108,37 +615,23 @@ class ProjectFileService {
     inPoint: number,
     outPoint: number
   ): Promise<{ frames: unknown[]; sampleInterval: number } | null> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return null;
-    return this.analysisService.getAnalysis(handle, mediaId, inPoint, outPoint);
+    return artifactStorageDelegates.getAnalysis(this.artifactStorageContext, mediaId, inPoint, outPoint);
   }
 
   async hasAnalysis(mediaId: string, inPoint: number, outPoint: number): Promise<boolean> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.analysisService.hasAnalysis(handle, mediaId, inPoint, outPoint);
+    return artifactStorageDelegates.hasAnalysis(this.artifactStorageContext, mediaId, inPoint, outPoint);
   }
 
   async getAnalysisRanges(mediaId: string): Promise<string[]> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return [];
-    return this.analysisService.getAnalysisRanges(handle, mediaId);
+    return artifactStorageDelegates.getAnalysisRanges(this.artifactStorageContext, mediaId);
   }
 
   async getAllAnalysisMerged(mediaId: string): Promise<{ frames: unknown[]; sampleInterval: number } | null> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return null;
-    return this.analysisService.getAllAnalysisMerged(handle, mediaId);
+    return artifactStorageDelegates.getAllAnalysisMerged(this.artifactStorageContext, mediaId);
   }
 
   async deleteAnalysis(mediaId: string): Promise<boolean> {
-    if (this._activeBackend === 'native') {
-      return this.deleteFile('ANALYSIS', `${mediaId}.json`);
-    }
-
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.analysisService.deleteAnalysis(handle, mediaId);
+    return artifactStorageDelegates.deleteAnalysis(this.artifactStorageContext, mediaId);
   }
 
   // ============================================
@@ -1146,117 +639,27 @@ class ProjectFileService {
   // ============================================
 
   async saveTranscript(mediaId: string, transcript: unknown, transcribedRanges?: [number, number][]): Promise<boolean> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.transcriptService.saveTranscript(handle, mediaId, transcript, transcribedRanges);
+    return artifactStorageDelegates.saveTranscript(this.artifactStorageContext, mediaId, transcript, transcribedRanges);
   }
 
   async getTranscript(mediaId: string): Promise<{ words: unknown[]; transcribedRanges?: [number, number][] } | null> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return null;
-    return this.transcriptService.getTranscript(handle, mediaId);
+    return artifactStorageDelegates.getTranscript(this.artifactStorageContext, mediaId);
   }
 
   async getTranscribedRanges(mediaId: string): Promise<[number, number][]> {
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return [];
-    return this.transcriptService.getTranscribedRanges(handle, mediaId);
+    return artifactStorageDelegates.getTranscribedRanges(this.artifactStorageContext, mediaId);
   }
 
   async deleteTranscript(mediaId: string): Promise<boolean> {
-    if (this._activeBackend === 'native') {
-      return this.deleteFile('TRANSCRIPTS', `${mediaId}.json`);
-    }
-
-    const handle = this.coreService.getProjectHandle();
-    if (!handle) return false;
-    return this.transcriptService.deleteTranscript(handle, mediaId);
+    return artifactStorageDelegates.deleteTranscript(this.artifactStorageContext, mediaId);
   }
 
   async deleteAudioArtifact(ref: string): Promise<boolean> {
-    const artifactId = normalizeArtifactId(ref);
-    const hash = getHashFromArtifactId(artifactId);
-    let deleted = false;
-
-    if (this._activeBackend === 'native' && hash) {
-      deleted = await this.deleteEntry(
-        'CACHE_ARTIFACTS',
-        `sha256/${hash.slice(0, 2)}/${hash}`,
-        { recursive: true },
-      ) || deleted;
-    } else {
-      const handle = this.coreService.getProjectHandle();
-      if (handle) {
-        deleted = await artifactService.deleteArtifact(handle, artifactId) || deleted;
-      }
-    }
-
-    try {
-      deleted = await artifactService.createIndexedDBStore().deleteArtifact(artifactId) || deleted;
-    } catch (error) {
-      log.debug('IndexedDB artifact delete skipped', { artifactId, error });
-    }
-
-    if (hash) {
-      try {
-        await projectDB.deleteArtifactManifest(artifactId);
-        await projectDB.deleteArtifactBlob(hash);
-      } catch (error) {
-        log.debug('Artifact manifest/blob cleanup skipped', { artifactId, error });
-      }
-    }
-
-    return deleted;
+    return deleteProjectAudioArtifact(this.artifactCleanupContext, ref);
   }
 
   async deleteMediaFileArtifacts(options: DeleteMediaFileArtifactsOptions): Promise<DeleteMediaFileArtifactsResult> {
-    const deleted: string[] = [];
-    const failed: string[] = [];
-    const uniqueProxyKeys = [...new Set([
-      ...(options.proxyStorageKeys ?? []),
-      options.fileHash,
-      options.mediaId,
-    ].filter((key): key is string => Boolean(key)))];
-    const uniqueAudioRefs = [...new Set(options.audioArtifactRefs ?? [])];
-
-    const attempt = async (label: string, task: () => Promise<boolean>) => {
-      try {
-        const ok = await task();
-        if (ok) {
-          deleted.push(label);
-        }
-      } catch (error) {
-        failed.push(label);
-        log.warn('Failed to delete media artifact', { label, error });
-      }
-    };
-
-    if (options.projectPath) {
-      await attempt(`raw:${options.projectPath}`, () => this.deleteRawFile(options.projectPath));
-    }
-
-    if (options.fileHash) {
-      await attempt(`thumbnail:${options.fileHash}`, () => this.deleteThumbnail(options.fileHash!));
-
-      const splatRuntimeFiles = await this.listFiles('CACHE_SPLATS');
-      for (const fileName of splatRuntimeFiles.filter((name) => name.startsWith(`${options.fileHash}.`) && name.endsWith('.rtgs'))) {
-        await attempt(`splat-runtime:${fileName}`, () => this.deleteFile('CACHE_SPLATS', fileName));
-      }
-    }
-
-    await attempt(`analysis:${options.mediaId}`, () => this.deleteAnalysis(options.mediaId));
-    await attempt(`transcript:${options.mediaId}`, () => this.deleteTranscript(options.mediaId));
-    await attempt(`waveform:${options.mediaId}`, () => this.deleteWaveform(options.mediaId));
-
-    for (const proxyKey of uniqueProxyKeys) {
-      await attempt(`proxy:${proxyKey}`, () => this.deleteProxy(proxyKey));
-    }
-
-    for (const ref of uniqueAudioRefs) {
-      await attempt(`audio-artifact:${ref}`, () => this.deleteAudioArtifact(ref));
-    }
-
-    return { deleted, failed };
+    return deleteProjectMediaFileArtifacts(this.artifactCleanupContext, options);
   }
 }
 
