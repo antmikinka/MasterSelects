@@ -14,94 +14,49 @@ import { Logger } from './logger';
 import { engine } from '../engine/WebGPUEngine';
 import { getClipTimeInfo, layerBuilder } from './layerBuilder';
 import { createFrameContext } from './layerBuilder/FrameContext';
-import type { FrameContext } from './layerBuilder';
 import { useTimelineStore } from '../stores/timeline';
-import type { TimelineClip } from '../types';
-import {
-  buildPlaybackDebugStats,
-  type PlaybackHealthAnomaly,
-  type PlaybackHealthVideoState,
-} from './playbackDebugStats';
-import {
-  canUseSharedPreviewRuntimeSession,
-  getPreviewRuntimeSource,
-  getRuntimeFrameProvider,
-  getScrubRuntimeSource,
-  updateRuntimePlaybackTime,
-} from './mediaRuntime/runtimePlayback';
-import type { RuntimeFrameProvider } from './mediaRuntime/types';
-import { vfPipelineMonitor } from './vfPipelineMonitor';
-import { wcPipelineMonitor } from './wcPipelineMonitor';
 import { hasTimelineVisualRenderDemand } from './timeline/timelineVisualDemand';
+import {
+  CLIP_ESCALATION_COOLDOWN_MS,
+  CLIP_ESCALATION_THRESHOLD,
+  CLIP_ESCALATION_WINDOW_MS,
+  FRAME_STALL_POLLS,
+  HIGH_DROP_THRESHOLD,
+  PLAYBACK_PURGE_RESUME_DELAY_MS,
+  POLL_INTERVAL,
+  RENDER_STALL_MS,
+  SEEK_STUCK_MS,
+  WARMUP_STUCK_MS,
+} from './playbackHealth/constants';
+import {
+  createInitialAnomalyCounts,
+  recordAnomalyMetric,
+  resetAnomalyCounts,
+} from './playbackHealth/anomalyMetrics';
+import {
+  buildPlaybackHealthSnapshot,
+  buildSnapshotVideoState,
+  buildVideoSnapshot,
+} from './playbackHealth/reports';
+import { classifyPreviewFreezeRecovery } from './playbackHealth/previewFreeze';
+import { resetWebCodecsProvidersForClip } from './playbackHealth/runtimeReset';
+import {
+  getVisibleHtmlVideoClipsAtPlayhead,
+  shouldMonitorHtmlVideoHealth,
+} from './playbackHealth/visibleClips';
+import type {
+  AnomalyEvent,
+  AnomalyType,
+  PlaybackHealthSnapshot,
+  PlaybackHealthVideoSnapshot,
+  PlaybackPurgeMode,
+  PlaybackPurgeOptions,
+  PlaybackPurgeResult,
+  VideoTimeTracker,
+} from './playbackHealth/contracts';
 
 const log = Logger.create('PlaybackHealth');
 
-// --- Types ---
-
-type AnomalyType =
-  | 'FRAME_STALL'
-  | 'WARMUP_STUCK'
-  | 'RVFC_ORPHANED'
-  | 'SEEK_STUCK'
-  | 'READYSTATE_DROP'
-  | 'GPU_SURFACE_COLD'
-  | 'RENDER_STALL'
-  | 'HIGH_DROP_RATE'
-  | 'PREVIEW_FREEZE';
-
-interface AnomalyEvent {
-  type: AnomalyType;
-  timestamp: number;
-  clipId?: string;
-  detail?: string;
-  recovered: boolean;
-}
-
-interface VideoTimeTracker {
-  lastTime: number;
-  staleCount: number;
-}
-
-type PlaybackPurgeMode = 'targeted' | 'full';
-
-interface PlaybackPurgeOptions {
-  reason?: string;
-  mode?: PlaybackPurgeMode;
-  resumePlayback?: boolean;
-}
-
-interface PlaybackPurgeResult {
-  reason: string;
-  mode: PlaybackPurgeMode;
-  playheadPosition: number;
-  wasPlaying: boolean;
-  resumeScheduled: boolean;
-  clips: Array<{
-    clipId: string;
-    targetTime: number;
-    hadVideoElement: boolean;
-    webCodecsProvidersReset: number;
-  }>;
-}
-
-// --- Constants ---
-
-const POLL_INTERVAL = 500;
-const MAX_ANOMALY_LOG = 200;
-const COOLDOWN_MS = 5000;
-const FRAME_STALL_POLLS = 3;        // 3 polls × 500ms = 1.5s
-const WARMUP_STUCK_MS = 3000;
-const SEEK_STUCK_MS = 2000;
-const RENDER_STALL_MS = 3000;
-const HIGH_DROP_THRESHOLD = 10;
-const CLIP_ESCALATION_WINDOW_MS = 12000;
-const CLIP_ESCALATION_THRESHOLD = 3;
-const CLIP_ESCALATION_COOLDOWN_MS = 15000;
-const PREVIEW_FREEZE_WINDOW_MS = 1500;
-const PREVIEW_FREEZE_RECOVERY_MS = 650;
-const PREVIEW_FREEZE_STALE_FRAMES = 12;
-const PLAYBACK_PURGE_COOLDOWN_MS = 8000;
-const PLAYBACK_PURGE_RESUME_DELAY_MS = 80;
 
 // --- Service ---
 
@@ -118,55 +73,9 @@ export class PlaybackHealthMonitor {
 
   // Anomaly log (ring buffer)
   private anomalyLog: AnomalyEvent[] = [];
-  private anomalyCounts: Record<AnomalyType, number> = {
-    FRAME_STALL: 0,
-    WARMUP_STUCK: 0,
-    RVFC_ORPHANED: 0,
-    SEEK_STUCK: 0,
-    READYSTATE_DROP: 0,
-    GPU_SURFACE_COLD: 0,
-    RENDER_STALL: 0,
-    HIGH_DROP_RATE: 0,
-    PREVIEW_FREEZE: 0,
-  };
+  private anomalyCounts = createInitialAnomalyCounts();
   private lastAnomalyTime: Partial<Record<AnomalyType, number>> = {};
   private lastPlaybackPurgeAt = 0;
-
-  private shouldMonitorHtmlVideoHealth(
-    clip: {
-      source?: {
-        webCodecsPlayer?: {
-          isFullMode?: () => boolean;
-        } | null;
-      } | null;
-    }
-  ): boolean {
-    return !clip.source?.webCodecsPlayer?.isFullMode?.();
-  }
-
-  private getVisibleHtmlVideoClipsAtPlayhead(ctx: FrameContext): TimelineClip[] {
-    const seenClipIds = new Set<string>();
-    const seenVideos = new Set<HTMLVideoElement>();
-    const result: TimelineClip[] = [];
-
-    for (const clip of ctx.clipsAtTime) {
-      const video = clip.source?.videoElement;
-      const hasTrackMetadata = ctx.tracks.length > 0 || ctx.videoTracks.length > 0;
-      const trackVisible = hasTrackMetadata ? ctx.visibleVideoTrackIds.has(clip.trackId) : true;
-      if (!video || !clip.trackId || !trackVisible) {
-        continue;
-      }
-      if (seenClipIds.has(clip.id) || seenVideos.has(video)) {
-        continue;
-      }
-
-      seenClipIds.add(clip.id);
-      seenVideos.add(video);
-      result.push(clip);
-    }
-
-    return result;
-  }
 
   start(): void {
     if (this.intervalId !== null) return;
@@ -222,8 +131,8 @@ export class PlaybackHealthMonitor {
     });
 
     // Gather visible video clips at the effective playhead.
-    const videoClips = this.getVisibleHtmlVideoClipsAtPlayhead(ctx);
-    const htmlHealthVideoClips = videoClips.filter((clip) => this.shouldMonitorHtmlVideoHealth(clip));
+    const videoClips = getVisibleHtmlVideoClipsAtPlayhead(ctx);
+    const htmlHealthVideoClips = videoClips.filter(shouldMonitorHtmlVideoHealth);
 
     const vsm = layerBuilder.getVideoSyncManager();
 
@@ -376,37 +285,17 @@ export class PlaybackHealthMonitor {
     isPlaying: boolean,
     decoder: ReturnType<typeof engine.getStats>['decoder']
   ): void {
-    if (!isPlaying) return;
-    if (typeof document !== 'undefined' && document.hidden) return;
-    if (now - this.lastPlaybackPurgeAt < PLAYBACK_PURGE_COOLDOWN_MS) return;
-
-    const healthVideos = this.videos() as PlaybackHealthVideoState[];
-    if (healthVideos.length === 0) return;
-
-    const playback = buildPlaybackDebugStats({
+    const recovery = classifyPreviewFreezeRecovery({
       decoder,
       now,
-      windowMs: PREVIEW_FREEZE_WINDOW_MS,
-      wcTimeline: wcPipelineMonitor.timeline(PREVIEW_FREEZE_WINDOW_MS),
-      vfTimeline: vfPipelineMonitor.timeline(PREVIEW_FREEZE_WINDOW_MS),
-      healthVideos,
-      healthAnomalies: this.anomalyLog as PlaybackHealthAnomaly[],
+      isPlaying,
+      lastPlaybackPurgeAt: this.lastPlaybackPurgeAt,
+      healthVideos: this.videos(),
+      healthAnomalies: this.anomalyLog,
     });
+    if (!recovery) return;
 
-    const freezeLongEnough = playback.longestPreviewFreezeMs >= PREVIEW_FREEZE_RECOVERY_MS;
-    const staleEnough = playback.stalePreviewWhileTargetMoved >= PREVIEW_FREEZE_STALE_FRAMES;
-    if (!freezeLongEnough || !staleEnough) {
-      return;
-    }
-
-    const detail = [
-      `preview frozen for ${Math.round(playback.longestPreviewFreezeMs)}ms`,
-      `staleMovingFrames=${playback.stalePreviewWhileTargetMoved}`,
-      `path=${playback.lastPreviewFreezePath ?? 'unknown'}`,
-      `pipeline=${playback.pipeline}`,
-    ].join(', ');
-
-    if (this.recordAnomaly('PREVIEW_FREEZE', playback.lastPreviewFreezeClipId, detail)) {
+    if (this.recordAnomaly('PREVIEW_FREEZE', recovery.clipId, recovery.detail)) {
       this.lastPlaybackPurgeAt = now;
       this.purgePlaybackPath({
         reason: 'auto-preview-freeze',
@@ -418,26 +307,18 @@ export class PlaybackHealthMonitor {
 
   private recordAnomaly(type: AnomalyType, clipId?: string, detail?: string): boolean {
     const now = performance.now();
-    const lastTime = this.lastAnomalyTime[type];
-    if (lastTime !== undefined && now - lastTime < COOLDOWN_MS) return false;
-
-    this.lastAnomalyTime[type] = now;
-    this.anomalyCounts[type]++;
-
-    const event: AnomalyEvent = {
-      type,
-      timestamp: now,
-      clipId,
-      detail,
-      recovered: type !== 'HIGH_DROP_RATE' && type !== 'READYSTATE_DROP',
-    };
-
-    this.anomalyLog.push(event);
-    if (this.anomalyLog.length > MAX_ANOMALY_LOG) {
-      this.anomalyLog.shift();
+    const event = recordAnomalyMetric({
+      anomalyLog: this.anomalyLog,
+      anomalyCounts: this.anomalyCounts,
+      lastAnomalyTime: this.lastAnomalyTime,
+    }, type, now, clipId, detail);
+    if (!event) {
+      return false;
     }
 
-    log.warn(`[${type}]${clipId ? ` clip=${clipId}` : ''} ${detail || ''}`);
+    log.warn(
+      `[${type}]${clipId ? ` clip=${clipId}` : ''} ${detail || ''}`
+    );
     return true;
   }
 
@@ -538,58 +419,6 @@ export class PlaybackHealthMonitor {
     return Math.max(0, Math.min(targetTime, duration - 0.001));
   }
 
-  private resetRuntimeProvider(
-    provider: RuntimeFrameProvider | null | undefined,
-    targetTime: number
-  ): boolean {
-    if (!provider?.isFullMode?.()) {
-      return false;
-    }
-
-    try {
-      provider.pause();
-      provider.seek(targetTime);
-      provider.advanceToTime?.(targetTime);
-      return true;
-    } catch (error) {
-      log.warn('Failed to reset WebCodecs provider during playback purge', error);
-      return false;
-    }
-  }
-
-  private resetWebCodecsProvidersForClip(
-    ctx: ReturnType<typeof createFrameContext>,
-    clip: TimelineClip,
-    targetTime: number
-  ): number {
-    const source = clip.source;
-    if (!source) {
-      return 0;
-    }
-
-    const providers = new Set<RuntimeFrameProvider>();
-    const allowShared = canUseSharedPreviewRuntimeSession(clip, ctx.clipsAtTime);
-    const previewSource = getPreviewRuntimeSource(source, clip.trackId, allowShared);
-    const scrubSource = getScrubRuntimeSource(source, clip.trackId, allowShared);
-
-    updateRuntimePlaybackTime(previewSource, targetTime);
-    updateRuntimePlaybackTime(scrubSource, targetTime);
-
-    const previewProvider = getRuntimeFrameProvider(previewSource);
-    const scrubProvider = getRuntimeFrameProvider(scrubSource);
-    if (previewProvider) providers.add(previewProvider);
-    if (scrubProvider) providers.add(scrubProvider);
-    if (source.webCodecsPlayer) providers.add(source.webCodecsPlayer);
-
-    let resetCount = 0;
-    for (const provider of providers) {
-      if (this.resetRuntimeProvider(provider, targetTime)) {
-        resetCount++;
-      }
-    }
-    return resetCount;
-  }
-
   purgePlaybackPath(options: PlaybackPurgeOptions = {}): PlaybackPurgeResult {
     const reason = options.reason ?? 'manual';
     const mode = options.mode ?? 'targeted';
@@ -608,7 +437,7 @@ export class PlaybackHealthMonitor {
     const ctx = createFrameContext();
     const vsm = layerBuilder.getVideoSyncManager();
     const lc = engine.getLayerCollector();
-    const clipsAtPlayhead = this.getVisibleHtmlVideoClipsAtPlayhead(ctx).filter(
+    const clipsAtPlayhead = getVisibleHtmlVideoClipsAtPlayhead(ctx).filter(
       (clip) => clip.source?.videoElement || clip.source?.webCodecsPlayer
     );
 
@@ -628,7 +457,12 @@ export class PlaybackHealthMonitor {
     for (const clip of clipsAtPlayhead) {
       const targetTime = getClipTimeInfo(ctx, clip).clipTime;
       const video = clip.source?.videoElement;
-      const webCodecsProvidersReset = this.resetWebCodecsProvidersForClip(ctx, clip, targetTime);
+      const webCodecsProvidersReset = resetWebCodecsProvidersForClip(
+        ctx,
+        clip,
+        targetTime,
+        (error) => log.warn('Failed to reset WebCodecs provider during playback purge', error)
+      );
 
       if (video) {
         const safeTargetTime = this.safePurgeSeekTime(video, targetTime);
@@ -688,7 +522,7 @@ export class PlaybackHealthMonitor {
     const vsm = layerBuilder.getVideoSyncManager();
     const lc = engine.getLayerCollector?.();
 
-    const videoClips = this.getVisibleHtmlVideoClipsAtPlayhead(ctx);
+    const videoClips = getVisibleHtmlVideoClipsAtPlayhead(ctx);
 
     // Force decode all
     for (const clip of videoClips) {
@@ -712,7 +546,7 @@ export class PlaybackHealthMonitor {
     const ctx = createFrameContext();
     const lc = engine.getLayerCollector?.();
 
-    const videoClips = this.getVisibleHtmlVideoClipsAtPlayhead(ctx);
+    const videoClips = getVisibleHtmlVideoClipsAtPlayhead(ctx);
 
     for (const clip of videoClips) {
       const video = clip.source!.videoElement!;
@@ -727,7 +561,7 @@ export class PlaybackHealthMonitor {
     const ctx = createFrameContext();
     const vsm = layerBuilder.getVideoSyncManager();
 
-    const videoClips = this.getVisibleHtmlVideoClipsAtPlayhead(ctx);
+    const videoClips = getVisibleHtmlVideoClipsAtPlayhead(ctx);
 
     for (const clip of videoClips) {
       vsm.clearWarmupState(clip.source!.videoElement!);
@@ -757,9 +591,7 @@ export class PlaybackHealthMonitor {
     this.clipEscalationEvents.clear();
     this.clipEscalationCooldowns.clear();
     this.anomalyLog.length = 0;
-    for (const key of Object.keys(this.anomalyCounts) as AnomalyType[]) {
-      this.anomalyCounts[key] = 0;
-    }
+    resetAnomalyCounts(this.anomalyCounts);
     this.lastAnomalyTime = {};
     this.lastPlaybackPurgeAt = 0;
     log.info('Health monitor reset');
@@ -767,34 +599,21 @@ export class PlaybackHealthMonitor {
 
   // --- Console API ---
 
-  snapshot(): {
-    status: string;
-    uptime: number;
-    anomalyCounts: Record<AnomalyType, number>;
-    videoStates: Array<{ clipId: string; currentTime: number; readyState: number; seeking: boolean; paused: boolean }>;
-  } {
+  snapshot(): PlaybackHealthSnapshot {
     const { isPlaying } = useTimelineStore.getState();
     const ctx = createFrameContext();
-    const videoClips = this.getVisibleHtmlVideoClipsAtPlayhead(ctx);
+    const videoClips = getVisibleHtmlVideoClipsAtPlayhead(ctx);
 
-    const totalAnomalies = Object.values(this.anomalyCounts).reduce((a, b) => a + b, 0);
-    const status = totalAnomalies === 0 ? 'healthy' : isPlaying ? 'degraded' : 'idle-with-issues';
-
-    return {
-      status,
-      uptime: Math.round((performance.now() - this.startTime) / 1000),
-      anomalyCounts: { ...this.anomalyCounts },
+    return buildPlaybackHealthSnapshot({
+      isPlaying,
+      startTime: this.startTime,
+      now: performance.now(),
+      anomalyCounts: this.anomalyCounts,
       videoStates: videoClips.map((c) => {
         const v = c.source!.videoElement!;
-        return {
-          clipId: c.id,
-          currentTime: v.currentTime,
-          readyState: v.readyState,
-          seeking: v.seeking,
-          paused: v.paused,
-        };
+        return buildSnapshotVideoState(c.id, v);
       }),
-    };
+    });
   }
 
   anomalies(filterType?: AnomalyType): AnomalyEvent[] {
@@ -802,35 +621,20 @@ export class PlaybackHealthMonitor {
     return [...this.anomalyLog];
   }
 
-  videos(): Array<{
-    clipId: string;
-    src: string;
-    currentTime: number;
-    readyState: number;
-    seeking: boolean;
-    paused: boolean;
-    played: number;
-    warmingUp: boolean;
-    gpuReady: boolean;
-  }> {
+  videos(): PlaybackHealthVideoSnapshot[] {
     const ctx = createFrameContext();
     const vsm = layerBuilder.getVideoSyncManager();
     const lc = engine.getLayerCollector();
 
-    return this.getVisibleHtmlVideoClipsAtPlayhead(ctx)
+    return getVisibleHtmlVideoClipsAtPlayhead(ctx)
       .map((c) => {
         const v = c.source!.videoElement!;
-        return {
+        return buildVideoSnapshot({
           clipId: c.id,
-          src: v.src?.split('/').pop() || v.currentSrc?.split('/').pop() || '(blob)',
-          currentTime: v.currentTime,
-          readyState: v.readyState,
-          seeking: v.seeking,
-          paused: v.paused,
-          played: v.played.length,
+          video: v,
           warmingUp: vsm.isVideoWarmingUp(v),
           gpuReady: lc?.isVideoGpuReady(v) ?? false,
-        };
+        });
       });
   }
 

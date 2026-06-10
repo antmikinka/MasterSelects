@@ -72,7 +72,12 @@ export const classCHardTargets = [
   { path: 'src/components/panels/properties/GaussianSplatTab.tsx', maxCurrentHits: 3 },
   { path: 'src/components/panels/properties/index.tsx', maxCurrentHits: 3 },
   { path: 'src/components/panels/properties/LottieTab.tsx', maxCurrentHits: 2 },
-  { path: 'src/components/panels/properties/MasksTab.tsx', maxCurrentHits: 6 },
+  // Packet 287: 6 -> 1+1+1+1+2 (masksTab modules), total conserved.
+  { path: 'src/components/panels/properties/MasksTab.tsx', maxCurrentHits: 1 },
+  { path: 'src/components/panels/properties/masksTab/MaskItem.tsx', maxCurrentHits: 1 },
+  { path: 'src/components/panels/properties/masksTab/MaskPathKeyframeToggle.tsx', maxCurrentHits: 1 },
+  { path: 'src/components/panels/properties/masksTab/useMaskKeybindings.ts', maxCurrentHits: 1 },
+  { path: 'src/components/panels/properties/masksTab/useMaskPanelBatch.ts', maxCurrentHits: 2 },
   { path: 'src/components/panels/properties/shared.tsx', maxCurrentHits: 7 },
   { path: 'src/components/panels/properties/SplatEffectorTab.tsx', maxCurrentHits: 3 },
   { path: 'src/components/panels/properties/ThreeDTextTab.tsx', maxCurrentHits: 1 },
@@ -285,8 +290,8 @@ export const getStateAccessPolicyBaselines = {
   // only (669 -> 665 via the packet-188 Preview ceiling cut).
   // fileCount log (totals conserved per split redistribution):
   // 192 ->193(218) ->196(227) ->199(231) ->203(239) ->205(246) ->206(253/254)
-  // ->207(259) ->208(267) ->212(279).
-  classCHardTargetFileCount: 212,
+  // ->207(259) ->208(267) ->212(279) ->216(287).
+  classCHardTargetFileCount: 216,
   // 669 -> 665 (packet 188 Preview cut) -> 664 (packet 209 retired one hit)
   // -> 659 (packet 231 retired the dispatcher ceiling slack: 16 -> 11 actual)
   // -> 658 (packet 237 retired one compositionRenderer hit).

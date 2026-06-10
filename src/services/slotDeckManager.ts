@@ -1,10 +1,8 @@
-import type { TimelineClip, TimelineTrack } from '../types';
+import type { TimelineClip } from '../types/timeline';
 import { engine } from '../engine/WebGPUEngine';
 import { flags } from '../engine/featureFlags';
 import type { Composition, SlotDeckState } from '../stores/mediaStore/types';
 import { useMediaStore } from '../stores/mediaStore';
-import { DEFAULT_TRANSFORM } from '../stores/timeline/constants';
-import type { RuntimeProviderDemand } from '../timeline';
 import {
   bindSourceRuntimeForOwner,
   planSourceRuntimeBindingForOwner,
@@ -21,71 +19,26 @@ import {
   startTimelineImageHydration,
   type TimelineImageHydrationHandle,
 } from './timeline/imageRuntimeHydrator';
-
-type DecoderMode = SlotDeckState['decoderMode'];
-type SlotDeckStatus = SlotDeckState['status'];
+import { buildSlotDeckClip } from './slotDeck/clipPlanning';
+import { findEvictionCandidate, resolveAssignedCompositionId } from './slotDeck/planning';
+import { createSlotDeckImageDemand, getRuntimeSrcKind } from './slotDeck/runtimePlanning';
+import {
+  buildDeckState,
+  createDisposedSlotDeckState,
+  createPinnedWarmingSlotDeckState,
+  markSlotDeckClipReady,
+  sanitizeSlotDeckError,
+} from './slotDeck/state';
+import type {
+  DecoderMode,
+  PreparedSlotDeck,
+  SlotDeckEntry,
+  SlotDeckManagerSnapshot,
+} from './slotDeck/types';
 
 const SLOT_DECK_SOFT_CAP = 8;
 
-function getRuntimeSrcKind(url: string): 'blob-url' | 'remote-url' | 'media-source' | 'unknown' {
-  if (!url) return 'unknown';
-  if (url.startsWith('blob:')) return 'blob-url';
-  if (url.startsWith('http')) return 'remote-url';
-  if (url.startsWith('mediastream:')) return 'media-source';
-  return 'unknown';
-}
-
-export interface PreparedSlotDeck {
-  slotIndex: number;
-  compositionId: string;
-  composition: Composition;
-  clips: TimelineClip[];
-  tracks: TimelineTrack[];
-  duration: number;
-}
-
-export interface SlotDeckManagerSnapshot {
-  softCap: number;
-  deckCount: number;
-  pinnedDeckCount: number;
-  states: SlotDeckState[];
-}
-
-interface SlotDeckEntry extends PreparedSlotDeck {
-  status: SlotDeckStatus;
-  preparedClipCount: number;
-  readyClipCount: number;
-  firstFrameReady: boolean;
-  decoderMode: DecoderMode;
-  lastPreparedAt: number | null;
-  lastActivatedAt: number | null;
-  lastError: string | null;
-  pinnedLayerIndex: number | null;
-  pendingDispose: boolean;
-}
-
-function resolveAssignedCompositionId(slotIndex: number): string | null {
-  const { slotAssignments } = useMediaStore.getState();
-  for (const [compId, assignedSlotIndex] of Object.entries(slotAssignments)) {
-    if (assignedSlotIndex === slotIndex) {
-      return compId;
-    }
-  }
-  return null;
-}
-
-function sanitizeError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
-
-function removeUndefinedValues<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined)
-  ) as T;
-}
+export type { PreparedSlotDeck, SlotDeckManagerSnapshot } from './slotDeck/types';
 
 class SlotDeckManager {
   private decks = new Map<number, SlotDeckEntry>();
@@ -120,28 +73,12 @@ class SlotDeckManager {
     dispose();
   }
 
-  private buildDeckState(entry: SlotDeckEntry): SlotDeckState {
-    return {
-      slotIndex: entry.slotIndex,
-      compositionId: entry.pendingDispose ? null : entry.compositionId,
-      status: entry.pendingDispose ? 'disposed' : entry.status,
-      preparedClipCount: entry.preparedClipCount,
-      readyClipCount: entry.readyClipCount,
-      firstFrameReady: entry.firstFrameReady,
-      decoderMode: entry.decoderMode,
-      lastPreparedAt: entry.lastPreparedAt,
-      lastActivatedAt: entry.lastActivatedAt,
-      lastError: entry.lastError,
-      pinnedLayerIndex: entry.pinnedLayerIndex,
-    };
-  }
-
   private pushDeckState(entry: SlotDeckEntry): void {
     const mediaStore = useMediaStore.getState();
     const setSlotDeckState = mediaStore.setSlotDeckState as
       | ((slotIndex: number, next: SlotDeckState) => void)
       | undefined;
-    setSlotDeckState?.(entry.slotIndex, this.buildDeckState(entry));
+    setSlotDeckState?.(entry.slotIndex, buildDeckState(entry));
   }
 
   private pushDisposedState(slotIndex: number): void {
@@ -149,74 +86,16 @@ class SlotDeckManager {
     const setSlotDeckState = mediaStore.setSlotDeckState as
       | ((slotIndex: number, next: SlotDeckState) => void)
       | undefined;
-    setSlotDeckState?.(slotIndex, {
-      slotIndex,
-      compositionId: null,
-      status: 'disposed',
-      preparedClipCount: 0,
-      readyClipCount: 0,
-      firstFrameReady: false,
-      decoderMode: 'unknown',
-      lastPreparedAt: null,
-      lastActivatedAt: null,
-      lastError: null,
-      pinnedLayerIndex: null,
-    });
+    setSlotDeckState?.(slotIndex, createDisposedSlotDeckState(slotIndex));
   }
 
   private resolveComposition(compositionId: string): Composition | null {
     return useMediaStore.getState().compositions.find((comp) => comp.id === compositionId) ?? null;
   }
 
-  private updateDecoderMode(current: DecoderMode, next: DecoderMode): DecoderMode {
-    if (current === 'unknown') {
-      return next;
-    }
-    if (current === next) {
-      return current;
-    }
-    return 'mixed';
-  }
-
-  private getEvictionTimestamp(entry: SlotDeckEntry): number {
-    return Math.max(entry.lastActivatedAt ?? 0, entry.lastPreparedAt ?? 0);
-  }
-
-  private getEvictionCandidates(): SlotDeckEntry[] {
-    return Array.from(this.decks.values()).filter(
-      (entry) => entry.pinnedLayerIndex === null && !entry.pendingDispose && entry.status !== 'disposed'
-    );
-  }
-
-  private findEvictionCandidate(preferredPreserveSlotIndex?: number | null): SlotDeckEntry | null {
-    const candidates = this.getEvictionCandidates();
-    if (candidates.length === 0) {
-      return null;
-    }
-
-    const pool =
-      preferredPreserveSlotIndex === undefined || preferredPreserveSlotIndex === null
-        ? candidates
-        : candidates.filter((entry) => entry.slotIndex !== preferredPreserveSlotIndex);
-
-    if (pool.length === 0) {
-      return null;
-    }
-
-    pool.sort((left, right) => {
-      const timestampDiff = this.getEvictionTimestamp(left) - this.getEvictionTimestamp(right);
-      if (timestampDiff !== 0) {
-        return timestampDiff;
-      }
-      return left.slotIndex - right.slotIndex;
-    });
-
-    return pool[0] ?? null;
-  }
-
   private enforceSoftCap(preferredPreserveSlotIndex?: number | null): void {
     while (this.decks.size > SLOT_DECK_SOFT_CAP) {
-      const candidate = this.findEvictionCandidate(preferredPreserveSlotIndex);
+      const candidate = findEvictionCandidate(this.decks.values(), preferredPreserveSlotIndex);
       if (!candidate) {
         return;
       }
@@ -229,18 +108,7 @@ class SlotDeckManager {
       return;
     }
 
-    entry.readyClipCount = Math.min(entry.preparedClipCount, entry.readyClipCount + 1);
-    entry.decoderMode = this.updateDecoderMode(entry.decoderMode, mode);
-    entry.lastPreparedAt = Date.now();
-
-    if (options?.visual) {
-      entry.firstFrameReady = true;
-    }
-
-    if (entry.readyClipCount >= entry.preparedClipCount) {
-      entry.status = entry.firstFrameReady ? 'hot' : 'warm';
-    }
-
+    markSlotDeckClipReady(entry, mode, Date.now(), options);
     this.pushDeckState(entry);
   }
 
@@ -250,7 +118,7 @@ class SlotDeckManager {
     }
 
     entry.status = 'failed';
-    entry.lastError = sanitizeError(error);
+    entry.lastError = sanitizeSlotDeckError(error);
     this.pushDeckState(entry);
   }
 
@@ -477,7 +345,7 @@ class SlotDeckManager {
     const handle = startTimelineImageHydration({
       url,
       resource: {
-        demand: this.createSlotDeckImageDemand(entry, clip, ownerId, url),
+        demand: createSlotDeckImageDemand(entry, clip, ownerId, url),
         imageId: `${ownerId}:image`,
         label: 'Slot deck image hydration',
         tags: ['slot-deck', 'image'],
@@ -524,43 +392,6 @@ class SlotDeckManager {
     }
     this.pendingImageHydrations.set(ownerId, handle);
     return true;
-  }
-
-  private createSlotDeckImageDemand(
-    entry: SlotDeckEntry,
-    clip: TimelineClip,
-    ownerId: string,
-    url: string
-  ): RuntimeProviderDemand {
-    const resourceId = `timeline-runtime:slot-deck:${ownerId}:image-canvas:image`;
-    return {
-      id: resourceId,
-      facetId: `${resourceId}:facet`,
-      resourceKind: 'image-canvas',
-      policyId: 'slot-deck',
-      leasePolicy: 'lease-visible',
-      owner: removeUndefinedValues({
-        ownerId,
-        ownerType: 'slot' as const,
-        clipId: clip.id,
-        trackId: clip.trackId,
-        compositionId: entry.compositionId,
-        mediaFileId: clip.mediaFileId,
-      }),
-      source: removeUndefinedValues({
-        sourceId: clip.mediaFileId,
-        mediaFileId: clip.mediaFileId,
-        clipId: clip.id,
-        trackId: clip.trackId,
-        compositionId: entry.compositionId,
-        previewPath: url,
-      }),
-      dimensions: {
-        durationSeconds: clip.duration,
-      },
-      priority: 'background',
-      tags: ['slot-deck', 'image'],
-    };
   }
 
   private loadVectorAnimationForClip(entry: SlotDeckEntry, clip: TimelineClip, file: File, sourceType: VectorAnimationProvider): void {
@@ -647,19 +478,15 @@ class SlotDeckManager {
       const setSlotDeckState = mediaStore.setSlotDeckState as
         | ((slotIndex: number, next: SlotDeckState) => void)
         | undefined;
-      setSlotDeckState?.(slotIndex, {
+      setSlotDeckState?.(
         slotIndex,
-        compositionId,
-        status: 'warming',
-        preparedClipCount: 0,
-        readyClipCount: 0,
-        firstFrameReady: false,
-        decoderMode: 'unknown',
-        lastPreparedAt: Date.now(),
-        lastActivatedAt: null,
-        lastError: null,
-        pinnedLayerIndex: existing.pinnedLayerIndex,
-      });
+        createPinnedWarmingSlotDeckState(
+          slotIndex,
+          compositionId,
+          existing.pinnedLayerIndex,
+          Date.now()
+        )
+      );
       return;
     }
 
@@ -707,24 +534,7 @@ class SlotDeckManager {
 
     for (const serializedClip of timelineData.clips) {
       const mediaFile = files.find((file) => file.id === serializedClip.mediaFileId);
-      const clip: TimelineClip = {
-        id: serializedClip.id,
-        trackId: serializedClip.trackId,
-        name: serializedClip.name,
-        file: (mediaFile?.file ?? null) as never,
-        startTime: serializedClip.startTime,
-        duration: serializedClip.duration,
-        inPoint: serializedClip.inPoint,
-        outPoint: serializedClip.outPoint,
-        source: null,
-        transform: serializedClip.transform || { ...DEFAULT_TRANSFORM },
-        effects: serializedClip.effects || [],
-        mediaFileId: serializedClip.mediaFileId,
-        reversed: serializedClip.reversed,
-        isComposition: serializedClip.isComposition,
-        compositionId: serializedClip.compositionId,
-        masks: serializedClip.masks,
-      };
+      const clip = buildSlotDeckClip(serializedClip, mediaFile);
 
       const sourceType = serializedClip.sourceType;
       const fileUrl = mediaFile?.url;
@@ -822,7 +632,8 @@ class SlotDeckManager {
     entry.pinnedLayerIndex = null;
 
     if (entry.pendingDispose) {
-      const nextCompositionId = resolveAssignedCompositionId(slotIndex);
+      const { slotAssignments } = useMediaStore.getState();
+      const nextCompositionId = resolveAssignedCompositionId(slotAssignments, slotIndex);
       this.disposeEntry(entry);
       if (nextCompositionId) {
         this.prepareSlot(slotIndex, nextCompositionId);
@@ -839,7 +650,7 @@ class SlotDeckManager {
 
   getSlotState(slotIndex: number): SlotDeckState | null {
     const entry = this.decks.get(slotIndex);
-    return entry ? this.buildDeckState(entry) : null;
+    return entry ? buildDeckState(entry) : null;
   }
 
   getPreparedDeck(slotIndex: number, compositionId?: string): PreparedSlotDeck | null {
@@ -858,7 +669,7 @@ class SlotDeckManager {
 
   getSnapshot(): SlotDeckManagerSnapshot {
     const states = Array.from(this.decks.values())
-      .map((entry) => this.buildDeckState(entry))
+      .map((entry) => buildDeckState(entry))
       .sort((left, right) => left.slotIndex - right.slotIndex);
 
     return {
