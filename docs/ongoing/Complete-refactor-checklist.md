@@ -19,10 +19,10 @@ orchestrator or worker-agent execution run starts.
 - Source implementation: current bounded source packet has explicit write set,
   forbidden files, and gates
 - Current bounded packets:
-  Wave 26 source packets 259-263 are dispatched in parallel for `SAM2Panel`,
-  `TextPreviewEditor`, `registerCoreProperties`, `exportRuntimeReporting`, and
-  the aiTools playback handler; docs closure packet `DOCS-CLOSURE-264` is
-  bookkeeping-only.
+  Wave 32 source packets 295-299 are dispatched in parallel for
+  `SceneObjectOverlay`, the stressTest handler, `elevenLabsService`,
+  `proxyGenerator`, and `MatAnyoneSetupDialog`; docs closure packet
+  `DOCS-CLOSURE-300` is bookkeeping-only.
 - Completed source/tooling packet: `P0-REG-001`; focused registry checks passed.
 - Completed bounded packet: `P0-BASELINE-REFRESH-001`, read-only plus docs.
 - Completed bounded packet: `P1-CONTRACT-001`, contracts and focused boundary
@@ -2394,6 +2394,68 @@ orchestrator or worker-agent execution run starts.
 - Wave 25 verification:
   Orchestrator-verified: tsc clean; focused guard/render/persistence nets
   green.
+- Wave 26 closure completed:
+  `P7-SAM2PANEL-SPLIT-259` reduced `SAM2Panel` from 1065 to 598 raw lines.
+  `P5-TEXTPREVIEWEDITOR-SPLIT-260` reduced `TextPreviewEditor` from 1063 to
+  608. `P5-REGISTERCOREPROPERTIES-SPLIT-261` reduced
+  `registerCoreProperties` from 1056 to 27 with proof 132/132.
+  `P5-EXPORTRUNTIMEREPORTING-SPLIT-262` reduced `exportRuntimeReporting` from
+  1046 to 59. `P7-AITOOLS-PLAYBACK-HANDLER-SPLIT-263` reduced the aiTools
+  playback handler from 1042 to 16 with surface proof 12/12.
+  `DOCS-CLOSURE-264` closed wave 26 bookkeeping.
+- Wave 27 closure completed:
+  `P6-FREQUENCYPHASEANALYSISGENERATOR-SPLIT-265` reduced `FrequencyPhase` from
+  1040 to 505 raw lines. `P7-KIEAISERVICE-SPLIT-266` reduced `kieAiService`
+  from 1032 to 110. `P6-CLIPTRANSCRIBER-SPLIT-267` reduced `clipTranscriber`
+  from 1018 to 211 and fixed the census decode leak with finally-close.
+  `P5-TRANSFORMTAB-SPLIT-268` reduced `TransformTab` from 1015 to 345.
+  `P5-LEGALDIALOG-SPLIT-269` reduced `LegalDialog` from 1009 to 199 with text
+  word-identical. `P6-WAVEFORMPYRAMIDGENERATOR-SPLIT-270` reduced
+  `WaveformPyramid` from 1006 to 643.
+- Wave 28 closure completed:
+  `P5-EXPORTPANEL-FOLLOWUP-271` reduced `ExportPanel` from 984 to 598 and
+  completed the follow-up. `P6-MESHPASS-SPLIT-272` reduced `MeshPass` from 979
+  to 422. `P7-FLASHBOARDCHATSERVICE-SPLIT-273` reduced
+  `FlashBoardChatService` from 977 to 44 with prompt-identical output.
+  `P5-DOCKTABPANE-SPLIT-274` reduced `DockTabPane` from 966 to 373.
+  `P7-AITOOLS-CLIPS-HANDLER-SPLIT-275` reduced the aiTools clips handler from
+  954 to 24 with surface proof 14/14. `P4-FLASHBOARDCOMPOSER-SPLIT-276`
+  reduced `FlashBoardComposer` from 951 to 672.
+- Wave 29 closure completed:
+  `P6-AUDIOEXPORTPIPELINE-SPLIT-277` reduced `AudioExportPipeline` from 945 to
+  671 raw lines. `P7-FLASHBOARDPROMPTREFINER-SPLIT-278` reduced
+  `FlashBoardPromptRefiner` from 925 to 41 with sha256-identical prompts.
+  `P6-AUDIOMIXERPANEL-SPLIT-279` reduced `AudioMixerPanel` from 920 to 238 and
+  conserved 30 getState hits. `P6-THUMBNAILCACHESERVICE-SPLIT-280` reduced
+  `thumbnailCacheService` from 912 to 362. `P5-DOCKCONTAINER-SPLIT-281`
+  reduced `DockContainer` from 906 to 65. `P7-MIDICOMMANDS-SPLIT-282` reduced
+  `midiCommands` from 902 to 23 with proof 13/13.
+- Wave 30 closure completed:
+  `P5-LOTTIETAB-SPLIT-283` reduced `LottieTab` from 895 to 232 raw lines.
+  `P2-FILEIMPORTSLICE-SPLIT-284` reduced `fileImportSlice` from 889 to 32 with
+  action surface proof 6/6. `P6-COMPOSITORPIPELINE-SPLIT-285` reduced
+  `CompositorPipeline` from 885 to 311 with WGSL-identical output.
+  `P7-PLAYBACKHEALTHMONITOR-SPLIT-286` reduced `playbackHealthMonitor` from
+  885 to 689. `P5-MASKSTAB-SPLIT-287` reduced `MasksTab` from 878 to 158.
+  `P6-SLOTDECKMANAGER-SPLIT-288` reduced `slotDeckManager` from 873 to 684.
+- Wave 31 closure completed:
+  `P6-BEATONSET-SPLIT-289` reduced `BeatOnset` from 870 to 539 raw lines.
+  `P6-RAMPREVIEWENGINE-SPLIT-290` reduced `ramPreviewEngine` from 856 to 693.
+  `P6-EXPORTLAYERBUILDER-SPLIT-291` reduced `ExportLayerBuilder` from 854 to
+  170 and retired one getState hit, lowering maxHits from 658 to 657.
+  `P6-AUDIOGRAPHROUTESETTINGS-SPLIT-292` reduced `audioGraphRouteSettings`
+  from 819 to 87 with effect-order proof and live/offline parity.
+  `P7-STEMSEPARATIONSERVICE-SPLIT-293` reduced `StemSeparationService` from
+  818 to 364. `P5-TEXTLAYOUT-SPLIT-294` reduced `textLayout` from 816 to 25.
+- Wave 31 audit refresh:
+  Over-700 count is now 44, down from about 114 at goal start. The hard-case
+  remainders are `proxyFrameCache` 1545, `RenderDispatcher` 1266,
+  `ParallelDecodeManager` 1193, and `WebGPUEngine` 940. Current policy file
+  tracking is fileCount 218, maxHits 657, and adapter paths 22; the comment
+  log has been compacted twice for the 300-line registry budget.
+- Waves 26-31 verification:
+  Orchestrator-verified per wave: tsc clean plus focused guard/audio/render
+  nets green.
 - Product source refactors remain bounded by approved packet write sets.
 
 ## Document Map

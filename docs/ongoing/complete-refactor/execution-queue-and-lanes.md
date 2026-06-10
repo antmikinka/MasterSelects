@@ -905,6 +905,23 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 - Wave 25 verification:
   Orchestrator-verified: tsc clean; focused guard/render/persistence nets
   green. Over-700 count is now 78.
+- Waves 26-31 closure completed:
+  packets 259-294 reduced or closed `SAM2Panel`, `TextPreviewEditor`,
+  `registerCoreProperties`, `exportRuntimeReporting`, aiTools playback,
+  `FrequencyPhase`, `kieAiService`, `clipTranscriber`, `TransformTab`,
+  `LegalDialog`, `WaveformPyramid`, `ExportPanel`, `MeshPass`,
+  `FlashBoardChatService`, `DockTabPane`, aiTools clips,
+  `FlashBoardComposer`, `AudioExportPipeline`, `FlashBoardPromptRefiner`,
+  `AudioMixerPanel`, `thumbnailCacheService`, `DockContainer`, `midiCommands`,
+  `LottieTab`, `fileImportSlice`, `CompositorPipeline`,
+  `playbackHealthMonitor`, `MasksTab`, `slotDeckManager`, `BeatOnset`,
+  `ramPreviewEngine`, `ExportLayerBuilder`, `audioGraphRouteSettings`,
+  `StemSeparationService`, and `textLayout`.
+- Wave 31 verification:
+  Orchestrator-verified per wave: tsc clean plus focused guard/audio/render
+  nets green. Over-700 count is now 44; hard-case remainders are
+  `proxyFrameCache` 1545, `RenderDispatcher` 1266, `ParallelDecodeManager`
+  1193, and `WebGPUEngine` 940.
 
 ## High-Conflict Ownership Snapshot
 
@@ -923,33 +940,37 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 | `src/engine/**`, `src/components/preview/**`, `src/components/export/**` | later P5/P6 joint packets | read, smoke only | render snapshot/output-router contracts frozen |
 | `src/services/aiTools/**` | later P7 smoke quarantine packets | read, smoke inventory only | Phase 0 smoke thresholds accepted |
 
-## Active Wave 26
+## Active Wave 32
 
-Wave 26 packets are dispatched in parallel with docs-only
-`DOCS-CLOSURE-264`. Keep write sets disjoint and report any needed scope
+Wave 32 packets are dispatched in parallel with docs-only
+`DOCS-CLOSURE-300`. Keep write sets disjoint and report any needed scope
 extension instead of self-extending.
 
-- `P7-SAM2PANEL-SPLIT-259`: split `SAM2Panel` (currently 1065 raw lines).
-- `P5-TEXTPREVIEWEDITOR-SPLIT-260`: split `TextPreviewEditor` (currently 1063
+- `P5-SCENEOBJECTOVERLAY-FOLLOWUP-295`: split `SceneObjectOverlay` follow-up
+  (currently 814 raw lines).
+- `P7-STRESSTEST-HANDLER-SPLIT-296`: split the stressTest handler (currently
+  812 raw lines).
+- `P7-ELEVENLABSSERVICE-SPLIT-297`: split `elevenLabsService` (currently 810
   raw lines).
-- `P5-REGISTERCOREPROPERTIES-SPLIT-261`: split `registerCoreProperties`
-  (currently 1056 raw lines).
-- `P5-EXPORTRUNTIMEREPORTING-SPLIT-262`: split `exportRuntimeReporting`
-  (currently 1046 raw lines).
-- `P7-AITOOLS-PLAYBACK-HANDLER-SPLIT-263`: split the aiTools playback handler
-  (currently 1042 raw lines).
+- `P6-PROXYGENERATOR-FOLLOWUP-298`: split `proxyGenerator` follow-up
+  (currently 808 raw lines; regrew after packet 242 via concurrent feature
+  work).
+- `P5-MATANYONESETUPDIALOG-SPLIT-299`: split `MatAnyoneSetupDialog`
+  (currently 807 raw lines).
 
 ## Queued Packets
 
-- `P6-FREQUENCYPHASEANALYSISGENERATOR-SPLIT`: split
-  `FrequencyPhaseAnalysisGenerator` (currently 1040 raw lines).
-- `P7-KIEAISERVICE-SPLIT`: split `kieAiService` (currently 1032 raw lines).
-- `P6-CLIPTRANSCRIBER-SPLIT`: split `clipTranscriber` (currently 1018 raw
+- `P5-NODEGRAPHCANVAS-SPLIT`: split `NodeGraphCanvas` (currently 803 raw
   lines).
-- `P5-TRANSFORMTAB-SPLIT`: split `TransformTab` (currently 1015 raw lines).
-- `P5-LEGALDIALOG-SPLIT`: split `LegalDialog` (currently 1009 raw lines).
-- `P6-WAVEFORMPYRAMIDGENERATOR-SPLIT`: split `WaveformPyramidGenerator`
-  (currently 1006 raw lines).
+- `P7-PLAYBACKDEBUGSTATS-SPLIT`: split `playbackDebugStats` (currently 799 raw
+  lines).
+- `P5-EXPORTDIALOG-SPLIT`: split `ExportDialog` (currently 795 raw lines).
+- `P3-PROJECTCORESERVICE-SPLIT`: split `ProjectCoreService` (currently 794 raw
+  lines).
+- `P5-TEXTMESHCACHE-SPLIT`: split `TextMeshCache` (currently 790 raw lines).
+- `P6-USEENGINE-SPLIT`: split `useEngine` (currently 790 raw lines).
+- `P5-FRAMEEXPORTER-SPLIT`: split `FrameExporter` (currently 790 raw lines).
+- Remaining 700-790 files: continue bounded packets after the listed queue.
 - `P6-PROXYFRAMECACHE-HARD-CASE-FOLLOWUP`: revisit `proxyFrameCache` remainder
   (currently 1545 raw lines) only with cache/decoder ownership write set.
 - `P6-RENDERDISPATCHER-HARD-CASE-FOLLOWUP`: revisit `RenderDispatcher`
@@ -957,12 +978,14 @@ extension instead of self-extending.
 - `P6-PARALLELDECODEMANAGER-HARD-CASE-FOLLOWUP`: revisit
   `ParallelDecodeManager` remainder (currently 1193 raw lines) only with
   decoder-ownership write set.
+- `P6-WEBGPUENGINE-HARD-CASE-FOLLOWUP`: revisit `WebGPUEngine` remainder
+  (currently 940 raw lines) only with lifecycle/facade write set.
 - `P8-RETIRED-PATH-LEDGER-PASS`: refresh retired-path ledger status.
 - `P8-FINAL-FULL-CHAIN`: run final full chain when the refactor wave is ready.
 - `P8-CLOSING-SUMMARY`: write the closing summary after final verification.
 
 ## Immediate Next Step
 
-Track wave 26 packet reports and keep this file to the active wave plus the
-next queued packets. Do not reopen completed wave 21-25 packets except through
+Track wave 32 packet reports and keep this file to the active wave plus the
+next queued packets. Do not reopen completed wave 21-31 packets except through
 the named hard-case follow-ups.

@@ -5,26 +5,19 @@ import {
   BACKPRESSURE_POLL_MS,
   BACKPRESSURE_TARGET_FRAMES,
   CANVAS_POOL_SIZE,
-  DECODE_BATCH_SIZE,
-  FLUSH_TIMEOUT_PER_SAMPLE_MS,
   JPEG_QUALITY,
-  MAX_FLUSH_TIMEOUT_MS,
   MAX_PENDING_ENCODE_FRAMES,
-  MIN_FLUSH_TIMEOUT_MS,
   PROXY_FPS,
   PROXY_MAX_WIDTH,
   getProxyVideoBitrate,
 } from './proxyGeneration/constants';
 import { createCanvasPool, createCanvasSlot, type CanvasSlot } from './proxyGeneration/canvasPool';
 import { createProxyVideoDecoder } from './proxyGeneration/decoder';
+import { processProxySamples } from './proxyGeneration/decodePipeline';
 import { ProxyFrameEncodeWorkerClient } from './proxyGeneration/frameEncodeWorkerClient';
 import { createMetrics, logProxyPerformance, type ProxyGenerationMetrics } from './proxyGeneration/metrics';
 import { loadProxyVideoWithMP4Box } from './proxyGeneration/mp4Demuxer';
-import {
-  getFirstPresentationCts,
-  getMaxFrameIndex,
-  getNormalizedSampleTimestampUs,
-} from './proxyGeneration/sampleTiming';
+import { getMaxFrameIndex } from './proxyGeneration/sampleTiming';
 import {
   canUseDedicatedFrameWorkers,
   getDedicatedFrameWorkerCount,
@@ -598,176 +591,35 @@ class ProxyGeneratorWebCodecs {
 
   private async processSamples(): Promise<void> {
     if (!this.decoder) return;
-    const decoder = this.decoder;
-
-    const sortedSamples = [...this.samples].sort((a, b) => a.dts - b.dts);
-    const firstPresentationCts = getFirstPresentationCts(sortedSamples);
-
-    const keyframeCount = sortedSamples.filter(s => s.is_sync).length;
-    log.info(`Decoding ${sortedSamples.length} samples (${keyframeCount} keyframes)...`);
-    if (firstPresentationCts > 0) {
-      log.debug('Normalizing proxy sample timestamps', {
-        firstPresentationCts,
-        firstPresentationSeconds: firstPresentationCts / sortedSamples[0].timescale,
-      });
-    }
-
-    const firstKeyframeIdx = sortedSamples.findIndex(s => s.is_sync);
-    if (firstKeyframeIdx === -1) throw new Error('No keyframes found');
-
-    const startTime = performance.now();
-    let decodeErrors = 0;
-    let primaryError: unknown = null;
-    let workerFailureReason: unknown = null;
-    this.resetEncodePipeline();
-    this.startEncodeWorkers();
-
-    try {
-      const decodeWallStart = performance.now();
-
-      for (let batchStart = firstKeyframeIdx; batchStart < sortedSamples.length; batchStart += DECODE_BATCH_SIZE) {
-        if (this.checkCancelled?.()) {
-          this.isCancelled = true;
-          break;
-        }
-
-        if (decoder.state === 'closed') {
-          log.error('Decoder closed unexpectedly');
-          break;
-        }
-
-        const batchEnd = Math.min(batchStart + DECODE_BATCH_SIZE, sortedSamples.length);
-
-        for (let i = batchStart; i < batchEnd; i++) {
-          const sample = sortedSamples[i];
-
-          const chunk = new EncodedVideoChunk({
-            type: sample.is_sync ? 'key' : 'delta',
-            timestamp: getNormalizedSampleTimestampUs(sample, firstPresentationCts),
-            duration: (sample.duration / sample.timescale) * 1_000_000,
-            data: sample.data,
-          });
-
-          try {
-            const feedStart = performance.now();
-            decoder.decode(chunk);
-            this.metrics.decodeFeedMs += performance.now() - feedStart;
-          } catch (error) {
-            decodeErrors++;
-            if (decodeErrors <= 5) {
-              log.error('Decode chunk failed', error);
-            }
-            if (decodeErrors > 50) {
-              log.error('Too many decode errors, stopping');
-              return;
-            }
-          }
-        }
-
-        await new Promise(resolve => setTimeout(resolve, 0));
-        this.queueDecodedFrames();
-        await this.waitForEncodeBackpressure();
-      }
-
-      const flushTimeoutMs = Math.max(
-        MIN_FLUSH_TIMEOUT_MS,
-        Math.min(MAX_FLUSH_TIMEOUT_MS, sortedSamples.length * FLUSH_TIMEOUT_PER_SAMPLE_MS)
-      );
-      const flushStart = performance.now();
-      const flushed = await this.flushDecoder(flushTimeoutMs);
-      this.metrics.decoderFlushMs += performance.now() - flushStart;
-      if (!flushed && !this.isCancelled) {
-        throw new Error(`Decoder flush timed out after ${flushTimeoutMs}ms`);
-      }
-
-      this.metrics.decodeWallMs += performance.now() - decodeWallStart;
-
-      try {
-        if (decoder.state !== 'closed') decoder.close();
-      } catch { /* ignore */ }
-
-      await new Promise(resolve => setTimeout(resolve, 10));
-      this.queueDecodedFrames();
-    } catch (error) {
-      primaryError = error;
-      this.encodeStopRequested = true;
-      throw error;
-    } finally {
-      if (this.encodeStopRequested) {
-        this.closeDecodedFrames();
-      } else {
-        this.queueDecodedFrames();
-      }
-
-      this.decodeDone = true;
-      this.wakeEncodeWorkers();
-
-      const workerResults = await Promise.allSettled(this.encodeWorkers);
-      const workerFailure = workerResults.find(
-        (result): result is PromiseRejectedResult => result.status === 'rejected'
-      );
-      if (!primaryError && workerFailure) {
-        workerFailureReason = workerFailure.reason;
-      }
-    }
-
-    if (workerFailureReason) {
-      throw workerFailureReason;
-    }
-
-    const totalTime = performance.now() - startTime;
-    const fps = this.processedFrames / (totalTime / 1000);
-    log.info(`Complete: ${this.processedFrames}/${this.totalFrames} frames in ${(totalTime / 1000).toFixed(1)}s (${fps.toFixed(1)} fps encode)`);
-    this.logPerformance(totalTime);
-  }
-
-  private async flushDecoder(timeoutMs: number): Promise<boolean> {
-    if (!this.decoder || this.decoder.state === 'closed') return true;
-    const decoder = this.decoder;
-
-    let settled = false;
-    let succeeded = false;
-    const startedAt = performance.now();
-
-    const flushPromise = decoder.flush()
-      .then(() => {
-        succeeded = true;
-      })
-      .catch((error) => {
-        log.warn('Decoder flush failed', error);
-      })
-      .finally(() => {
-        settled = true;
-      });
-
-    while (!settled) {
-      if (this.checkCancelled?.()) {
+    await processProxySamples({
+      decoder: this.decoder,
+      samples: this.samples,
+      metrics: this.metrics,
+      totalFrames: this.totalFrames,
+      getProcessedFrames: () => this.processedFrames,
+      isCancelled: () => this.isCancelled,
+      checkCancelled: () => Boolean(this.checkCancelled?.()),
+      markCancelled: () => {
         this.isCancelled = true;
-        break;
-      }
-
-      this.queueDecodedFrames();
-      await this.waitForEncodeBackpressure();
-      if (this.decodedFrames.size === 0) {
-        await new Promise(resolve => setTimeout(resolve, 20));
-      }
-
-      if (performance.now() - startedAt > timeoutMs) {
-        log.warn('Decoder flush timed out', {
-          decodeQueueSize: decoder.decodeQueueSize,
-          decodedFrames: this.decodedFrames.size,
-          processedFrames: this.processedFrames,
-          totalFrames: this.totalFrames,
-          timeoutMs,
-        });
-        break;
-      }
-    }
-
-    if (settled) {
-      await flushPromise;
-    }
-    return succeeded;
+      },
+      resetEncodePipeline: () => this.resetEncodePipeline(),
+      startEncodeWorkers: () => this.startEncodeWorkers(),
+      queueDecodedFrames: () => this.queueDecodedFrames(),
+      waitForEncodeBackpressure: () => this.waitForEncodeBackpressure(),
+      getDecodedFrameCount: () => this.decodedFrames.size,
+      closeDecodedFrames: () => this.closeDecodedFrames(),
+      isEncodeStopRequested: () => this.encodeStopRequested,
+      requestEncodeStop: () => {
+        this.encodeStopRequested = true;
+      },
+      setDecodeDone: () => {
+        this.decodeDone = true;
+      },
+      wakeEncodeWorkers: () => this.wakeEncodeWorkers(),
+      waitForEncodeWorkers: () => Promise.allSettled(this.encodeWorkers),
+      logPerformance: (totalMs) => this.logPerformance(totalMs),
+      log,
+    });
   }
 
   private closeDecodedFrames() {

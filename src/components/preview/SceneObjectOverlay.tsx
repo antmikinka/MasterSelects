@@ -57,13 +57,14 @@ import {
 } from './sceneOverlay/sceneOverlayTransformPlans';
 import { createAxisPlaneDrag } from './sceneOverlay/sceneOverlayDragGeometry';
 import { applyDragTransform } from './sceneOverlay/sceneOverlayDragTransformPlans';
+import { useSceneObjectContextMenu } from './sceneOverlay/useSceneObjectContextMenu';
+import { useSceneOverlayKeybindings } from './sceneOverlay/useSceneOverlayKeybindings';
 import type {
   ClipTransformPatch,
   DisplayCameraWireframePath,
   DisplayWorldGridPath,
   DragRuntime,
   DragState,
-  ObjectContextMenuState,
   ProjectedRotateRing,
   ProjectedRotateRingPoint,
   SceneGizmoDragAxis,
@@ -149,8 +150,6 @@ export function SceneObjectOverlay({
   const endedDragRef = useRef(false);
   const hoveredAxisRef = useRef<SceneGizmoAxis | null>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-  const contextMenuRef = useRef<HTMLDivElement>(null);
-  const [objectContextMenu, setObjectContextMenu] = useState<ObjectContextMenuState | null>(null);
   const dragRuntimeRef = useRef<DragRuntime>({
     target: null,
     hasPointerLock: false,
@@ -364,29 +363,16 @@ export function SceneObjectOverlay({
     updateHoveredAxis(null);
   }, [enabled, selectedObject?.clipId, selectedObject?.screen.visible, updateHoveredAxis]);
 
-  useEffect(() => {
-    if (!objectContextMenu) return;
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (target instanceof Node && contextMenuRef.current?.contains(target)) {
-        return;
-      }
-      setObjectContextMenu(null);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setObjectContextMenu(null);
-      }
-    };
-
-    window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [objectContextMenu]);
+  const {
+    contextMenuRef,
+    objectContextMenu,
+    openObjectContextMenu,
+    setContextMenuObjectOrbitPivot,
+  } = useSceneObjectContextMenu({
+    canSetObjectOrbitPivot,
+    overlayRef,
+    onSetObjectOrbitPivot,
+  });
 
   useEffect(() => {
     if (!dragState) return;
@@ -445,58 +431,17 @@ export function SceneObjectOverlay({
     };
   }, [applyObjectTransform, dragState, endDrag, releasePointerLock]);
 
-  useEffect(() => {
-    if (!enabled || !selectedObject) return;
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const target = event.target;
-      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) {
-        return;
-      }
-      if (event.altKey || event.ctrlKey || event.metaKey) return;
-      if (event.code === 'KeyW') {
-        event.preventDefault();
-        setMode('move');
-      } else if (event.code === 'KeyE') {
-        event.preventDefault();
-        setMode('rotate');
-      } else if (event.code === 'KeyR') {
-        event.preventDefault();
-        setMode('scale');
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [enabled, selectedObject]);
+  useSceneOverlayKeybindings({
+    enabled,
+    selectedObject,
+    onModeChange: setMode,
+  });
 
   const handleObjectPointerDown = useCallback((event: ReactPointerEvent, object: PreviewSceneObject) => {
     event.preventDefault();
     event.stopPropagation();
     selectClip(object.clipId, event.shiftKey);
   }, [selectClip]);
-
-  const openObjectContextMenu = useCallback((event: ReactMouseEvent<Element>, object: PreviewSceneObject) => {
-    if (!canSetObjectOrbitPivot || object.kind === 'camera') {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-
-    const overlayRect = overlayRef.current?.getBoundingClientRect();
-    setObjectContextMenu({
-      x: overlayRect ? event.clientX - overlayRect.left : event.clientX,
-      y: overlayRect ? event.clientY - overlayRect.top : event.clientY,
-      object,
-    });
-  }, [canSetObjectOrbitPivot]);
-
-  const setContextMenuObjectOrbitPivot = useCallback(() => {
-    if (!objectContextMenu) return;
-    onSetObjectOrbitPivot?.(objectContextMenu.object);
-    setObjectContextMenu(null);
-  }, [objectContextMenu, onSetObjectOrbitPivot]);
 
   const startGizmoDrag = useCallback((params: {
     clientX: number;
