@@ -1,0 +1,50 @@
+import type { TimelineClip, TimelineTrack } from '../../../stores/timeline/types';
+import type { BlendMode } from '../../../types/blendMode';
+import type { RuntimeColorGrade } from '../../../types/colorCorrection';
+import type { Effect } from '../../../types/effects';
+import type { TextBoundsPath } from '../../../types/masks';
+import type { ClipTransform } from '../../../types/timelineCore';
+import type { VectorAnimationClipSettings } from '../../../types/vectorAnimation';
+import type { WebCodecsPlayer } from '../../WebCodecsPlayer';
+
+export interface ExportClipStateLike {
+  clipId: string;
+  webCodecsPlayer: WebCodecsPlayer | null;
+  lastSampleIndex: number;
+  isSequential: boolean;
+  preciseVideoElement?: HTMLVideoElement | null;
+  exportImageElement?: HTMLImageElement | null;
+}
+
+export interface BaseLayerPropsLike {
+  id: string;
+  name: string;
+  sourceClipId: string;
+  visible: boolean;
+  opacity: number;
+  blendMode: BlendMode;
+  effects: Effect[];
+  colorCorrection?: RuntimeColorGrade;
+  position: { x: number; y: number; z: number };
+  scale: { x: number; y: number; z?: number };
+  rotation: { x: number; y: number; z: number };
+  maskClipId?: string;
+  maskInvert?: boolean;
+  is3D?: boolean;
+}
+
+export interface FrameContextLike {
+  time: number;
+  fps: number;
+  frameTolerance: number;
+  clipsAtTime: TimelineClip[];
+  trackMap: Map<string, TimelineTrack>;
+  clipsByTrack: Map<string, TimelineClip>;
+  getInterpolatedTransform: (clipId: string, localTime: number) => ClipTransform;
+  getInterpolatedEffects: (clipId: string, localTime: number) => Effect[];
+  getInterpolatedColorCorrection: (clipId: string, localTime: number) => RuntimeColorGrade | undefined;
+  getInterpolatedVectorAnimationSettings: (clipId: string, localTime: number) => VectorAnimationClipSettings;
+  getInterpolatedTextBounds: (clipId: string, localTime: number) => TextBoundsPath | undefined;
+  getSourceTimeForClip: (clipId: string, localTime: number) => number;
+  getInterpolatedSpeed: (clipId: string, localTime: number) => number;
+}

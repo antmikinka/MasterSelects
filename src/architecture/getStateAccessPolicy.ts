@@ -55,10 +55,8 @@ export const classCHardTargets = [
   { path: 'src/components/panels/audio-mixer/MixerTrackColorMenu.tsx', maxCurrentHits: 1 },
   { path: 'src/components/panels/color/ColorEditor.tsx', maxCurrentHits: 1 },
   { path: 'src/components/panels/HistoryPanel.tsx', maxCurrentHits: 1 },
-  // Redistributed by packet 172: two hits moved into the extracted
-  // source-monitor badge hook; MediaPanel-cluster total unchanged (7).
-  // Packet 190 moved one hit into the board node-move gesture hook.
-  // Packet 218 moved one hit into the composition-settings hook.
+  // MediaPanel trail: badge hook (172), node-move hook (190),
+  // composition-settings hook (218). Cluster total 7.
   { path: 'src/components/panels/MediaPanel.tsx', maxCurrentHits: 3 },
   { path: 'src/components/panels/media/board/useMediaBoardNodeMoveGesture.ts', maxCurrentHits: 1 },
   { path: 'src/components/panels/media/panel/useMediaPanelCompositionSettings.ts', maxCurrentHits: 1 },
@@ -92,11 +90,8 @@ export const classCHardTargets = [
   { path: 'src/components/pianoRoll/PianoRollBoot.ts', maxCurrentHits: 1 },
   { path: 'src/components/preview/MaskOverlay.tsx', maxCurrentHits: 2 },
   { path: 'src/components/preview/MultiPreviewSlot.tsx', maxCurrentHits: 4 },
-  // Ratchet trail: 27 -> 23 (packet 188, adapter layer), -> 20+3 (191,
-  // source config), -> 17+3+2 (209, wheel handler). Cluster total 22 (one
-  // hit retired entirely in 209).
-  // Packet 227 moved 16 hits into the edit-camera/scene-camera hooks;
-  // Preview.tsx keeps 1. Cluster total still 22.
+  // Preview trail: 27 ->23(188) ->20+3(191) ->17+3+2(209, one retired)
+  // ->1+16 camera hooks (227). Cluster total 22.
   { path: 'src/components/preview/Preview.tsx', maxCurrentHits: 1 },
   { path: 'src/components/preview/usePreviewEditCameraController.ts', maxCurrentHits: 8 },
   { path: 'src/components/preview/usePreviewSceneCameraActions.ts', maxCurrentHits: 7 },
@@ -144,13 +139,16 @@ export const classCHardTargets = [
   { path: 'src/components/timeline/utils/layerSyncProxyFrames.ts', maxCurrentHits: 2 },
   { path: 'src/engine/audio/AudioExportPipeline.ts', maxCurrentHits: 3 },
   { path: 'src/engine/export/ClipPreparation.ts', maxCurrentHits: 2 },
-  { path: 'src/engine/export/ExportLayerBuilder.ts', maxCurrentHits: 7 },
+  // Packet 291: 7 -> 0 entry + 1+4+1 modules (one site retired via shared
+  // lookup; maxHits ratchets 658 -> 657).
+  { path: 'src/engine/export/layerBuilder/baseLayers.ts', maxCurrentHits: 1 },
+  { path: 'src/engine/export/layerBuilder/sourceLookup.ts', maxCurrentHits: 4 },
+  { path: 'src/engine/export/layerBuilder/textLayers.ts', maxCurrentHits: 1 },
   { path: 'src/engine/export/ExportMaskTextures.ts', maxCurrentHits: 1 },
   { path: 'src/engine/export/FrameExporter.ts', maxCurrentHits: 4 },
   { path: 'src/engine/export/preloadGaussianSplats.ts', maxCurrentHits: 4 },
   { path: 'src/engine/managers/OutputWindowManager.ts', maxCurrentHits: 6 },
-  // Packet 239 split: LayerCollector entry is getState-free; its 7 hits
-  // moved into the collector branch modules (cluster total conserved).
+  // Packet 239: LayerCollector 7 -> collector branch modules, conserved.
   { path: 'src/engine/render/layerCollector/htmlVideoCollector.ts', maxCurrentHits: 1 },
   { path: 'src/engine/render/layerCollector/htmlVideoFrameCache.ts', maxCurrentHits: 1 },
   { path: 'src/engine/render/layerCollector/htmlVideoNotReadyCollector.ts', maxCurrentHits: 1 },
@@ -291,9 +289,9 @@ export const getStateAccessPolicyBaselines = {
   // fileCount log (totals conserved per split redistribution):
   // 192 ->193(218) ->196(227) ->199(231) ->203(239) ->205(246) ->206(253/254)
   // ->207(259) ->208(267) ->212(279) ->216(287).
-  classCHardTargetFileCount: 216,
+  classCHardTargetFileCount: 218,
   // 669 -> 665 (packet 188 Preview cut) -> 664 (packet 209 retired one hit)
   // -> 659 (packet 231 retired the dispatcher ceiling slack: 16 -> 11 actual)
   // -> 658 (packet 237 retired one compositionRenderer hit).
-  classCHardTargetMaxHits: 658,
+  classCHardTargetMaxHits: 657,
 } as const;
