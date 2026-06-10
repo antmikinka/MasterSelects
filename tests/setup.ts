@@ -88,6 +88,7 @@ vi.mock('../src/services/proxyFrameCache', () => ({
   proxyFrameCache: {
     getCachedRanges: vi.fn().mockReturnValue([]),
     cancelPreload: vi.fn(),
+    warmScrubAudioBuffer: vi.fn().mockResolvedValue(null),
   },
 }))
 

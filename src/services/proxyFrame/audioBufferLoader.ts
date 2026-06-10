@@ -15,14 +15,20 @@ const log = Logger.create('ProxyFrameCache');
 
 const MAX_AUDIO_BUFFER_CACHE_BYTES = 192 * 1024 * 1024;
 const MAX_AUDIO_BUFFER_CACHE_ENTRIES = 3;
+const AUDIO_BUFFER_RETRY_COOLDOWN_MS = 3000;
+const SCRUB_AUDIO_WARM_BACKOFF_MS = 5000;
 
 type StoreMediaFile = ReturnType<typeof useMediaStore.getState>['files'][number];
 
 export interface AudioBufferLoadState {
   // Track loading state to prevent duplicate loads
   loading: Set<string>;
-  // Cooldown for "source not found" retries (not permanent failure like failed)
+  // Next allowed load retry time for source-not-found/decode retry cooldowns.
   retryTime: Map<string, number>;
+  // Next allowed opportunistic scrub warmup time, separate from demand loads.
+  nextAllowedWarmAt: Map<string, number>;
+  // Warm backoff diagnostics are intentionally logged once per file.
+  warmBackoffLogged: Set<string>;
   // Track files with no audio
   failed: Set<string>;
 }
@@ -31,6 +37,8 @@ export function createAudioBufferLoadState(): AudioBufferLoadState {
   return {
     loading: new Set(),
     retryTime: new Map(),
+    nextAllowedWarmAt: new Map(),
+    warmBackoffLogged: new Set(),
     failed: new Set(),
   };
 }
@@ -53,6 +61,7 @@ export function touchAudioBufferCacheEntry(
 export function enforceAudioBufferCacheLimit(
   audioBufferCache: Map<string, AudioBuffer>,
   releaseAudioBufferResource: (mediaFileId: string) => void,
+  onEvictAudioBuffer?: (mediaFileId: string) => void,
 ): void {
   let totalBytes = 0;
   for (const buffer of audioBufferCache.values()) {
@@ -67,9 +76,35 @@ export function enforceAudioBufferCacheLimit(
     if (!oldest) break;
     audioBufferCache.delete(oldest[0]);
     releaseAudioBufferResource(oldest[0]);
+    onEvictAudioBuffer?.(oldest[0]);
     totalBytes -= estimateAudioBufferBytes(oldest[1]);
     log.debug(`Evicted decoded audio buffer from cache: ${oldest[0]}`);
   }
+}
+
+export function canWarmScrubAudioBuffer(
+  state: AudioBufferLoadState,
+  mediaFileId: string,
+  now = performance.now(),
+): boolean {
+  const nextAllowedWarmAt = state.nextAllowedWarmAt.get(mediaFileId);
+  return !nextAllowedWarmAt || now >= nextAllowedWarmAt;
+}
+
+export function deferScrubAudioBufferWarmup(
+  state: AudioBufferLoadState,
+  mediaFileId: string,
+  reason: string,
+  now = performance.now(),
+): void {
+  state.nextAllowedWarmAt.set(mediaFileId, now + SCRUB_AUDIO_WARM_BACKOFF_MS);
+  if (state.warmBackoffLogged.has(mediaFileId)) return;
+  state.warmBackoffLogged.add(mediaFileId);
+  log.debug('Deferring scrub audio buffer warmups', {
+    mediaFileId,
+    reason,
+    cooldownMs: SCRUB_AUDIO_WARM_BACKOFF_MS,
+  });
 }
 
 // Resolve raw audio bytes for a media file, trying every available source.
@@ -192,8 +227,16 @@ export async function loadAudioBufferForScrub(args: {
   videoElementSrc?: string;
   getAudioContext: () => AudioContext;
   cacheDecodedAudioBuffer: (mediaFileId: string, buffer: AudioBuffer) => boolean;
+  onDecodedAudioBufferNotRetained?: (mediaFileId: string) => void;
 }): Promise<AudioBuffer | null> {
-  const { state, mediaFileId, videoElementSrc, getAudioContext, cacheDecodedAudioBuffer } = args;
+  const {
+    state,
+    mediaFileId,
+    videoElementSrc,
+    getAudioContext,
+    cacheDecodedAudioBuffer,
+    onDecodedAudioBufferNotRetained,
+  } = args;
 
   const mediaStore = useMediaStore.getState();
   const mediaFile = mediaStore.files.find(f => f.id === mediaFileId);
@@ -209,8 +252,9 @@ export async function loadAudioBufferForScrub(args: {
   }
 
   // Cooldown for "source not found" - retry after 3 seconds (source may become available)
-  const lastAttempt = state.retryTime.get(mediaFileId);
-  if (lastAttempt && performance.now() - lastAttempt < 3000) {
+  const now = performance.now();
+  const nextAllowedAttemptAt = state.retryTime.get(mediaFileId);
+  if (nextAllowedAttemptAt && now < nextAllowedAttemptAt) {
     return null;
   }
 
@@ -223,7 +267,7 @@ export async function loadAudioBufferForScrub(args: {
     if (!arrayBuffer) {
       log.warn(`No audio source found for ${mediaFileId}`);
       // Use cooldown instead of permanent failure - source may become available later
-      state.retryTime.set(mediaFileId, performance.now());
+      state.retryTime.set(mediaFileId, performance.now() + AUDIO_BUFFER_RETRY_COOLDOWN_MS);
       state.loading.delete(mediaFileId);
       return null;
     }
@@ -233,6 +277,9 @@ export async function loadAudioBufferForScrub(args: {
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0)); // Clone to avoid detached buffer
 
     const retained = cacheDecodedAudioBuffer(mediaFileId, audioBuffer);
+    if (!retained) {
+      onDecodedAudioBufferNotRetained?.(mediaFileId);
+    }
     state.failed.delete(mediaFileId);
     state.loading.delete(mediaFileId);
     state.retryTime.delete(mediaFileId);
@@ -252,7 +299,7 @@ export async function loadAudioBufferForScrub(args: {
       state.failed.add(mediaFileId);
       log.debug(`No audio track in ${mediaFileId}`);
     } else {
-      state.retryTime.set(mediaFileId, performance.now());
+      state.retryTime.set(mediaFileId, performance.now() + AUDIO_BUFFER_RETRY_COOLDOWN_MS);
       log.debug(`Audio decode error for ${mediaFileId} (will retry): ${errorMessage}`);
     }
     return null;

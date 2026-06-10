@@ -48,7 +48,9 @@ import {
   touchCachedEntry,
 } from './proxyFrame/frameCacheOps';
 import {
+  canWarmScrubAudioBuffer,
   createAudioBufferLoadState,
+  deferScrubAudioBufferWarmup,
   enforceAudioBufferCacheLimit,
   loadAudioBufferForScrub,
   touchAudioBufferCacheEntry,
@@ -241,8 +243,16 @@ class ProxyFrameCache {
     });
     touchAudioBufferCacheEntry(this.audioBufferCache, mediaFileId, buffer);
     retainAudioBufferResource(mediaFileId, buffer);
-    enforceAudioBufferCacheLimit(this.audioBufferCache, (id) => this.releaseAudioBufferResource(id));
+    enforceAudioBufferCacheLimit(
+      this.audioBufferCache,
+      (id) => this.releaseAudioBufferResource(id),
+      (id) => this.deferScrubAudioBufferWarmup(id, 'decoded audio buffer evicted from cache')
+    );
     return true;
+  }
+
+  private deferScrubAudioBufferWarmup(mediaFileId: string, reason: string): void {
+    deferScrubAudioBufferWarmup(this.audioBufferLoadState, mediaFileId, reason);
   }
 
   private releaseAudioBufferResource(mediaFileId: string): void {
@@ -632,7 +642,27 @@ class ProxyFrameCache {
       videoElementSrc,
       getAudioContext: () => this.getAudioContext(),
       cacheDecodedAudioBuffer: (id, buffer) => this.cacheDecodedAudioBuffer(id, buffer),
+      onDecodedAudioBufferNotRetained: (id) =>
+        this.deferScrubAudioBufferWarmup(id, 'decoded audio buffer was not retained'),
     });
+  }
+
+  /**
+   * Opportunistically warm a decoded buffer for varispeed scrub audio.
+   * Demand callers (stem mixer/export/scrub playback) should use getAudioBuffer().
+   */
+  async warmScrubAudioBuffer(mediaFileId: string, videoElementSrc?: string): Promise<AudioBuffer | null> {
+    const cached = this.audioBufferCache.get(mediaFileId);
+    if (cached) {
+      touchAudioBufferCacheEntry(this.audioBufferCache, mediaFileId, cached);
+      return cached;
+    }
+
+    if (!canWarmScrubAudioBuffer(this.audioBufferLoadState, mediaFileId)) {
+      return null;
+    }
+
+    return this.getAudioBuffer(mediaFileId, videoElementSrc);
   }
 
   /**
@@ -708,6 +738,8 @@ class ProxyFrameCache {
     this.releaseAudioBufferResource(mediaFileId);
     this.audioBufferLoadState.failed.delete(mediaFileId);
     this.audioBufferLoadState.retryTime.delete(mediaFileId);
+    this.audioBufferLoadState.nextAllowedWarmAt.delete(mediaFileId);
+    this.audioBufferLoadState.warmBackoffLogged.delete(mediaFileId);
   }
 
   // Clear entire cache
@@ -742,6 +774,8 @@ class ProxyFrameCache {
     this.releaseAllAudioBuffers();
     this.audioBufferLoadState.failed.clear();
     this.audioBufferLoadState.retryTime.clear();
+    this.audioBufferLoadState.nextAllowedWarmAt.clear();
+    this.audioBufferLoadState.warmBackoffLogged.clear();
     this.audioBufferLoadState.loading.clear();
   }
 
@@ -767,6 +801,8 @@ class ProxyFrameCache {
     this.releaseAllAudioBuffers();
     this.audioBufferLoadState.failed.clear();
     this.audioBufferLoadState.retryTime.clear();
+    this.audioBufferLoadState.nextAllowedWarmAt.clear();
+    this.audioBufferLoadState.warmBackoffLogged.clear();
 
     log.info('AudioContext disposed');
   }
