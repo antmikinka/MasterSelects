@@ -4,30 +4,14 @@
 import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import { Logger } from '../../services/logger';
-import { flashBoardMediaBridge } from '../../services/flashboard/FlashBoardMediaBridge';
-import type { Keyframe } from '../../types/keyframes';
-import type {
-  HistoryEventType,
-  HistoryListEntry,
-  HistoryTimelineEvent,
-  ProjectHistoryState,
-} from '../../types/history';
-import { createDefaultFlashBoardComposer } from '../flashboardStore/defaults';
-import type { ExportStoreData } from '../exportStore';
-import { createDefaultExportStoreData, getExportStoreData } from '../exportStore';
-import {
-  createHistoryTimelineEditState,
-  type HistoryTimelineEditState,
-} from '../timeline/historyTimelineEditState';
-import { createHistoryTimelineRestoreState } from '../timeline/historyTimelineRestoreState';
-import { syncHistoryRehydratedTimelineRuntimeResources } from '../../services/timeline/historyRuntimeRehydration';
-import { clearAINodeRuntimeCache } from '../../services/nodeGraph';
-import { stopTimelineAudioPlayback } from '../../services/audio/timelineAudioPlaybackStopper';
+import type { HistoryTimelineEvent } from '../../types/history';
 import type {
   DockStoreSnapshot,
   ExportStoreSnapshot,
   FlashBoardStoreSnapshot,
   HistoryState,
+  HistoryStoreInitRefs,
+  HistoryStoreRefs,
   MediaStoreState,
   StateSnapshot,
   TimelineStoreState,
@@ -37,31 +21,37 @@ export type {
   HistoryRestoreResult,
 } from './historyStoreTypes';
 import {
-  cloneClipForHistory,
-  cloneCompositionForHistory,
-  cloneHistoryForProject,
-  cloneMasterAudioState,
-  cloneMediaFileForHistory,
-  cloneSnapshotStack,
-  cloneTrackForHistory,
-  deepClone,
-} from './snapshotCloning';
-import {
   appendHistoryBranch,
   createBranchFromRedoPath,
   createHistoryEntries,
-  createHistoryNavigationState,
   markActiveHistoryEntry,
 } from './historyNavigation';
 import {
-  limitBranchForProject,
-  limitSnapshotStackForProject,
-  normalizePersistedBranches,
-  normalizePersistedEventLog,
-  normalizePersistedSnapshot,
-  normalizePersistedSnapshotStack,
-  normalizePersistedVisibleEntries,
-} from './projectHistoryPersistence';
+  HISTORY_DEBUG_DISABLE_STORAGE_KEY,
+  isHistoryDisabledForDebug,
+  setHistoryDisabledForDebug,
+} from './historyDebug';
+import {
+  createHistorySnapshot,
+  createInitialHistorySnapshot as createInitialHistorySnapshotFromRefs,
+} from './snapshotCapture';
+import { applyHistorySnapshot } from './snapshotApply';
+import { createHistoryFacade } from './historyFacade';
+import {
+  restoreHistoryBranchAction,
+  restoreHistoryEntryAction,
+  type HistoryRestoreActionContext,
+} from './historyRestoreActions';
+import {
+  createHistoryProjectHydrationState,
+  serializeHistoryForProject,
+} from './historyProjectState';
+
+export {
+  HISTORY_DEBUG_DISABLE_STORAGE_KEY,
+  isHistoryDisabledForDebug,
+  setHistoryDisabledForDebug,
+};
 
 const log = Logger.create('History');
 const MAX_HISTORY_EVENT_LOG_SIZE = 500;
@@ -69,68 +59,13 @@ const MAX_HISTORY_BRANCHES = 24;
 const MAX_PERSISTED_HISTORY_SNAPSHOTS = 32;
 const PERSIST_HISTORY_SNAPSHOTS = false;
 const HISTORY_CAPTURE_WARN_MS = 24;
-export const HISTORY_DEBUG_DISABLE_STORAGE_KEY = 'masterselects.debug.disableHistory';
-
-type HistoryDebugWindow = Window & {
-  __MS_DISABLE_HISTORY__?: boolean;
-  __MS_HISTORY_DEBUG__?: {
-    disable: () => void;
-    enable: () => void;
-    isDisabled: () => boolean;
-    storageKey: string;
-  };
-};
-
-function readHistoryDebugStorage(): boolean {
-  if (typeof window === 'undefined') return false;
-  try {
-    const stored = window.localStorage?.getItem(HISTORY_DEBUG_DISABLE_STORAGE_KEY);
-    return stored === '1' || stored === 'true';
-  } catch {
-    return false;
-  }
-}
-
-export function isHistoryDisabledForDebug(): boolean {
-  if (typeof window === 'undefined') return false;
-  const debugWindow = window as HistoryDebugWindow;
-  return debugWindow.__MS_DISABLE_HISTORY__ === true || readHistoryDebugStorage();
-}
-
-export function setHistoryDisabledForDebug(disabled: boolean): void {
-  if (typeof window === 'undefined') return;
-  const debugWindow = window as HistoryDebugWindow;
-  debugWindow.__MS_DISABLE_HISTORY__ = disabled;
-  try {
-    if (disabled) {
-      window.localStorage?.setItem(HISTORY_DEBUG_DISABLE_STORAGE_KEY, '1');
-    } else {
-      window.localStorage?.removeItem(HISTORY_DEBUG_DISABLE_STORAGE_KEY);
-    }
-  } catch {
-    // localStorage can be unavailable in restricted browser contexts.
-  }
-}
-
-function installHistoryDebugControls(): void {
-  if (typeof window === 'undefined') return;
-  const debugWindow = window as HistoryDebugWindow;
-  debugWindow.__MS_HISTORY_DEBUG__ = {
-    disable: () => setHistoryDisabledForDebug(true),
-    enable: () => setHistoryDisabledForDebug(false),
-    isDisabled: isHistoryDisabledForDebug,
-    storageKey: HISTORY_DEBUG_DISABLE_STORAGE_KEY,
-  };
-}
-
-installHistoryDebugControls();
 
 // Callback to flush pending debounced captures before undo/redo (set by useGlobalHistory)
 // Flush = execute the pending capture immediately so its state isn't lost
 let flushPendingCaptureCallback: (() => void) | null = null;
 let suppressCapturesCallback: (() => void) | null = null;
 // Called after a snapshot is applied (undo/redo/jump/restore) so the preview can
-// be rebuilt — restoring deleted clips otherwise leaves a stale canvas.
+// be rebuilt - restoring deleted clips otherwise leaves a stale canvas.
 let afterApplyCallback: (() => void) | null = null;
 export function setHistoryCallbacks(callbacks: {
   flushPendingCapture: () => void;
@@ -155,13 +90,7 @@ let getExportState: (() => ExportStoreSnapshot) | undefined;
 let setExportState: ((state: Partial<ExportStoreSnapshot>) => void) | undefined;
 
 // Initialize store references (called from useGlobalHistory)
-export function initHistoryStoreRefs(stores: {
-  timeline: { getState: () => TimelineStoreState; setState: (state: Partial<TimelineStoreState>) => void };
-  media: { getState: () => MediaStoreState; setState: (state: Partial<MediaStoreState>) => void };
-  dock: { getState: () => DockStoreSnapshot; setState: (state: Partial<DockStoreSnapshot>) => void };
-  flashboard?: { getState: () => FlashBoardStoreSnapshot; setState: (state: Partial<FlashBoardStoreSnapshot>) => void };
-  export?: { getState: () => ExportStoreSnapshot; setState: (state: Partial<ExportStoreSnapshot>) => void };
-}) {
+export function initHistoryStoreRefs(stores: HistoryStoreInitRefs) {
   getTimelineState = stores.timeline.getState;
   setTimelineState = stores.timeline.setState;
   getMediaState = stores.media.getState;
@@ -174,267 +103,64 @@ export function initHistoryStoreRefs(stores: {
   setExportState = stores.export?.setState;
 }
 
+function getHistoryStoreRefs(): HistoryStoreRefs {
+  return {
+    getTimelineState,
+    setTimelineState,
+    getMediaState,
+    setMediaState,
+    getDockState,
+    setDockState,
+    getFlashBoardState,
+    setFlashBoardState,
+    getExportState,
+    setExportState,
+  };
+}
+
+function createSnapshot(label: string, previousSnapshot?: StateSnapshot | null): StateSnapshot {
+  return createHistorySnapshot(label, getHistoryStoreRefs(), previousSnapshot);
+}
 
 function createInitialHistorySnapshot(): StateSnapshot | null {
-  if (!getTimelineState || !getMediaState || !getDockState) return null;
-  return createSnapshot('initial');
+  return createInitialHistorySnapshotFromRefs(getHistoryStoreRefs());
 }
 
-function createTimelineSnapshot(): StateSnapshot['timeline'] {
-  const timeline = getTimelineState?.() || null;
-
-  const keyframesObj: Record<string, Keyframe[]> = {};
-  if (timeline?.clipKeyframes instanceof Map) {
-    timeline.clipKeyframes.forEach((kfs: Keyframe[], clipId: string) => {
-      keyframesObj[clipId] = deepClone(kfs);
-    });
-  }
-
-  return {
-    clips: (timeline?.clips || []).map(cloneClipForHistory),
-    tracks: (timeline?.tracks || []).map(cloneTrackForHistory),
-    selectedClipIds: timeline?.selectedClipIds ? [...timeline.selectedClipIds] : [],
-    zoom: timeline?.zoom || 50,
-    scrollX: timeline?.scrollX || 0,
-    layers: deepClone((timeline?.layers || []).filter(Boolean)),
-    selectedLayerId: timeline?.selectedLayerId || null,
-    clipKeyframes: keyframesObj,
-    markers: deepClone(timeline?.markers || []),
-    masterAudioState: cloneMasterAudioState(timeline?.masterAudioState),
-  };
-}
-
-function createTimelineEditStateSnapshot(
-  label: string,
-  timestamp: number,
-): HistoryTimelineEditState | undefined {
-  const timeline = getTimelineState?.() || null;
-  if (!timeline) return undefined;
-
-  return createHistoryTimelineEditState({
-    id: `history:${timestamp}:${label}`,
-    label,
-    timestamp,
-    tracks: timeline.tracks || [],
-    clips: timeline.clips || [],
-    selectedClipIds: timeline.selectedClipIds || new Set<string>(),
-    zoom: timeline.zoom || 50,
-    scrollX: timeline.scrollX || 0,
-    layers: (timeline.layers || []).filter(Boolean),
-    selectedLayerId: timeline.selectedLayerId || null,
-    clipKeyframes: timeline.clipKeyframes,
-    markers: timeline.markers || [],
-    masterAudioState: timeline.masterAudioState,
+function applySnapshot(snapshot: StateSnapshot): void {
+  applyHistorySnapshot(snapshot, getHistoryStoreRefs(), {
+    afterApply: afterApplyCallback ?? undefined,
+    onTimelineEditStateRestored: (diagnostics) => {
+      log.debug('Restored timeline from HistoryTimelineEditState', diagnostics);
+    },
   });
-}
-
-function createTimelineSnapshotFromEditState(
-  timelineEditState: HistoryTimelineEditState,
-): StateSnapshot['timeline'] {
-  const restored = createHistoryTimelineRestoreState(timelineEditState, {}, {
-    placeholderFileMode: 'plain-data',
-  }).state;
-  return {
-    clips: restored.clips.map(cloneClipForHistory),
-    tracks: restored.tracks.map(cloneTrackForHistory),
-    selectedClipIds: [...restored.selectedClipIds],
-    zoom: restored.zoom,
-    scrollX: restored.scrollX,
-    layers: deepClone(restored.layers),
-    selectedLayerId: restored.selectedLayerId,
-    clipKeyframes: Object.fromEntries(
-      Array.from(restored.clipKeyframes.entries()).map(([clipId, keyframes]) => [
-        clipId,
-        deepClone(keyframes),
-      ])
-    ),
-    markers: deepClone(restored.markers),
-    masterAudioState: cloneMasterAudioState(restored.masterAudioState),
-  };
-}
-
-function createMediaSnapshot(): StateSnapshot['media'] {
-  const media = getMediaState?.() || null;
-
-  return {
-    files: (media?.files || []).map(cloneMediaFileForHistory),
-    compositions: (media?.compositions || []).map(cloneCompositionForHistory),
-    folders: deepClone(media?.folders || []),
-    selectedIds: [...(media?.selectedIds || [])],
-    expandedFolderIds: [...(media?.expandedFolderIds || [])],
-    textItems: deepClone(media?.textItems || []),
-    solidItems: deepClone(media?.solidItems || []),
-    mathSceneItems: deepClone(media?.mathSceneItems || []),
-    motionShapeItems: deepClone(media?.motionShapeItems || []),
-    signalAssets: deepClone(media?.signalAssets || []),
-    signalArtifacts: deepClone(media?.signalArtifacts || []),
-    signalGraphs: deepClone(media?.signalGraphs || []),
-    signalOperators: deepClone(media?.signalOperators || []),
-  };
-}
-
-function createDockSnapshot(): StateSnapshot['dock'] {
-  const dock = getDockState?.();
-  return {
-    layout: deepClone(dock?.layout ?? null),
-  };
-}
-
-function createFlashBoardSnapshot(): StateSnapshot['flashboard'] {
-  const flashboard = getFlashBoardState?.() || {
-    activeGenerationRecords: [],
-    selectedActiveGenerationRecordIds: [],
-    composer: createDefaultFlashBoardComposer(),
-  };
-
-  return {
-    activeGenerationRecords: deepClone(flashboard.activeGenerationRecords || []),
-    composer: deepClone(flashboard.composer || createDefaultFlashBoardComposer()),
-    generationMetadataByMediaId: deepClone(flashBoardMediaBridge.serializeMetadata()),
-  };
-}
-
-function createExportSnapshot(): ExportStoreData {
-  return deepClone(getExportStoreData(getExportState?.() || createDefaultExportStoreData()));
-}
-
-// Create snapshot from current state
-function createSnapshot(label: string, _previousSnapshot?: StateSnapshot | null): StateSnapshot {
-  const timestamp = Date.now();
-  const timelineEditState = createTimelineEditStateSnapshot(label, timestamp);
-  return {
-    timestamp,
-    label,
-    timeline: timelineEditState
-      ? createTimelineSnapshotFromEditState(timelineEditState)
-      : createTimelineSnapshot(),
-    timelineEditState,
-    media: createMediaSnapshot(),
-    dock: createDockSnapshot(),
-    flashboard: createFlashBoardSnapshot(),
-    export: createExportSnapshot(),
-  };
-}
-
-// Apply a snapshot to all stores
-function applySnapshot(snapshot: StateSnapshot) {
-  if (!snapshot) return;
-
-  // Apply timeline state (including layers)
-  if (setTimelineState && getTimelineState) {
-    const currentTimeline = getTimelineState();
-    let timelineState: Partial<TimelineStoreState>;
-
-    if (snapshot.timelineEditState) {
-      const restored = createHistoryTimelineRestoreState(snapshot.timelineEditState, currentTimeline);
-      timelineState = restored.state;
-      log.debug('Restored timeline from HistoryTimelineEditState', restored.diagnostics);
-    } else {
-      // Preserve source references for layers (filter out undefined entries from snapshots)
-      const restoredLayers = (snapshot.timeline.layers || []).filter(Boolean).map((layer) => {
-        const currentLayer = (currentTimeline.layers || []).find((l) => l?.id === layer.id);
-        return {
-          ...deepClone(layer),
-          source: currentLayer?.source || layer.source,
-        };
-      });
-
-      // Convert plain object back to Map<string, Keyframe[]>
-      const restoredKeyframes = new Map<string, Keyframe[]>();
-      if (snapshot.timeline.clipKeyframes) {
-        for (const [clipId, kfs] of Object.entries(snapshot.timeline.clipKeyframes)) {
-          restoredKeyframes.set(clipId, deepClone(kfs));
-        }
-      }
-
-      timelineState = {
-        clips: snapshot.timeline.clips.map(cloneClipForHistory),
-        tracks: snapshot.timeline.tracks.map(cloneTrackForHistory),
-        selectedClipIds: new Set(snapshot.timeline.selectedClipIds || []),
-        zoom: snapshot.timeline.zoom,
-        scrollX: snapshot.timeline.scrollX,
-        layers: restoredLayers,
-        selectedLayerId: snapshot.timeline.selectedLayerId,
-        clipKeyframes: restoredKeyframes,
-        markers: deepClone(snapshot.timeline.markers || []),
-      };
-    }
-
-    if ('masterAudioState' in currentTimeline || snapshot.timeline.masterAudioState !== undefined) {
-      timelineState.masterAudioState = snapshot.timelineEditState
-        ? cloneMasterAudioState(snapshot.timelineEditState.timeline.masterAudioState)
-        : cloneMasterAudioState(snapshot.timeline.masterAudioState);
-    }
-
-    stopTimelineAudioPlayback();
-    clearAINodeRuntimeCache();
-    setTimelineState(timelineState);
-    syncHistoryRehydratedTimelineRuntimeResources(timelineState.clips ?? []);
-  }
-
-  // Apply media state (preserve file references)
-  if (setMediaState && getMediaState) {
-    const currentMedia = getMediaState();
-    const restoredFiles = (snapshot.media.files || []).filter(Boolean).map((file) => {
-      const currentFile = (currentMedia.files || []).find((f) => f?.id === file.id);
-      const clonedFile = cloneMediaFileForHistory(file);
-      return {
-        ...clonedFile,
-        file: currentFile?.file || file.file, // Preserve File reference
-        url: currentFile?.url || clonedFile.url || '',
-        thumbnailUrl: currentFile?.thumbnailUrl || clonedFile.thumbnailUrl,
-        proxyVideoUrl: currentFile?.proxyVideoUrl || clonedFile.proxyVideoUrl,
-      };
-    });
-
-    setMediaState({
-      files: restoredFiles,
-      compositions: snapshot.media.compositions.map(cloneCompositionForHistory),
-      folders: deepClone(snapshot.media.folders),
-      selectedIds: [...snapshot.media.selectedIds],
-      expandedFolderIds: [...snapshot.media.expandedFolderIds],
-      textItems: deepClone(snapshot.media.textItems || []),
-      solidItems: deepClone(snapshot.media.solidItems || []),
-      mathSceneItems: deepClone(snapshot.media.mathSceneItems || []),
-      motionShapeItems: deepClone(snapshot.media.motionShapeItems || []),
-      signalAssets: deepClone(snapshot.media.signalAssets || []),
-      signalArtifacts: deepClone(snapshot.media.signalArtifacts || []),
-      signalGraphs: deepClone(snapshot.media.signalGraphs || []),
-      signalOperators: deepClone(snapshot.media.signalOperators || []),
-    });
-  }
-
-  // Apply dock state
-  if (setDockState && snapshot.dock.layout) {
-    setDockState({
-      layout: deepClone(snapshot.dock.layout),
-    });
-  }
-
-  if (setFlashBoardState) {
-    setFlashBoardState({
-      activeGenerationRecords: deepClone(snapshot.flashboard?.activeGenerationRecords || []),
-      selectedActiveGenerationRecordIds: [],
-      composer: deepClone(snapshot.flashboard?.composer || createDefaultFlashBoardComposer()),
-    });
-  }
-
-  flashBoardMediaBridge.hydrateMetadata(
-    deepClone(snapshot.flashboard?.generationMetadataByMediaId || {})
-  );
-
-  if (setExportState) {
-    setExportState(deepClone(snapshot.export));
-  }
-
-  // Rebuild the preview from the restored state. Without this, restoring deleted
-  // clips (or any layer-affecting undo/redo) leaves the canvas showing the old
-  // frame until the next interaction.
-  afterApplyCallback?.();
 }
 
 function isTimelineHistoryLocked(): boolean {
   return getTimelineState?.().isExporting === true;
+}
+
+function flushPendingCapture(): void {
+  flushPendingCaptureCallback?.();
+}
+
+function suppressCaptures(): void {
+  suppressCapturesCallback?.();
+}
+
+function createRestoreContext(
+  set: (state: Partial<HistoryState>) => void,
+  get: () => HistoryState
+): HistoryRestoreActionContext {
+  return {
+    get,
+    set,
+    applySnapshot,
+    isHistoryDisabledForDebug,
+    isTimelineHistoryLocked,
+    flushPendingCapture,
+    suppressCaptures,
+    log,
+  };
 }
 
 export const useHistoryStore = create<HistoryState>()(
@@ -517,7 +243,7 @@ export const useHistoryStore = create<HistoryState>()(
       }
 
       // Flush pending debounced capture so we don't lose the latest state
-      flushPendingCaptureCallback?.();
+      flushPendingCapture();
 
       // Re-read stacks after flush may have pushed new entries
       const { undoStack, currentSnapshot, redoStack } = get();
@@ -549,7 +275,7 @@ export const useHistoryStore = create<HistoryState>()(
       });
 
       // Suppress auto-captures for 200ms to prevent cascading state changes from re-capturing
-      suppressCapturesCallback?.();
+      suppressCaptures();
 
       log.debug(`Undo: ${undoneLabel} (stack: ${newUndoStack.length})`);
       return { operation: 'undo', label: undoneLabel };
@@ -569,7 +295,7 @@ export const useHistoryStore = create<HistoryState>()(
       }
 
       // Flush pending debounced capture
-      flushPendingCaptureCallback?.();
+      flushPendingCapture();
 
       // Re-read stacks after flush
       const { redoStack, currentSnapshot, undoStack } = get();
@@ -600,7 +326,7 @@ export const useHistoryStore = create<HistoryState>()(
       });
 
       // Suppress auto-captures for 200ms
-      suppressCapturesCallback?.();
+      suppressCaptures();
 
       log.debug(`Redo: ${nextSnapshot.label} (stack: ${newRedoStack.length})`);
       return { operation: 'redo', label: nextSnapshot.label };
@@ -648,152 +374,11 @@ export const useHistoryStore = create<HistoryState>()(
       }));
     },
 
-    restoreEntry: (entry) => {
-      if (isHistoryDisabledForDebug()) return null;
+    restoreEntry: (entry) => restoreHistoryEntryAction(entry, createRestoreContext(set, get)),
 
-      if (entry.kind === 'branch' && entry.branchId) {
-        return get().restoreBranch(entry.branchId, entry.stackIndex);
-      }
-      if (entry.kind === 'event' || entry.kind === 'current') {
-        return null;
-      }
-      if (typeof entry.stackIndex !== 'number') {
-        return null;
-      }
-      if (isTimelineHistoryLocked()) {
-        log.warn('Blocked history jump during timeline export');
-        return null;
-      }
-
-      if (get().batchId !== null) {
-        get().endBatch();
-      }
-
-      flushPendingCaptureCallback?.();
-
-      const {
-        undoStack,
-        currentSnapshot,
-        redoStack,
-        eventLog,
-        branches,
-        navigationEntries,
-        navigationSnapshotsByEntryId,
-      } = get();
-      const navigationState = navigationEntries
-        ? { entries: navigationEntries, snapshotsByEntryId: navigationSnapshotsByEntryId }
-        : createHistoryNavigationState(undoStack, currentSnapshot, redoStack, eventLog, branches);
-      let targetSnapshot: StateSnapshot | undefined;
-      let nextUndoStack: StateSnapshot[] = [];
-      let nextRedoStack: StateSnapshot[] = [];
-
-      if (entry.kind === 'undoable') {
-        targetSnapshot = undoStack[entry.stackIndex];
-        nextUndoStack = undoStack.slice(0, entry.stackIndex);
-        nextRedoStack = [
-          ...undoStack.slice(entry.stackIndex + 1),
-          ...(currentSnapshot ? [currentSnapshot] : []),
-          ...redoStack.slice().reverse(),
-        ].reverse();
-      } else if (entry.kind === 'redoable') {
-        const redoPath = redoStack.slice().reverse();
-        targetSnapshot = redoPath[entry.stackIndex];
-        nextUndoStack = [
-          ...undoStack,
-          ...(currentSnapshot ? [currentSnapshot] : []),
-          ...redoPath.slice(0, entry.stackIndex),
-        ];
-        nextRedoStack = redoPath.slice(entry.stackIndex + 1).reverse();
-      }
-
-      if (!targetSnapshot) return null;
-
-      set({ isApplying: true });
-      applySnapshot(targetSnapshot);
-      set({
-        undoStack: cloneSnapshotStack(nextUndoStack),
-        redoStack: cloneSnapshotStack(nextRedoStack),
-        currentSnapshot: deepClone(targetSnapshot),
-        navigationEntries: navigationState.entries,
-        navigationSnapshotsByEntryId: navigationState.snapshotsByEntryId,
-        activeEntryId: entry.id,
-        isApplying: false,
-      });
-
-      suppressCapturesCallback?.();
-
-      log.debug(`Jump to history entry: ${entry.label}`);
-      return { operation: 'restore-branch', label: entry.label };
-    },
-
-    restoreBranch: (branchId, snapshotIndex) => {
-      if (isHistoryDisabledForDebug()) return null;
-
-      if (isTimelineHistoryLocked()) {
-        log.warn('Blocked branch restore during timeline export');
-        return null;
-      }
-
-      if (get().batchId !== null) {
-        get().endBatch();
-      }
-
-      flushPendingCaptureCallback?.();
-
-      const {
-        undoStack,
-        currentSnapshot,
-        redoStack,
-        eventLog,
-        branches,
-        navigationEntries,
-        navigationSnapshotsByEntryId,
-      } = get();
-      const branch = branches.find((candidate) => candidate.id === branchId);
-      if (!branch) return null;
-
-      const targetSnapshotIndex = Math.max(
-        0,
-        Math.min(
-          branch.snapshots.length - 1,
-          typeof snapshotIndex === 'number' ? Math.floor(snapshotIndex) : branch.snapshots.length - 1
-        )
-      );
-      const branchPath = [
-        ...branch.baseUndoStack,
-        ...(branch.baseSnapshot ? [branch.baseSnapshot] : []),
-        ...branch.snapshots.slice(0, targetSnapshotIndex + 1),
-      ];
-      const branchTip = branchPath[branchPath.length - 1];
-      if (!branchTip) return null;
-
-      const nextRedoStack = branch.snapshots.slice(targetSnapshotIndex + 1).reverse();
-      const navigationState = navigationEntries
-        ? { entries: navigationEntries, snapshotsByEntryId: navigationSnapshotsByEntryId }
-        : createHistoryNavigationState(undoStack, currentSnapshot, redoStack, eventLog, branches);
-      const activeEntryId = navigationState.entries.find((candidate) => (
-        candidate.kind === 'branch' &&
-        candidate.branchId === branchId &&
-        candidate.stackIndex === targetSnapshotIndex
-      ))?.id ?? null;
-
-      set({ isApplying: true });
-      applySnapshot(branchTip);
-      set({
-        undoStack: cloneSnapshotStack(branchPath.slice(0, -1)),
-        redoStack: cloneSnapshotStack(nextRedoStack),
-        currentSnapshot: deepClone(branchTip),
-        navigationEntries: navigationState.entries,
-        navigationSnapshotsByEntryId: navigationState.snapshotsByEntryId,
-        activeEntryId,
-        isApplying: false,
-      });
-
-      suppressCapturesCallback?.();
-
-      log.debug(`Restore branch: ${branch.label}`);
-      return { operation: 'restore-branch', label: branch.label };
-    },
+    restoreBranch: (branchId, snapshotIndex) => (
+      restoreHistoryBranchAction(branchId, snapshotIndex, createRestoreContext(set, get))
+    ),
 
     startBatch: (label: string) => {
       if (isHistoryDisabledForDebug()) return;
@@ -874,169 +459,47 @@ export const useHistoryStore = create<HistoryState>()(
     }),
 
     serializeForProject: () => {
-      if (isHistoryDisabledForDebug()) {
-        return {
-          schemaVersion: 1,
-          undoStack: [],
-          redoStack: [],
-          currentSnapshot: null,
-          eventLog: [],
-          visibleEntries: [],
-          branches: [],
-          maxHistorySize: get().maxHistorySize,
-        };
-      }
-
-      const {
-        undoStack,
-        redoStack,
-        currentSnapshot,
-        eventLog,
-        branches,
-        maxHistorySize,
-        navigationEntries,
-        activeEntryId,
-      } = get();
-      const persistentEventLog = eventLog.filter((event) => event.type !== 'autosave');
-      const visibleEntries = markActiveHistoryEntry(
-        navigationEntries ?? createHistoryEntries(undoStack, currentSnapshot, redoStack, eventLog, branches),
-        activeEntryId
-      ).slice(-MAX_HISTORY_EVENT_LOG_SIZE);
-
-      if (!PERSIST_HISTORY_SNAPSHOTS) {
-        return {
-          schemaVersion: 1,
-          undoStack: [],
-          redoStack: [],
-          currentSnapshot: null,
-          eventLog: persistentEventLog.slice(-MAX_HISTORY_EVENT_LOG_SIZE),
-          visibleEntries,
-          branches: [],
-          maxHistorySize,
-        };
-      }
-
-      const persistedMaxHistorySize = Math.min(maxHistorySize, MAX_PERSISTED_HISTORY_SNAPSHOTS);
-
-      return cloneHistoryForProject({
-        schemaVersion: 1,
-        undoStack: limitSnapshotStackForProject(
-          undoStack,
-          maxHistorySize,
-          MAX_PERSISTED_HISTORY_SNAPSHOTS
-        ),
-        redoStack: limitSnapshotStackForProject(
-          redoStack,
-          maxHistorySize,
-          MAX_PERSISTED_HISTORY_SNAPSHOTS
-        ),
-        currentSnapshot,
-        eventLog: persistentEventLog.slice(-MAX_HISTORY_EVENT_LOG_SIZE),
-        visibleEntries,
-        branches: branches
-          .slice(-MAX_HISTORY_BRANCHES)
-          .map((branch) => limitBranchForProject(
-            branch,
-            maxHistorySize,
-            MAX_PERSISTED_HISTORY_SNAPSHOTS
-          )),
-        maxHistorySize: persistedMaxHistorySize,
+      const state = get();
+      return serializeHistoryForProject({
+        undoStack: state.undoStack,
+        redoStack: state.redoStack,
+        currentSnapshot: state.currentSnapshot,
+        eventLog: state.eventLog,
+        branches: state.branches,
+        maxHistorySize: state.maxHistorySize,
+        navigationEntries: state.navigationEntries,
+        activeEntryId: state.activeEntryId,
+        isHistoryDisabled: isHistoryDisabledForDebug(),
+        maxEventLogSize: MAX_HISTORY_EVENT_LOG_SIZE,
+        maxHistoryBranches: MAX_HISTORY_BRANCHES,
+        maxPersistedHistorySnapshots: MAX_PERSISTED_HISTORY_SNAPSHOTS,
+        persistHistorySnapshots: PERSIST_HISTORY_SNAPSHOTS,
       });
     },
 
     hydrateFromProject: (history) => {
-      const maxHistorySize = Math.max(1, Math.floor(history?.maxHistorySize ?? get().maxHistorySize));
-
-      if (isHistoryDisabledForDebug()) {
-        set({
-          undoStack: [],
-          redoStack: [],
-          eventLog: [],
-          branches: [],
-          currentSnapshot: null,
-          maxHistorySize,
-          navigationEntries: null,
-          navigationSnapshotsByEntryId: {},
-          activeEntryId: null,
-          isApplying: false,
-          batchId: null,
-          batchLabel: null,
-        });
-        return;
-      }
-
-      if (!history || history.schemaVersion !== 1) {
-        set({
-          undoStack: [],
-          redoStack: [],
-          eventLog: [],
-          branches: [],
-          currentSnapshot: createInitialHistorySnapshot(),
-          maxHistorySize,
-          navigationEntries: null,
-          navigationSnapshotsByEntryId: {},
-          activeEntryId: null,
-          isApplying: false,
-          batchId: null,
-          batchLabel: null,
-        });
-        return;
-      }
-
-      if (!PERSIST_HISTORY_SNAPSHOTS) {
-        const visibleEntries = normalizePersistedVisibleEntries(
-          history.visibleEntries,
-          MAX_HISTORY_EVENT_LOG_SIZE
-        );
-        const activeEntry = visibleEntries.find((entry) => entry.active);
-
-        set({
-          undoStack: [],
-          redoStack: [],
-          eventLog: normalizePersistedEventLog(history.eventLog, MAX_HISTORY_EVENT_LOG_SIZE),
-          branches: [],
-          currentSnapshot: createInitialHistorySnapshot(),
-          maxHistorySize,
-          navigationEntries: visibleEntries.length > 0 ? visibleEntries : null,
-          navigationSnapshotsByEntryId: {},
-          activeEntryId: activeEntry?.id ?? null,
-          isApplying: false,
-          batchId: null,
-          batchLabel: null,
-        });
-        return;
-      }
-
-      set({
-        undoStack: normalizePersistedSnapshotStack(history.undoStack, maxHistorySize),
-        redoStack: normalizePersistedSnapshotStack(history.redoStack, maxHistorySize),
-        eventLog: normalizePersistedEventLog(history.eventLog, MAX_HISTORY_EVENT_LOG_SIZE),
-        branches: normalizePersistedBranches(history.branches, maxHistorySize, MAX_HISTORY_BRANCHES),
-        currentSnapshot: normalizePersistedSnapshot(history.currentSnapshot) ?? createInitialHistorySnapshot(),
-        maxHistorySize,
-        navigationEntries: null,
-        navigationSnapshotsByEntryId: {},
-        activeEntryId: null,
-        isApplying: false,
-        batchId: null,
-        batchLabel: null,
-      });
+      set(createHistoryProjectHydrationState({
+        history,
+        currentMaxHistorySize: get().maxHistorySize,
+        isHistoryDisabled: isHistoryDisabledForDebug(),
+        createInitialHistorySnapshot,
+        maxEventLogSize: MAX_HISTORY_EVENT_LOG_SIZE,
+        maxHistoryBranches: MAX_HISTORY_BRANCHES,
+        persistHistorySnapshots: PERSIST_HISTORY_SNAPSHOTS,
+      }));
     },
   }))
 );
 
-// Export convenience functions
-export const captureSnapshot = (label: string) => useHistoryStore.getState().captureSnapshot(label);
-export const undo = () => useHistoryStore.getState().undo();
-export const redo = () => useHistoryStore.getState().redo();
-export const startBatch = (label: string) => useHistoryStore.getState().startBatch(label);
-export const endBatch = () => useHistoryStore.getState().endBatch();
-export const recordHistoryEvent = (type: HistoryEventType, label: string) => {
-  useHistoryStore.getState().recordEvent(type, label);
-};
-export const restoreHistoryEntry = (entry: HistoryListEntry) => useHistoryStore.getState().restoreEntry(entry);
-export const restoreHistoryBranch = (branchId: string, snapshotIndex?: number) => useHistoryStore.getState().restoreBranch(branchId, snapshotIndex);
-export const serializeHistoryStateForProject = () => useHistoryStore.getState().serializeForProject();
-export const hydrateHistoryStateFromProject = (history: ProjectHistoryState | null | undefined) => {
-  useHistoryStore.getState().hydrateFromProject(history);
-};
+const historyFacade = createHistoryFacade(useHistoryStore);
+
+export const captureSnapshot = historyFacade.captureSnapshot;
+export const undo = historyFacade.undo;
+export const redo = historyFacade.redo;
+export const startBatch = historyFacade.startBatch;
+export const endBatch = historyFacade.endBatch;
+export const recordHistoryEvent = historyFacade.recordHistoryEvent;
+export const restoreHistoryEntry = historyFacade.restoreHistoryEntry;
+export const restoreHistoryBranch = historyFacade.restoreHistoryBranch;
+export const serializeHistoryStateForProject = historyFacade.serializeHistoryStateForProject;
+export const hydrateHistoryStateFromProject = historyFacade.hydrateHistoryStateFromProject;

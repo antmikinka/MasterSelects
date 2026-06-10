@@ -2,15 +2,13 @@
 
 import { create } from 'zustand';
 import { subscribeWithSelector, persist } from 'zustand/middleware';
-import { DEFAULT_DRAG_STATE, DEFAULT_LAYOUT } from './layoutDefaults';
 import { FACTORY_VIDEO_EDIT_LAYOUT_ID } from './panelRegistry';
 import {
   cleanupRestoredCurrentLayout,
   cleanupSavedLayout,
-  cloneDockLayout,
-  getFactoryDockLayouts,
   mergeFactoryDockLayouts,
 } from './layoutPersistence';
+import { createDockStoreInitialState } from './initialState';
 import { createLayoutMutationActions } from './layoutMutationActions';
 import { createDragAndPanelStateActions } from './dragAndPanelStateActions';
 import { createPanelVisibilityActions } from './panelVisibilityActions';
@@ -35,14 +33,7 @@ export const useDockStore = create<DockStoreState>()(
   subscribeWithSelector(
     persist(
       (set, get) => ({
-        layout: cloneDockLayout(DEFAULT_LAYOUT),
-        dragState: DEFAULT_DRAG_STATE,
-        maxZIndex: 1000,
-        hoveredTabTarget: null,
-        maximizedPanelId: null,
-        savedLayouts: getFactoryDockLayouts(),
-        defaultSavedLayoutId: FACTORY_VIDEO_EDIT_LAYOUT_ID,
-        activeSavedLayoutId: FACTORY_VIDEO_EDIT_LAYOUT_ID,
+        ...createDockStoreInitialState(),
         ...createLayoutMutationActions(set, get),
         ...createDragAndPanelStateActions(set, get),
         ...createPanelVisibilityActions(set, get),

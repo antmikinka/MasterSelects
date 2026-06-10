@@ -166,3 +166,39 @@ export interface FlashBoardStoreSnapshot {
 }
 
 export type ExportStoreSnapshot = ExportStoreData;
+
+export interface HistoryStoreRefs {
+  getTimelineState?: () => TimelineStoreState;
+  setTimelineState?: (state: Partial<TimelineStoreState>) => void;
+  getMediaState?: () => MediaStoreState;
+  setMediaState?: (state: Partial<MediaStoreState>) => void;
+  getDockState?: () => DockStoreSnapshot;
+  setDockState?: (state: Partial<DockStoreSnapshot>) => void;
+  getFlashBoardState?: () => FlashBoardStoreSnapshot;
+  setFlashBoardState?: (state: Partial<FlashBoardStoreSnapshot>) => void;
+  getExportState?: () => ExportStoreSnapshot;
+  setExportState?: (state: Partial<ExportStoreSnapshot>) => void;
+}
+
+export interface HistoryStoreInitRefs {
+  timeline: {
+    getState: () => TimelineStoreState;
+    setState: (state: Partial<TimelineStoreState>) => void;
+  };
+  media: {
+    getState: () => MediaStoreState;
+    setState: (state: Partial<MediaStoreState>) => void;
+  };
+  dock: {
+    getState: () => DockStoreSnapshot;
+    setState: (state: Partial<DockStoreSnapshot>) => void;
+  };
+  flashboard?: {
+    getState: () => FlashBoardStoreSnapshot;
+    setState: (state: Partial<FlashBoardStoreSnapshot>) => void;
+  };
+  export?: {
+    getState: () => ExportStoreSnapshot;
+    setState: (state: Partial<ExportStoreSnapshot>) => void;
+  };
+}
