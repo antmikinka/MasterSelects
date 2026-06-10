@@ -922,6 +922,13 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
   nets green. Over-700 count is now 44; hard-case remainders are
   `proxyFrameCache` 1545, `RenderDispatcher` 1266, `ParallelDecodeManager`
   1193, and `WebGPUEngine` 940.
+- Waves 32-37 closure completed:
+  packets 295-345 finished the final over-700 reduction wave set. The final
+  tracked state is one documented exception, `src/services/proxyFrameCache.ts`
+  at 831 raw lines; all other tracked product-source files are under the
+  700-line ceiling. See
+  `docs/ongoing/Complete-refactor-checklist.md#closing-summary` for the
+  authoritative closing summary, final gate state, and debt ledger.
 
 ## High-Conflict Ownership Snapshot
 
@@ -940,52 +947,32 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 | `src/engine/**`, `src/components/preview/**`, `src/components/export/**` | later P5/P6 joint packets | read, smoke only | render snapshot/output-router contracts frozen |
 | `src/services/aiTools/**` | later P7 smoke quarantine packets | read, smoke inventory only | Phase 0 smoke thresholds accepted |
 
-## Active Wave 32
+## Initiative Complete
 
-Wave 32 packets are dispatched in parallel with docs-only
-`DOCS-CLOSURE-300`. Keep write sets disjoint and report any needed scope
-extension instead of self-extending.
+The Complete Refactor active queue is empty. Packets 295-345 are closed, and
+the final initiative state is recorded in
+`docs/ongoing/Complete-refactor-checklist.md#closing-summary`.
 
-- `P5-SCENEOBJECTOVERLAY-FOLLOWUP-295`: split `SceneObjectOverlay` follow-up
-  (currently 814 raw lines).
-- `P7-STRESSTEST-HANDLER-SPLIT-296`: split the stressTest handler (currently
-  812 raw lines).
-- `P7-ELEVENLABSSERVICE-SPLIT-297`: split `elevenLabsService` (currently 810
-  raw lines).
-- `P6-PROXYGENERATOR-FOLLOWUP-298`: split `proxyGenerator` follow-up
-  (currently 808 raw lines; regrew after packet 242 via concurrent feature
-  work).
-- `P5-MATANYONESETUPDIALOG-SPLIT-299`: split `MatAnyoneSetupDialog`
-  (currently 807 raw lines).
+## Optional Future Packets
 
-## Queued Packets
+These are debt-ledger follow-ups only. They are not active Complete Refactor
+queue items.
 
-- `P5-NODEGRAPHCANVAS-SPLIT`: split `NodeGraphCanvas` (currently 803 raw
-  lines).
-- `P7-PLAYBACKDEBUGSTATS-SPLIT`: split `playbackDebugStats` (currently 799 raw
-  lines).
-- `P5-EXPORTDIALOG-SPLIT`: split `ExportDialog` (currently 795 raw lines).
-- `P3-PROJECTCORESERVICE-SPLIT`: split `ProjectCoreService` (currently 794 raw
-  lines).
-- `P5-TEXTMESHCACHE-SPLIT`: split `TextMeshCache` (currently 790 raw lines).
-- `P6-USEENGINE-SPLIT`: split `useEngine` (currently 790 raw lines).
-- `P5-FRAMEEXPORTER-SPLIT`: split `FrameExporter` (currently 790 raw lines).
-- Remaining 700-790 files: continue bounded packets after the listed queue.
-- `P6-PROXYFRAMECACHE-HARD-CASE-FOLLOWUP`: revisit `proxyFrameCache` remainder
-  (currently 1545 raw lines) only with cache/decoder ownership write set.
-- `P6-RENDERDISPATCHER-HARD-CASE-FOLLOWUP`: revisit `RenderDispatcher`
-  remainder (currently 1266 raw lines) only with lifecycle/facade write set.
-- `P6-PARALLELDECODEMANAGER-HARD-CASE-FOLLOWUP`: revisit
-  `ParallelDecodeManager` remainder (currently 1193 raw lines) only with
-  decoder-ownership write set.
-- `P6-WEBGPUENGINE-HARD-CASE-FOLLOWUP`: revisit `WebGPUEngine` remainder
-  (currently 940 raw lines) only with lifecycle/facade write set.
-- `P8-RETIRED-PATH-LEDGER-PASS`: refresh retired-path ledger status.
-- `P8-FINAL-FULL-CHAIN`: run final full chain when the refactor wave is ready.
-- `P8-CLOSING-SUMMARY`: write the closing summary after final verification.
-
-## Immediate Next Step
-
-Track wave 32 packet reports and keep this file to the active wave plus the
-next queued packets. Do not reopen completed wave 21-31 packets except through
-the named hard-case follow-ups.
+- `P6-PROXYFRAMECACHE-LEASE-FREEZE-EXCEPTION-REVIEW`: revisit
+  `src/services/proxyFrameCache.ts` only if the mediaRuntime lease freeze can
+  be relaxed without changing byte-identical reason/id strings, test-visible
+  cache maps, preload accessors, compat delegations, lease-welded
+  load/error/dispose flows, or public API delegation glue.
+- `P6-CLIPANALYZER-FINALFRAMES-LOG-FIX`: fix the pre-existing
+  `clipAnalyzer` log that reports `window.frames` instead of `finalFrames`.
+- `P6-AUDIO-DETERMINISTIC-HASH-ID-DEDUP`: deduplicate `deterministicHashId`
+  across the five audio generators.
+- `P6-MULTICAMANALYZER-MATH-DEDUP`: consolidate near-duplicate
+  motion/sharpness math in `multicamAnalyzer`.
+- `P5-NODEWORKSPACEUTILS-NAMING-CLEANUP`: split or rename the 259-line mixed
+  helper module `nodeWorkspaceUtils.ts` if a future owner wants stricter role
+  naming.
+- `P8-LINT-WARNING-BUDGET`: address the remaining roughly 37 lint warnings.
+- `P5P6-FAST-EXPORT-BROWSER-SMOKE`: run the recommended post-refactor FAST
+  export `debugExport` browser smoke after user-announced bridge access is
+  available.
