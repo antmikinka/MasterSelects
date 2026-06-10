@@ -14,12 +14,19 @@ import { getAudioWaveformStatus, getSourceWaveformChannels, drawSourceAudioWavef
 import {
   clearTimelinePlacementCommandPreview,
   runTimelinePlacementCommand,
-  showTimelinePlacementCommandPreview,
 } from '../../services/timelinePlacementCommands';
 import { useMediaStore, type MediaFile } from '../../stores/mediaStore';
 import { startMediaFileWaveformGeneration } from '../../stores/mediaStore/helpers/mediaWaveformHelpers';
 import type { TimelinePlacementMode } from '../../stores/timeline/editOperations/types';
-import { TIMELINE_TOOL_ICONS } from '../timeline/tools/toolIcons';
+import { SourceMonitorPlacementCommands } from './sourceMonitor/SourceMonitorPlacementCommands';
+import {
+  clampTime,
+  createTimelineTicks,
+  DEFAULT_STILL_DURATION,
+  formatTimecode,
+  MIN_MARK_GAP_SECONDS,
+  normalizeDuration,
+} from './sourceMonitor/sourceMonitorTimecode';
 
 interface SourceMonitorProps {
   file: MediaFile;
@@ -27,78 +34,7 @@ interface SourceMonitorProps {
   onClose: () => void;
 }
 
-const SOURCE_MONITOR_PLACEMENT_COMMANDS: Array<{
-  mode: TimelinePlacementMode;
-  label: string;
-  title: string;
-}> = [
-  { mode: 'insert', label: 'Insert', title: 'Insert source at playhead' },
-  { mode: 'overwrite', label: 'Overwrite', title: 'Overwrite at playhead' },
-  { mode: 'replace', label: 'Replace', title: 'Replace selected clip or range' },
-  { mode: 'fit-to-fill', label: 'Fit', title: 'Fit source to selected clip or range' },
-  { mode: 'append-at-end', label: 'Append', title: 'Append source at track end' },
-  { mode: 'place-on-top', label: 'Top', title: 'Place source on top track' },
-  { mode: 'ripple-overwrite', label: 'Ripple Overwrite', title: 'Ripple overwrite selected range' },
-];
-
-const DEFAULT_STILL_DURATION = 5;
-const MIN_MARK_GAP_SECONDS = 0.001;
-
 type SourceTimelineDragKind = 'playhead' | 'in' | 'out';
-
-function normalizeDuration(value: number | undefined, fallback = 0): number {
-  return Number.isFinite(value) && value !== undefined && value > 0 ? value : fallback;
-}
-
-function clampTime(time: number, duration: number): number {
-  if (!Number.isFinite(time)) return 0;
-  return Math.max(0, Math.min(Math.max(0, duration), time));
-}
-
-function getNiceStep(rawStep: number): number {
-  if (!Number.isFinite(rawStep) || rawStep <= 0) return 1;
-  const exponent = Math.floor(Math.log10(rawStep));
-  const base = rawStep / 10 ** exponent;
-  const niceBase = base <= 1 ? 1 : base <= 2 ? 2 : base <= 5 ? 5 : 10;
-  return niceBase * 10 ** exponent;
-}
-
-function formatTimecode(seconds: number, fps: number): string {
-  const safeSeconds = Math.max(0, seconds);
-  const h = Math.floor(safeSeconds / 3600);
-  const m = Math.floor((safeSeconds % 3600) / 60);
-  const s = Math.floor(safeSeconds % 60);
-  const f = Math.floor((safeSeconds % 1) * fps);
-  if (h > 0) {
-    return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}:${f.toString().padStart(2, '0')}`;
-  }
-  return `${m}:${s.toString().padStart(2, '0')}:${f.toString().padStart(2, '0')}`;
-}
-
-function createTimelineTicks(duration: number, fps: number): Array<{ time: number; label: string; major: boolean }> {
-  if (duration <= 0) return [];
-  const majorStep = getNiceStep(duration / 5);
-  const minorStep = majorStep / 4;
-  const ticks: Array<{ time: number; label: string; major: boolean }> = [];
-  const maxTicks = 96;
-
-  for (let i = 0; i <= maxTicks; i += 1) {
-    const time = i * minorStep;
-    if (time > duration + MIN_MARK_GAP_SECONDS) break;
-    const major = Math.abs(time / majorStep - Math.round(time / majorStep)) < 0.0001 || time === 0;
-    ticks.push({
-      time: Math.min(time, duration),
-      label: major ? formatTimecode(time, fps) : '',
-      major,
-    });
-  }
-
-  if (ticks[ticks.length - 1]?.time !== duration) {
-    ticks.push({ time: duration, label: formatTimecode(duration, fps), major: true });
-  }
-
-  return ticks;
-}
 
 function updateMediaFileWaveformCache(
   id: string,
@@ -705,27 +641,10 @@ export function SourceMonitor({ file, autoplayRequestId = 0, onClose }: SourceMo
               </div>
             )}
 
-            <div className="source-monitor-edit-commands" aria-label="Source edit commands">
-              {SOURCE_MONITOR_PLACEMENT_COMMANDS.map((command) => {
-                const CommandIcon = TIMELINE_TOOL_ICONS[command.mode];
-                return (
-                  <button
-                    key={command.mode}
-                    className={`btn btn-sm source-monitor-icon-btn source-monitor-command-btn ${pendingPlacementMode === command.mode ? 'btn-active' : ''}`}
-                    onClick={() => runSourcePlacementCommand(command.mode)}
-                    onMouseEnter={() => showTimelinePlacementCommandPreview(command.mode)}
-                    onMouseLeave={() => clearTimelinePlacementCommandPreview(command.mode)}
-                    onFocus={() => showTimelinePlacementCommandPreview(command.mode)}
-                    onBlur={() => clearTimelinePlacementCommandPreview(command.mode)}
-                    disabled={pendingPlacementMode !== null}
-                    title={command.title}
-                    aria-label={command.label}
-                  >
-                    <CommandIcon size={14} stroke={2.2} aria-hidden="true" />
-                  </button>
-                );
-              })}
-            </div>
+            <SourceMonitorPlacementCommands
+              pendingPlacementMode={pendingPlacementMode}
+              onRunCommand={runSourcePlacementCommand}
+            />
           </div>
 
           <div className="source-monitor-timecode source-monitor-timecode-duration">

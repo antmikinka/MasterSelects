@@ -12,18 +12,15 @@ import { useMediaStore } from '../../stores/mediaStore';
 import {
   collectMIDIMappingSummary,
   getSlotGridLabel,
-  getMarkerTargetLabel,
   type MIDIMappingSummaryEntry,
   type MIDISlotTarget,
 } from '../../services/midi/midiMappingSummary';
 import {
-  moveMarkerMIDIBinding,
   setMarkerMIDIBinding,
   setParameterMIDIBinding,
   setSlotMIDIBinding,
   setTransportMIDIBinding,
   startLearningParameterMIDIBinding,
-  updateParameterMIDIBinding,
 } from '../../services/midi/midiBindingMutations';
 import {
   triggerMIDITransportAction,
@@ -32,11 +29,15 @@ import {
 } from '../../services/midi/midiCommands';
 import {
   describeMIDILearnTarget,
-  getMIDINoteName,
   type MarkerMIDIAction,
-  type MIDIParameterBinding,
   type MIDITransportAction,
 } from '../../types/midi';
+import {
+  MIDIMappingCardEditor,
+  type MIDIMappingDraft,
+} from './midiMapping/MIDIMappingCardEditor';
+import { MIDIMappingParameterControls } from './midiMapping/MIDIMappingParameterControls';
+import { useParameterRangeDrafts } from './midiMapping/useParameterRangeDrafts';
 import './MIDIMappingPanel.css';
 
 function MIDIMappingEmptyState({ isEnabled }: { isEnabled: boolean }) {
@@ -53,60 +54,6 @@ function MIDIMappingEmptyState({ isEnabled }: { isEnabled: boolean }) {
       )}
     </div>
   );
-}
-
-interface MIDIMappingDraft {
-  mappingId: string;
-  channel: string;
-  note: string;
-  markerId?: string;
-}
-
-interface MIDIParameterRangeDraft {
-  min: string;
-  max: string;
-}
-
-function clampInteger(value: string, fallback: number, min: number, max: number): number {
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-
-  return Math.max(min, Math.min(max, parsed));
-}
-
-function formatParameterRangeInput(value: number): string {
-  if (!Number.isFinite(value)) {
-    return '0';
-  }
-
-  if (Number.isInteger(value)) {
-    return String(value);
-  }
-
-  return Number(value.toFixed(6)).toString();
-}
-
-function resolveParameterRange(binding: MIDIParameterBinding): { min: number; max: number } {
-  if (
-    typeof binding.min === 'number' &&
-    typeof binding.max === 'number' &&
-    Number.isFinite(binding.min) &&
-    Number.isFinite(binding.max) &&
-    binding.max > binding.min
-  ) {
-    return { min: binding.min, max: binding.max };
-  }
-
-  const center = typeof binding.currentValue === 'number' && Number.isFinite(binding.currentValue)
-    ? binding.currentValue
-    : 0;
-  const range = Math.max(Math.abs(center), 1) * 4;
-  return {
-    min: center - range / 2,
-    max: center + range / 2,
-  };
 }
 
 export function MIDIMappingPanel() {
@@ -128,7 +75,7 @@ export function MIDIMappingPanel() {
   const compositions = useMediaStore((state) => state.compositions);
   const slotAssignments = useMediaStore((state) => state.slotAssignments);
   const [draft, setDraft] = useState<MIDIMappingDraft | null>(null);
-  const [parameterRangeDrafts, setParameterRangeDrafts] = useState<Record<string, MIDIParameterRangeDraft>>({});
+  const parameterRangeControls = useParameterRangeDrafts();
   const [previewingMappingId, setPreviewingMappingId] = useState<string | null>(null);
   const previewResetTimeoutRef = useRef<number | null>(null);
 
@@ -260,85 +207,6 @@ export function MIDIMappingPanel() {
     setDraft(null);
   };
 
-  const getParameterRangeDraft = (binding: MIDIParameterBinding): MIDIParameterRangeDraft => {
-    const draftRange = parameterRangeDrafts[binding.id];
-    if (draftRange) {
-      return draftRange;
-    }
-
-    const range = resolveParameterRange(binding);
-    return {
-      min: formatParameterRangeInput(range.min),
-      max: formatParameterRangeInput(range.max),
-    };
-  };
-
-  const updateParameterRangeDraft = (
-    binding: MIDIParameterBinding,
-    field: keyof MIDIParameterRangeDraft,
-    value: string
-  ) => {
-    const range = resolveParameterRange(binding);
-    setParameterRangeDrafts((currentDrafts) => ({
-      ...currentDrafts,
-      [binding.id]: {
-        min: currentDrafts[binding.id]?.min ?? formatParameterRangeInput(range.min),
-        max: currentDrafts[binding.id]?.max ?? formatParameterRangeInput(range.max),
-        [field]: value,
-      },
-    }));
-  };
-
-  const resetParameterRangeDraft = (bindingId: string) => {
-    setParameterRangeDrafts((currentDrafts) => {
-      if (!currentDrafts[bindingId]) {
-        return currentDrafts;
-      }
-
-      const nextDrafts = { ...currentDrafts };
-      delete nextDrafts[bindingId];
-      return nextDrafts;
-    });
-  };
-
-  const commitParameterRangeDraft = (binding: MIDIParameterBinding) => {
-    const draftRange = parameterRangeDrafts[binding.id];
-    if (!draftRange) {
-      return;
-    }
-
-    const min = Number(draftRange.min);
-    const max = Number(draftRange.max);
-    if (Number.isFinite(min) && Number.isFinite(max) && max > min) {
-      updateParameterMIDIBinding(binding.id, { min, max });
-    }
-
-    resetParameterRangeDraft(binding.id);
-  };
-
-  const handleParameterRangeKeyDown = (
-    event: ReactKeyboardEvent<HTMLInputElement>,
-    binding: MIDIParameterBinding
-  ) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      commitParameterRangeDraft(binding);
-      event.currentTarget.blur();
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      resetParameterRangeDraft(binding.id);
-      event.currentTarget.blur();
-    }
-  };
-
-  const toggleParameterInvert = (binding: MIDIParameterBinding) => {
-    updateParameterMIDIBinding(binding.id, { invert: !binding.invert });
-  };
-
-  const toggleParameterDamping = (binding: MIDIParameterBinding) => {
-    updateParameterMIDIBinding(binding.id, { damping: !binding.damping });
-  };
-
   const clearMapping = (mapping: MIDIMappingSummaryEntry) => {
     if (mapping.scope === 'transport') {
       setTransportMIDIBinding(mapping.action as MIDITransportAction, null);
@@ -384,54 +252,6 @@ export function MIDIMappingPanel() {
     if (draft?.mappingId === mapping.id) {
       closeEditor();
     }
-  };
-
-  const saveDraft = (mapping: MIDIMappingSummaryEntry) => {
-    if (!draft || draft.mappingId !== mapping.id) {
-      return;
-    }
-
-    if (mapping.scope === 'parameter' || !('note' in mapping.binding)) {
-      closeEditor();
-      return;
-    }
-
-    const nextBinding = {
-      channel: clampInteger(draft.channel, mapping.binding.channel, 1, 16),
-      note: clampInteger(draft.note, mapping.binding.note, 0, 127),
-    };
-
-    if (mapping.scope === 'transport') {
-      setTransportMIDIBinding(mapping.action as MIDITransportAction, nextBinding);
-      closeEditor();
-      return;
-    }
-
-    if (mapping.scope === 'slot') {
-      if (mapping.slotIndex !== undefined) {
-        setSlotMIDIBinding(mapping.slotIndex, nextBinding);
-      }
-      closeEditor();
-      return;
-    }
-
-    const nextMarkerId = draft.markerId ?? mapping.markerId;
-    if (!nextMarkerId || !mapping.markerId) {
-      return;
-    }
-
-    if (nextMarkerId !== mapping.markerId) {
-      moveMarkerMIDIBinding({
-        fromMarkerId: mapping.markerId,
-        toMarkerId: nextMarkerId,
-        action: mapping.action as MarkerMIDIAction,
-        binding: nextBinding,
-      });
-    } else {
-      setMarkerMIDIBinding(nextMarkerId, mapping.action as MarkerMIDIAction, nextBinding);
-    }
-
-    closeEditor();
   };
 
   const startLearningForMapping = (mapping: MIDIMappingSummaryEntry) => {
@@ -534,20 +354,7 @@ export function MIDIMappingPanel() {
             const isEditing = draft?.mappingId === mapping.id;
             const isParameterMapping = mapping.scope === 'parameter';
             const isActiveMapping = activeMappingIds[mapping.id] !== undefined;
-            const channelValue = isEditing ? draft.channel : String(mapping.binding.channel);
-            const noteValue = isEditing && !isParameterMapping
-              ? draft.note
-              : 'note' in mapping.binding
-                ? String(mapping.binding.note)
-                : '';
-            const selectedMarkerId = isEditing ? draft.markerId ?? mapping.markerId : mapping.markerId;
             const isPreviewable = mapping.scope === 'transport' || mapping.scope === 'slot' || mapping.markerTime !== undefined;
-            const notePreview = 'note' in mapping.binding
-              ? getMIDINoteName(clampInteger(noteValue, mapping.binding.note, 0, 127))
-              : '';
-            const parameterRangeDraft = mapping.parameterBinding
-              ? getParameterRangeDraft(mapping.parameterBinding)
-              : null;
             const sourceMarkerId =
               learnTarget?.kind === 'marker'
                 ? learnTarget.sourceMarkerId ?? learnTarget.markerId
@@ -624,141 +431,25 @@ export function MIDIMappingPanel() {
                   )}
                 </div>
 
-                {isParameterMapping && mapping.parameterBinding && parameterRangeDraft && (
-                  <div
-                    className="midi-mapping-parameter-controls"
-                    onClick={stopEventPropagation}
-                    onKeyDown={stopEventPropagation}
-                  >
-                    <label className="midi-mapping-field midi-mapping-range-field">
-                      <span>Min</span>
-                      <input
-                        type="number"
-                        value={parameterRangeDraft.min}
-                        onChange={(event) => updateParameterRangeDraft(mapping.parameterBinding!, 'min', event.target.value)}
-                        onBlur={() => commitParameterRangeDraft(mapping.parameterBinding!)}
-                        onKeyDown={(event) => handleParameterRangeKeyDown(event, mapping.parameterBinding!)}
-                      />
-                    </label>
-                    <label className="midi-mapping-field midi-mapping-range-field">
-                      <span>Max</span>
-                      <input
-                        type="number"
-                        value={parameterRangeDraft.max}
-                        onChange={(event) => updateParameterRangeDraft(mapping.parameterBinding!, 'max', event.target.value)}
-                        onBlur={() => commitParameterRangeDraft(mapping.parameterBinding!)}
-                        onKeyDown={(event) => handleParameterRangeKeyDown(event, mapping.parameterBinding!)}
-                      />
-                    </label>
-                    <button
-                      className={`settings-button midi-mapping-invert-button${mapping.parameterBinding.invert ? ' is-active' : ''}`}
-                      onClick={() => toggleParameterInvert(mapping.parameterBinding!)}
-                      title="Invert MIDI value"
-                      type="button"
-                    >
-                      Invert
-                    </button>
-                    <label
-                      className="midi-mapping-checkbox"
-                      title="Smooth MIDI parameter changes"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={!!mapping.parameterBinding.damping}
-                        onChange={() => toggleParameterDamping(mapping.parameterBinding!)}
-                      />
-                      <span>Damp</span>
-                    </label>
-                  </div>
+                {isParameterMapping && mapping.parameterBinding && (
+                  <MIDIMappingParameterControls
+                    binding={mapping.parameterBinding}
+                    controls={parameterRangeControls}
+                  />
                 )}
 
-                {isEditing && (
-                  <div
-                    className="midi-mapping-editor"
-                    onClick={stopEventPropagation}
-                    onKeyDown={stopEventPropagation}
-                  >
-                    <div className="midi-mapping-editor-grid">
-                      <label className="midi-mapping-field">
-                        <span>Channel</span>
-                        <input
-                          type="number"
-                          min={1}
-                          max={16}
-                          value={channelValue}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setDraft((currentDraft) => currentDraft && currentDraft.mappingId === mapping.id
-                              ? { ...currentDraft, channel: value }
-                              : currentDraft
-                            );
-                          }}
-                        />
-                      </label>
-
-                      <label className="midi-mapping-field">
-                        <span>Note</span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={127}
-                          value={noteValue}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setDraft((currentDraft) => currentDraft && currentDraft.mappingId === mapping.id
-                              ? { ...currentDraft, note: value }
-                              : currentDraft
-                            );
-                          }}
-                        />
-                        <small>{notePreview}</small>
-                      </label>
-
-                      {mapping.scope === 'marker' && (
-                        <label className="midi-mapping-field midi-mapping-field-wide">
-                          <span>Marker</span>
-                          <select
-                            value={selectedMarkerId ?? ''}
-                            onChange={(event) => {
-                              const value = event.target.value;
-                              setDraft((currentDraft) => currentDraft && currentDraft.mappingId === mapping.id
-                                ? { ...currentDraft, markerId: value }
-                                : currentDraft
-                              );
-                            }}
-                          >
-                            {markers.map((marker) => (
-                              <option key={marker.id} value={marker.id}>
-                                {getMarkerTargetLabel(marker)}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      )}
-                    </div>
-
-                    <div className="midi-mapping-editor-actions">
-                      <button className="settings-button" onClick={() => saveDraft(mapping)}>
-                        Save
-                      </button>
-                      <button className="settings-button" onClick={() => previewMapping(mapping)}>
-                        Trigger
-                      </button>
-                      <button className="settings-button" onClick={() => startLearningForMapping(mapping)}>
-                        {isLearningCurrentMapping ? 'Listening...' : 'Learn'}
-                      </button>
-                      <button className="settings-button" onClick={() => clearMapping(mapping)}>
-                        Clear
-                      </button>
-                      <button className="settings-button" onClick={closeEditor}>
-                        Cancel
-                      </button>
-                    </div>
-
-                    <p className="midi-mapping-editor-hint">
-                      Notes stay unique across transport and marker mappings. Saving or learning here replaces any existing assignment using the same channel and note.
-                    </p>
-                  </div>
+                {isEditing && draft && (
+                  <MIDIMappingCardEditor
+                    mapping={mapping}
+                    markers={markers}
+                    draft={draft}
+                    setDraft={setDraft}
+                    isLearningCurrentMapping={!!isLearningCurrentMapping}
+                    onPreview={() => previewMapping(mapping)}
+                    onLearn={() => startLearningForMapping(mapping)}
+                    onClear={() => clearMapping(mapping)}
+                    onClose={closeEditor}
+                  />
                 )}
               </div>
             );

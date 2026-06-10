@@ -5,78 +5,22 @@ import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 import type { MediaFile } from './mediaStore';
 import { Logger } from '../services/logger';
+import type {
+  MultiCamSource,
+  MultiCamAnalysis,
+  TranscriptEntry,
+  EditDecision,
+  EditStyle,
+  AnalysisStatus,
+  TranscriptStatus,
+  EDLStatus,
+} from './multicam/types';
+import { planEdlClipPlacements } from './multicam/edlClipPlanner';
+
+// Compatibility re-export: domain types moved to ./multicam/types
+export type * from './multicam/types';
 
 const log = Logger.create('MultiCam');
-
-// =============================================================================
-// Types
-// =============================================================================
-
-export interface MultiCamSource {
-  id: string;
-  mediaFileId: string;
-  name: string;
-  role: 'wide' | 'closeup' | 'detail' | 'custom';
-  customRole?: string;
-  // Sync offset in milliseconds (relative to master camera)
-  syncOffset: number;
-  // Duration in milliseconds
-  duration: number;
-  // Thumbnail URL
-  thumbnailUrl?: string;
-}
-
-export interface CameraAnalysis {
-  cameraId: string;
-  // Per-frame analysis data (sampled at intervals)
-  frames: FrameAnalysis[];
-}
-
-export interface FrameAnalysis {
-  timestamp: number; // ms
-  motion: number; // 0-1
-  sharpness: number; // 0-1
-  faces: DetectedFace[];
-  audioLevel: number; // 0-1
-}
-
-export interface DetectedFace {
-  id: string;
-  bbox: { x: number; y: number; width: number; height: number };
-  confidence: number;
-  position: 'left' | 'center' | 'right';
-  size: number; // Relative size in frame (0-1)
-}
-
-export interface MultiCamAnalysis {
-  projectDuration: number; // ms
-  sampleInterval: number; // ms between samples
-  cameras: CameraAnalysis[];
-  audioLevels: { timestamp: number; level: number }[];
-}
-
-export interface TranscriptEntry {
-  id: string;
-  start: number; // ms
-  end: number; // ms
-  speaker: string;
-  text: string;
-}
-
-export interface EditDecision {
-  id: string;
-  start: number; // ms
-  end: number; // ms
-  cameraId: string;
-  reason?: string;
-  confidence?: number; // 0-1, how confident the AI is in this decision
-}
-
-export type EditStyle = 'podcast' | 'interview' | 'music' | 'documentary' | 'custom';
-
-export type AnalysisStatus = 'idle' | 'analyzing' | 'complete' | 'error';
-export type TranscriptStatus = 'idle' | 'loading-model' | 'generating' | 'complete' | 'error';
-export type EDLStatus = 'idle' | 'generating' | 'complete' | 'error';
 
 // =============================================================================
 // Store Interface
@@ -615,6 +559,8 @@ export const useMultiCamStore = create<MultiCamStore>()(
         return;
       }
 
+      const placements = planEdlClipPlacements(edl, cameras);
+
       // Import timeline store and apply EDL
       import('./timeline').then(({ useTimelineStore }) => {
         const timelineStore = useTimelineStore.getState();
@@ -627,25 +573,18 @@ export const useMultiCamStore = create<MultiCamStore>()(
           const mediaStore = useMediaStore.getState();
 
           // Add clips for each edit decision
-          for (const decision of edl) {
-            const camera = cameras.find(c => c.id === decision.cameraId);
-            if (!camera) continue;
-
-            const mediaFile = mediaStore.files.find(f => f.id === camera.mediaFileId);
+          for (const placement of placements) {
+            const mediaFile = mediaStore.files.find(f => f.id === placement.mediaFileId);
             if (!mediaFile || !mediaFile.file) continue;
 
-            // Calculate in/out points considering sync offset
-            const inPoint = (decision.start + camera.syncOffset) / 1000; // Convert to seconds
-            const outPoint = (decision.end + camera.syncOffset) / 1000;
-            const startTime = decision.start / 1000;
-            const duration = outPoint - inPoint;
+            const { inPoint, outPoint, startTime } = placement;
 
             // Add clip and then trim it to the correct in/out points
             timelineStore.addClip(
               trackId,
               mediaFile.file,
               startTime,
-              duration,
+              placement.duration,
               mediaFile.id
             ).then(() => {
               // Find the clip we just added and trim it

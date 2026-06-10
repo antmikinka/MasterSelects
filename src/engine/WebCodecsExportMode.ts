@@ -3,6 +3,15 @@
 
 import { Logger } from '../services/logger';
 import type { Sample } from './webCodecsTypes';
+import {
+  computePresentationOffsetUs,
+  normalizedSampleTimestampUs,
+  frameToleranceUs,
+  findClosestSampleIndex,
+  findKeyframeBefore,
+  findClosestFrameIndex,
+  findBufferedFrameIndex as findBufferedCtsIndex,
+} from './webCodecsExport/exportSamplePlanning';
 
 const log = Logger.create('WebCodecsExportMode');
 
@@ -68,59 +77,11 @@ export class WebCodecsExportMode {
   }
 
   private getFrameToleranceUs(multiplier = 1.5): number {
-    return (1_000_000 / Math.max(this.player.getFrameRate(), 1)) * multiplier;
-  }
-
-  private updatePresentationOffset(samples: readonly Sample[]): void {
-    let firstPresentationUs = Infinity;
-    for (const sample of samples) {
-      if (!Number.isFinite(sample.cts) || !Number.isFinite(sample.timescale) || sample.timescale <= 0) {
-        continue;
-      }
-      firstPresentationUs = Math.min(firstPresentationUs, (sample.cts * 1_000_000) / sample.timescale);
-    }
-
-    this.presentationOffsetUs = Number.isFinite(firstPresentationUs) ? firstPresentationUs : 0;
-  }
-
-  private getSampleTimestampUs(sample: Sample): number {
-    return (sample.cts * 1_000_000) / sample.timescale;
+    return frameToleranceUs(this.player.getFrameRate(), multiplier);
   }
 
   private getNormalizedSampleTimestampUs(sample: Sample): number {
-    return Math.max(0, this.getSampleTimestampUs(sample) - this.presentationOffsetUs);
-  }
-
-  private findClosestSampleIndex(targetTimeSeconds: number): number {
-    const timescale = this.player.getVideoTrackTimescale();
-    const samples = this.player.getSamples();
-    if (timescale === null || samples.length === 0) {
-      return 0;
-    }
-
-    const targetUs = targetTimeSeconds * 1_000_000;
-    let targetSampleIndex = 0;
-    let closestDiff = Infinity;
-
-    for (let i = 0; i < samples.length; i++) {
-      const diff = Math.abs(this.getNormalizedSampleTimestampUs(samples[i]) - targetUs);
-      if (diff < closestDiff) {
-        closestDiff = diff;
-        targetSampleIndex = i;
-      }
-    }
-
-    return targetSampleIndex;
-  }
-
-  private findKeyframeBefore(targetSampleIndex: number): number {
-    const samples = this.player.getSamples();
-    for (let i = Math.min(targetSampleIndex, samples.length - 1); i >= 0; i--) {
-      if (samples[i].is_sync) {
-        return i;
-      }
-    }
-    return 0;
+    return normalizedSampleTimestampUs(sample, this.presentationOffsetUs);
   }
 
   private refreshBufferedFrameIndex(): void {
@@ -128,13 +89,7 @@ export class WebCodecsExportMode {
   }
 
   private findBufferedFrameIndex(targetCtsUs: number, toleranceUs = this.getFrameToleranceUs()): number {
-    const bestIndex = this.findClosestFrameIndex(targetCtsUs);
-    if (bestIndex < 0 || bestIndex >= this.exportFramesCts.length) {
-      return -1;
-    }
-
-    const bestCts = this.exportFramesCts[bestIndex];
-    return Math.abs(bestCts - targetCtsUs) <= toleranceUs ? bestIndex : -1;
+    return findBufferedCtsIndex(this.exportFramesCts, targetCtsUs, toleranceUs);
   }
 
   private async waitForBufferedTarget(
@@ -335,7 +290,7 @@ export class WebCodecsExportMode {
     this.exportFramesCts = [];
     this.exportCurrentIndex = 0;
 
-    const keyframeIndex = this.findKeyframeBefore(targetSampleIndex);
+    const keyframeIndex = findKeyframeBefore(samples, targetSampleIndex);
     await this.reconfigureDecoderForExport('restartFromKeyframe');
     this.decodeCursorIndex = keyframeIndex;
     this.player.setSampleIndex(keyframeIndex);
@@ -428,19 +383,10 @@ export class WebCodecsExportMode {
     this.isActive = true;
 
     const allSamples = this.player.getSamples();
-    this.updatePresentationOffset(allSamples);
-    const targetUs = startTimeSeconds * 1_000_000;
-    let startSampleIndex = 0;
-    let closestDiff = Infinity;
-    for (let i = 0; i < allSamples.length; i++) {
-      const diff = Math.abs(this.getNormalizedSampleTimestampUs(allSamples[i]) - targetUs);
-      if (diff < closestDiff) {
-        closestDiff = diff;
-        startSampleIndex = i;
-      }
-    }
+    this.presentationOffsetUs = computePresentationOffsetUs(allSamples);
+    const startSampleIndex = findClosestSampleIndex(allSamples, startTimeSeconds, this.presentationOffsetUs);
 
-    const keyframeIndex = this.findKeyframeBefore(startSampleIndex);
+    const keyframeIndex = findKeyframeBefore(allSamples, startSampleIndex);
     const startSample = allSamples[startSampleIndex];
     const decodeEnd = Math.min(
       allSamples.length,
@@ -476,7 +422,7 @@ export class WebCodecsExportMode {
       this.player.setCurrentFrame(this.exportFrameBuffer.get(startCts) || null);
       this.exportCurrentIndex = startFrameIndex;
     } else if (this.exportFramesCts.length > 0) {
-      const fallbackIndex = this.findClosestFrameIndex(this.getNormalizedSampleTimestampUs(startSample));
+      const fallbackIndex = findClosestFrameIndex(this.exportFramesCts, this.getNormalizedSampleTimestampUs(startSample));
       const fallbackCts = this.exportFramesCts[Math.max(0, fallbackIndex)];
       this.player.setCurrentFrame(this.exportFrameBuffer.get(fallbackCts) || null);
       this.exportCurrentIndex = Math.max(0, fallbackIndex);
@@ -586,7 +532,11 @@ export class WebCodecsExportMode {
     }
 
     const targetCts = timeSeconds * 1_000_000;
-    const targetSampleIndex = this.findClosestSampleIndex(timeSeconds);
+    const targetSampleIndex = findClosestSampleIndex(
+      this.player.getSamples(),
+      timeSeconds,
+      this.presentationOffsetUs
+    );
 
     let bestIndex = this.findBufferedFrameIndex(targetCts, this.getFrameToleranceUs());
     if (bestIndex >= 0 && bestIndex < this.exportFramesCts.length) {
@@ -664,7 +614,7 @@ export class WebCodecsExportMode {
     }
 
     if (this.exportFramesCts.length > 0) {
-      bestIndex = this.findClosestFrameIndex(targetCts);
+      bestIndex = findClosestFrameIndex(this.exportFramesCts, targetCts);
       const fallbackCts = this.exportFramesCts[Math.max(0, bestIndex)];
       this.player.setCurrentFrame(this.exportFrameBuffer.get(fallbackCts) || null);
       this.exportCurrentIndex = Math.max(0, bestIndex);
@@ -674,33 +624,6 @@ export class WebCodecsExportMode {
 
     log.error(`No frames in buffer for seek to ${timeSeconds.toFixed(3)}s`);
     throw new Error(`FAST export could not decode frame at ${timeSeconds.toFixed(3)}s`);
-  }
-
-  /**
-   * Binary search to find closest frame index for a target CTS
-   */
-  private findClosestFrameIndex(targetCts: number): number {
-    const arr = this.exportFramesCts;
-    if (arr.length === 0) {
-      return -1;
-    }
-
-    let left = 0;
-    let right = arr.length - 1;
-
-    while (left < right) {
-      const mid = Math.floor((left + right) / 2);
-      if (arr[mid] < targetCts) {
-        left = mid + 1;
-      } else {
-        right = mid;
-      }
-    }
-
-    if (left > 0 && Math.abs(arr[left - 1] - targetCts) < Math.abs(arr[left] - targetCts)) {
-      return left - 1;
-    }
-    return left;
   }
 
   /**

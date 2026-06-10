@@ -1,560 +1,63 @@
+import type { ElevenLabsVoiceSearchParams } from './elevenLabsService';
 import type {
-  ElevenLabsCreateSpeechParams,
-  ElevenLabsModel,
-  ElevenLabsVoiceSearchParams,
-  ElevenLabsVoiceSearchResult,
-} from './elevenLabsService';
-
-export type AuthProvider = 'google' | 'magic_link';
-export type BillingPlanId = 'free' | 'starter' | 'pro' | 'studio';
-
-export interface ApiErrorResponse {
-  error?: string;
-  message?: string;
-  [key: string]: unknown;
-}
-
-interface ApiErrorShape {
-  code?: string;
-  message?: string;
-}
-
-export interface CloudSessionUser {
-  email: string;
-  id: string;
-}
-
-export interface CloudMeResponse {
-  billing?: {
-    klingGenerationEnabled: boolean;
-    label: string;
-    monthlyCredits: number;
-  };
-  creditBalance: number;
-  entitlements: Record<string, string>;
-  hostedAIEnabled: boolean;
-  plan: BillingPlanId | string;
-  session: {
-    authenticated: boolean;
-    expiresAt?: string;
-    provider?: AuthProvider | string;
-  };
-  user: CloudSessionUser | null;
-}
-
-export interface BillingSummaryResponse {
-  creditBalance: number;
-  entitlements: Record<string, string>;
-  hostedAIEnabled: boolean;
-  plan: {
-    id: BillingPlanId | string;
-    label: string;
-    monthlyCredits: number;
-  };
-  recentCredits: Array<{
-    amount: number;
-    balance_after: number;
-    created_at: string;
-    description: string | null;
-    entry_type: string;
-    id: string;
-    source: string;
-  }>;
-  stripeCustomerId: string | null;
-  subscription: null | {
-    cancelAtPeriodEnd: boolean;
-    currentPeriodEnd: string | null;
-    currentPeriodStart: string | null;
-    id: string;
-    planId: BillingPlanId | string;
-    status: string;
-    stripeSubscriptionId: string;
-    updatedAt: string;
-  };
-  usage: {
-    byFeature: Array<{
-      completedCount: number;
-      creditCost: number;
-      feature: string;
-      failedCount: number;
-      pendingCount: number;
-    }>;
-    completedCount: number;
-    creditCost: number;
-    failedCount: number;
-    pendingCount: number;
-    since: string;
-  };
-  user: CloudSessionUser & {
-    avatarUrl: string | null;
-    displayName: string;
-  } | null;
-}
-
-export interface CheckoutResponse {
-  checkoutUrl: string | null;
-  destination?: 'checkout' | 'portal';
-  id: string;
-  planId: BillingPlanId | string;
-  priceId: string | null;
-}
-
-export interface PortalResponse {
-  id: string;
-  portalUrl: string;
-}
-
-export interface CloudAiGatewayError {
-  code: string;
-  details?: Record<string, unknown> | null;
-  message: string;
-}
-
-export type CloudAiGatewayKind = 'ai.audio' | 'ai.chat' | 'ai.video';
-export type CloudAiGatewayMode = 'byo' | 'hosted';
-export type CloudAiGatewayStatus =
-  | 'accepted'
-  | 'byo_required'
-  | 'completed'
-  | 'error'
-  | 'processing'
-  | 'queued'
-  | 'ready'
-  | 'requires_auth'
-  | 'requires_billing'
-  | 'unsupported';
-
-export interface CloudAiGatewayEnvelope<TData = unknown> {
-  byoRequired?: boolean;
-  capability?: Record<string, unknown>;
-  creditBalance?: number | null;
-  creditsCharged?: number | null;
-  data?: TData | null;
-  error?: CloudAiGatewayError | null;
-  kind: CloudAiGatewayKind;
-  mode: CloudAiGatewayMode;
-  next?: 'auth' | 'poll' | 'pricing' | 'upgrade';
-  ok: boolean;
-  provider: string;
-  requestId: string | null;
-  session?: {
-    authenticated: boolean;
-    email?: string | null;
-    provider?: string | null;
-  } | null;
-  status: CloudAiGatewayStatus;
-  streaming?: boolean;
-}
-
-export interface CloudAiChatMessage {
-  content: unknown;
-  name?: string;
-  role: 'assistant' | 'developer' | 'system' | 'tool' | 'user';
-  tool_call_id?: string;
-}
-
-export interface CloudAiChatRequest {
-  max_completion_tokens?: number;
-  idempotencyKey?: string;
-  max_tokens?: number;
-  messages: CloudAiChatMessage[];
-  model?: string;
-  response_format?: Record<string, unknown>;
-  stream?: boolean;
-  tool_choice?: unknown;
-  tools?: unknown;
-  temperature?: number;
-  top_p?: number;
-}
-
-export interface CloudAiVideoRequest {
-  action?: 'generate' | 'status';
-  idempotencyKey?: string;
-  params?: {
-    aspectRatio?: string;
-    duration?: number;
-    endImageUrl?: string;
-    imageInputs?: string[];
-    mode?: string;
-    multiPrompt?: Array<{ index: number; prompt: string; duration: number }>;
-    multiShots?: boolean;
-    outputFormat?: 'jpeg' | 'png' | 'webp';
-    outputType?: 'image' | 'video';
-    provider?: string;
-    prompt?: string;
-    referenceMedia?: Array<{
-      fileName?: string;
-      label?: string;
-      mediaType: 'audio' | 'image' | 'video';
-      mimeType?: string;
-      source: string;
-    }>;
-    resolution?: string;
-    sound?: boolean;
-    startImageUrl?: string;
-  };
-  taskId?: string;
-}
-
-export interface CloudAiAudioSpeechRequest {
-  idempotencyKey?: string;
-  params: ElevenLabsCreateSpeechParams;
-}
-
-export interface CloudAiAudioMusicRequest {
-  action: 'music';
-  idempotencyKey?: string;
-  params: {
-    audioWeight?: number;
-    customMode?: boolean;
-    instrumental?: boolean;
-    model?: string;
-    negativeTags?: string;
-    outputType?: 'audio';
-    prompt: string;
-    provider?: string;
-    style?: string;
-    styleWeight?: number;
-    title?: string;
-    vocalGender?: 'm' | 'f';
-    weirdnessConstraint?: number;
-  };
-}
-
-export interface CloudAiAudioMusicCreateResponse {
-  outputType: 'audio';
-  provider: string;
-  taskId: string;
-}
-
-export interface CloudAiAudioModelsResponse {
-  models: ElevenLabsModel[];
-}
-
-export type CloudAiAudioVoicesResponse = ElevenLabsVoiceSearchResult;
-
-export interface CloudAiCapabilitiesResponse {
-  byoRequired?: boolean;
-  capability?: Record<string, unknown>;
-  creditBalance?: number | null;
-  data?: {
-    capabilities?: Record<string, unknown>;
-    feature: string;
-    modes: string[];
-    pollingSupported?: boolean;
-    streamSupported?: boolean;
-  };
-  kind: CloudAiGatewayKind;
-  mode: CloudAiGatewayMode;
-  ok: boolean;
-  provider: string;
-  requestId: string | null;
-  session?: {
-    authenticated: boolean;
-    email?: string | null;
-    provider?: string | null;
-  } | null;
-  status: CloudAiGatewayStatus;
-}
-
-import { APP_VERSION } from '../version';
-
-const HOSTED_CLOUD_API_ROUTES = [
-  '/api/me',
-  '/api/auth',
-  '/api/billing',
-  '/api/stripe',
-  '/api/ai/chat',
-  '/api/ai/audio',
-  '/api/ai/video',
-];
-
-function isLocalViteOrigin(): boolean {
-  if (typeof window === 'undefined') {
-    return false;
-  }
-
-  const { hostname, port } = window.location;
-  return (hostname === 'localhost' || hostname === '127.0.0.1') && port === '5173';
-}
-
-function isHostedCloudApiRoute(path: string): boolean {
-  return HOSTED_CLOUD_API_ROUTES.some((route) => (
-    path === route
-    || path.startsWith(`${route}/`)
-    || path.startsWith(`${route}?`)
-  ));
-}
-
-function isHtmlPayload(response: Response, text: string): boolean {
-  const contentType = response.headers.get('Content-Type') ?? response.headers.get('content-type') ?? '';
-  const trimmed = text.trimStart().toLowerCase();
-
-  return contentType.includes('text/html')
-    || trimmed.startsWith('<!doctype html')
-    || trimmed.startsWith('<html');
-}
-
-function isLocalHostedApiMisconfigured(path: string, response: Response, text: string): boolean {
-  if (!isLocalViteOrigin() || !isHostedCloudApiRoute(path)) {
-    return false;
-  }
-
-  return response.status === 404 || isHtmlPayload(response, text);
-}
-
-function getLocalHostedApiError(path: string): Error {
-  return new Error(
-    `Hosted API route ${path} is not available on the Vite dev server. Start the backend with "npm run dev:api" or run both with "npm run dev:full".`,
-  );
-}
-
-function getApiErrorMessage(error: ApiErrorResponse, status: number): string {
-  if (typeof error.message === 'string' && error.message.trim().length > 0) {
-    return error.message;
-  }
-
-  if (typeof error.error === 'string' && error.error.trim().length > 0) {
-    return error.error;
-  }
-
-  const nestedError = error.error as ApiErrorShape | undefined;
-  if (nestedError && typeof nestedError.message === 'string' && nestedError.message.trim().length > 0) {
-    return nestedError.message;
-  }
-
-  return `Request failed with status ${status}`;
-}
-
-async function requestResponse(path: string, init: RequestInit = {}): Promise<Response> {
-  let response: Response;
-
-  try {
-    response = await fetch(path, {
-      credentials: 'include',
-      ...init,
-      headers: {
-        'X-App-Version': APP_VERSION,
-        ...(init.headers ?? {}),
-      },
-    });
-  } catch (error) {
-    if (isLocalViteOrigin() && isHostedCloudApiRoute(path)) {
-      throw getLocalHostedApiError(path);
-    }
-
-    throw error;
-  }
-
-  if (isLocalViteOrigin() && isHostedCloudApiRoute(path)) {
-    const text = await response.clone().text().catch(() => '');
-    if (isLocalHostedApiMisconfigured(path, response, text)) {
-      throw getLocalHostedApiError(path);
-    }
-  }
-
-  return response;
-}
-
-export interface LoginResponse {
-  authorizationUrl?: string;
-  delivery?: 'debug_link' | 'email_sent';
-  expiresAt?: string;
-  message?: string;
-  nextStep: string;
-  ok?: boolean;
-  provider: AuthProvider;
-  redirectTo?: string;
-  state: string;
-  verificationUrl?: string;
-}
-
-export interface CallbackResponse {
-  nextStep: string;
-  ok: boolean;
-  redirectTo?: string;
-  session?: CloudMeResponse['session'];
-  user?: CloudSessionUser & {
-    avatarUrl?: string | null;
-    displayName?: string;
-  };
-}
-
-export interface HostedVideoStatusResponse {
-  completedAt?: string;
-  createdAt: string;
-  error?: string;
-  id: string;
-  imageUrl?: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  videoUrl?: string;
-}
-
-export interface HostedVideoCreateResponse {
-  creditBalance: number;
-  creditsCharged: number;
-  outputType?: 'image' | 'video';
-  provider: string;
-  taskId: string;
-}
-
-export interface HostedVideoInfoResponse {
-  creditBalance: number;
-  enabled: boolean;
-  provider: string;
-}
-
-interface ApiRequestInit extends RequestInit {
-  timeoutMs?: number;
-}
-
-const DEFAULT_JSON_REQUEST_TIMEOUT_MS = 10_000;
-const AI_CHAT_REQUEST_TIMEOUT_MS = 90_000;
-
-function createRequestController(signal?: AbortSignal | null, timeoutMs?: number): {
-  cleanup: () => void;
-  didTimeout: () => boolean;
-  signal: AbortSignal | undefined;
-} {
-  if (!signal && (!timeoutMs || timeoutMs <= 0)) {
-    return {
-      cleanup: () => undefined,
-      didTimeout: () => false,
-      signal: undefined,
-    };
-  }
-
-  const controller = new AbortController();
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-  const abortFromParent = () => controller.abort(signal?.reason);
-
-  if (signal) {
-    if (signal.aborted) {
-      controller.abort(signal.reason);
-    } else {
-      signal.addEventListener('abort', abortFromParent, { once: true });
-    }
-  }
-
-  if (timeoutMs && timeoutMs > 0) {
-    timeoutHandle = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, timeoutMs);
-  }
-
-  return {
-    cleanup: () => {
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-      }
-      if (signal) {
-        signal.removeEventListener('abort', abortFromParent);
-      }
-    },
-    didTimeout: () => timedOut,
-    signal: controller.signal,
-  };
-}
-
-function getApiTimeoutError(path: string, timeoutMs: number): Error {
-  if (isLocalViteOrigin() && isHostedCloudApiRoute(path)) {
-    return new Error(
-      `Hosted API route ${path} did not respond within ${Math.round(timeoutMs / 1000)}s. Check that "npm run dev:api" is healthy and restart the local backend if needed.`,
-    );
-  }
-
-  return new Error(`Request to ${path} timed out after ${timeoutMs}ms.`);
-}
-
-async function requestJson<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
-  const { timeoutMs = DEFAULT_JSON_REQUEST_TIMEOUT_MS, ...requestInit } = init;
-  const requestController = createRequestController(requestInit.signal, timeoutMs);
-  let response: Response;
-
-  try {
-    response = await fetch(path, {
-      credentials: 'include',
-      ...requestInit,
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        'X-App-Version': APP_VERSION,
-        ...(requestInit.headers ?? {}),
-      },
-      signal: requestController.signal,
-    });
-  } catch (error) {
-    requestController.cleanup();
-
-    if (requestController.didTimeout()) {
-      throw getApiTimeoutError(path, timeoutMs);
-    }
-
-    if (isLocalViteOrigin() && isHostedCloudApiRoute(path)) {
-      throw getLocalHostedApiError(path);
-    }
-
-    throw error;
-  }
-
-  requestController.cleanup();
-  const text = await response.text();
-
-  if (isLocalHostedApiMisconfigured(path, response, text)) {
-    throw getLocalHostedApiError(path);
-  }
-
-  let data: T;
-
-  try {
-    data = text ? (JSON.parse(text) as T) : ({} as T);
-  } catch (error) {
-    if (isLocalViteOrigin() && isHostedCloudApiRoute(path)) {
-      throw getLocalHostedApiError(path);
-    }
-
-    throw error;
-  }
-
-  if (!response.ok) {
-    const error = data as T & ApiErrorResponse;
-    throw new Error(getApiErrorMessage(error, response.status));
-  }
-
-  return data;
-}
-
-async function requestBinary(path: string, init: RequestInit = {}): Promise<{ blob: Blob; response: Response }> {
-  const response = await requestResponse(path, {
-    ...init,
-    headers: {
-      Accept: 'audio/mpeg',
-      ...(init.headers ?? {}),
-    },
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    let message = `Request failed with status ${response.status}`;
-
-    if (text.trim()) {
-      try {
-        message = getApiErrorMessage(JSON.parse(text) as ApiErrorResponse, response.status);
-      } catch {
-        message = text.trim();
-      }
-    }
-
-    throw new Error(message);
-  }
-
-  return {
-    blob: await response.blob(),
-    response,
-  };
-}
+  AuthProvider,
+  BillingPlanId,
+  BillingSummaryResponse,
+  CallbackResponse,
+  CheckoutResponse,
+  CloudAiAudioModelsResponse,
+  CloudAiAudioMusicCreateResponse,
+  CloudAiAudioMusicRequest,
+  CloudAiAudioSpeechRequest,
+  CloudAiAudioVoicesResponse,
+  CloudAiCapabilitiesResponse,
+  CloudAiChatRequest,
+  CloudAiGatewayEnvelope,
+  CloudAiVideoRequest,
+  CloudMeResponse,
+  CloudSessionUser,
+  HostedVideoCreateResponse,
+  HostedVideoInfoResponse,
+  HostedVideoStatusResponse,
+  LoginResponse,
+  PortalResponse,
+} from './cloud/apiContracts';
+import {
+  AI_CHAT_REQUEST_TIMEOUT_MS,
+  requestBinary,
+  requestJson,
+  requestResponse,
+} from './cloud/transport';
+
+export type {
+  ApiErrorResponse,
+  AuthProvider,
+  BillingPlanId,
+  BillingSummaryResponse,
+  CallbackResponse,
+  CheckoutResponse,
+  CloudAiAudioModelsResponse,
+  CloudAiAudioMusicCreateResponse,
+  CloudAiAudioMusicRequest,
+  CloudAiAudioSpeechRequest,
+  CloudAiAudioVoicesResponse,
+  CloudAiCapabilitiesResponse,
+  CloudAiChatMessage,
+  CloudAiChatRequest,
+  CloudAiGatewayEnvelope,
+  CloudAiGatewayError,
+  CloudAiGatewayKind,
+  CloudAiGatewayMode,
+  CloudAiGatewayStatus,
+  CloudAiVideoRequest,
+  CloudMeResponse,
+  CloudSessionUser,
+  HostedVideoCreateResponse,
+  HostedVideoInfoResponse,
+  HostedVideoStatusResponse,
+  LoginResponse,
+  PortalResponse,
+} from './cloud/apiContracts';
 
 export const cloudApi = {
   auth: {

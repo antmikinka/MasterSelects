@@ -1,8 +1,5 @@
 import {
-  Alignment,
   EventType,
-  Fit,
-  Layout,
   Rive,
   StateMachineInputType,
   type AssetLoadCallback,
@@ -17,17 +14,24 @@ import {
   coerceVectorAnimationInputValue,
   getVectorAnimationDataBindingDefaultValue,
   getVectorAnimationInputDefaultValue,
-  isVectorAnimationBounceMode,
-  isVectorAnimationReverseStartMode,
   mergeVectorAnimationSettings,
-  normalizeVectorAnimationRenderDimension,
   normalizeVectorAnimationStateName,
-  shouldLoopVectorAnimation,
   type VectorAnimationClipSettings,
-  type VectorAnimationDataBindingProperty,
 } from '../../types/vectorAnimation';
 import { Logger } from '../logger';
 import { prepareRiveAsset } from './riveMetadata';
+import { resolveAnimationTime } from './riveRuntime/rivePlaybackPlanning';
+import {
+  createLayout,
+  DEFAULT_CANVAS_SIZE,
+  getDataBindingPropertiesForSettings,
+  getInstanceKey,
+  getPreparePromiseKey,
+  getRenderSize,
+  getSelectedAnimationName,
+  getSettingsKey,
+  parseRiveColorValue,
+} from './riveRuntime/riveSettingsMapping';
 import type {
   PreparedRiveAsset,
   RiveRuntimePrepareResult,
@@ -39,9 +43,7 @@ import {
 } from './vectorRuntimeReporting';
 
 const log = Logger.create('RiveRuntime');
-const DEFAULT_CANVAS_SIZE = 512;
 const DEFAULT_RIVE_DURATION = 5;
-const FRAME_EPSILON = 1 / 120;
 
 interface RiveRuntimeEntry {
   asset: PreparedRiveAsset;
@@ -70,19 +72,6 @@ function createCanvas(width?: number, height?: number): HTMLCanvasElement {
   canvas.height = height && height > 0 ? height : DEFAULT_CANVAS_SIZE;
   canvas.dataset.masterselectsDynamic = 'rive';
   return canvas;
-}
-
-function getFit(settings: VectorAnimationClipSettings): Fit {
-  if (settings.fit === 'cover') return Fit.Cover;
-  if (settings.fit === 'fill') return Fit.Fill;
-  return Fit.Contain;
-}
-
-function createLayout(settings: VectorAnimationClipSettings): Layout {
-  return new Layout({
-    fit: getFit(settings),
-    alignment: Alignment.Center,
-  });
 }
 
 function waitForRiveLoad(params: ConstructorParameters<typeof Rive>[0]): Promise<Rive> {
@@ -114,189 +103,9 @@ function createAssetLoader(clipId: string): AssetLoadCallback {
   };
 }
 
-function getSettingsKey(settings: VectorAnimationClipSettings): string {
-  return JSON.stringify({
-    backgroundColor: settings.backgroundColor ?? null,
-    fit: settings.fit,
-    loop: settings.loop,
-    endBehavior: settings.endBehavior,
-    playbackMode: settings.playbackMode,
-    renderWidth: settings.renderWidth ?? null,
-    renderHeight: settings.renderHeight ?? null,
-  });
-}
-
-function getInstanceKey(settings: VectorAnimationClipSettings): string {
-  return JSON.stringify({
-    animationName: settings.animationName ?? null,
-    artboard: settings.artboard ?? null,
-    stateMachineName: settings.stateMachineName ?? null,
-    viewModelName: settings.viewModelName ?? null,
-    viewModelInstanceName: settings.viewModelInstanceName ?? null,
-  });
-}
-
-function getRenderSize(
-  entry: RiveRuntimeEntry,
-  settings: VectorAnimationClipSettings,
-): { width: number; height: number } {
-  const width = normalizeVectorAnimationRenderDimension(settings.renderWidth)
-    ?? entry.asset.metadata.width
-    ?? DEFAULT_CANVAS_SIZE;
-  const height = normalizeVectorAnimationRenderDimension(settings.renderHeight)
-    ?? entry.asset.metadata.height
-    ?? DEFAULT_CANVAS_SIZE;
-  return { width, height };
-}
-
 function clearCanvas(canvas: HTMLCanvasElement): void {
   const context = canvas.getContext('2d');
   context?.clearRect(0, 0, canvas.width, canvas.height);
-}
-
-function getSourceDuration(clip: TimelineClip, duration: number): number {
-  if (Number.isFinite(duration) && duration > 0) {
-    return duration;
-  }
-  if (Number.isFinite(clip.source?.naturalDuration) && (clip.source?.naturalDuration ?? 0) > 0) {
-    return clip.source!.naturalDuration!;
-  }
-  return Math.max(clip.duration, FRAME_EPSILON);
-}
-
-function normalizeModulo(value: number, divisor: number): number {
-  if (!Number.isFinite(divisor) || divisor <= 0) {
-    return 0;
-  }
-  const result = value % divisor;
-  return result < 0 ? result + divisor : result;
-}
-
-function resolveAnimationTime(
-  clip: TimelineClip,
-  animationDuration: number,
-  settings: VectorAnimationClipSettings,
-  timelineTime: number,
-): number | null {
-  const clipLocalTime = Math.max(0, timelineTime - clip.startTime);
-  const sourceDuration = getSourceDuration(clip, animationDuration);
-  const sourceMaxTime = Math.max(0, sourceDuration - FRAME_EPSILON);
-  const sourceInPoint = Math.max(0, Math.min(clip.inPoint, sourceMaxTime));
-  const rawSourceOutPoint =
-    Number.isFinite(clip.outPoint) && clip.outPoint > sourceInPoint
-      ? clip.outPoint
-      : sourceDuration;
-  const sourceOutPoint = Math.max(
-    sourceInPoint + FRAME_EPSILON,
-    Math.min(rawSourceOutPoint, sourceDuration),
-  );
-  const sourceWindowDuration = Math.max(sourceOutPoint - sourceInPoint, FRAME_EPSILON);
-  const shouldLoop = shouldLoopVectorAnimation(settings);
-  const isBounceMode = isVectorAnimationBounceMode(settings.playbackMode);
-  const cycleDuration = isBounceMode
-    ? sourceWindowDuration * 2
-    : sourceWindowDuration;
-
-  if (!shouldLoop && settings.endBehavior === 'clear' && clipLocalTime >= cycleDuration) {
-    return null;
-  }
-
-  const wrappedLocalTime = shouldLoop
-    ? normalizeModulo(clipLocalTime, cycleDuration)
-    : Math.max(0, Math.min(clipLocalTime, Math.max(0, cycleDuration - FRAME_EPSILON)));
-  const sourceWindowLocalTime = isBounceMode && wrappedLocalTime > sourceWindowDuration
-    ? cycleDuration - wrappedLocalTime
-    : Math.min(wrappedLocalTime, sourceWindowDuration - FRAME_EPSILON);
-  const startsReverse = isVectorAnimationReverseStartMode(settings.playbackMode);
-  const reversePlayback = Boolean(clip.reversed) !== startsReverse;
-
-  const sourceTime = reversePlayback
-    ? sourceOutPoint - sourceWindowLocalTime
-    : sourceInPoint + sourceWindowLocalTime;
-
-  const maxTime = Math.max(0, animationDuration - FRAME_EPSILON);
-  return Math.max(0, Math.min(sourceTime, maxTime));
-}
-
-function getSelectedAnimationName(
-  entry: RiveRuntimeEntry,
-  settings: VectorAnimationClipSettings,
-): string | undefined {
-  return (
-    normalizeVectorAnimationStateName(settings.animationName) ??
-    entry.asset.metadata.defaultAnimationName ??
-    entry.asset.metadata.animationNames?.[0]
-  );
-}
-
-function parseRiveColorValue(value: string | number | boolean): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.round(value);
-  }
-  if (typeof value === 'boolean') {
-    return value ? 0xffffffff : 0xff000000;
-  }
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (/^#[0-9a-f]{6}$/i.test(trimmed)) {
-    const rgb = Number.parseInt(trimmed.slice(1), 16);
-    return 0xff000000 | rgb;
-  }
-  if (/^#[0-9a-f]{8}$/i.test(trimmed)) {
-    return Number.parseInt(trimmed.slice(1), 16);
-  }
-  const numericValue = Number(trimmed);
-  return Number.isFinite(numericValue) ? Math.round(numericValue) : null;
-}
-
-function getDataBindingPropertiesForSettings(
-  entry: RiveRuntimeEntry,
-  settings: VectorAnimationClipSettings,
-): VectorAnimationDataBindingProperty[] {
-  const viewModelName = settings.viewModelName ?? entry.asset.metadata.defaultViewModelName;
-  const properties = entry.asset.metadata.dataBindingProperties ?? [];
-  return viewModelName
-    ? properties.filter((property) => property.viewModelName === viewModelName)
-    : properties;
-}
-
-const rivePrepareFileIds = new WeakMap<File, number>();
-let nextRivePrepareFileId = 1;
-
-function getPrepareFileKey(file: File | undefined): string {
-  if (!file) {
-    return 'none';
-  }
-
-  let id = rivePrepareFileIds.get(file);
-  if (!id) {
-    id = nextRivePrepareFileId;
-    nextRivePrepareFileId += 1;
-    rivePrepareFileIds.set(file, id);
-  }
-
-  return `${id}:${file.name}:${file.size}:${file.lastModified}:${file.type}`;
-}
-
-function getPrepareRuntimeOptionsKey(options?: VectorRuntimePrepareOptions): string {
-  if (!options) {
-    return 'default';
-  }
-  return [
-    options.policyId ?? 'interactive',
-    options.ownerId ?? 'default-owner',
-    options.resourceId ?? 'default-resource',
-  ].join(':');
-}
-
-function getPreparePromiseKey(
-  clip: TimelineClip,
-  fileOverride?: File,
-  runtimeOptions?: VectorRuntimePrepareOptions,
-): string {
-  return `${clip.id}:${getPrepareFileKey(fileOverride ?? clip.file)}:${getPrepareRuntimeOptionsKey(runtimeOptions)}`;
 }
 
 export class RiveRuntimeManager {
@@ -373,20 +182,7 @@ export class RiveRuntimeManager {
         canvas,
         buffer: asset.payload.data.slice(0),
         artboard: settings.artboard,
-        animations: getSelectedAnimationName(
-          {
-            asset,
-            canvas,
-            clipId: clip.id,
-            isReady: false,
-            player: null as unknown as Rive,
-            settingsKey: '',
-            instanceKey: '',
-            stateMachineInputs: new Map(),
-            riveEventHandler: () => undefined,
-          },
-          settings,
-        ),
+        animations: getSelectedAnimationName(asset.metadata, settings),
         stateMachines: normalizeVectorAnimationStateName(settings.stateMachineName),
         layout: createLayout(settings),
         autoplay: false,
@@ -446,7 +242,7 @@ export class RiveRuntimeManager {
       return;
     }
 
-    const renderSize = getRenderSize(entry, settings);
+    const renderSize = getRenderSize(entry.asset.metadata, settings);
     if (entry.canvas.width !== renderSize.width || entry.canvas.height !== renderSize.height) {
       entry.canvas.width = renderSize.width;
       entry.canvas.height = renderSize.height;
@@ -466,7 +262,7 @@ export class RiveRuntimeManager {
     try {
       entry.player.reset({
         artboard: settings.artboard,
-        animations: getSelectedAnimationName(entry, settings),
+        animations: getSelectedAnimationName(entry.asset.metadata, settings),
         stateMachines: normalizeVectorAnimationStateName(settings.stateMachineName),
         autoplay: false,
         autoBind: false,
@@ -623,7 +419,7 @@ export class RiveRuntimeManager {
       return;
     }
 
-    const properties = getDataBindingPropertiesForSettings(entry, settings);
+    const properties = getDataBindingPropertiesForSettings(entry.asset.metadata, settings);
     const valueKey = JSON.stringify(properties.map((property) => [
       property.viewModelName,
       property.name,
@@ -720,7 +516,7 @@ export class RiveRuntimeManager {
       return entry.canvas;
     }
 
-    const animationName = getSelectedAnimationName(entry, settings);
+    const animationName = getSelectedAnimationName(entry.asset.metadata, settings);
     if (animationName) {
       entry.player.scrub(animationName, animationTime);
     }

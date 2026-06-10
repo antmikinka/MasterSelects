@@ -59,6 +59,21 @@ export interface DragState {
   viewport: SceneViewport;
 }
 
+export interface SceneGizmoDragStartParams {
+  clientX: number;
+  clientY: number;
+  currentTarget: Element;
+  object: PreviewSceneObject;
+  axis: SceneGizmoDragAxis;
+  direction: { x: number; y: number };
+  axisVector: { x: number; y: number; z: number };
+  pixelsPerUnit: number;
+  freePixelsPerUnit: { x: number; y: number };
+  rotationRingClientRect?: DragState['rotationRingClientRect'];
+  rotationRingPoints?: ProjectedRotateRingPoint[];
+  rotationStartRingAngle?: number;
+}
+
 export interface DragRuntime {
   target: HTMLElement | null;
   hasPointerLock: boolean;

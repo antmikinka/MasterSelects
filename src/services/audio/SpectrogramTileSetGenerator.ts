@@ -16,14 +16,14 @@ import {
   SPECTROGRAM_TILE_PAYLOAD_VERSION,
   SPECTROGRAM_TILE_SET_MANIFEST_VERSION,
   createSpectrogramTileSetManifest,
-  encodeSpectrogramTilePayload,
   type SpectrogramFftSize,
-  type SpectrogramTileRef,
   type SpectrogramTileSetManifest,
 } from './spectrogramTileManifest';
+import { generateAndStoreSpectrogramTiles } from './spectrogram/payloadAssembly';
+
+export { SPECTROGRAM_TILE_PAYLOAD_MIME_TYPE } from './spectrogram/payloadAssembly';
 
 export const SPECTROGRAM_TILE_SET_GENERATOR_VERSION = 'masterselects.spectrogram-tile-set-generator@1.0.0';
-export const SPECTROGRAM_TILE_PAYLOAD_MIME_TYPE = 'application/vnd.masterselects.spectrogram-tile';
 
 export type SpectrogramTileSetGenerationPhase =
   | 'queued'
@@ -182,11 +182,6 @@ function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, value));
 }
 
-function clamp01(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(1, value));
-}
-
 function finiteNumber(value: number): boolean {
   return typeof value === 'number' && Number.isFinite(value);
 }
@@ -280,121 +275,6 @@ function normalizeParameters(
   };
 }
 
-function hannWindow(size: number): Float32Array {
-  const window = new Float32Array(size);
-  if (size <= 1) {
-    window[0] = 1;
-    return window;
-  }
-
-  for (let index = 0; index < size; index += 1) {
-    window[index] = 0.5 * (1 - Math.cos((2 * Math.PI * index) / (size - 1)));
-  }
-
-  return window;
-}
-
-function fftRadix2(real: Float32Array, imag: Float32Array): void {
-  const size = real.length;
-  let reversed = 0;
-
-  for (let index = 1; index < size; index += 1) {
-    let bit = size >> 1;
-    while ((reversed & bit) !== 0) {
-      reversed ^= bit;
-      bit >>= 1;
-    }
-    reversed ^= bit;
-
-    if (index < reversed) {
-      const tmpReal = real[index];
-      real[index] = real[reversed];
-      real[reversed] = tmpReal;
-      const tmpImag = imag[index];
-      imag[index] = imag[reversed];
-      imag[reversed] = tmpImag;
-    }
-  }
-
-  for (let length = 2; length <= size; length <<= 1) {
-    const angle = (-2 * Math.PI) / length;
-    const stepReal = Math.cos(angle);
-    const stepImag = Math.sin(angle);
-
-    for (let offset = 0; offset < size; offset += length) {
-      let twiddleReal = 1;
-      let twiddleImag = 0;
-
-      for (let pair = 0; pair < length / 2; pair += 1) {
-        const evenIndex = offset + pair;
-        const oddIndex = evenIndex + length / 2;
-        const oddReal = real[oddIndex] * twiddleReal - imag[oddIndex] * twiddleImag;
-        const oddImag = real[oddIndex] * twiddleImag + imag[oddIndex] * twiddleReal;
-
-        real[oddIndex] = real[evenIndex] - oddReal;
-        imag[oddIndex] = imag[evenIndex] - oddImag;
-        real[evenIndex] += oddReal;
-        imag[evenIndex] += oddImag;
-
-        const nextTwiddleReal = twiddleReal * stepReal - twiddleImag * stepImag;
-        twiddleImag = twiddleReal * stepImag + twiddleImag * stepReal;
-        twiddleReal = nextTwiddleReal;
-      }
-    }
-  }
-}
-
-function readMixedSample(channelData: Float32Array[], sampleIndex: number): number {
-  if (sampleIndex < 0) return 0;
-  let sum = 0;
-  let count = 0;
-
-  for (const data of channelData) {
-    if (sampleIndex >= data.length) continue;
-    const sample = data[sampleIndex] ?? 0;
-    sum += Number.isFinite(sample) ? sample : 0;
-    count += 1;
-  }
-
-  return count > 0 ? sum / count : 0;
-}
-
-function writeFrameMagnitudes(input: {
-  channelData: Float32Array[];
-  frameIndex: number;
-  hopSize: number;
-  fftSize: number;
-  frequencyBinCount: number;
-  window: Float32Array;
-  minDb: number;
-  maxDb: number;
-  real: Float32Array;
-  imag: Float32Array;
-  target: Float32Array;
-  targetFrameOffset: number;
-}): void {
-  input.real.fill(0);
-  input.imag.fill(0);
-  const sampleStart = input.frameIndex * input.hopSize;
-
-  for (let sampleOffset = 0; sampleOffset < input.fftSize; sampleOffset += 1) {
-    input.real[sampleOffset] = readMixedSample(input.channelData, sampleStart + sampleOffset)
-      * (input.window[sampleOffset] ?? 1);
-  }
-
-  fftRadix2(input.real, input.imag);
-
-  const dbRange = input.maxDb - input.minDb;
-  const amplitudeScale = input.fftSize / 2;
-  const targetOffset = input.targetFrameOffset * input.frequencyBinCount;
-
-  for (let binIndex = 0; binIndex < input.frequencyBinCount; binIndex += 1) {
-    const magnitude = Math.hypot(input.real[binIndex], input.imag[binIndex]) / amplitudeScale;
-    const db = 20 * Math.log10(Math.max(1e-12, magnitude));
-    input.target[targetOffset + binIndex] = clamp01((db - input.minDb) / dbRange);
-  }
-}
-
 async function deterministicHashId(prefix: string, cacheKey: string): Promise<string> {
   const bytes = textEncoder.encode(cacheKey);
   const hash = await sha256ArrayBuffer(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
@@ -480,12 +360,19 @@ export class SpectrogramTileSetGenerator {
       });
       throwIfCancelled(options.signal, jobId);
 
-      const stored = await this.generateAndStoreTiles({
-        request,
+      const stored = await generateAndStoreSpectrogramTiles({
+        artifactStore: this.artifactStore,
+        buffer: request.buffer,
+        mediaFileId: request.mediaFileId,
+        sourceFingerprint: request.sourceFingerprint,
+        clipAudioStateHash: request.clipAudioStateHash,
+        cacheKey: context.cacheKey,
         parameters,
         analyzerVersion,
         generatedAt,
-        context,
+        now: this.now,
+        emitProgress: (update) => this.emitProgress(context, update),
+        throwIfCancelled: () => throwIfCancelled(context.signal, context.jobId),
       });
       const manifest = createSpectrogramTileSetManifest({
         mediaFileId: request.mediaFileId,
@@ -588,128 +475,6 @@ export class SpectrogramTileSetGenerator {
           },
         );
     }
-  }
-
-  private async generateAndStoreTiles(input: {
-    request: SpectrogramTileSetGenerateRequest;
-    parameters: NormalizedSpectrogramParameters;
-    analyzerVersion: string;
-    generatedAt: string;
-    context: GenerationContext;
-  }): Promise<{
-    tiles: SpectrogramTileRef[];
-    payloadRefs: AudioArtifactRef[];
-    warnings: AudioAnalysisWarning[];
-  }> {
-    const { request, parameters, analyzerVersion, generatedAt, context } = input;
-    const payloadRefs: AudioArtifactRef[] = [];
-    const tiles: SpectrogramTileRef[] = [];
-    const channelData = Array.from({ length: request.buffer.numberOfChannels }, (_, index) => (
-      request.buffer.getChannelData(index)
-    ));
-    const window = hannWindow(parameters.fftSize);
-    const real = new Float32Array(parameters.fftSize);
-    const imag = new Float32Array(parameters.fftSize);
-    const tileCount = Math.max(1, Math.ceil(parameters.frameCount / parameters.tileWidthFrames));
-
-    for (let tileIndex = 0; tileIndex < tileCount; tileIndex += 1) {
-      const frameStart = tileIndex * parameters.tileWidthFrames;
-      const frameCount = Math.min(parameters.tileWidthFrames, parameters.frameCount - frameStart);
-      const values = new Float32Array(frameCount * parameters.frequencyBinCount);
-
-      this.emitProgress(context, {
-        phase: 'analyzing',
-        percent: 5 + (tileIndex / tileCount) * 70,
-        timestamp: this.now(),
-        tileIndex,
-        frameStart,
-        frameCount,
-        message: 'Analyzing spectrogram tile',
-      });
-      throwIfCancelled(context.signal, context.jobId);
-
-      for (let localFrame = 0; localFrame < frameCount; localFrame += 1) {
-        writeFrameMagnitudes({
-          channelData,
-          frameIndex: frameStart + localFrame,
-          hopSize: parameters.hopSize,
-          fftSize: parameters.fftSize,
-          frequencyBinCount: parameters.frequencyBinCount,
-          window,
-          minDb: parameters.minDb,
-          maxDb: parameters.maxDb,
-          real,
-          imag,
-          target: values,
-          targetFrameOffset: localFrame,
-        });
-      }
-
-      this.emitProgress(context, {
-        phase: 'storing-payloads',
-        percent: 75 + (tileIndex / tileCount) * 20,
-        timestamp: this.now(),
-        tileIndex,
-        frameStart,
-        frameCount,
-        message: 'Storing spectrogram tile payload',
-      });
-      throwIfCancelled(context.signal, context.jobId);
-
-      const payloadRef = await this.artifactStore.putPayload(encodeSpectrogramTilePayload({
-        header: {
-          schemaVersion: SPECTROGRAM_TILE_PAYLOAD_VERSION,
-          tileIndex,
-          channelIndex: 0,
-          frameStart,
-          frameCount,
-          frequencyBinStart: 0,
-          frequencyBinCount: parameters.frequencyBinCount,
-          minDb: parameters.minDb,
-          maxDb: parameters.maxDb,
-          valueLayout: 'time-major',
-          valueEncoding: 'normalized-db',
-        },
-        values,
-      }), {
-        mediaFileId: request.mediaFileId,
-        kind: 'spectrogram-tiles',
-        sourceFingerprint: request.sourceFingerprint,
-        clipAudioStateHash: request.clipAudioStateHash,
-        mimeType: SPECTROGRAM_TILE_PAYLOAD_MIME_TYPE,
-        encoding: 'raw',
-        analyzerVersion,
-        createdAt: generatedAt,
-        sourceRefs: [`audio-analysis-cache:${context.cacheKey}`],
-        metadata: {
-          cacheKey: context.cacheKey,
-          tileIndex,
-          channelIndex: 0,
-          frameStart,
-          frameCount,
-          frequencyBinStart: 0,
-          frequencyBinCount: parameters.frequencyBinCount,
-          valueEncoding: 'normalized-db',
-        },
-      });
-
-      payloadRefs.push(payloadRef);
-      tiles.push({
-        tileIndex,
-        channelIndex: 0,
-        frameStart,
-        frameCount,
-        frequencyBinStart: 0,
-        frequencyBinCount: parameters.frequencyBinCount,
-        payloadRef,
-      });
-    }
-
-    return {
-      tiles,
-      payloadRefs,
-      warnings: [],
-    };
   }
 
   private emitProgress(

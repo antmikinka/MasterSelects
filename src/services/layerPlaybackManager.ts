@@ -6,26 +6,25 @@ import type { TimelineClip, Layer, NestedCompositionData } from '../types';
 import { engine } from '../engine/WebGPUEngine';
 import { useMediaStore } from '../stores/mediaStore';
 import { useTimelineStore } from '../stores/timeline';
-import {
-  bindSourceRuntimeForOwner,
-  planSourceRuntimeBindingForOwner,
-} from './mediaRuntime/clipBindings';
 import { mediaRuntimeRegistry } from './mediaRuntime/registry';
 import { flags } from '../engine/featureFlags';
 import { Logger } from './logger';
 import { slotDeckManager } from './slotDeckManager';
 import { vectorAnimationRuntimeManager } from './vectorAnimation/VectorAnimationRuntimeManager';
-import { isVectorAnimationSourceType, type VectorAnimationProvider } from '../types/vectorAnimation';
+import { isVectorAnimationSourceType } from '../types/vectorAnimation';
 import {
   releaseReportedClipRuntimeResources,
   reportClipRuntimeResources,
-  reservePlannedClipRuntimeResources,
 } from './timeline/runtimeResourceReporting';
-import {
-  startTimelineImageHydration,
-  type TimelineImageHydrationHandle,
-} from './timeline/imageRuntimeHydrator';
+import type { TimelineImageHydrationHandle } from './timeline/imageRuntimeHydrator';
 import { createLayerTimelineClip } from './layerPlayback/clipHydration';
+import {
+  loadAudioForLayerClip,
+  loadImageForLayerClip,
+  loadVectorAnimationForLayerClip,
+  loadVideoForLayerClip,
+  type LayerClipMediaHost,
+} from './layerPlayback/clipMediaLoaders';
 import { buildBackgroundInnerLayers } from './layerPlayback/innerLayerBuilder';
 import type { LayerCompState, LayerPlaybackInfo, PlaybackWindow } from './layerPlayback/layerPlaybackState';
 import {
@@ -36,7 +35,6 @@ import {
 } from './layerPlayback/playbackTiming';
 import { syncAudioClipToPlayback, syncVideoClipToPlayback } from './layerPlayback/mediaSync';
 import { createActiveLayerState } from './layerPlayback/stateFactory';
-import { createBackgroundImageDemand, getRuntimeSrcKind } from './layerPlayback/runtimeDemand';
 
 const log = Logger.create('LayerPlayback');
 
@@ -70,6 +68,18 @@ class LayerPlaybackManager {
 
   // Layer index (0=A, 1=B, 2=C, 3=D) → loaded composition state
   private layerStates = new Map<number, LayerCompState>();
+
+  // Host surface for clipMediaLoaders: pending-handle maps and cleanup stay owned here.
+  private readonly mediaLoaderHost: LayerClipMediaHost = {
+    pendingVideoDisposers: this.pendingVideoDisposers,
+    pendingImageHydrations: this.pendingImageHydrations,
+    getRuntimeOwnerId: (layerIndex, clipId) => this.getRuntimeOwnerId(layerIndex, clipId),
+    isClipActive: (layerIndex, clip) =>
+      this.layerStates.get(layerIndex)?.clips.includes(clip) === true,
+    cleanupVideoElement: (video) => this.cleanupVideoElement(video),
+    disposePendingVideo: (ownerId) => this.disposePendingVideo(ownerId),
+    reportClipResources: (layerIndex, clip) => this.reportClipResources(layerIndex, clip),
+  };
 
   /**
    * Activate a composition on a layer — loads its timelineData and creates media elements
@@ -152,13 +162,13 @@ class LayerPlaybackManager {
 
       if (sourceType === 'video' && fileUrl) {
         clip.isLoading = true;
-        this.loadVideoForClip(clip, layerIndex, fileUrl, serializedClip.mediaFileId);
+        loadVideoForLayerClip(this.mediaLoaderHost, clip, layerIndex, fileUrl, serializedClip.mediaFileId);
       } else if (sourceType === 'audio' && fileUrl) {
         clip.isLoading = true;
-        this.loadAudioForClip(clip, layerIndex, fileUrl, serializedClip.mediaFileId);
+        loadAudioForLayerClip(this.mediaLoaderHost, clip, layerIndex, fileUrl, serializedClip.mediaFileId);
       } else if (sourceType === 'image' && fileUrl) {
         clip.isLoading = true;
-        this.loadImageForClip(clip, layerIndex, fileUrl);
+        loadImageForLayerClip(this.mediaLoaderHost, clip, layerIndex, fileUrl);
       } else if (isVectorAnimationSourceType(sourceType) && mediaFile?.file) {
         clip.isLoading = true;
         clip.source = {
@@ -167,7 +177,7 @@ class LayerPlaybackManager {
           naturalDuration: serializedClip.naturalDuration,
           vectorAnimationSettings: serializedClip.vectorAnimationSettings,
         };
-        this.loadVectorAnimationForClip(clip, layerIndex, mediaFile.file, sourceType);
+        loadVectorAnimationForLayerClip(this.mediaLoaderHost, clip, layerIndex, mediaFile.file, sourceType);
       } else {
         clip.isLoading = false;
       }
@@ -468,288 +478,6 @@ class LayerPlaybackManager {
    */
   getActiveLayerIndices(): number[] {
     return Array.from(this.layerStates.keys());
-  }
-
-  // === Private media loading methods ===
-
-  private loadVideoForClip(clip: TimelineClip, layerIndex: number, url: string, mediaFileId: string): void {
-    const ownerId = this.getRuntimeOwnerId(layerIndex, clip.id);
-    const runtimePlan = planSourceRuntimeBindingForOwner({
-      ownerId,
-      source: {
-        type: 'video',
-        mediaFileId,
-        naturalDuration: clip.source?.naturalDuration ?? clip.duration,
-      },
-      mediaFileId,
-      sessionPolicy: 'background',
-      sessionOwnerId: ownerId,
-    });
-    const admission = reservePlannedClipRuntimeResources({
-      policyId: 'background',
-      ownerId,
-      ownerType: 'clip',
-      clip,
-      source: runtimePlan?.source ?? {
-        type: 'video',
-        mediaFileId,
-        naturalDuration: clip.source?.naturalDuration ?? clip.duration,
-      },
-      mediaElementKind: 'video',
-      srcKind: getRuntimeSrcKind(url),
-      label: `Background layer ${layerIndex} clip resource`,
-      tags: ['background-layer', `layer-${layerIndex}`],
-    });
-    if (!admission.admitted) {
-      clip.isLoading = false;
-      log.debug('Background video load skipped by runtime admission', {
-        clipId: clip.id,
-        layerIndex,
-        reason: admission.decision.reason,
-        rejectedUnits: admission.decision.rejectedUnits.map((entry) => entry.unit),
-      });
-      return;
-    }
-
-    this.disposePendingVideo(ownerId);
-    const video = document.createElement('video');
-    video.src = url;
-    video.muted = true; // Background layers muted by default
-    video.playsInline = true;
-    video.preload = 'auto';
-    video.crossOrigin = 'anonymous';
-
-    let disposed = false;
-    const disposePending = () => {
-      if (disposed) {
-        return;
-      }
-      disposed = true;
-      video.removeEventListener('canplaythrough', onCanPlayThrough);
-      video.removeEventListener('error', onError);
-      admission.release();
-      this.cleanupVideoElement(video);
-      if (this.pendingVideoDisposers.get(ownerId) === disposePending) {
-        this.pendingVideoDisposers.delete(ownerId);
-      }
-    };
-    const onCanPlayThrough = () => {
-      if (disposed) {
-        return;
-      }
-      if (this.layerStates.get(layerIndex)?.clips.includes(clip) !== true) {
-        disposePending();
-        return;
-      }
-      disposed = true;
-      video.removeEventListener('error', onError);
-      if (this.pendingVideoDisposers.get(ownerId) === disposePending) {
-        this.pendingVideoDisposers.delete(ownerId);
-      }
-      clip.source = bindSourceRuntimeForOwner({
-        ownerId,
-        source: {
-          type: 'video',
-          videoElement: video,
-          naturalDuration: video.duration,
-          mediaFileId,
-        },
-        mediaFileId,
-        sessionPolicy: 'background',
-        sessionOwnerId: ownerId,
-      });
-      this.reportClipResources(layerIndex, clip);
-      clip.isLoading = false;
-      log.debug(`Video loaded for background clip ${clip.name} on layer ${layerIndex}`);
-      // Pre-cache frame via createImageBitmap for immediate scrubbing without play()
-      engine.preCacheVideoFrame(video);
-    };
-
-    const onError = () => {
-      disposePending();
-      clip.isLoading = false;
-      log.warn(`Failed to load video for background clip ${clip.name}`);
-    };
-
-    this.pendingVideoDisposers.set(ownerId, disposePending);
-    video.addEventListener('canplaythrough', onCanPlayThrough, { once: true });
-    video.addEventListener('error', onError, { once: true });
-  }
-
-  private loadAudioForClip(clip: TimelineClip, layerIndex: number, url: string, mediaFileId: string): void {
-    const ownerId = this.getRuntimeOwnerId(layerIndex, clip.id);
-    const runtimePlan = planSourceRuntimeBindingForOwner({
-      ownerId,
-      source: {
-        type: 'audio',
-        mediaFileId,
-        naturalDuration: clip.source?.naturalDuration ?? clip.duration,
-      },
-      mediaFileId,
-      sessionPolicy: 'background',
-      sessionOwnerId: ownerId,
-    });
-    const admission = reservePlannedClipRuntimeResources({
-      policyId: 'background',
-      ownerId,
-      ownerType: 'clip',
-      clip,
-      source: runtimePlan?.source ?? {
-        type: 'audio',
-        mediaFileId,
-        naturalDuration: clip.source?.naturalDuration ?? clip.duration,
-      },
-      mediaElementKind: 'audio',
-      srcKind: getRuntimeSrcKind(url),
-      label: `Background layer ${layerIndex} clip resource`,
-      tags: ['background-layer', `layer-${layerIndex}`],
-    });
-    if (!admission.admitted) {
-      clip.isLoading = false;
-      log.debug('Background audio load skipped by runtime admission', {
-        clipId: clip.id,
-        layerIndex,
-        reason: admission.decision.reason,
-        rejectedUnits: admission.decision.rejectedUnits.map((entry) => entry.unit),
-      });
-      return;
-    }
-
-    const audio = document.createElement('audio');
-    audio.src = url;
-    audio.preload = 'auto';
-
-    audio.addEventListener('canplaythrough', () => {
-      if (this.layerStates.get(layerIndex)?.clips.includes(clip) !== true) {
-        admission.release();
-        audio.pause();
-        audio.src = '';
-        audio.load();
-        return;
-      }
-      clip.source = bindSourceRuntimeForOwner({
-        ownerId,
-        source: {
-          type: 'audio',
-          audioElement: audio,
-          naturalDuration: audio.duration,
-          mediaFileId,
-        },
-        mediaFileId,
-        sessionPolicy: 'background',
-        sessionOwnerId: ownerId,
-      });
-      this.reportClipResources(layerIndex, clip);
-      clip.isLoading = false;
-      log.debug(`Audio loaded for background clip ${clip.name} on layer ${layerIndex}`);
-    }, { once: true });
-
-    audio.addEventListener('error', () => {
-      admission.release();
-      clip.isLoading = false;
-      log.warn(`Failed to load audio for background clip ${clip.name}`);
-    }, { once: true });
-  }
-
-  private loadImageForClip(clip: TimelineClip, layerIndex: number, url: string): void {
-    const ownerId = this.getRuntimeOwnerId(layerIndex, clip.id);
-    this.pendingImageHydrations.get(ownerId)?.cancel();
-    const handle = startTimelineImageHydration({
-      url,
-      resource: {
-        demand: createBackgroundImageDemand(layerIndex, clip, ownerId, url),
-        imageId: `${ownerId}:image`,
-        label: 'Background image hydration',
-        tags: ['background', 'image'],
-      },
-      isCurrent: () => this.layerStates.get(layerIndex)?.clips.includes(clip) === true,
-      onReady: (img) => {
-        this.pendingImageHydrations.delete(ownerId);
-        clip.source = bindSourceRuntimeForOwner({
-          ownerId,
-          source: {
-            type: 'image',
-            imageElement: img,
-            mediaFileId: clip.mediaFileId,
-            naturalDuration: clip.duration,
-          },
-          mediaFileId: clip.mediaFileId,
-          sessionPolicy: 'background',
-          sessionOwnerId: ownerId,
-        });
-        this.reportClipResources(layerIndex, clip);
-        clip.isLoading = false;
-        log.debug(`Image loaded for background clip ${clip.name} on layer ${layerIndex}`);
-      },
-      onError: () => {
-        this.pendingImageHydrations.delete(ownerId);
-        clip.isLoading = false;
-        log.warn(`Failed to load image for background clip ${clip.name}`);
-      },
-      onStale: () => {
-        this.pendingImageHydrations.delete(ownerId);
-        clip.isLoading = false;
-      },
-      onAdmissionDenied: (decision) => {
-        this.pendingImageHydrations.delete(ownerId);
-        clip.isLoading = false;
-        log.debug('Background image hydration skipped by runtime admission', {
-          clipId: clip.id,
-          layerIndex,
-          reason: decision.reason,
-          rejectedUnits: decision.rejectedUnits.map((entry) => entry.unit),
-        });
-      },
-    });
-    if (!handle.admitted) {
-      return;
-    }
-    this.pendingImageHydrations.set(ownerId, handle);
-  }
-
-  private loadVectorAnimationForClip(
-    clip: TimelineClip,
-    layerIndex: number,
-    file: File,
-    sourceType: VectorAnimationProvider
-  ): void {
-    void (async () => {
-      try {
-        if (clip.source?.type !== sourceType) {
-          clip.source = {
-            type: sourceType,
-            mediaFileId: clip.mediaFileId,
-            naturalDuration: clip.duration,
-          };
-        }
-        const runtimeOwnerId = this.getRuntimeOwnerId(layerIndex, clip.id);
-        const runtime = await vectorAnimationRuntimeManager.prepareClipSource(clip, file, {
-          policyId: 'background',
-          ownerId: runtimeOwnerId,
-          ownerType: 'clip',
-          label: `Background layer ${layerIndex} vector runtime canvas`,
-          tags: ['background-layer', `layer-${layerIndex}`, 'vector-animation'],
-        });
-        const naturalDuration =
-          runtime.metadata.duration ??
-          clip.source?.naturalDuration ??
-          clip.duration;
-        clip.file = file;
-        clip.source = {
-          type: sourceType,
-          textCanvas: runtime.canvas,
-          mediaFileId: clip.mediaFileId,
-          naturalDuration,
-          vectorAnimationSettings: clip.source?.vectorAnimationSettings,
-        };
-        this.reportClipResources(layerIndex, clip);
-        clip.isLoading = false;
-        vectorAnimationRuntimeManager.renderClipAtTime(clip, clip.startTime);
-      } catch (error) {
-        clip.isLoading = false;
-        log.warn(`Failed to load vector animation for background clip ${clip.name}`, error);
-      }
-    })();
   }
 
   private reportClipResources(layerIndex: number, clip: TimelineClip): void {
