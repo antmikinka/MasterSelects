@@ -1,7 +1,7 @@
 # Complete Refactor Checklist
 
 Status: execution plan
-Updated: 2026-06-09
+Updated: 2026-06-10
 
 This checklist tracks the actual codebase refactor plan in
 `docs/ongoing/Complete-refactor.md`.
@@ -18,9 +18,9 @@ orchestrator or worker-agent execution run starts.
 - Handoff templates: prepared for execution only
 - Source implementation: current bounded source packet has explicit write set,
   forbidden files, and gates
-- Current bounded packet: none; waves 7-8 complete; render freeze 3 of 5 done.
-  Next: `ExportRenderSession` freeze 4, mediaStore fileManageSlice split, and
-  MediaPanel continuation.
+- Current bounded packet: wave 11 running; waves 9-10 complete; render
+  contract freeze complete (5/5). Active: Preview router adoption, ExportPanel
+  runner split 1, and MediaPanel board joint packet.
 - Completed source/tooling packet: `P0-REG-001`; focused registry checks passed.
 - Completed bounded packet: `P0-BASELINE-REFRESH-001`, read-only plus docs.
 - Completed bounded packet: `P1-CONTRACT-001`, contracts and focused boundary
@@ -2107,9 +2107,44 @@ orchestrator or worker-agent execution run starts.
   and getState policy redistribution events from wave 6 remain recorded there.
 - Wave 8 verification:
   Orchestrator-verified: tsc clean; full-suite ratchet catch resolved; ratchet + historyStore + factory + router suites green.
-- Next eligible packet: `ExportRenderSession` adoption (freeze 4), mediaStore
-  `fileManageSlice` split, and MediaPanel continuation.
-- Product source refactors remain blocked outside approved packet write sets.
+- Wave 9 closure completed:
+  `P5P6-EXPORT-RENDER-SESSION-180` wrapped the export hot path in
+  `ExportRenderSessionImpl` (`begin`/`renderFrame`/`dispose`/`cancel`,
+  `AbortSignal`, idempotent dispose); `FrameExporter` adopted it internally
+  with public surface unchanged, and per-path restore parity documented.
+  `P4-MEDIA-PANEL-SPLIT-182` extracted the store-binding wall with
+  per-selector granularity proof (22 selectors), plus command bindings, content
+  view, and delete dialog; `MediaPanel.tsx` is 2572 raw lines.
+  `P2-FILEMANAGESLICE-SPLIT-183` converted `fileManageSlice` (1309) to a
+  51-line composer plus 12 role modules; deletion/cleanup call parity was
+  verified, and orchestrator getState redistribution landed (8 hits over 5
+  modules).
+- Guard-precision event:
+  `foundationTypeBoundary` now uses resolution-based barrel counting, so
+  store-local `types.ts` files are no longer miscounted; the fan-in ratchet was
+  honestly lowered 755 -> 557 after measuring the true global value. Wave-9
+  barrel imports were redirected to role modules.
+- Wave 9 verification:
+  Orchestrator-verified: tsc clean; guards + export-session + mediaPanel + registry suites green.
+- Wave 10 closure completed:
+  `P5P6-EXPORTPANEL-SESSION-ADOPTION-184` moved all four inline ExportPanel
+  paths (GIF, FFmpeg direct, still, sequence) onto the session; scan verified
+  zero direct engine export-state mutation remains, and cancel is wired through
+  the session. RENDER CONTRACT FREEZE COMPLETE (5/5); P5/P6 monolith splits are
+  unblocked. `P2-COMPOSITIONSLICE-SPLIT-186` converted `compositionSlice`
+  (810) to a 35-line composer plus 11 role modules with exact bridge call-count
+  parity (15 functions); orchestrator getState redistribution landed (10 hits
+  over 6 modules; hard-target file count 187). `P4-MEDIA-PANEL-SPLIT-185`
+  extracted overlay mounts, reducing `MediaPanel.tsx` to 2497 raw lines, and
+  recorded the complete board-block composition map for the upcoming joint
+  packet: board controller lines ~686-2254, board state ~331-477, board JSX
+  ~2255-2321.
+- Wave 10 verification:
+  Orchestrator-verified: tsc clean; guards + export adoption + registry + mediaPanel + historyStore suites green.
+- Next active packets:
+  wave 11 is running Preview router adoption, ExportPanel runner split 1, and
+  the MediaPanel board joint packet.
+- Product source refactors remain bounded by approved packet write sets.
 
 ## Document Map
 
@@ -2656,8 +2691,8 @@ Gates and subchecks:
         module
   - [ ] shell below budget
   - [ ] folders/board/downloads/generation/import status split
-- [ ] `P4_MEDIA_STORE_SELECTOR_CONTRACT`
-  - [ ] Media Panel reads through selectors/adapters
+- [x] `P4_MEDIA_STORE_SELECTOR_CONTRACT`
+  - [x] Media Panel reads through selectors/adapters
 - [ ] `P4_FLASHBOARD_ACTIVE_CONTRACT`
   - [ ] request -> queue/job -> provider task -> media import contract defined
 - [ ] `P4_FLASHBOARD_PROVIDER_TASK_CONTRACT`
@@ -2714,14 +2749,14 @@ Gates and subchecks:
 
 - [ ] `P5_PREVIEW_RUNTIME_BOUNDARY`
   - [ ] Preview shell separated from render target lifecycle owner
-- [ ] `P5_RENDER_TARGET_SNAPSHOT_CONTRACT`
-  - [ ] render target snapshot input defined before implementation
+- [x] `P5_RENDER_TARGET_SNAPSHOT_CONTRACT`
+  - [x] render target snapshot input defined before implementation
 - [ ] `P5_PREVIEW_OVERLAY_REGISTRY`
   - [ ] overlays registered through focused contracts
 - [ ] `P5_EXPORT_PANEL_RUNNER_BOUNDARY`
   - [ ] UI settings separated from runner adapters
-- [ ] `P5_EXPORT_RENDER_SESSION_CONTRACT`
-  - [ ] export session transaction and cancellation contract defined
+- [x] `P5_EXPORT_RENDER_SESSION_CONTRACT`
+  - [x] export session transaction and cancellation contract defined
 - [ ] `P5_BOUNDED_MEMORY_EXPORT`
   - [ ] bounded or streaming frame delivery requirement covered
 - [ ] `P5_EXPORT_SMOKE_PRESERVED`
@@ -2756,10 +2791,10 @@ Forbidden files:
 
 Gates and subchecks:
 
-- [ ] `P6_RENDER_FRAME_SNAPSHOT`
-  - [ ] per-frame snapshot contract avoids live store reads
-- [ ] `P6_RENDER_OUTPUT_ROUTER`
-  - [ ] output target routing owner defined
+- [x] `P6_RENDER_FRAME_SNAPSHOT`
+  - [x] per-frame snapshot contract avoids live store reads
+- [x] `P6_RENDER_OUTPUT_ROUTER`
+  - [x] output target routing owner defined
 - [ ] `P6_RENDER_DISPATCHER_OWNERSHIP_SPLIT`
   - [ ] collection/composition/output/diagnostics split plan defined
 - [ ] `P6_WEBCODECS_LIFECYCLE_SPLIT`

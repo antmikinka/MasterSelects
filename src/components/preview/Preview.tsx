@@ -24,7 +24,6 @@ import { useMediaStore } from '../../stores/mediaStore';
 import { DEFAULT_SCENE_CAMERA_SETTINGS, type SceneCameraSettings } from '../../stores/mediaStore/types';
 import { useDockStore } from '../../stores/dockStore';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { useRenderTargetStore } from '../../stores/renderTargetStore';
 import { startBatch, endBatch } from '../../stores/historyStore';
 import { MaskOverlay } from './MaskOverlay';
 import { SAM2Overlay } from './SAM2Overlay';
@@ -37,7 +36,6 @@ import { TextPreviewEditor } from './TextPreviewEditor';
 import { useEditModeOverlay } from './useEditModeOverlay';
 import { useLayerDrag } from './useLayerDrag';
 import { useSAM2Store } from '../../stores/sam2Store';
-import { renderScheduler } from '../../services/renderScheduler';
 import { engine } from '../../engine/WebGPUEngine';
 import {
   resolveOrbitCameraFrame,
@@ -53,6 +51,11 @@ import {
   getPreviewSourceLabel,
   resolvePreviewSourceCompositionId,
 } from '../../utils/previewPanelSource';
+import {
+  registerPreviewTarget,
+  setPreviewTargetTransparency,
+  unregisterPreviewTarget,
+} from '../../services/render/previewTargetRegistration';
 import {
   fullFrameFocalLengthMmToFov,
 } from '../../utils/cameraLens';
@@ -667,49 +670,26 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
 
     log.debug(`[${panelId}] Registering render target`, { source: stableRenderSource, isIndependent });
 
-    const gpuContext = engine.registerTargetCanvas(panelId, canvasRef.current);
-    if (!gpuContext) return;
-
-    useRenderTargetStore.getState().registerTarget({
+    const registered = registerPreviewTarget({
       id: panelId,
       name: 'Preview',
       source: stableRenderSource,
-      destinationType: 'canvas',
-      enabled: true,
       showTransparencyGrid,
       canvas: canvasRef.current,
-      context: gpuContext,
-      window: null,
-      isFullscreen: false,
+      onIndependentRegistered: () => setCompReady(true),
     });
-
-    if (useTimelineStore.getState().isPlaying) {
-      engine.clearVideoCache();
-      engine.clearScrubbingCache();
-      engine.clearCompositeCache();
-      engine.requestRender();
-    }
-
-    if (isIndependent) {
-      renderScheduler.register(panelId);
-      setCompReady(true);
-    }
+    if (!registered) return;
 
     return () => {
       log.debug(`[${panelId}] Unregistering render target`);
-      if (isIndependent) {
-        renderScheduler.unregister(panelId);
-      }
-      useRenderTargetStore.getState().unregisterTarget(panelId);
-      engine.unregisterTargetCanvas(panelId);
+      unregisterPreviewTarget(panelId, stableRenderSource);
     };
   }, [isEngineReady, panelId, stableRenderSource, showTransparencyGrid]);
 
   // Sync per-tab transparency grid flag
   useEffect(() => {
     if (!isEngineReady) return;
-    useRenderTargetStore.getState().setTargetTransparencyGrid(panelId, showTransparencyGrid);
-    engine.requestRender();
+    setPreviewTargetTransparency(panelId, showTransparencyGrid);
   }, [isEngineReady, panelId, showTransparencyGrid]);
 
   // Composition selector state

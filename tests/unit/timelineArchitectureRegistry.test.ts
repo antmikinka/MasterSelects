@@ -379,7 +379,9 @@ describe('timeline architecture registry', () => {
     const clipInteractionControllerSource = readRepoFile('src/components/timeline/hooks/useTimelineClipInteractionController.ts');
     const inputControllerSource = readRepoFile('src/components/timeline/hooks/useTimelineInputController.ts');
     const playheadMarkerControllerSource = readRepoFile('src/components/timeline/hooks/useTimelinePlayheadMarkerController.ts');
-    const compositionSliceSource = readRepoFile('src/stores/mediaStore/slices/compositionSlice.ts');
+    // Evidence location updated 2026-06-10: packet 186 moved the timeline
+    // switch bridge out of compositionSlice.ts; assertions unchanged.
+    const compositionSliceSource = readRepoFile('src/stores/mediaStore/slices/composition/timelineSwitchBridge.ts');
     const trackHeightWheelSource = readRepoFile('src/components/timeline/hooks/useTimelineTrackHeightWheel.ts');
     const sectionControllerSource = readRepoFile('src/components/timeline/hooks/useTimelineSectionController.ts');
     const sectionScrollPinningSource = readRepoFile('src/components/timeline/hooks/useTimelineSectionScrollPinning.ts');

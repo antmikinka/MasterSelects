@@ -681,6 +681,40 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
   there.
 - Wave 8 verification:
   Orchestrator-verified: tsc clean; full-suite ratchet catch resolved; ratchet + historyStore + factory + router suites green.
+- Wave 9 closure completed:
+  `P5P6-EXPORT-RENDER-SESSION-180` wrapped the export hot path in
+  `ExportRenderSessionImpl` (`begin`/`renderFrame`/`dispose`/`cancel`,
+  `AbortSignal`, idempotent dispose), and `FrameExporter` adopted it internally
+  with public surface unchanged and per-path restore parity documented.
+  `P4-MEDIA-PANEL-SPLIT-182` extracted the store-binding wall with
+  per-selector granularity proof (22 selectors), command bindings, content
+  view, and delete dialog; `MediaPanel.tsx` is 2572 raw lines.
+  `P2-FILEMANAGESLICE-SPLIT-183` converted `fileManageSlice` (1309) to a
+  51-line composer plus 12 role modules, with deletion/cleanup call parity
+  verified and orchestrator getState redistribution applied (8 hits over 5
+  modules).
+- Guard-precision event:
+  `foundationTypeBoundary` now uses resolution-based barrel counting, so
+  store-local `types.ts` files are no longer miscounted; the fan-in ratchet was
+  honestly lowered 755 -> 557 after measuring the true global value. Wave-9
+  barrel imports were redirected to role modules.
+- Wave 9 verification:
+  Orchestrator-verified: tsc clean; guards + export-session + mediaPanel + registry suites green.
+- Wave 10 closure completed:
+  `P5P6-EXPORTPANEL-SESSION-ADOPTION-184` moved all four inline ExportPanel
+  paths (GIF, FFmpeg direct, still, sequence) onto the session; scan verified
+  zero direct engine export-state mutation remains, and cancel is wired through
+  the session. RENDER CONTRACT FREEZE COMPLETE (5/5); P5/P6 monolith splits are
+  unblocked. `P2-COMPOSITIONSLICE-SPLIT-186` converted `compositionSlice`
+  (810) to a 35-line composer plus 11 role modules with exact bridge call-count
+  parity (15 functions); orchestrator getState redistribution applied (10 hits
+  over 6 modules; hard-target file count 187). `P4-MEDIA-PANEL-SPLIT-185`
+  extracted overlay mounts, reducing `MediaPanel.tsx` to 2497 raw lines, and
+  recorded the complete board-block composition map for the upcoming joint
+  packet: board controller lines ~686-2254, board state ~331-477, board JSX
+  ~2255-2321.
+- Wave 10 verification:
+  Orchestrator-verified: tsc clean; guards + export adoption + registry + mediaPanel + historyStore suites green.
 
 ## High-Conflict Ownership Snapshot
 
@@ -701,15 +735,16 @@ user-visible status remains in `docs/ongoing/Complete-refactor-checklist.md`.
 
 ## Active Packet
 
-None. Waves 7-8 are complete; render freeze 3 of 5 is done.
+Wave 11 running: Preview router adoption, ExportPanel runner split 1, and
+MediaPanel board joint packet. Render contract freeze is complete (5/5).
 
 ## Queued Packets
 
-- `ExportRenderSession` adoption (P5/P6 freeze packet 4).
-- mediaStore `fileManageSlice` split.
-- MediaPanel continuation.
+- Continue Preview router adoption.
+- Continue ExportPanel runner split 1.
+- Continue MediaPanel board joint packet.
 
 ## Immediate Next Step
 
-Run the next eligible packet from the queued list: `ExportRenderSession`
-adoption, mediaStore `fileManageSlice` split, or MediaPanel continuation.
+Finish wave 11 active packets under their bounded write sets; do not reopen
+completed render-freeze, `fileManageSlice`, or `compositionSlice` packets.

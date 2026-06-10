@@ -32,7 +32,9 @@ export const classCHardTargets = [
   { path: 'src/components/common/MatAnyoneSetupDialog.tsx', maxCurrentHits: 4 },
   { path: 'src/components/common/Toolbar.tsx', maxCurrentHits: 2 },
   { path: 'src/components/export/exportHelpers.ts', maxCurrentHits: 2 },
-  { path: 'src/components/export/ExportPanel.tsx', maxCurrentHits: 4 },
+  // Redistributed by packet 189: one hit moved into the FFmpeg runner.
+  { path: 'src/components/export/ExportPanel.tsx', maxCurrentHits: 3 },
+  { path: 'src/components/export/runners/ffmpegDirectExportRunner.ts', maxCurrentHits: 1 },
   { path: 'src/components/export/useExportState.ts', maxCurrentHits: 1 },
   { path: 'src/components/outputManager/OutputManager.tsx', maxCurrentHits: 1 },
   { path: 'src/components/outputManager/OutputManagerBoot.ts', maxCurrentHits: 1 },
@@ -45,7 +47,9 @@ export const classCHardTargets = [
   { path: 'src/components/panels/HistoryPanel.tsx', maxCurrentHits: 1 },
   // Redistributed by packet 172: two hits moved into the extracted
   // source-monitor badge hook; MediaPanel-cluster total unchanged (7).
-  { path: 'src/components/panels/MediaPanel.tsx', maxCurrentHits: 5 },
+  // Packet 190 moved one hit into the board node-move gesture hook.
+  { path: 'src/components/panels/MediaPanel.tsx', maxCurrentHits: 4 },
+  { path: 'src/components/panels/media/board/useMediaBoardNodeMoveGesture.ts', maxCurrentHits: 1 },
   { path: 'src/components/panels/media/panel/useMediaPanelSourceMonitorBadges.ts', maxCurrentHits: 2 },
   { path: 'src/components/panels/nodes/NodeWorkspacePanel.tsx', maxCurrentHits: 1 },
   { path: 'src/components/panels/properties/AnalysisTab.tsx', maxCurrentHits: 1 },
@@ -69,7 +73,9 @@ export const classCHardTargets = [
   { path: 'src/components/pianoRoll/PianoRollBoot.ts', maxCurrentHits: 1 },
   { path: 'src/components/preview/MaskOverlay.tsx', maxCurrentHits: 2 },
   { path: 'src/components/preview/MultiPreviewSlot.tsx', maxCurrentHits: 4 },
-  { path: 'src/components/preview/Preview.tsx', maxCurrentHits: 27 },
+  // Ratcheted 27 -> 23 by packet 188: registration sequences moved into the
+  // adapter-sanctioned services/render layer.
+  { path: 'src/components/preview/Preview.tsx', maxCurrentHits: 23 },
   { path: 'src/components/preview/SAM2Overlay.tsx', maxCurrentHits: 2 },
   { path: 'src/components/preview/SceneObjectOverlay.tsx', maxCurrentHits: 3 },
   { path: 'src/components/preview/sceneObjectOverlayMath.ts', maxCurrentHits: 1 },
@@ -226,9 +232,10 @@ export const classCHardTargets = [
 
 export const getStateAccessPolicyBaselines = {
   allowedAdapterPathCount: 21,
-  // 178 after packet 172 (MediaPanel badge hook); 182 after packet 183
-  // (fileManageSlice -> 5 modules); 187 after packet 186 (compositionSlice
-  // -> 6 modules). Cluster totals unchanged in every redistribution.
-  classCHardTargetFileCount: 187,
-  classCHardTargetMaxHits: 669,
+  // Running redistribution log: 178 (packet 172), 182 (183), 187 (186),
+  // 189 (189+190: ExportPanel/MediaPanel hits moved into runner/board-hook
+  // entries). Totals conserved per redistribution; max-hits ratchets DOWN
+  // only (669 -> 665 via the packet-188 Preview ceiling cut).
+  classCHardTargetFileCount: 189,
+  classCHardTargetMaxHits: 665,
 } as const;
