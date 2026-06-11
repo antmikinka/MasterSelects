@@ -182,7 +182,7 @@
 }
 
 .audio-mixer-panel.wood .audio-mixer-pan-row input {
-  height: 20px;
+  height: 22px;
 }
 
 .audio-mixer-panel.wood .audio-mixer-pan-row input::-webkit-slider-runnable-track {
@@ -200,16 +200,16 @@
 }
 
 .audio-mixer-panel.wood .audio-mixer-pan-row input::-webkit-slider-thumb {
-  width: 32px;
-  height: 27px;
-  margin-top: -11px;
+  width: 22px;
+  height: 22px;
+  margin-top: -8.5px;
   border: 0;
-  border-radius: 0;
-  background:
-    url('./pan-knob.png') left 0 top 0 / 22px 22px no-repeat,
-    radial-gradient(ellipse 13px 10px at 17px 14px, rgba(0, 0, 0, 0.6) 32%, rgba(0, 0, 0, 0.32) 62%, transparent 100%);
+  border-radius: 50%;
+  background: url('./pan-knob.png') center / 22px 22px no-repeat;
   box-shadow: none;
-  filter: none;
+  filter: drop-shadow(3px 4px 4px rgba(0, 0, 0, 0.5));
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 .audio-mixer-panel.wood .audio-mixer-pan-row input::-moz-range-track {
@@ -227,15 +227,13 @@
 }
 
 .audio-mixer-panel.wood .audio-mixer-pan-row input::-moz-range-thumb {
-  width: 32px;
-  height: 27px;
+  width: 22px;
+  height: 22px;
   border: 0;
-  border-radius: 0;
-  background:
-    url('./pan-knob.png') left 0 top 0 / 22px 22px no-repeat,
-    radial-gradient(ellipse 13px 10px at 17px 14px, rgba(0, 0, 0, 0.6) 32%, rgba(0, 0, 0, 0.32) 62%, transparent 100%);
+  border-radius: 50%;
+  background: url('./pan-knob.png') center / 22px 22px no-repeat;
   box-shadow: none;
-  filter: none;
+  filter: drop-shadow(3px 4px 4px rgba(0, 0, 0, 0.5));
 }
 
 /* output plate -> brass */
