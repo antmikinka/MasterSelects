@@ -4,7 +4,7 @@
 // mounting one heavy DOM component per clip. This makes large comps render in
 // O(visible clips) draw calls with a Level-of-Detail scheme.
 
-import { memo, useMemo, useReducer, useRef } from 'react';
+import { memo, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { TimelineAudioDisplayMode, TimelineClipDragPreview } from '../../stores/timeline/types';
 import { useMediaStore } from '../../stores/mediaStore';
 import {
@@ -45,6 +45,19 @@ import {
 } from './utils/timelineClipCanvasWorkerModel';
 
 export const MAX_CANVAS_WIDTH_PX = 16000;
+
+// The clip canvas paints a sliding window that follows the scroll position, so
+// its backing store only ever needs to span the visible viewport plus overscan.
+// Browsers (notably Chrome on Linux/Mesa) silently render a canvas blank once
+// its backing store exceeds the GPU's max compositable size, so the backing
+// width is capped well below the typical 16384 hardware limit. Sizing the
+// canvas to the full timeline content width instead blanks the whole lane at
+// high zoom; this keeps it bounded at every zoom level.
+// See docs/Features/Linux-Mesa-GPU.md (rules 1-2) and issue #259.
+const SAFE_MAX_CANVAS_BACKING_PX = 8192;
+// Used before the live viewport width has been measured, to avoid a one-frame
+// oversized backing store on first paint.
+const SAFE_VIEWPORT_FALLBACK_PX = 4096;
 
 const LOD_BAR_PX = TIMELINE_CLIP_CANVAS_LOD_BAR_PX;
 const LOD_LABEL_PX = TIMELINE_CLIP_CANVAS_LOD_LABEL_PX;
@@ -217,13 +230,41 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
     clipDragPreview,
     clipTrim,
   }), [clipDrag, clipDragPreview, clipTrim, trackId]);
+  // Measure the visible timeline viewport so the canvas backing stays bounded
+  // regardless of zoom. The `viewportWidth` prop is the clip row width, which
+  // equals the full timeline content width on wide/zoomed timelines — sizing the
+  // canvas to that overflows the GPU's max canvas size and blanks the lane on
+  // Linux/Mesa. The sliding window (`canvasOffsetX`) already follows the scroll
+  // position, so the canvas only needs to span the visible viewport + overscan.
+  const [measuredViewportWidth, setMeasuredViewportWidth] = useState(0);
+  useLayoutEffect(() => {
+    const viewport = canvasRef.current?.closest('.timeline-section-viewport');
+    if (!viewport) return;
+    const update = () => {
+      setMeasuredViewportWidth((previous) => (
+        previous === viewport.clientWidth ? previous : viewport.clientWidth
+      ));
+    };
+    update();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(update);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
+
   const scrollBucket = Math.round(scrollX / 200);
   const canvasOffsetX = Math.max(0, scrollBucket * 200 - CANVAS_RENDER_OVERSCAN_PX);
+  const devicePixelRatio = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 1;
+  const windowViewportWidth = Math.min(
+    viewportWidth,
+    measuredViewportWidth > 0 ? measuredViewportWidth : SAFE_VIEWPORT_FALLBACK_PX,
+  );
   const cssWidth = Math.max(
     1,
     Math.min(
       MAX_CANVAS_WIDTH_PX,
-      Math.ceil(viewportWidth + CANVAS_RENDER_OVERSCAN_PX * 2),
+      Math.floor(SAFE_MAX_CANVAS_BACKING_PX / devicePixelRatio),
+      Math.ceil(windowViewportWidth + CANVAS_RENDER_OVERSCAN_PX * 2),
     ),
   );
   const visibleAudioArtifactClipIds = useMemo(
