@@ -4,11 +4,10 @@
 // mounting one heavy DOM component per clip. This makes large comps render in
 // O(visible clips) draw calls with a Level-of-Detail scheme.
 
-import { memo, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { memo, useMemo, useReducer, useRef } from 'react';
 import type { TimelineAudioDisplayMode, TimelineClipDragPreview } from '../../stores/timeline/types';
 import { useMediaStore } from '../../stores/mediaStore';
 import {
-  MIN_CLIP_DURATION,
   TIMELINE_CLIP_CANVAS_LOD_BAR_PX,
   TIMELINE_CLIP_CANVAS_LOD_LABEL_PX,
 } from './timelineRenderConstants';
@@ -17,19 +16,22 @@ import type { TimelinePaintSourceClip } from '../../timeline';
 import { useTimelineClipCanvasAudioWarmups } from './hooks/useTimelineClipCanvasAudioWarmups';
 import { useTimelineClipCanvasMainThreadDraw } from './hooks/useTimelineClipCanvasMainThreadDraw';
 import { useTimelineClipCanvasThumbnailWarmups } from './hooks/useTimelineClipCanvasThumbnailWarmups';
+import { useTimelineClipCanvasViewport } from './hooks/useTimelineClipCanvasViewport';
 import { useTimelineClipCanvasWorkerRuntime } from './hooks/useTimelineClipCanvasWorkerRuntime';
-import type { TimelineClipCanvasSpectrogramTileSetMap } from './utils/timelineClipCanvasSpectrogramResource';
 import {
-  canLoopExtendTimelineVectorClip,
-  getTimelineClipSourceDuration,
-  isInfiniteTimelineSourceType,
-} from './utils/clipSourceTiming';
+  createWorkerDrawableClips,
+  resolveClipGeometry,
+} from './utils/timelineClipCanvasClipGeometry';
+import {
+  buildSourceWaveformPyramidIdMap,
+  enrichClipsWithSourceWaveformRef,
+} from './utils/timelineClipCanvasSourceWaveformRef';
+import type { TimelineClipCanvasSpectrogramTileSetMap } from './utils/timelineClipCanvasSpectrogramResource';
 import type { TimelineClipCanvasWaveformPyramidMap } from './utils/timelineClipCanvasWaveformResource';
 import {
   hasTimelineClipCanvasPassiveDecorations,
   type TimelineClipCanvasMediaStatus,
 } from './utils/timelineClipCanvasPassiveDecorations';
-import type { TimelineClipCanvasTrimGeometry } from './utils/timelineClipCanvasTrimResource';
 import {
   collectTimelineClipCanvasWorkerThumbnailPreparation,
 } from './utils/timelineClipCanvasThumbnailPreparation';
@@ -44,20 +46,9 @@ import {
   getTimelineClipCanvasWorkerEligibility,
 } from './utils/timelineClipCanvasWorkerModel';
 
+// Viewport-bounded canvas sizing (the Linux/Mesa blank-canvas guard) lives in
+// useTimelineClipCanvasViewport; see docs/Features/Linux-Mesa-GPU.md.
 export const MAX_CANVAS_WIDTH_PX = 16000;
-
-// The clip canvas paints a sliding window that follows the scroll position, so
-// its backing store only ever needs to span the visible viewport plus overscan.
-// Browsers (notably Chrome on Linux/Mesa) silently render a canvas blank once
-// its backing store exceeds the GPU's max compositable size, so the backing
-// width is capped well below the typical 16384 hardware limit. Sizing the
-// canvas to the full timeline content width instead blanks the whole lane at
-// high zoom; this keeps it bounded at every zoom level.
-// See docs/Features/Linux-Mesa-GPU.md (rules 1-2) and issue #259.
-const SAFE_MAX_CANVAS_BACKING_PX = 8192;
-// Used before the live viewport width has been measured, to avoid a one-frame
-// oversized backing store on first paint.
-const SAFE_VIEWPORT_FALLBACK_PX = 4096;
 
 const LOD_BAR_PX = TIMELINE_CLIP_CANVAS_LOD_BAR_PX;
 const LOD_LABEL_PX = TIMELINE_CLIP_CANVAS_LOD_LABEL_PX;
@@ -90,109 +81,6 @@ interface TimelineClipCanvasProps {
 
 type MediaFileCanvasStatusMap = ReadonlyMap<string, TimelineClipCanvasMediaStatus>;
 
-function resolveClipGeometry(
-  clip: TimelinePaintSourceClip,
-  props: Pick<TimelineClipCanvasProps, 'clipDrag' | 'clipDragPreview' | 'clipTrim' | 'trackId'>,
-): TimelineClipCanvasTrimGeometry {
-  const { clipDrag, clipDragPreview, clipTrim, trackId } = props;
-  let startTime = clip.startTime;
-  let duration = clip.duration;
-  let inPoint = clip.inPoint ?? 0;
-  let outPoint = clip.outPoint ?? inPoint + duration;
-  let visible = clip.trackId === trackId;
-  let trimEdge: 'left' | 'right' | undefined;
-  const sourceDuration = getTimelineClipSourceDuration(clip);
-  const dragPreviewPatch = clipDragPreview?.patches[clip.id];
-  const isPrimaryDragClip = clipDrag?.clipId === clip.id;
-  const isLinkedSlipClip = Boolean(
-    clipDrag?.toolGesture === 'slip' &&
-      !clipDrag.altKeyPressed &&
-      clip.linkedClipId === clipDrag.clipId,
-  );
-
-  if (isPrimaryDragClip) {
-    visible = clipDrag.currentTrackId === trackId;
-    const previewStartTime = dragPreviewPatch ? Math.max(0, dragPreviewPatch.startTime) : startTime;
-    startTime = clipDrag.snappedTime !== null ? clipDrag.snappedTime : previewStartTime;
-  } else if (clipDrag?.multiSelectClipIds?.includes(clip.id) && clipDrag.multiSelectTimeDelta !== undefined) {
-    startTime = Math.max(0, clip.startTime + clipDrag.multiSelectTimeDelta);
-  } else if (dragPreviewPatch) {
-    startTime = Math.max(0, dragPreviewPatch.startTime);
-    visible = (dragPreviewPatch.trackId ?? clip.trackId) === trackId;
-  }
-
-  if (
-    clipDrag?.toolGesture === 'slip' &&
-    (isPrimaryDragClip || isLinkedSlipClip) &&
-    typeof clipDrag.sourceTimeDelta === 'number'
-  ) {
-    const visibleSourceDuration = Math.max(0.001, outPoint - inPoint);
-    const maxInPoint = Math.max(0, sourceDuration - visibleSourceDuration);
-    const nextInPoint = Math.max(0, Math.min(maxInPoint, inPoint + clipDrag.sourceTimeDelta));
-    inPoint = nextInPoint;
-    outPoint = nextInPoint + visibleSourceDuration;
-  }
-
-  if (clipTrim?.clipId === clip.id) {
-    trimEdge = clipTrim.edge;
-    const deltaTime = clipTrim.appliedDelta;
-    const sourceType = clip.source?.type;
-    const isInfiniteClip = isInfiniteTimelineSourceType(sourceType);
-    if (clipTrim.edge === 'left') {
-      const maxTrim = clipTrim.originalDuration - MIN_CLIP_DURATION;
-      const minTrim = isInfiniteClip
-        ? -clipTrim.originalStartTime
-        : -clipTrim.originalInPoint;
-      const clampedDelta = Math.max(minTrim, Math.min(maxTrim, deltaTime));
-      startTime = clipTrim.originalStartTime + clampedDelta;
-      duration = clipTrim.originalDuration - clampedDelta;
-      inPoint = clipTrim.originalInPoint + clampedDelta;
-      outPoint = clipTrim.originalOutPoint;
-    } else {
-      const maxExtend = isInfiniteClip || canLoopExtendTimelineVectorClip(clip)
-        ? Number.MAX_SAFE_INTEGER
-        : sourceDuration - clipTrim.originalOutPoint;
-      const minTrim = -(clipTrim.originalDuration - MIN_CLIP_DURATION);
-      const clampedDelta = Math.max(minTrim, Math.min(maxExtend, deltaTime));
-      startTime = clipTrim.originalStartTime;
-      duration = clipTrim.originalDuration + clampedDelta;
-      inPoint = clipTrim.originalInPoint;
-      outPoint = clipTrim.originalOutPoint + clampedDelta;
-    }
-  }
-
-  return {
-    startTime,
-    duration: Math.max(0.001, duration),
-    inPoint,
-    outPoint,
-    visible,
-    trimEdge,
-    originalStartTime: clip.startTime,
-    originalEndTime: clip.startTime + clip.duration,
-    sourceDuration,
-  };
-}
-
-function createWorkerDrawableClips(
-  clips: readonly TimelinePaintSourceClip[],
-  props: Pick<TimelineClipCanvasProps, 'clipDrag' | 'clipDragPreview' | 'clipTrim' | 'trackId'>,
-): readonly TimelinePaintSourceClip[] {
-  const drawableClips: TimelinePaintSourceClip[] = [];
-  for (const clip of clips) {
-    const geometry = resolveClipGeometry(clip, props);
-    if (!geometry.visible) continue;
-    drawableClips.push({
-      ...clip,
-      startTime: geometry.startTime,
-      duration: geometry.duration,
-      inPoint: geometry.inPoint,
-      outPoint: geometry.outPoint,
-    });
-  }
-  return drawableClips;
-}
-
 function getCanvasClipMediaFileId(clip: TimelinePaintSourceClip): string | null {
   return clip.source?.mediaFileId ?? clip.mediaFileId ?? null;
 }
@@ -209,7 +97,7 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [redrawNonce, bumpRedraw] = useReducer((n: number) => n + 1, 0);
   const {
-    clips,
+    clips: rawClips,
     trackId,
     height,
     timeToPixel,
@@ -224,49 +112,32 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
     clipDragPreview,
     clipTrim,
   } = props;
+  const mediaFilesState = useMediaStore((state) => state.files);
+  const mediaFiles = useMemo(
+    () => (Array.isArray(mediaFilesState) ? mediaFilesState : []),
+    [mediaFilesState],
+  );
+  const sourceWaveformPyramidIds = useMemo(
+    () => buildSourceWaveformPyramidIdMap(mediaFiles),
+    [mediaFiles],
+  );
+  const clips = useMemo(
+    () => enrichClipsWithSourceWaveformRef(rawClips, sourceWaveformPyramidIds),
+    [rawClips, sourceWaveformPyramidIds],
+  );
   const geometryProps = useMemo(() => ({
     trackId,
     clipDrag,
     clipDragPreview,
     clipTrim,
   }), [clipDrag, clipDragPreview, clipTrim, trackId]);
-  // Measure the visible timeline viewport so the canvas backing stays bounded
-  // regardless of zoom. The `viewportWidth` prop is the clip row width, which
-  // equals the full timeline content width on wide/zoomed timelines — sizing the
-  // canvas to that overflows the GPU's max canvas size and blanks the lane on
-  // Linux/Mesa. The sliding window (`canvasOffsetX`) already follows the scroll
-  // position, so the canvas only needs to span the visible viewport + overscan.
-  const [measuredViewportWidth, setMeasuredViewportWidth] = useState(0);
-  useLayoutEffect(() => {
-    const viewport = canvasRef.current?.closest('.timeline-section-viewport');
-    if (!viewport) return;
-    const update = () => {
-      setMeasuredViewportWidth((previous) => (
-        previous === viewport.clientWidth ? previous : viewport.clientWidth
-      ));
-    };
-    update();
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(update);
-    observer.observe(viewport);
-    return () => observer.disconnect();
-  }, []);
-
-  const scrollBucket = Math.round(scrollX / 200);
-  const canvasOffsetX = Math.max(0, scrollBucket * 200 - CANVAS_RENDER_OVERSCAN_PX);
-  const devicePixelRatio = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 1;
-  const windowViewportWidth = Math.min(
+  const { cssWidth, canvasOffsetX, scrollBucket } = useTimelineClipCanvasViewport({
+    canvasRef,
+    scrollX,
     viewportWidth,
-    measuredViewportWidth > 0 ? measuredViewportWidth : SAFE_VIEWPORT_FALLBACK_PX,
-  );
-  const cssWidth = Math.max(
-    1,
-    Math.min(
-      MAX_CANVAS_WIDTH_PX,
-      Math.floor(SAFE_MAX_CANVAS_BACKING_PX / devicePixelRatio),
-      Math.ceil(windowViewportWidth + CANVAS_RENDER_OVERSCAN_PX * 2),
-    ),
-  );
+    overscanPx: CANVAS_RENDER_OVERSCAN_PX,
+    maxCanvasWidthPx: MAX_CANVAS_WIDTH_PX,
+  });
   const visibleAudioArtifactClipIds = useMemo(
     () => collectTimelineClipCanvasVisibleAudioArtifactClipIds({
       clips,
@@ -292,11 +163,6 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
     requestRedraw: bumpRedraw,
   });
 
-  const mediaFilesState = useMediaStore((state) => state.files);
-  const mediaFiles = useMemo(
-    () => (Array.isArray(mediaFilesState) ? mediaFilesState : []),
-    [mediaFilesState],
-  );
   const mediaFileStatusById = useMemo(() => {
     const map = new Map<string, TimelineClipCanvasMediaStatus>();
     for (const file of mediaFiles) {
