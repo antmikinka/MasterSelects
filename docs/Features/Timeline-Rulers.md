@@ -263,7 +263,18 @@ Original spec:
 - **Check:** toggling formats adds/removes rows and the header height tracks;
   build + lint.
 
-### Packet 6 — Active-lane selection (hook only)
+### Packet 6 — Active-lane selection (hook only) — ✅ Implemented
+Done. The select-vs-scrub rule: each `.ruler-lane` records the press x on
+`mousedown` (and lets it bubble so the ruler's scrub still fires); on `mouseup`,
+a press that moved ≤ 4px is treated as a click and calls `onSelectLane(lane.id)`
+→ `setActiveRulerLane`. A drag beyond the threshold is a scrub and never selects,
+so click-to-jump-playhead and drag-scrub both keep working. The chrome passes
+`setActiveRulerLane` as `onSelectLane`; the active lane shows a subtle highlight
+(`.ruler-lane.is-active`: faint accent tint + 2px inset left bar), gated to >1
+lane (meaningless for a single lane). **No snap behavior** — `activeRulerLaneId`
+is purely the seam a future grid will read.
+
+Original spec:
 - Clicking a lane sets `activeRulerLaneId`; active lane gets a subtle highlight
   class. **No snap behavior** — this is the seam the future grid reads.
 - **Disambiguation from scrub (must be concrete):** the whole ruler is

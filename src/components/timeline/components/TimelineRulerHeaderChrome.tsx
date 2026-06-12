@@ -49,6 +49,7 @@ export function TimelineRulerHeaderChrome({
   const rulerLanes = useTimelineStore(selectRulerLanes);
   const tempoMap = useTimelineStore(selectTempoMap);
   const activeRulerLaneId = useTimelineStore(selectActiveRulerLaneId);
+  const setActiveRulerLane = useTimelineStore((state) => state.setActiveRulerLane);
 
   // Header + ruler heights track the lane count so the columns stay aligned.
   const laneCount = Math.max(1, rulerLanes.length);
@@ -72,6 +73,7 @@ export function TimelineRulerHeaderChrome({
             lanes={rulerLanes}
             tempoMap={tempoMap}
             activeRulerLaneId={activeRulerLaneId}
+            onSelectLane={setActiveRulerLane}
             scrollX={scrollX}
             onRulerMouseDown={onRulerMouseDown}
             formatTime={formatTime}

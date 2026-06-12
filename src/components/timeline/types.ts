@@ -151,6 +151,9 @@ export interface TimelineRulerProps {
   lanes?: RulerLane[];
   tempoMap?: TempoMap;
   activeRulerLaneId?: string | null;
+  // Click (without drag) on a lane selects it as the active lane. No snap
+  // behavior — this is the seam a future grid reads (issue #257, Packet 6).
+  onSelectLane?: (laneId: string) => void;
   scrollX: number;
   onRulerMouseDown: (e: React.MouseEvent) => void;
   formatTime: (seconds: number) => string;

@@ -608,6 +608,7 @@
 
 .ruler-lane.is-active {
   background: color-mix(in srgb, var(--accent, var(--border-strong)) 7%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent, var(--border-strong));
 }
 
 .time-marker {

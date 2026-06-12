@@ -7,7 +7,7 @@
 // TempoMap via createBarsLaneTicks. No frame<->time crossfade — each lane's
 // format is fixed and only tick density adapts to zoom.
 
-import { memo, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import type { RulerLane } from '../../types';
 import type { TimelineRulerProps } from './types';
 import {
@@ -22,6 +22,9 @@ import { createDefaultRulerLanes, createDefaultTempoMap } from '../../timeline/t
 const RULER_VIEWPORT_FALLBACK_PX = 1600;
 const RULER_VIEWPORT_MIN_PX = 1600;
 const RULER_RENDER_OVERSCAN_PX = 512;
+// A press that moves less than this is a click (selects the lane); more is a
+// scrub drag (handled by the ruler's mousedown, never selects).
+const LANE_CLICK_SELECT_THRESHOLD_PX = 4;
 
 function getResizeObserverInlineSize(entry: ResizeObserverEntry): number {
   const borderBox = entry.borderBoxSize;
@@ -36,6 +39,7 @@ function TimelineRulerComponent({
   lanes,
   tempoMap,
   activeRulerLaneId = null,
+  onSelectLane,
   scrollX,
   onRulerMouseDown,
   formatTime,
@@ -44,6 +48,7 @@ function TimelineRulerComponent({
   videoBakeRegionSelection = null,
 }: TimelineRulerProps) {
   const rulerRef = useRef<HTMLDivElement | null>(null);
+  const laneClickStartXRef = useRef<number | null>(null);
   const [measuredViewportWidth, setMeasuredViewportWidth] = useState(RULER_VIEWPORT_FALLBACK_PX);
 
   useLayoutEffect(() => {
@@ -157,14 +162,30 @@ function TimelineRulerComponent({
       onMouseDown={onRulerMouseDown}
     >
       {effectiveLanes.map((lane) => {
-        const isActive = lane.id === activeRulerLaneId;
+        // The active highlight only matters when choosing among >1 lanes.
+        const isActive = effectiveLanes.length > 1 && lane.id === activeRulerLaneId;
         const ticks = renderLaneTicks(lane);
+        const handleLaneMouseDown = (event: ReactMouseEvent) => {
+          // Record the press start; let it bubble so the ruler scrub still fires.
+          laneClickStartXRef.current = event.clientX;
+        };
+        const handleLaneMouseUp = (event: ReactMouseEvent) => {
+          const startX = laneClickStartXRef.current;
+          laneClickStartXRef.current = null;
+          if (startX === null || !onSelectLane) return;
+          // A click (no meaningful drag) selects the lane; a scrub drag does not.
+          if (Math.abs(event.clientX - startX) <= LANE_CLICK_SELECT_THRESHOLD_PX) {
+            onSelectLane(lane.id);
+          }
+        };
         return (
           <div
             key={lane.id}
             className={`ruler-lane ${lane.format}${isActive ? ' is-active' : ''}`}
             data-ruler-lane-format={lane.format}
             data-ruler-lane-id={lane.id}
+            onMouseDown={handleLaneMouseDown}
+            onMouseUp={handleLaneMouseUp}
           >
             {ticks.map((tick, tickIndex) => {
               const x = alignTimelineGridPixel(timeToPixel(tick.time), devicePixelRatio);
