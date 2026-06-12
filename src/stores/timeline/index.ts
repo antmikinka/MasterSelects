@@ -5,6 +5,7 @@ import { subscribeWithSelector } from 'zustand/middleware';
 
 import type { TimelineStore, TimelineUtils, TimelineClip, Keyframe } from './types';
 import { DEFAULT_TRACKS, DEFAULT_TRACK_HEADER_WIDTH, MIN_TRACK_HEADER_WIDTH, MAX_TRACK_HEADER_WIDTH } from './constants';
+import { createDefaultTempoMap, createDefaultRulerLanes, getDefaultActiveRulerLaneId } from '../../timeline/tempo/rulerDefaults';
 
 import { createTrackSlice } from './trackSlice';
 import { createClipSlice } from './clipSlice';
@@ -267,6 +268,11 @@ export const useTimelineStore = create<TimelineStore>()(
 
       // Timeline markers
       markers: [] as import('./types').TimelineMarker[],
+
+      // Multi-ruler infrastructure (issue #257) — default to a single Time lane.
+      tempoMap: createDefaultTempoMap(),
+      rulerLanes: createDefaultRulerLanes(),
+      activeRulerLaneId: getDefaultActiveRulerLaneId() as string | null,
 
       // Composition-level audio master bus state
       masterAudioState: undefined,
