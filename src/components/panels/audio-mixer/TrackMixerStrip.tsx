@@ -48,6 +48,7 @@ function TrackMixerStripComponent({
   const effectiveSolo = audioState.solo;
   const effects = audioState.effectStack ?? [];
   const sends = audioState.sends ?? [];
+  const hasLabelColor = Boolean(track.labelColor && track.labelColor !== 'none');
   const stripStyle: MixerCssProperties = {
     '--strip-color': getTimelineTrackColor(track, index),
     '--strip-leather-x': `${-(index * MIXER_STRIP_TEXTURE_STEP_PX)}px`,
@@ -78,9 +79,13 @@ function TrackMixerStripComponent({
 
   return (
     <section
-      className={`audio-mixer-strip ${focused ? 'focused' : ''} ${effectiveMuted ? 'muted' : ''} ${audioState.recordArm ? 'armed' : ''}`}
+      className={`audio-mixer-strip ${focused ? 'focused' : ''} ${effectiveMuted ? 'muted' : ''} ${audioState.recordArm ? 'armed' : ''} ${hasLabelColor ? 'has-label-color' : ''}`}
       style={stripStyle}
-      onClick={onFocus}
+      onPointerDown={(event) => {
+        if (event.button === 0) {
+          onFocus();
+        }
+      }}
       onContextMenu={(event) => onOpenColorMenu(event, track.id)}
     >
       <div className="audio-mixer-strip-color" aria-hidden="true" />

@@ -18,7 +18,7 @@ describe('useMixerFaderDraft', () => {
     vi.useRealTimers();
   });
 
-  it('previews drag updates without committing the store until drag end', () => {
+  it('previews drag updates and exposes the live draft without committing the store until drag end', () => {
     const commit = vi.fn();
     const preview = vi.fn();
     const previewEnd = vi.fn();
@@ -34,7 +34,7 @@ describe('useMixerFaderDraft', () => {
       result.current.setDraft(-9);
     });
 
-    expect(result.current.value).toBe(0);
+    expect(result.current.value).toBe(-9);
     expect(commit).not.toHaveBeenCalled();
     expect(preview).toHaveBeenCalledTimes(4);
     expect(preview).toHaveBeenLastCalledWith(-9);

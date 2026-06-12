@@ -37,15 +37,18 @@ function roundToStep(value: number, min: number, step: number): number {
   return Math.round(rounded * 1000) / 1000;
 }
 
-function getValueFromClientY(
-  clientY: number,
-  rect: DOMRect,
+function getValueFromDragDelta(
+  startValue: number,
+  deltaY: number,
+  trackHeight: number,
+  thumbHeight: number,
   min: number,
   max: number,
   step: number,
 ): number {
-  const normalized = clamp(1 - ((clientY - rect.top) / Math.max(1, rect.height)), 0, 1);
-  return clamp(roundToStep(min + normalized * (max - min), min, step), min, max);
+  const travelHeight = Math.max(1, trackHeight - thumbHeight);
+  const valueDelta = -(deltaY / travelHeight) * (max - min);
+  return clamp(roundToStep(startValue + valueDelta, min, step), min, max);
 }
 
 function getPositionPercent(value: number, min: number, max: number): number {
@@ -78,6 +81,8 @@ export function MixerVolumeFader({
   const thumbRef = useRef<HTMLSpanElement>(null);
   const draggingRef = useRef(false);
   const dragRectRef = useRef<DOMRect | null>(null);
+  const dragStartClientYRef = useRef(0);
+  const dragStartValueRef = useRef(value);
   const thumbHeightRef = useRef(DEFAULT_THUMB_HEIGHT);
   const style: MixerVolumeFaderStyle = {
     '--audio-mixer-fader-thumb-y': '0px',
@@ -103,31 +108,72 @@ export function MixerVolumeFader({
     }
   }, [applyVisualValue, value]);
 
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || typeof ResizeObserver === 'undefined') return undefined;
+    let frameId: number | null = null;
+    const syncVisualValue = () => {
+      frameId = null;
+      if (!draggingRef.current) {
+        applyVisualValue(value);
+      }
+    };
+    const observer = new ResizeObserver(() => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+      frameId = window.requestAnimationFrame(syncVisualValue);
+    });
+    observer.observe(root);
+    if (thumbRef.current) {
+      observer.observe(thumbRef.current);
+    }
+    return () => {
+      observer.disconnect();
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+    };
+  }, [applyVisualValue, value]);
+
   const updateFromPointer = useCallback((clientY: number, rectOverride?: DOMRect) => {
     const rect = rectOverride ?? dragRectRef.current ?? rootRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const nextValue = getValueFromClientY(clientY, rect, min, max, step);
+    const thumbHeight = readThumbHeight(thumbRef.current, thumbHeightRef.current || DEFAULT_THUMB_HEIGHT);
+    thumbHeightRef.current = thumbHeight;
+    const nextValue = getValueFromDragDelta(
+      dragStartValueRef.current,
+      clientY - dragStartClientYRef.current,
+      rect.height,
+      thumbHeight,
+      min,
+      max,
+      step,
+    );
     applyVisualValue(nextValue, rect);
     onChange(nextValue);
   }, [applyVisualValue, max, min, onChange, step]);
 
   const handlePointerDown = useCallback((event: PointerEvent) => {
     if (event.button !== 0) return;
+    if (event.target !== thumbRef.current) return;
     event.preventDefault();
     event.stopPropagation();
     draggingRef.current = true;
     const target = event.currentTarget as HTMLDivElement;
+    target.dataset.dragging = 'true';
     const rect = target.getBoundingClientRect();
     dragRectRef.current = rect;
     thumbHeightRef.current = readThumbHeight(thumbRef.current, thumbHeightRef.current);
+    dragStartClientYRef.current = event.clientY;
+    dragStartValueRef.current = value;
     onBeginDrag();
     try {
       target.setPointerCapture(event.pointerId);
     } catch {
       // Synthetic debug pointer events do not always create a capturable pointer.
     }
-    updateFromPointer(event.clientY, rect);
-  }, [onBeginDrag, updateFromPointer]);
+  }, [onBeginDrag, value]);
 
   const handlePointerMove = useCallback((event: PointerEvent) => {
     if (!draggingRef.current) return;
@@ -142,6 +188,10 @@ export function MixerVolumeFader({
     event?.stopPropagation();
     draggingRef.current = false;
     dragRectRef.current = null;
+    dragStartClientYRef.current = 0;
+    if (rootRef.current) {
+      delete rootRef.current.dataset.dragging;
+    }
     if (event) {
       const target = event.currentTarget as HTMLDivElement;
       try {
@@ -218,8 +268,12 @@ export function MixerVolumeFader({
       style={style}
       onBlur={() => {
         if (draggingRef.current) {
+          if (rootRef.current) {
+            delete rootRef.current.dataset.dragging;
+          }
           draggingRef.current = false;
           dragRectRef.current = null;
+          dragStartClientYRef.current = 0;
           onEndDrag();
         }
       }}

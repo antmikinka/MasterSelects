@@ -700,7 +700,7 @@
   background: url('./fadercap-topdown.svg') center / 100% 100% no-repeat;
   transform: translate3d(-50%, var(--audio-mixer-fader-thumb-y, 0px), 0) rotate(90deg);
   transform-origin: center;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .audio-mixer-strip-fader:hover .audio-mixer-strip-fader-thumb,

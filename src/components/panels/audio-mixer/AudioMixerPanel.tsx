@@ -1,4 +1,4 @@
-import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './AudioMixerPanel.css';
 import './wood-theme/wood-theme.css';
 import { useTimelineStore } from '../../../stores/timeline';
@@ -29,9 +29,25 @@ export function AudioMixerPanel() {
   const [focusedStripId, setFocusedStripId] = useState<string>(MASTER_FOCUS_ID);
   const [fxWindowTarget, setFxWindowTarget] = useState<FxWindowTarget | null>(null);
   const [trackColorMenuTarget, setTrackColorMenuTarget] = useState<TrackColorMenuTarget | null>(null);
+  const [compactHeight, setCompactHeight] = useState(false);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const woodMixerEnabled = useSettingsStore(state => state.audioMixerWoodThemeEnabled);
 
   useEffect(() => audioRecordingService.subscribe(setRecordingState), []);
+
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel || typeof ResizeObserver === 'undefined') return;
+
+    const updateCompactHeight = () => {
+      setCompactHeight(panel.getBoundingClientRect().height <= 430);
+    };
+
+    updateCompactHeight();
+    const resizeObserver = new ResizeObserver(updateCompactHeight);
+    resizeObserver.observe(panel);
+    return () => resizeObserver.disconnect();
+  }, []);
 
   // MIDI tracks appear as mixer channel strips too (issue #182): their synth is
   // routed through a per-track volume/pan/meter bus, so they behave like audio.
@@ -152,9 +168,10 @@ export function AudioMixerPanel() {
   }, []);
 
   const focusedIsMaster = focusedStripId === MASTER_FOCUS_ID;
+  const panelClassName = `audio-mixer-panel${woodMixerEnabled ? ' wood' : ''}${compactHeight ? ' compact-height' : ''}`;
 
   return (
-    <div className={`audio-mixer-panel${woodMixerEnabled ? ' wood' : ''}`}>
+    <div ref={panelRef} className={panelClassName}>
       {recoveryEntries.length > 0 && (
         <div className="audio-mixer-recovery-list">
           {recoveryEntries.slice(0, 4).map(entry => (

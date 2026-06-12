@@ -42,11 +42,11 @@ export function useMixerFaderDraft(
 
   const setDraft = useCallback((value: number) => {
     latestValueRef.current = value;
+    setDraftValue(value);
     if (draggingRef.current) {
       previewValueRef.current?.(value);
       return;
     }
-    setDraftValue(value);
     commitNow(value);
   }, [commitNow]);
 

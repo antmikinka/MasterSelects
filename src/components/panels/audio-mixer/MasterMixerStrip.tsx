@@ -72,7 +72,11 @@ function MasterMixerStripComponent({
     <section
       className={`audio-mixer-strip master ${focused ? 'focused' : ''} ${masterAudio.limiterEnabled ? 'limited' : ''}`}
       style={stripStyle}
-      onClick={onFocus}
+      onPointerDown={(event) => {
+        if (event.button === 0) {
+          onFocus();
+        }
+      }}
     >
       <div className="audio-mixer-strip-color" aria-hidden="true" />
 

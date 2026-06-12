@@ -18,11 +18,34 @@
 }
 
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab-bar {
+  position: relative;
   min-height: 28px;
   border-bottom: 0;
   background: transparent;
   box-shadow:
     inset 0 1px 0 rgba(255, 235, 185, 0.10);
+}
+
+.dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab-bar::before,
+.dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab-bar::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  z-index: 4;
+  width: 20px;
+  height: 20px;
+  background: url('./corner-screw-brass.png') center / 20px 20px no-repeat;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.62));
+  opacity: 0.86;
+  pointer-events: none;
+}
+
+.dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab-bar::before {
+  left: 8px;
+}
+
+.dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab-bar::after {
+  right: 8px;
 }
 
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab-handle {
@@ -161,6 +184,10 @@
     inset 0 1px 0 rgba(255, 217, 163, 0.11),
     inset 1px 0 1px rgba(255, 213, 148, 0.04),
     inset -1px 0 2px rgba(0, 0, 0, 0.18);
+  transition:
+    grid-template-rows 170ms ease,
+    gap 170ms ease,
+    padding 170ms ease;
 }
 
 .audio-mixer-panel.wood .audio-mixer-strip::before {
@@ -215,10 +242,22 @@
 }
 
 .audio-mixer-panel.wood .audio-mixer-strip.focused {
+  z-index: 2;
   box-shadow:
     inset 0 1px 0 rgba(255, 217, 163, 0.18),
-    inset 0 0 0 1px color-mix(in srgb, var(--strip-color) 55%, transparent),
     0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.audio-mixer-panel.wood .audio-mixer-strip.focused::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  z-index: 3;
+  border: 1px solid color-mix(in srgb, var(--strip-color) 70%, rgba(255, 235, 185, 0.18));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--strip-color) 42%, transparent),
+    0 0 6px color-mix(in srgb, var(--strip-color) 28%, transparent);
+  pointer-events: none;
 }
 
 /* track color marker -> leather slot with a small enamel inlay */
@@ -272,6 +311,43 @@
     0 2px 3px rgba(0, 0, 0, 0.45);
 }
 
+.audio-mixer-panel.wood .audio-mixer-strip-name,
+.audio-mixer-panel.wood .audio-mixer-strip-output,
+.audio-mixer-panel.wood .audio-mixer-rack,
+.audio-mixer-panel.wood .audio-mixer-fader-meter,
+.audio-mixer-panel.wood .audio-mixer-pan-row,
+.audio-mixer-panel.wood .audio-mixer-rack-slot {
+  transform-origin: center;
+  transition:
+    opacity 150ms ease,
+    transform 170ms ease,
+    padding 170ms ease,
+    border-color 170ms ease,
+    border-width 170ms ease,
+    border-radius 170ms ease,
+    box-shadow 170ms ease,
+    max-height 170ms ease,
+    min-height 170ms ease;
+}
+
+.audio-mixer-panel.wood .audio-mixer-rack-group {
+  transition:
+    opacity 150ms ease,
+    transform 170ms ease,
+    max-height 170ms ease;
+}
+
+.audio-mixer-panel.wood .audio-mixer-strip-name strong,
+.audio-mixer-panel.wood .audio-mixer-strip-name span,
+.audio-mixer-panel.wood .audio-mixer-strip-output strong,
+.audio-mixer-panel.wood .audio-mixer-strip-output span {
+  transition:
+    opacity 130ms ease,
+    transform 150ms ease,
+    font-size 150ms ease,
+    line-height 150ms ease;
+}
+
 .audio-mixer-panel.wood .audio-mixer-strip-name strong {
   color: #291c07;
   text-shadow: 0 1px 0 rgba(255, 238, 194, 0.4);
@@ -306,6 +382,11 @@
 
 .audio-mixer-panel.wood .audio-mixer-rack-slot {
   min-height: 22px;
+  max-height: 28px;
+}
+
+.audio-mixer-panel.wood .audio-mixer-rack-group.sends {
+  max-height: 84px;
 }
 
 /* the tall fader pocket stretches the leather a lot — flatten its blotches
@@ -599,10 +680,67 @@
 .audio-mixer-panel.wood .audio-mixer-strip-fader {
   --audio-mixer-fader-thumb-width: 34px;
   --audio-mixer-fader-thumb-height: 64px;
+  --audio-mixer-fader-rail: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.82) 0 1px,
+    #0b0a09 1px 2px,
+    #25241f 2px 3px,
+    #5f5b50 3px 4px,
+    #34322d 4px 5px,
+    #100f0d 5px 6px,
+    #030303 6px 8px,
+    #0b0a09 8px 9px,
+    rgba(0, 0, 0, 0.68) 9px 10px
+  );
   position: relative;
   z-index: 2;
   overflow: visible;
   contain: layout;
+  transition:
+    height 170ms ease,
+    margin 170ms ease;
+}
+
+.audio-mixer-panel.wood .audio-mixer-strip-fader-rail {
+  left: 50%;
+  width: 10px;
+  border-radius: 1px;
+  overflow: visible;
+  box-shadow:
+    -2px 0 3px rgba(0, 0, 0, 0.42),
+    2px 0 3px rgba(0, 0, 0, 0.34),
+    inset 1px 0 0 rgba(255, 255, 245, 0.06),
+    inset -1px 0 0 rgba(0, 0, 0, 0.78);
+  transition:
+    top 170ms ease,
+    bottom 170ms ease;
+}
+
+.audio-mixer-panel.wood .audio-mixer-strip-fader-rail::before,
+.audio-mixer-panel.wood .audio-mixer-strip-fader-rail::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  z-index: 1;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: url('./rail-screw-phillips-brass.png') center / 10px 10px no-repeat;
+  filter:
+    drop-shadow(0 1px 1px rgba(0, 0, 0, 0.82))
+    drop-shadow(0 0 2px rgba(255, 224, 116, 0.36));
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.audio-mixer-panel.wood .audio-mixer-strip-fader-rail::before {
+  top: 0;
+  transform: translate(-50%, -165%);
+}
+
+.audio-mixer-panel.wood .audio-mixer-strip-fader-rail::after {
+  bottom: 0;
+  transform: translate(-50%, 165%);
 }
 
 .audio-mixer-panel.wood .audio-mixer-strip-fader-thumb {
@@ -617,6 +755,93 @@
   filter: drop-shadow(6px 8px 10px rgba(0, 0, 0, 0.34));
 }
 
+.audio-mixer-panel.wood .audio-mixer-strip-fader-thumb::after {
+  --audio-mixer-fader-glow-edge: rgba(255, 225, 92, 0.86);
+  --audio-mixer-fader-glow-core: #fffdf0;
+  --audio-mixer-fader-glow-base: rgba(255, 211, 69, 0.72);
+  --audio-mixer-fader-glow-near: rgba(255, 255, 218, 0.95);
+  --audio-mixer-fader-glow-mid: rgba(255, 214, 70, 0.85);
+  --audio-mixer-fader-glow-far: rgba(255, 162, 30, 0.48);
+  --audio-mixer-fader-glow-near-soft: rgba(255, 255, 218, 0.86);
+  --audio-mixer-fader-glow-mid-soft: rgba(255, 214, 70, 0.72);
+  --audio-mixer-fader-glow-far-soft: rgba(255, 162, 30, 0.36);
+  --audio-mixer-fader-glow-near-hot: rgba(255, 255, 230, 1);
+  --audio-mixer-fader-glow-mid-hot: rgba(255, 225, 82, 0.95);
+  --audio-mixer-fader-glow-far-hot: rgba(255, 172, 34, 0.58);
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 18%;
+  right: 18%;
+  height: 4px;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, transparent, var(--audio-mixer-fader-glow-edge) 18%, var(--audio-mixer-fader-glow-core) 50%, var(--audio-mixer-fader-glow-edge) 82%, transparent),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), var(--audio-mixer-fader-glow-base));
+  box-shadow:
+    0 0 4px var(--audio-mixer-fader-glow-near),
+    0 0 10px var(--audio-mixer-fader-glow-mid),
+    0 0 18px var(--audio-mixer-fader-glow-far);
+  mix-blend-mode: screen;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%) scaleX(0.55);
+  transition:
+    opacity 120ms ease,
+    transform 140ms ease;
+}
+
+.audio-mixer-panel.wood .audio-mixer-strip-fader[data-dragging='true'] .audio-mixer-strip-fader-thumb::after,
+.audio-mixer-panel.wood .audio-mixer-strip-fader:active .audio-mixer-strip-fader-thumb::after,
+.audio-mixer-panel.wood .audio-mixer-strip-fader:focus-visible .audio-mixer-strip-fader-thumb::after {
+  opacity: 1;
+  transform: translateY(-50%) scaleX(1);
+  animation: audio-mixer-fader-cap-glow 720ms ease-in-out infinite alternate;
+}
+
+@keyframes audio-mixer-fader-cap-glow {
+  from {
+    box-shadow:
+      0 0 3px var(--audio-mixer-fader-glow-near-soft),
+      0 0 9px var(--audio-mixer-fader-glow-mid-soft),
+      0 0 15px var(--audio-mixer-fader-glow-far-soft);
+  }
+
+  to {
+    box-shadow:
+      0 0 6px var(--audio-mixer-fader-glow-near-hot),
+      0 0 14px var(--audio-mixer-fader-glow-mid-hot),
+      0 0 24px var(--audio-mixer-fader-glow-far-hot);
+  }
+}
+
+.audio-mixer-panel.wood .audio-mixer-strip.has-label-color .audio-mixer-strip-fader-thumb::after {
+  --audio-mixer-fader-glow-edge: color-mix(in srgb, var(--strip-color) 82%, transparent);
+  --audio-mixer-fader-glow-core: color-mix(in srgb, var(--strip-color) 34%, #fffdf0);
+  --audio-mixer-fader-glow-base: color-mix(in srgb, var(--strip-color) 66%, rgba(255, 255, 255, 0.68));
+  --audio-mixer-fader-glow-near: color-mix(in srgb, var(--strip-color) 42%, rgba(255, 255, 230, 0.92));
+  --audio-mixer-fader-glow-mid: color-mix(in srgb, var(--strip-color) 76%, transparent);
+  --audio-mixer-fader-glow-far: color-mix(in srgb, var(--strip-color) 52%, transparent);
+  --audio-mixer-fader-glow-near-soft: color-mix(in srgb, var(--strip-color) 34%, rgba(255, 255, 230, 0.86));
+  --audio-mixer-fader-glow-mid-soft: color-mix(in srgb, var(--strip-color) 62%, transparent);
+  --audio-mixer-fader-glow-far-soft: color-mix(in srgb, var(--strip-color) 38%, transparent);
+  --audio-mixer-fader-glow-near-hot: color-mix(in srgb, var(--strip-color) 48%, #fffdf0);
+  --audio-mixer-fader-glow-mid-hot: color-mix(in srgb, var(--strip-color) 86%, transparent);
+  --audio-mixer-fader-glow-far-hot: color-mix(in srgb, var(--strip-color) 58%, transparent);
+}
+
+.audio-mixer-panel.wood .audio-mixer-fader-meter.master .audio-mixer-strip-fader {
+  --audio-mixer-fader-thumb-width: 44px;
+  --audio-mixer-fader-thumb-height: 81px;
+}
+
+.audio-mixer-panel.wood .audio-mixer-fader-meter.master .audio-mixer-strip-fader-thumb {
+  background: url('./master-fadercap-bronze.png') center / 100% 100% no-repeat;
+  border-radius: 7px;
+  box-shadow: 12px 14px 18px rgba(0, 0, 0, 0.44);
+  filter: drop-shadow(7px 9px 12px rgba(0, 0, 0, 0.36));
+}
+
 /* base theme re-adds a drop-shadow on hover/focus — keep it off here too */
 .audio-mixer-panel.wood .audio-mixer-strip-fader:hover .audio-mixer-strip-fader-thumb,
 .audio-mixer-panel.wood .audio-mixer-strip-fader:focus-visible .audio-mixer-strip-fader-thumb {
@@ -626,6 +851,149 @@
 /* meter scale silkscreen */
 .audio-mixer-panel.wood .audio-mixer-meter-scale-labels {
   color: #d8cfc0;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-strip {
+  grid-template-rows: 8px 22px minmax(27px, 0.16fr) 19px 21px 21px 19px minmax(0, 2.5fr) 0px;
+  gap: 2px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-strip::before {
+  --wood-strip-control-gap-height: 84px;
+  --wood-strip-rack-pocket-height: max(27px, calc((100% - var(--wood-strip-control-gap-height)) * 0.08));
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-strip-name {
+  grid-template-rows: minmax(0, 1fr) 0px;
+  gap: 0;
+  align-items: center;
+  min-height: 0;
+  padding: 0 3px;
+  border-radius: 4px;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-strip-name strong {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-strip-name span {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  line-height: 0;
+  transform: translateY(-2px);
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-rack {
+  grid-template-rows: minmax(0, 1fr) auto;
+  padding: 2px;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-rack-slot.send-add {
+  min-height: 0;
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+  transform: translateY(4px) scaleY(0.72);
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-rack-group.sends:has(> .send-add:only-child) {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateY(3px);
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-rack-slot {
+  min-height: 20px;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-pan-row {
+  height: 19px;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-pan-row input {
+  height: 19px;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-pan-row input::-webkit-slider-thumb {
+  width: 18px;
+  height: 18px;
+  margin-top: -6.5px;
+  background-size: 18px 18px;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-pan-row input::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  background-size: 18px 18px;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-fader-meter {
+  z-index: 2;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-strip-fader {
+  height: calc(100% + 64px);
+  margin: -32px auto;
+  z-index: 5;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-fader-meter.master .audio-mixer-strip-fader {
+  height: calc(100% + 80px);
+  margin-top: -40px;
+  margin-bottom: -40px;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-strip-fader-rail {
+  top: 32px;
+  bottom: 32px;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-fader-meter.master .audio-mixer-strip-fader-rail {
+  top: 40px;
+  bottom: 40px;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-strip-fader-rail::before,
+.audio-mixer-panel.wood.compact-height .audio-mixer-strip-fader-rail::after {
+  opacity: 0;
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-strip-output {
+  min-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  padding: 0 3px;
+  border-width: 0;
+  border-radius: 4px;
+  box-shadow: none;
+  transform: translateY(5px) scaleY(0.72);
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-strip-output strong {
+  font-size: 9px;
+  opacity: 0;
+  line-height: 0;
+  transform: translateY(2px);
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-strip-output span {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  line-height: 0;
+  transform: translateY(2px);
 }
 
 }
