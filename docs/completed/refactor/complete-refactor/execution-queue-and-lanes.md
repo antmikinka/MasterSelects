@@ -1,14 +1,19 @@
 # Complete Refactor - Execution Queue And Lanes
 
+Status: COMPLETE — archived 2026-06-12. The queue is empty and closed; this
+file is historical reference only. Moved from `docs/ongoing/` to
+`docs/completed/refactor/`; path references inside reflect the original
+location.
+
 Source: split from `docs/ongoing/Complete-refactor.md` on 2026-06-09.
 
 Back to index: [Complete-refactor.md](../Complete-refactor.md).
 
 Archived completed packet specs: [execution-history-2026-06-09.md](execution-history-2026-06-09.md).
 
-## Active Queue Rule
+## Active Queue Rule (historical)
 
-This file is the live queue, not the packet-history archive.
+This file was the live queue, not the packet-history archive.
 
 - Keep only the active packet plus the next few queued packets in full detail.
 - When a packet completes, collapse it to one or two lines in

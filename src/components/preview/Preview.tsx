@@ -35,6 +35,7 @@ import { usePreviewSourceConfig } from './usePreviewSourceConfig';
 import { usePreviewViewGeometry } from './usePreviewViewGeometry';
 import { usePreviewViewport } from './usePreviewViewport';
 import { usePreviewWheelHandler } from './usePreviewWheelHandler';
+import type { Layer } from '../../types/layers';
 
 const SCENE_OBJECT_INTERACTION_SELECTOR = [
   '.preview-scene-object-handle',
@@ -570,8 +571,26 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
   });
 
   // Edit mode helpers (bounding box calculation, hit testing, cursor mapping)
+  const getLayerProjectionTransform = useCallback((layer: Layer) => {
+    const clip = layer.sourceClipId
+      ? clips.find(candidate => candidate.id === layer.sourceClipId)
+      : clips.find(candidate => candidate.name === layer.name);
+    if (!clip) return undefined;
+
+    return useTimelineStore.getState().getInterpolatedTransform(
+      clip.id,
+      playheadPosition - clip.startTime,
+    );
+  }, [clips, playheadPosition]);
   const { calculateLayerBounds, findLayerAtPosition, findHandleAtPosition, getCursorForHandle } =
-    useEditModeOverlay({ effectiveResolution, canvasSize, canvasInContainer, viewZoom, layers });
+    useEditModeOverlay({
+      effectiveResolution,
+      canvasSize,
+      canvasInContainer,
+      viewZoom,
+      layers,
+      getLayerProjectionTransform,
+    });
 
   // Layer drag logic (move/scale, overlay drawing, document-level listeners)
   const { isDragging, dragMode, dragHandle, hoverHandle, handleOverlayMouseDown, handleOverlayMouseMove, handleOverlayMouseUp } =

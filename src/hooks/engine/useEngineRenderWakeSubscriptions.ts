@@ -14,14 +14,14 @@ export function useEngineRenderWakeSubscriptions(isEngineReady: boolean): void {
       (state) => state.playheadPosition,
       (playheadPosition) => {
         const timelineState = useTimelineStore.getState();
-        if (hasTimelineVisualRenderDemand({
+        const hasVisualDemand = hasTimelineVisualRenderDemand({
           clips: timelineState.clips,
           tracks: timelineState.tracks,
           playheadPosition,
           clipDragPreview: timelineState.clipDragPreview,
-        })) {
-          engine.requestRender();
-        } else if (timelineState.isDraggingPlayhead) {
+        });
+        engine.requestRender();
+        if (!hasVisualDemand && timelineState.isDraggingPlayhead) {
           layerBuilder.syncAudioElements();
         }
       }

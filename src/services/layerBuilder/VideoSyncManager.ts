@@ -204,12 +204,9 @@ export class VideoSyncManager {
     return resolveVideoSyncMedia(clip).htmlVideoElement;
   }
 
-  private shouldMuteVideoElementSourceAudio(ctx: FrameContext, clip: TimelineClip): boolean {
-    if (!clip.linkedClipId) return false;
-    return ctx.clips.some(candidate =>
-      candidate.id === clip.linkedClipId &&
-      candidate.source?.type === 'audio'
-    );
+  private shouldMuteVideoElementSourceAudio(_ctx: FrameContext, clip: TimelineClip): boolean {
+    return clip.source?.type === 'video' ||
+      Boolean(clip.source?.videoElement || clip.source?.webCodecsPlayer);
   }
 
   private muteLinkedVideoSourceAudio(ctx: FrameContext, clip: TimelineClip, video: HTMLVideoElement | null | undefined): void {

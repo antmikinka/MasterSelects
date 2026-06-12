@@ -92,6 +92,7 @@ export function useEngine() {
     if (!isEngineReady) return;
 
     let lastPlayhead = -1;
+    let lastNoDemandFrameWasCleared = false;
 
     // Move expensive stats collection out of the RAF callback.
     // getPlaybackDebugStats + framePhaseMonitor.summary() can take 1-5ms+
@@ -190,6 +191,13 @@ export function useEngine() {
         }
 
         if (!hasVisualRenderDemand) {
+          if (!lastNoDemandFrameWasCleared) {
+            renderScheduler.setActiveCompLayers([]);
+            const renderStart = performance.now();
+            engine.render([]);
+            renderMs += performance.now() - renderStart;
+            lastNoDemandFrameWasCleared = true;
+          }
           if (!timelineState.isPlaying) {
             const syncAudioStart = performance.now();
             layerBuilder.syncAudioElements();
@@ -198,6 +206,7 @@ export function useEngine() {
           recordFramePhases('skipped');
           return;
         }
+        lastNoDemandFrameWasCleared = false;
 
         // Try cached RAM Preview frame first (instant scrubbing over pre-rendered frames).
         // Wall-clock driven effects must render live even when the playhead is parked.

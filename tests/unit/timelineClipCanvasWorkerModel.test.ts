@@ -121,7 +121,6 @@ describe('timeline clip canvas worker model', () => {
 
     expect(eligibility.eligible).toBe(false);
     expect(eligibility.reasons).toEqual([
-      'audio-resource-visuals',
       'clip-trim-active',
       'composition-visuals',
       'fade-visuals',
@@ -129,6 +128,32 @@ describe('timeline clip canvas worker model', () => {
       'source-timing-visuals',
       'thumbnail-visuals',
     ]);
+  });
+
+  it('does not treat video clips with waveform data as audio-resource visuals', () => {
+    const videoClip = createClip({
+      trackType: 'video',
+      source: { type: 'video', mediaFileId: 'media-1' },
+      waveform: [0, 0.4, 0.2],
+      audioState: {
+        sourceAnalysisRefs: { waveformPyramidId: 'video-source-waveform' },
+      },
+    });
+
+    expect(videoClip.isAudio).toBe(false);
+    expect(videoClip.visuals.audioResource).toEqual({
+      waveformLike: false,
+      analysisRef: false,
+    });
+
+    const eligibility = getTimelineClipCanvasWorkerEligibility({
+      clips: [videoClip],
+      waveformsEnabled: true,
+      audioDisplayMode: 'detailed',
+      preparedThumbnailClipIds: new Set(['clip-1']),
+    });
+
+    expect(eligibility).toEqual({ eligible: true, reasons: [] });
   });
 
   it('carries prepared waveform resources as cloned transferable columns', () => {
@@ -255,6 +280,8 @@ describe('timeline clip canvas worker model', () => {
   it('uses the shared audio analysis ref rules for prepared waveform clips', () => {
     const result = buildTimelineClipCanvasWorkerDrawMessage({
       clips: [createClip({
+        trackType: 'audio',
+        source: { type: 'audio', naturalDuration: 4 },
         audioState: {
           processedAnalysisRefs: { processedWaveformPyramidId: 'processed-waveform-ref' },
         },

@@ -1,10 +1,14 @@
 # Complete Refactor Checklist
 
-Status: execution plan
+Status: COMPLETE — archived 2026-06-12. Final closure is recorded in the
+CLOSING SUMMARY section below; remaining optional work lives in the debt
+ledger. Moved from `docs/ongoing/` to `docs/completed/refactor/`; path
+references inside reflect the original location.
+
 Updated: 2026-06-10
 
 This checklist tracks the actual codebase refactor plan in
-`docs/ongoing/Complete-refactor.md`.
+`Complete-refactor.md` (same directory).
 
 Handoff files are prepared as execution templates. Use them when the master
 orchestrator or worker-agent execution run starts.

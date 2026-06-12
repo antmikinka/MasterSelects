@@ -535,6 +535,56 @@ describe('scrub audio sync', () => {
     cacheStub.restore();
   });
 
+  it('does not play embedded video audio when the linked audio clip is absent', () => {
+    const manager = new AudioTrackSyncManager() as unknown as AudioTrackSyncManagerTestAccess;
+    const syncAudioElement = vi.fn();
+    manager.audioSyncHandler = { syncAudioElement, stopScrubAudio: vi.fn() };
+
+    const cacheStub = stubProxyFrameCache();
+
+    const videoClip = makeClip({
+      id: 'video-removed-audio',
+      trackId: 'video-track',
+      mediaFileId: 'media-removed-audio',
+      source: { type: 'video', mediaFileId: 'media-removed-audio' },
+    });
+
+    const ctx = makeFrameContext({
+      clips: [videoClip],
+      clipsAtTime: [videoClip],
+      videoTracks: [{ id: 'video-track', type: 'video', visible: true }],
+      audioTracks: [],
+      visibleVideoTrackIds: new Set(['video-track']),
+      unmutedAudioTrackIds: new Set<string>(),
+      proxyEnabled: true,
+      mediaFiles: [{
+        id: 'media-removed-audio',
+        name: 'removed-audio.mp4',
+        url: 'blob:removed-audio-video',
+        hasProxyAudio: true,
+        audioProxyStatus: 'ready',
+      }],
+      isDraggingPlayhead: true,
+    });
+
+    hydrateTimelineMediaWindow(ctx);
+    const videoElement = getLazyTimelineVideoElementForClip(videoClip);
+    expect(videoElement).toBeInstanceOf(HTMLVideoElement);
+    if (videoElement) videoElement.muted = false;
+
+    manager.syncVideoClipAudio(
+      ctx,
+      { audioPlayingCount: 0, maxAudioDrift: 0, hasAudioError: false, masterSet: false }
+    );
+
+    expect(videoElement?.muted).toBe(true);
+    expect(syncAudioElement).not.toHaveBeenCalled();
+    expect(cacheStub.playScrubAudio).not.toHaveBeenCalled();
+    expect(cacheStub.preloadAudioProxy).not.toHaveBeenCalled();
+
+    cacheStub.restore();
+  });
+
   it('suppresses linked audio clip scrub fallback once varispeed scrub audio is ready', () => {
     const manager = new AudioTrackSyncManager() as unknown as AudioTrackSyncManagerTestAccess;
     const syncAudioElement = vi.fn();

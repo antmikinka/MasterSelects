@@ -698,6 +698,29 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     expect(throttledSeek).toHaveBeenCalled();
   });
 
+  it('mutes HTML video source audio even when no linked audio clip exists', () => {
+    flags.useFullWebCodecsPlayback = false;
+
+    const manager = createManager();
+    vi.spyOn(manager, 'throttledSeek').mockImplementation(() => {});
+
+    const { clip, ctx, video } = createLazyVideoClip('clip-muted-source', {
+      currentTime: 1.5,
+      muted: false,
+      paused: true,
+      seeking: false,
+      readyState: 4,
+      played: { length: 1 } as TimeRanges,
+      pause: vi.fn() as HTMLVideoElement['pause'],
+      playbackRate: 1,
+    });
+    ctx.isDraggingPlayhead = true;
+
+    manager.syncClipVideo(clip, ctx);
+
+    expect(video.muted).toBe(true);
+  });
+
   it('pre-captures paused HTML frames with the active clip id as owner', () => {
     flags.useFullWebCodecsPlayback = false;
 

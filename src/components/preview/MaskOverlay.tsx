@@ -25,6 +25,7 @@ import {
   buildShapePreviewPath,
   buildVisibleMaskPaths,
   getProjectionParams,
+  withClipProjectionTransform,
 } from './maskOverlay/maskOverlayProjectionPlans';
 import type { PenEdgeInsertPreview } from './maskOverlay/maskOverlayTypes';
 import { usePenMaskDraw } from './maskOverlay/usePenMaskDraw';
@@ -77,6 +78,7 @@ export function MaskOverlay({ canvasWidth, canvasHeight, displayWidth, displayHe
     setVertexHandleMode,
     setActiveMask,
     getInterpolatedMasks,
+    getInterpolatedTransform,
   } = useTimelineStore();
 
   // Get first selected clip for mask editing
@@ -91,9 +93,19 @@ export function MaskOverlay({ canvasWidth, canvasHeight, displayWidth, displayHe
     return layers.find(layer => layer?.sourceClipId === selectedClip.id)
       || layers.find(layer => layer?.name === selectedClip.name);
   }, [layers, selectedClip]);
+  const selectedClipLocalTime = selectedClip
+    ? playheadPosition - selectedClip.startTime
+    : 0;
+  const projectionLayer = useMemo(() => {
+    if (!selectedClip) return activeLayer;
+    return withClipProjectionTransform(
+      activeLayer,
+      getInterpolatedTransform(selectedClip.id, selectedClipLocalTime),
+    );
+  }, [activeLayer, getInterpolatedTransform, selectedClip, selectedClipLocalTime]);
   const projectionParams = useMemo(
-    () => getProjectionParams(activeLayer, canvasWidth, canvasHeight),
-    [activeLayer, canvasHeight, canvasWidth],
+    () => getProjectionParams(projectionLayer, canvasWidth, canvasHeight),
+    [canvasHeight, canvasWidth, projectionLayer],
   );
   const projectMaskPoint = useCallback((point: { x: number; y: number }) => {
     if (!projectionParams) {

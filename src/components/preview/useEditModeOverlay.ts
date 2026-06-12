@@ -2,6 +2,7 @@
 
 import { useCallback } from 'react';
 import type { Layer } from '../../types';
+import type { ClipTransform } from '../../types/timelineCore';
 import {
   calculateLayerOverlayBounds,
   getLayerOverlayHandles,
@@ -9,6 +10,7 @@ import {
   scaleLayerOverlayBounds,
   type LayerOverlayBounds,
 } from './editModeOverlayMath';
+import { withClipProjectionTransform } from './maskOverlay/maskOverlayProjectionPlans';
 
 interface UseEditModeOverlayParams {
   effectiveResolution: { width: number; height: number };
@@ -16,6 +18,7 @@ interface UseEditModeOverlayParams {
   canvasInContainer: { x: number; y: number; width: number; height: number };
   viewZoom: number;
   layers: Layer[];
+  getLayerProjectionTransform?: (layer: Layer) => ClipTransform | null | undefined;
 }
 
 export function useEditModeOverlay({
@@ -24,32 +27,39 @@ export function useEditModeOverlay({
   canvasInContainer,
   viewZoom,
   layers,
+  getLayerProjectionTransform,
 }: UseEditModeOverlayParams) {
+  const getProjectionLayer = useCallback((layer: Layer) => (
+    withClipProjectionTransform(layer, getLayerProjectionTransform?.(layer)) ?? layer
+  ), [getLayerProjectionTransform]);
 
   // Calculate layer bounding box in canvas coordinates (matches shader transform)
   const calculateLayerBounds = useCallback((layer: Layer, canvasW: number, canvasH: number, forcePos?: { x: number; y: number }) => {
+    const projectionLayer = getProjectionLayer(layer);
     let sourceWidth = effectiveResolution.width;
     let sourceHeight = effectiveResolution.height;
 
-    if (layer.source?.videoElement) {
-      sourceWidth = layer.source.videoElement.videoWidth || sourceWidth;
-      sourceHeight = layer.source.videoElement.videoHeight || sourceHeight;
-    } else if (layer.source?.imageElement) {
-      sourceWidth = layer.source.imageElement.naturalWidth || sourceWidth;
-      sourceHeight = layer.source.imageElement.naturalHeight || sourceHeight;
-    } else if (layer.source?.textCanvas) {
-      sourceWidth = layer.source.textCanvas.width || sourceWidth;
-      sourceHeight = layer.source.textCanvas.height || sourceHeight;
-    } else if (layer.source?.nestedComposition) {
-      sourceWidth = layer.source.nestedComposition.width || sourceWidth;
-      sourceHeight = layer.source.nestedComposition.height || sourceHeight;
-    } else if (layer.source?.intrinsicWidth && layer.source?.intrinsicHeight) {
-      sourceWidth = layer.source.intrinsicWidth;
-      sourceHeight = layer.source.intrinsicHeight;
+    if (projectionLayer.source?.videoElement) {
+      sourceWidth = projectionLayer.source.videoElement.videoWidth || sourceWidth;
+      sourceHeight = projectionLayer.source.videoElement.videoHeight || sourceHeight;
+    } else if (projectionLayer.source?.imageElement) {
+      sourceWidth = projectionLayer.source.imageElement.naturalWidth || sourceWidth;
+      sourceHeight = projectionLayer.source.imageElement.naturalHeight || sourceHeight;
+    } else if (projectionLayer.source?.textCanvas) {
+      sourceWidth = projectionLayer.source.textCanvas.width || sourceWidth;
+      sourceHeight = projectionLayer.source.textCanvas.height || sourceHeight;
+    } else if (projectionLayer.source?.nestedComposition) {
+      sourceWidth = projectionLayer.source.nestedComposition.width || sourceWidth;
+      sourceHeight = projectionLayer.source.nestedComposition.height || sourceHeight;
+    } else if (projectionLayer.source?.intrinsicWidth && projectionLayer.source?.intrinsicHeight) {
+      sourceWidth = projectionLayer.source.intrinsicWidth;
+      sourceHeight = projectionLayer.source.intrinsicHeight;
     }
 
-    const layerPos = forcePos || layer.position;
-    const rotationValue = typeof layer.rotation === 'number' ? layer.rotation : layer.rotation.z;
+    const layerPos = forcePos || projectionLayer.position;
+    const rotationValue = typeof projectionLayer.rotation === 'number'
+      ? projectionLayer.rotation
+      : projectionLayer.rotation.z;
 
     return calculateLayerOverlayBounds({
       sourceWidth,
@@ -59,10 +69,10 @@ export function useEditModeOverlay({
       canvasWidth: canvasW,
       canvasHeight: canvasH,
       position: layerPos,
-      scale: layer.scale,
+      scale: projectionLayer.scale,
       rotation: rotationValue,
     });
-  }, [effectiveResolution]);
+  }, [effectiveResolution, getProjectionLayer]);
 
   const toContainerBounds = useCallback((bounds: LayerOverlayBounds): LayerOverlayBounds => (
     scaleLayerOverlayBounds(bounds, viewZoom, { x: canvasInContainer.x, y: canvasInContainer.y })

@@ -1,5 +1,7 @@
 import type { Layer } from "../../../types/layers";
+import type { ClipTransform } from "../../../types/timelineCore";
 import type { ClipMask, MaskVertex } from "../../../types/masks";
+import { getEffectiveScale } from "../../../utils/transformScale";
 import { type LayerUvProjectionParams } from '../editModeOverlayMath';
 import type {
   CanvasMaskVertex,
@@ -9,6 +11,24 @@ import type {
 } from './maskOverlayTypes';
 
 const DEFAULT_MASK_OUTLINE_COLOR = '#2997E5';
+
+export function withClipProjectionTransform(
+  layer: Layer | undefined,
+  transform: ClipTransform | null | undefined,
+): Layer | undefined {
+  if (!layer || !transform) return layer;
+
+  return {
+    ...layer,
+    position: { ...transform.position },
+    scale: getEffectiveScale(transform.scale),
+    rotation: {
+      x: (transform.rotation.x * Math.PI) / 180,
+      y: (transform.rotation.y * Math.PI) / 180,
+      z: (transform.rotation.z * Math.PI) / 180,
+    },
+  };
+}
 
 export function getLayerSourceSize(
   layer: Layer | undefined,

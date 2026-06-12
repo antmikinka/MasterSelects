@@ -1,6 +1,12 @@
 # Complete Refactor Execution Plan
 
-Status: execution plan
+Status: COMPLETE — archived 2026-06-12. The initiative is closed (37 waves,
+~200 bounded packets, all gates green); there is no next packet. This document
+and its companions were moved from `docs/ongoing/` to
+`docs/completed/refactor/`; path references inside reflect the original
+location. Durable architecture rules were promoted to `CLAUDE.md`/`AGENTS.md`
+section 6.
+
 Created: 2026-06-09
 Updated: 2026-06-09
 

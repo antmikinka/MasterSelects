@@ -1,5 +1,8 @@
 import type { TimelinePaintSourceClip } from '../../../timeline';
-import { hasTimelineClipCanvasAudioAnalysisRef } from './timelineClipCanvasAudio';
+import {
+  hasTimelineClipCanvasAudioAnalysisRef,
+  isTimelineClipCanvasAudioClip,
+} from './timelineClipCanvasAudio';
 
 const SOURCE_TIMING_EPSILON = 0.001;
 
@@ -84,11 +87,14 @@ export const timelineClipCanvasPaintVisualContributors = [
   {
     id: 'audio-resource',
     apply: (clip, visuals) => {
-      visuals.audioResource.waveformLike = (clip.waveform?.length ?? 0) > 0 ||
+      const isAudioClip = isTimelineClipCanvasAudioClip(clip);
+      visuals.audioResource.waveformLike = isAudioClip && (
+        (clip.waveform?.length ?? 0) > 0 ||
         (clip.waveformChannels?.length ?? 0) > 0 ||
         Boolean(clip.waveformGenerating) ||
-        clip.waveformProgress !== undefined;
-      visuals.audioResource.analysisRef = hasTimelineClipCanvasAudioAnalysisRef(clip);
+        clip.waveformProgress !== undefined
+      );
+      visuals.audioResource.analysisRef = isAudioClip && hasTimelineClipCanvasAudioAnalysisRef(clip);
     },
   },
   {

@@ -9,12 +9,12 @@ export const completeExitCriteriaCoverage = completeArchitectureGates.map((gate)
   evidence: [
     {
       kind: 'docs',
-      path: 'docs/ongoing/Complete-refactor-checklist.md',
+      path: 'docs/completed/refactor/Complete-refactor-checklist.md',
       note: 'The checklist tracks gate subchecks and phase readiness.',
     },
     {
       kind: 'docs',
-      path: 'docs/ongoing/complete-refactor/execution-queue-and-lanes.md',
+      path: 'docs/completed/refactor/complete-refactor/execution-queue-and-lanes.md',
       note: 'The execution queue records packet write sets, forbidden files, checks, and stop conditions.',
     },
   ],

@@ -1,6 +1,5 @@
 import {
   getPreferredWaveformPyramidRef,
-  hasLegacyWaveformSamples,
   type TimelineWaveformPresenceInput,
 } from '../../../utils/audioWaveformPresence';
 import { getPreferredSpectrogramTileSetRef } from '../../../utils/audioSpectrogramPresence';
@@ -17,8 +16,6 @@ export function hasTimelineClipCanvasAudioAnalysisRef(input: TimelineClipCanvasA
 }
 
 export function isTimelineClipCanvasAudioClip(input: TimelineClipCanvasAudioClipInput): boolean {
-  return input.trackType === 'audio' ||
-    input.source?.type === 'audio' ||
-    hasLegacyWaveformSamples(input) ||
-    hasTimelineClipCanvasAudioAnalysisRef(input);
+  if (input.trackType) return input.trackType === 'audio';
+  return input.source?.type === 'audio';
 }

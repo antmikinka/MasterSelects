@@ -30,14 +30,16 @@ AGENTS.md` or equivalent). Parity check: `fc.exe /b AGENTS.md CLAUDE.md`.
 
 ## 2. Orchestration Model
 
-Decided 2026-06-09. One Claude Code session acts as master orchestrator;
-OpenAI Codex CLI agents are dispatched as headless workers via `codex exec`
-(gpt-5.5, xhigh reasoning, fast tier — the user-level Codex defaults).
+One Claude Code session acts as master orchestrator; OpenAI Codex CLI agents
+can be dispatched as headless workers via `codex exec` (gpt-5.5, xhigh
+reasoning, fast tier — the user-level Codex defaults) whenever parallel
+bounded work helps. For non-trivial fixes, get a Codex second opinion on the
+diagnosis or diff even when no workers are dispatched.
 
 | Role | Owns |
 |---|---|
-| Orchestrator (Claude) | Packet specs (lane, goal, write set, forbidden files, checks, stop conditions), dispatch, post-packet verification (focused vitest + diff review), gate closure, queue/lane strategy, ALL git commits, merges and pushes |
-| Workers (Codex) | Source edits, `npx tsc -b` + scoped rg scans, checklist/queue bookkeeping in repo style, packet report |
+| Orchestrator (Claude) | Work-packet specs (goal, write set, forbidden files, checks, stop conditions), dispatch, post-packet verification (focused vitest + diff review), ALL git commits, merges and pushes |
+| Workers (Codex) | Source edits, `npx tsc -b` + scoped rg scans, packet report |
 
 Rules:
 
@@ -46,18 +48,13 @@ Rules:
 - Verified sandbox limits: the Codex sandbox cannot run vitest (esbuild
   `spawn EPERM`) and cannot write `.git/index.lock` (no `git add`/`commit`).
   Workers must not claim test results; read-only git is fine. The orchestrator
-  runs the focused test suite after each packet, commits verified waves, and
+  runs the focused test suite after each packet, commits verified work, and
   reverts or dispatches a fix-forward packet when red.
-- Up to 6 parallel workers, only with disjoint write sets. At most one
-  concurrently running worker may hold
-  `docs/ongoing/Complete-refactor-checklist.md` and
-  `docs/ongoing/complete-refactor/execution-queue-and-lanes.md` in its write
-  set; other parallel workers return reports only.
+- Up to 6 parallel workers, only with disjoint write sets.
 - Claude-side dispatch mechanics: `~/.claude/skills/codex-worker/SKILL.md`.
 - Doppelspitze (MCP, skill, agent bus, file-lock bus, lead-a/lead-b
   coordination, handoff/logging) stays disabled for this repository unless the
-  user explicitly re-enables it. Coordinate through the checklist, the active
-  queue, and normal chat updates.
+  user explicitly re-enables it. Coordinate through normal chat updates.
 
 ---
 
@@ -121,9 +118,7 @@ Anything not using a `fast ...` command:
 - Check budget: during ongoing work run focused unit/smoke tests, targeted
   builds, or lint proportional to risk and change scope. Do not run the full
   chain after every small edit; it is mandatory only at the normal-command
-  boundaries above. Refactor packet commits on issue branches follow the
-  bounded-packet checks defined in the queue, plus orchestrator test
-  verification.
+  boundaries above.
 - Large command outputs are token- and time-expensive: report short summaries
   and relevant error lines, not full logs.
 - Prefer small, coherent changes and packet-sized commits.
@@ -161,38 +156,29 @@ explicitly adds that request.
 
 ---
 
-## 6. Complete Refactor
+## 6. Architecture Rules
 
-The repo-wide Complete Refactor is the active architecture initiative. Do not
-restart meta-planning; read the plan and execute the next bounded packet.
+The repo-wide Complete Refactor closed in June 2026 (37 waves, ~200 bounded
+packets; all architecture and quality gates green). It is finished work — do
+not look for a next packet. The archive lives at
+`docs/completed/refactor/Complete-refactor.md`; optional follow-up work is
+recorded as a debt ledger in
+`docs/completed/refactor/Complete-refactor-checklist.md`.
 
-1. `docs/ongoing/Complete-refactor.md` — plan and orchestrator index
-2. `docs/ongoing/Complete-refactor-checklist.md` — user-visible status source
-3. `docs/ongoing/complete-refactor/execution-queue-and-lanes.md` — active queue
+These rules from the refactor stay permanently in force:
 
-Rules:
-
-- Every source change needs a lane, write set, forbidden files, gate/check,
-  and a short report. No broad unscoped refactors.
-- Foundation lanes come first: shared types/barrels, runtime leases, project
-  persistence, and dev-bridge quarantine before domain refactors.
-- Product-source ceiling is 700 LOC, with smaller role-specific budgets in the
-  plan. Splits must reduce real coupling — no `helpers.ts`/`utils.ts`/broad
-  `types.ts` dumping grounds, no blind line-count splits.
+- Product-source ceiling is 700 LOC. Splits must reduce real coupling — no
+  `helpers.ts`/`utils.ts`/broad `types.ts` dumping grounds, no blind
+  line-count splits.
 - Runtime handles (File, Blob, object URLs, DOM/media elements, AudioContext,
   VideoFrame, ImageBitmap, GPU objects, decoders, workers, service singletons)
   stay out of durable stores, project data, pure shared types, and
   cross-domain schema tiers.
-- Keep the checklist current in the same session whenever requirements, lanes,
-  gates, blockers, or verification needs change. Keep the queue file an active
-  queue (active packet + next few queued), not a history archive; completed
-  packets collapse to checklist lines.
-- If a needed gate, contract, or write set is missing, add the smallest
-  preflight entry to plan/checklist, then continue with the bounded packet.
-- Timeline is a protected lane: `src/stores/timeline/**`,
-  `src/components/timeline/**`, and `src/timeline/architecture/**` are
-  read-only except for explicit integration packets. Completed timeline
-  architecture docs live under `docs/completed/architecture/`.
+- Large multi-file changes still run as bounded work packets: explicit goal,
+  write set, checks, and a short report. No broad unscoped refactors.
+- Timeline code (`src/stores/timeline/**`, `src/components/timeline/**`) is
+  open for normal work. Completed timeline architecture docs live under
+  `docs/completed/architecture/`.
 
 ---
 
@@ -231,7 +217,7 @@ use `yt-dlp` next to the helper binary or from `PATH`.
 
 Especially central files: `src/engine/WebGPUEngine.ts`,
 `src/engine/render/RenderDispatcher.ts`, `src/stores/timeline/index.ts`,
-`src/stores/mediaStore/index.ts`, `src/stores/historyStore.ts`,
+`src/stores/mediaStore/index.ts`, `src/stores/historyStore/index.ts`,
 `src/services/layerBuilder/LayerBuilderService.ts`, `src/services/logger.ts`,
 `src/engine/featureFlags.ts`.
 
@@ -354,9 +340,9 @@ detection). NativeHelper WebSocket warnings matter only when the tested path
 actually needs the helper.
 
 For timeline, playback, render, or export bugs: inspect logs, traces, and
-`src/services/monitoring/` (playbackHealthMonitor, playbackDebugStats,
-framePhaseMonitor, wcPipelineMonitor, vfPipelineMonitor, scrubSettleState)
-before editing. Browser globals: `window.__WC_PIPELINE__`,
+the monitoring modules in `src/services/` (playbackHealthMonitor,
+playbackDebugStats, framePhaseMonitor, wcPipelineMonitor, vfPipelineMonitor,
+scrubSettleState) before editing. Browser globals: `window.__WC_PIPELINE__`,
 `window.__VF_PIPELINE__`. Useful module sets:
 `Logger.enable('WebCodecsPlayer,PlaybackHealth,LayerCollector')` and
 `Logger.enable('VideoSyncManager,ParallelDecode,RenderLoop')`.

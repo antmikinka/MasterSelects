@@ -9,9 +9,9 @@ export const completeRefactorLanes = [
     writeSet: [
       'src/architecture/**',
       'tests/unit/completeArchitectureRegistry.test.ts',
-      'docs/ongoing/Complete-refactor.md',
-      'docs/ongoing/Complete-refactor-checklist.md',
-      'docs/ongoing/complete-refactor/**',
+      'docs/completed/refactor/Complete-refactor.md',
+      'docs/completed/refactor/Complete-refactor-checklist.md',
+      'docs/completed/refactor/complete-refactor/**',
     ],
     forbiddenWriteSet: [
       'src/components/**',
@@ -146,9 +146,9 @@ export const completeRefactorLanes = [
       'src/services/project/types/schema.types.ts',
       'tests/unit/projectSchemaBoundary.test.ts',
       'src/architecture/**',
-      'docs/ongoing/Complete-refactor.md',
-      'docs/ongoing/Complete-refactor-checklist.md',
-      'docs/ongoing/complete-refactor/**',
+      'docs/completed/refactor/Complete-refactor.md',
+      'docs/completed/refactor/Complete-refactor-checklist.md',
+      'docs/completed/refactor/complete-refactor/**',
     ],
     forbiddenWriteSet: [
       'src/services/project/projectSave.ts',
@@ -269,7 +269,7 @@ export const completeRefactorLanes = [
     writeSet: [
       'tests/**',
       'src/architecture/**',
-      'docs/ongoing/complete-refactor/**',
+      'docs/completed/refactor/complete-refactor/**',
     ],
     forbiddenWriteSet: [
       'src/components/**',

@@ -84,11 +84,7 @@ export class AudioTrackSyncManager {
   private videoClipAudioSync = new AudioTrackVideoClipAudioSync({
     getClipVideoElement: (clip) => this.getClipVideoElement(clip),
     getLinkedAudioClipAtPlayhead: (ctx, clip) => this.getLinkedAudioClipAtPlayhead(ctx, clip),
-    getVideoAudioProxyElementForClip: (mediaFileId, clipId) =>
-      this.getVideoAudioProxyElementForClip(mediaFileId, clipId),
     getClipAudioRouteSettings,
-    syncPreviewAudioElement: (target, ctx, state) =>
-      this.syncPreviewAudioElement(target, ctx, state),
   });
 
   constructor() {
@@ -589,10 +585,6 @@ export class AudioTrackSyncManager {
     if (!element) return;
     pauseAudioElement(element);
     audioRoutingManager.disposeRoute(element);
-  }
-
-  private getVideoAudioProxyElementForClip(mediaFileId: string, clipId: string): HTMLAudioElement | null {
-    return this.runtimeElements.getVideoAudioProxyForClip(mediaFileId, clipId);
   }
 
   private shouldSuppressLinkedAudioClipScrub(ctx: FrameContext, clip: TimelineClip): boolean {
