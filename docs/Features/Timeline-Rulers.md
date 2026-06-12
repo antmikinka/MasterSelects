@@ -2,10 +2,15 @@
 
 # Multi-Ruler Infrastructure (Integration Plan)
 
-**Status:** Planned — not yet implemented. This document is the agreed design and
-work-packet breakdown for turning the single timeline ruler into a stack of
-coexisting ruler lanes. Issue: #257 (different rulers for frame / bars / time —
-see them all and snap to the one clicked).
+**Status:** Implemented (Packets 1–7). The single timeline ruler is now a stack of
+coexisting ruler lanes (Time / Timecode / Frames / Bars+Beats), chosen from the
+**Rulers** checklist (left of the View dropdown) and persisted per composition.
+Bars+Beats is driven by a TempoMap (constant 4/4 @ 60 BPM today, list-of-events
+ready). Clicking a lane sets the active lane (highlighted) — the seam a future grid
+will snap to. This phase ships **no grid/snap behavior** yet. Issue: #257.
+
+Each `### Packet N` section below is annotated with a ✅ "Implemented" summary of
+what actually shipped, followed by the original spec for reference.
 
 ---
 
