@@ -35,7 +35,7 @@ describe('AppearanceSettings', () => {
   it('exposes the wooden mixer theme toggle in Appearance preferences', () => {
     render(<AppearanceSettings />);
 
-    const checkbox = screen.getByLabelText('Wooden mixer theme');
+    const checkbox = screen.getByLabelText('Wooden audio mixer theme');
 
     expect(checkbox).toBeChecked();
 

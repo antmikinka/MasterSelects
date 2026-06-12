@@ -57,7 +57,6 @@ interface PreviewProps {
 export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps) {
   const { isEngineReady } = useEngine();
   // NOTE: these are store actions (stable references) — safe to destructure once.
-  // For state-reading functions (getInterpolatedTransform), call getState() at usage site.
   const { addKeyframe, hasKeyframes, isRecording } = useTimelineStore.getState();
   const engineInitFailed = useEngineStore((s) => s.engineInitFailed);
   const engineInitError = useEngineStore((s) => s.engineInitError);
@@ -83,6 +82,7 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
     updateTextBoundsVertices,
     setPropertyValue,
     getInterpolatedTextBounds,
+    getInterpolatedTransform,
     maskEditMode,
     maskPanelActive,
     layers,
@@ -106,6 +106,7 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
     updateTextBoundsVertices: s.updateTextBoundsVertices,
     setPropertyValue: s.setPropertyValue,
     getInterpolatedTextBounds: s.getInterpolatedTextBounds,
+    getInterpolatedTransform: s.getInterpolatedTransform,
     maskEditMode: s.maskEditMode,
     maskPanelActive: s.maskPanelActive,
     layers: s.layers,
@@ -577,11 +578,11 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
       : clips.find(candidate => candidate.name === layer.name);
     if (!clip) return undefined;
 
-    return useTimelineStore.getState().getInterpolatedTransform(
+    return getInterpolatedTransform(
       clip.id,
       playheadPosition - clip.startTime,
     );
-  }, [clips, playheadPosition]);
+  }, [clips, getInterpolatedTransform, playheadPosition]);
   const { calculateLayerBounds, findLayerAtPosition, findHandleAtPosition, getCursorForHandle } =
     useEditModeOverlay({
       effectiveResolution,
