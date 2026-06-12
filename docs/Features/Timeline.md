@@ -160,6 +160,7 @@ getTrackChildren()  // Query child tracks
 
 ### Timeline Tool Palette
 - The ruler/header strip contains a compact grouped timeline tool palette.
+- UX: the palette is always visible. It no longer hides behind a single tools-icon "hub" that fanned the buttons out on hover; that reveal/collapse animation was removed so every tool button sits in place at full size like a normal toolbar (issue #256). The hold-to-open grouped-tool flyout is unaffected.
 - Root groups are Selection, Cut, Trim, Placement, and Navigation/Marking.
 - Clicking a root button activates the last enabled child tool for that group.
 - Holding a root button, right-clicking it, or using its chevron opens an unclipped portal flyout.
