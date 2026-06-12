@@ -16,6 +16,7 @@ import {
   MixerMeterScale,
   MIXER_METER_VISUAL_FEATURES,
 } from './MixerMeter';
+import { MixerFaderResizeHandle, type MixerFaderResizeHandleProps } from './MixerFaderResizeHandle';
 import { MixerRack, stopPropagation } from './MixerRack';
 import { MixerVolumeFader } from './MixerVolumeFader';
 import { useMixerFaderDraft } from './useMixerFaderDraft';
@@ -34,6 +35,7 @@ function TrackMixerStripComponent({
   onFocus,
   onOpenFx,
   onOpenColorMenu,
+  faderResizeHandleProps,
 }: {
   track: TimelineTrack;
   index: number;
@@ -41,6 +43,7 @@ function TrackMixerStripComponent({
   onFocus: () => void;
   onOpenFx: (target: FxWindowTarget) => void;
   onOpenColorMenu: (event: ReactMouseEvent, trackId: string) => void;
+  faderResizeHandleProps: MixerFaderResizeHandleProps;
 }) {
   const meterScope = getMixerRuntimeAudioMeterScope('track', track.id);
   const audioState = getTrackAudioState(track);
@@ -168,6 +171,8 @@ function TrackMixerStripComponent({
         <span>{formatPan(audioState.pan)}</span>
       </div>
 
+      <MixerFaderResizeHandle {...faderResizeHandleProps} />
+
       <div className="audio-mixer-fader-meter" onPointerDown={stopPropagation}>
         <MixerVolumeFader
           value={volumeDraft.value}
@@ -203,4 +208,5 @@ export const TrackMixerStrip = memo(TrackMixerStripComponent, (prev, next) => (
   && prev.focused === next.focused
   && prev.onOpenFx === next.onOpenFx
   && prev.onOpenColorMenu === next.onOpenColorMenu
+  && prev.faderResizeHandleProps === next.faderResizeHandleProps
 ));

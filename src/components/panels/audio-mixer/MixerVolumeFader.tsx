@@ -203,6 +203,16 @@ export function MixerVolumeFader({
     onEndDrag();
   }, [onEndDrag]);
 
+  const setThumbHovered = useCallback((hovered: boolean) => {
+    const root = rootRef.current;
+    if (!root) return;
+    if (hovered) {
+      root.dataset.thumbHovered = 'true';
+    } else {
+      delete root.dataset.thumbHovered;
+    }
+  }, []);
+
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return undefined;
@@ -281,7 +291,13 @@ export function MixerVolumeFader({
       onDoubleClick={onDoubleClick}
     >
       <span className="audio-mixer-strip-fader-rail" aria-hidden="true" />
-      <span ref={thumbRef} className="audio-mixer-strip-fader-thumb" aria-hidden="true" />
+      <span
+        ref={thumbRef}
+        className="audio-mixer-strip-fader-thumb"
+        aria-hidden="true"
+        onPointerEnter={() => setThumbHovered(true)}
+        onPointerLeave={() => setThumbHovered(false)}
+      />
     </div>
   );
 }

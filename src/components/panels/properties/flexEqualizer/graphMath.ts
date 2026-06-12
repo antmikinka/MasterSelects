@@ -12,10 +12,6 @@ export const GRAPH_MIN_FREQUENCY_HZ = 20;
 export const GRAPH_MAX_FREQUENCY_HZ = 20000;
 export const DEFAULT_GRAPH_WIDTH = 520;
 export const DEFAULT_GRAPH_HEIGHT = 220;
-export const FULL_GRAPH_MIN_HEIGHT = 180;
-export const FULL_GRAPH_MAX_HEIGHT = 340;
-export const COMPACT_GRAPH_MIN_HEIGHT = 132;
-export const COMPACT_GRAPH_MAX_HEIGHT = 220;
 export const GAIN_STEP_DB = 0.1;
 export const MAX_CANVAS_CACHE_ENTRIES = 12;
 
@@ -38,14 +34,6 @@ export function graphXToFrequency(x: number, width: number): number {
 export function graphYToDb(y: number, height: number, rangeDb: number): number {
   const normalized = clamp(y / Math.max(1, height), 0, 1);
   return quantize(rangeDb - normalized * rangeDb * 2, GAIN_STEP_DB);
-}
-
-export function getResponsiveGraphHeight(width: number, compact: boolean): number {
-  const safeWidth = Math.max(1, width || DEFAULT_GRAPH_WIDTH);
-  const idealAspectRatio = compact ? 2.6 : 2.35;
-  const minHeight = compact ? COMPACT_GRAPH_MIN_HEIGHT : FULL_GRAPH_MIN_HEIGHT;
-  const maxHeight = compact ? COMPACT_GRAPH_MAX_HEIGHT : FULL_GRAPH_MAX_HEIGHT;
-  return Math.round(clamp(safeWidth / idealAspectRatio, minHeight, maxHeight));
 }
 
 export function formatSignedDb(value: number): string {

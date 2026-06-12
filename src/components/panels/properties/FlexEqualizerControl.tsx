@@ -4,7 +4,6 @@ import { normalizeAudioEqParams } from '../../../engine/audio/eq/AudioEqLegacy';
 import {
   addAudioEqBand,
   removeAudioEqBand,
-  updateAudioEqBand,
 } from '../../../engine/audio/eq/AudioEqOperations';
 import {
   applyAudioEqCurveFit,
@@ -67,14 +66,17 @@ import {
   graphYToDb,
   quantize,
 } from './flexEqualizer/graphMath';
-import { SelectedBandControls } from './flexEqualizer/SelectedBandControls';
-import { TopControls } from './flexEqualizer/TopControls';
+import type { FlexEqAdvancedPanel } from './flexEqualizer/BandAdvancedPanels';
+import { ControlModule } from './flexEqualizer/ControlModule';
+import { GraphStage } from './flexEqualizer/GraphStage';
+import { PresetBrowserPanel } from './flexEqualizer/PresetBrowserPanel';
+import { UtilityStrip } from './flexEqualizer/UtilityStrip';
 import { useBandDragCommits } from './flexEqualizer/useBandDragCommits';
+import { useFitVisiblePanelHeight } from './flexEqualizer/useFitVisiblePanelHeight';
 import { useFlexEqualizerPresetBrowser } from './flexEqualizer/useFlexEqualizerPresetBrowser';
 import { useEqualizerGraphSize } from './flexEqualizer/useEqualizerGraphSize';
 import { useRuntimeAnalyzerStream, type RuntimeAnalyzerScope } from './useThrottledRuntimeAnalyzer';
-
-type FlexEqAdvancedPanel = 'none' | 'dynamics' | 'spectral';
+import './flexEqualizer/flexEqControlModule.css';
 
 export interface FlexEqualizerControlProps {
   params: unknown;
@@ -103,6 +105,7 @@ export function FlexEqualizerControl({
   onUpdateParamPath,
   onChangeParams,
 }: FlexEqualizerControlProps) {
+  const rootRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const activePointerIdRef = useRef<number | null>(null);
@@ -113,7 +116,8 @@ export function FlexEqualizerControl({
   const analyzerRef = useRef<AudioEqAnalyzerView | undefined>(analyzer);
   const renderCacheRef = useRef<FlexEqCanvasRenderCache>({});
   const staticVersionRef = useRef(0);
-  const size = useEqualizerGraphSize(stageRef, compact);
+  useFitVisiblePanelHeight(rootRef);
+  const size = useEqualizerGraphSize(stageRef);
   const normalized = useMemo(() => normalizeAudioEqParams(params), [params]);
   const selectedBandIds = useMemo(
     () => normalized.display.selectedBandIds ?? [],
@@ -262,6 +266,8 @@ export function FlexEqualizerControl({
     if (patch.q !== undefined) updatePath(`eq.audible.bands.${bandId}.q`, patch.q);
     if (patch.type !== undefined) updatePath(`eq.audible.bands.${bandId}.type`, patch.type);
     if (patch.enabled !== undefined) updatePath(`eq.audible.bands.${bandId}.enabled`, patch.enabled);
+    if (patch.slopeDbPerOct !== undefined) updatePath(`eq.audible.bands.${bandId}.slopeDbPerOct`, patch.slopeDbPerOct);
+    if (patch.brickwall !== undefined) updatePath(`eq.audible.bands.${bandId}.brickwall`, patch.brickwall);
     if (patch.dynamic !== undefined) updatePath(`eq.audible.bands.${bandId}.dynamic`, patch.dynamic as unknown as AudioEffectParamValue);
     if (patch.spectralDynamics !== undefined) updatePath(`eq.audible.bands.${bandId}.spectralDynamics`, patch.spectralDynamics as unknown as AudioEffectParamValue);
   };
@@ -584,77 +590,90 @@ export function FlexEqualizerControl({
   };
 
   return (
-    <div className={`flex-eq ${compact ? 'compact' : ''}`}>
-      <TopControls
-        ariaLabel={ariaLabel}
-        compact={compact}
-        disabled={disabled}
-        normalized={normalized}
-        showPresetBrowser={presetBrowser.showPresetBrowser}
-        presetQuery={presetBrowser.presetQuery}
-        presetTagFilter={presetBrowser.presetTagFilter}
-        presetFilter={presetBrowser.presetFilter}
-        presetTags={presetBrowser.presetTags}
-        filteredPresets={presetBrowser.filteredPresets}
-        graphMode={graphMode}
-        hasAnalyzer={hasAnalyzer}
-        matchSourceActive={Boolean(matchSource)}
-        matchTargetActive={Boolean(matchTarget)}
-        canApplyMatch={Boolean(matchSource && matchTarget)}
-        stageRef={stageRef}
-        canvasRef={canvasRef}
-        graphHeight={size.height}
-        setShowPresetBrowser={presetBrowser.setShowPresetBrowser}
-        setPresetQuery={presetBrowser.setPresetQuery}
-        setPresetTagFilter={presetBrowser.setPresetTagFilter}
-        setPresetFilter={presetBrowser.setPresetFilter}
-        setGraphMode={setGraphMode}
-        setSketchPoints={setSketchPoints}
-        updatePresetKind={updatePresetKind}
-        updatePath={(path, value) => updatePath(path, value)}
-        saveCurrentUserPreset={presetBrowser.saveCurrentUserPreset}
-        applyBrowserPreset={applyBrowserPreset}
-        toggleBrowserPresetFavorite={presetBrowser.toggleBrowserPresetFavorite}
-        deleteBrowserPreset={presetBrowser.deleteBrowserPreset}
-        switchABSlot={switchABSlot}
-        syncActiveABSlot={syncActiveABSlot}
-        handleCopyCurve={() => void handleCopyCurve()}
-        handleCopyBands={() => void handleCopyBands()}
-        handlePaste={() => void handlePaste()}
-        captureMatchSource={captureMatchSource}
-        captureMatchTarget={captureMatchTarget}
-        applyCapturedMatch={applyCapturedMatch}
-        addBand={addBand}
-        handlePointerDown={handlePointerDown}
-        handlePointerMove={handlePointerMove}
-        finishPointer={finishPointer}
-        handlePointerLeave={handlePointerLeave}
-        handleContextMenu={handleContextMenu}
-        activeABSlot={abState.activeSlot}
-        hasSelectedBand={Boolean(selectedBand)}
-      />
+    <div ref={rootRef} className={`flex-eq flex-eq-hw ${compact ? 'compact' : ''}`}>
+      <div className="flex-eq-rack">
+        <div className="flex-eq-display">
+          <GraphStage
+            ariaLabel={ariaLabel}
+            stageRef={stageRef}
+            canvasRef={canvasRef}
+            handlePointerDown={handlePointerDown}
+            handlePointerMove={handlePointerMove}
+            finishPointer={finishPointer}
+            handlePointerLeave={handlePointerLeave}
+            handleContextMenu={handleContextMenu}
+          />
 
-      <SelectedBandControls
-        advancedPanel={advancedPanel}
-        disabled={disabled}
-        effectId={effectId}
-        keyframeClipId={keyframeClipId}
-        normalized={normalized}
-        selectedBand={selectedBand}
-        selectedBandAllKeyframeEntries={selectedBandAllKeyframeEntries}
-        soloBandIds={soloBandIds}
-        setAdvancedPanel={setAdvancedPanel}
-        setSelectedBand={setSelectedBand}
-        toggleSoloBand={toggleSoloBand}
-        updateBand={updateBand}
-        updateBandDynamics={updateBandDynamics}
-        updateBandSpectralDynamics={updateBandSpectralDynamics}
-        removeSelectedBand={() => {
-          if (selectedBand) commitParams(removeAudioEqBand(normalized, selectedBand.id));
-        }}
-        resetBandGain={(bandId) => commitParams(updateAudioEqBand(normalized, bandId, { gainDb: 0 }))}
-        renderBandNumericKeyframeToggle={renderBandNumericKeyframeToggle}
-      />
+          <ControlModule
+            compact={compact}
+            disabled={disabled}
+            effectId={effectId}
+            keyframeClipId={keyframeClipId}
+            normalized={normalized}
+            selectedBand={selectedBand}
+            selectedBandAllKeyframeEntries={selectedBandAllKeyframeEntries}
+            soloBandIds={soloBandIds}
+            advancedPanel={advancedPanel}
+            setAdvancedPanel={setAdvancedPanel}
+            toggleSoloBand={toggleSoloBand}
+            updateBand={updateBand}
+            scheduleBandDragCommit={scheduleBandDragCommit}
+            flushBandDragCommit={flushBandDragCommit}
+            updateBandDynamics={updateBandDynamics}
+            updateBandSpectralDynamics={updateBandSpectralDynamics}
+            removeSelectedBand={() => {
+              if (selectedBand) commitParams(removeAudioEqBand(normalized, selectedBand.id));
+            }}
+            renderBandNumericKeyframeToggle={renderBandNumericKeyframeToggle}
+            utilitySlot={(
+              <UtilityStrip
+                disabled={disabled}
+                normalized={normalized}
+                graphMode={graphMode}
+                hasAnalyzer={hasAnalyzer}
+                showPresetBrowser={presetBrowser.showPresetBrowser}
+                matchSourceActive={Boolean(matchSource)}
+                matchTargetActive={Boolean(matchTarget)}
+                canApplyMatch={Boolean(matchSource && matchTarget)}
+                activeABSlot={abState.activeSlot}
+                hasSelectedBand={Boolean(selectedBand)}
+                setShowPresetBrowser={presetBrowser.setShowPresetBrowser}
+                setGraphMode={setGraphMode}
+                setSketchPoints={setSketchPoints}
+                updatePresetKind={updatePresetKind}
+                updatePath={(path, value) => updatePath(path, value)}
+                switchABSlot={switchABSlot}
+                syncActiveABSlot={syncActiveABSlot}
+                handleCopyCurve={() => void handleCopyCurve()}
+                handleCopyBands={() => void handleCopyBands()}
+                handlePaste={() => void handlePaste()}
+                captureMatchSource={captureMatchSource}
+                captureMatchTarget={captureMatchTarget}
+                applyCapturedMatch={applyCapturedMatch}
+                addBand={addBand}
+              />
+            )}
+            presetBrowserSlot={presetBrowser.showPresetBrowser ? (
+              <PresetBrowserPanel
+                compact={compact}
+                disabled={disabled}
+                presetQuery={presetBrowser.presetQuery}
+                presetTagFilter={presetBrowser.presetTagFilter}
+                presetFilter={presetBrowser.presetFilter}
+                presetTags={presetBrowser.presetTags}
+                filteredPresets={presetBrowser.filteredPresets}
+                setPresetQuery={presetBrowser.setPresetQuery}
+                setPresetTagFilter={presetBrowser.setPresetTagFilter}
+                setPresetFilter={presetBrowser.setPresetFilter}
+                saveCurrentUserPreset={presetBrowser.saveCurrentUserPreset}
+                applyBrowserPreset={applyBrowserPreset}
+                toggleBrowserPresetFavorite={presetBrowser.toggleBrowserPresetFavorite}
+                deleteBrowserPreset={presetBrowser.deleteBrowserPreset}
+              />
+            ) : undefined}
+          />
+        </div>
+      </div>
     </div>
   );
 }

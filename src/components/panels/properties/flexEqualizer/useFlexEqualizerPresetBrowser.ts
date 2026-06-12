@@ -12,7 +12,7 @@ import {
   loadAudioEqUserPresets,
   toggleAudioEqPresetFavoriteId,
 } from '../../../../services/audio/audioEqPresetStorage';
-import type { FlexEqBrowserPresetView } from './TopControls';
+import type { FlexEqBrowserPresetView } from './controlTypes';
 
 const FACTORY_PRESETS = getAudioEqFactoryPresets();
 

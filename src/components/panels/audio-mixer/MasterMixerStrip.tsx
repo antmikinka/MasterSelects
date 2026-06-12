@@ -14,6 +14,7 @@ import {
   MixerMeterScale,
   MIXER_METER_VISUAL_FEATURES,
 } from './MixerMeter';
+import { MixerFaderResizeHandle, type MixerFaderResizeHandleProps } from './MixerFaderResizeHandle';
 import { MixerRack, stopPropagation } from './MixerRack';
 import { MixerVolumeFader } from './MixerVolumeFader';
 import { useMixerFaderDraft } from './useMixerFaderDraft';
@@ -34,6 +35,7 @@ function MasterMixerStripComponent({
   onStaticPreflight,
   onRenderedPreflight,
   leatherIndex,
+  faderResizeHandleProps,
 }: {
   masterAudio: MasterAudioState;
   focused: boolean;
@@ -43,6 +45,7 @@ function MasterMixerStripComponent({
   onStaticPreflight: () => void;
   onRenderedPreflight: () => void;
   leatherIndex: number;
+  faderResizeHandleProps: MixerFaderResizeHandleProps;
 }) {
   const meterScope = getMixerRuntimeAudioMeterScope('master');
   const status = getPreflightStatus(masterAudio.exportPreflight);
@@ -121,6 +124,8 @@ function MasterMixerStripComponent({
         <span>TP {masterAudio.truePeakCeilingDb.toFixed(1)}</span>
       </div>
 
+      <MixerFaderResizeHandle {...faderResizeHandleProps} />
+
       <div className="audio-mixer-fader-meter master" onPointerDown={stopPropagation}>
         <MixerVolumeFader
           value={volumeDraft.value}
@@ -158,4 +163,5 @@ export const MasterMixerStrip = memo(MasterMixerStripComponent, (prev, next) => 
   && prev.onStaticPreflight === next.onStaticPreflight
   && prev.onRenderedPreflight === next.onRenderedPreflight
   && prev.leatherIndex === next.leatherIndex
+  && prev.faderResizeHandleProps === next.faderResizeHandleProps
 ));

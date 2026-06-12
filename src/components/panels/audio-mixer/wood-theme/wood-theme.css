@@ -169,7 +169,7 @@
 
 .audio-mixer-panel.wood .audio-mixer-strip {
   /* keep the FX rack as small as possible; give the freed space to fader + meters */
-  grid-template-rows: 8px 38px minmax(56px, 0.28fr) 22px 23px 23px 21px minmax(0, 2fr) 24px;
+  grid-template-rows: 8px 38px minmax(56px, 0.28fr) 22px 23px 23px 21px 8px minmax(0, var(--audio-mixer-fader-area-fr, 2fr)) 24px;
   position: relative;
   isolation: isolate;
   overflow: visible;
@@ -191,13 +191,13 @@
 }
 
 .audio-mixer-panel.wood .audio-mixer-strip::before {
-  --wood-strip-control-gap-height: 104px;
+  --wood-strip-control-gap-height: 112px;
   --wood-strip-rack-pocket-height: max(56px, calc((100% - var(--wood-strip-control-gap-height)) * 0.122807));
   --wood-strip-fader-pocket-height: calc(100% - var(--wood-strip-control-gap-height) - var(--wood-strip-rack-pocket-height));
   content: '';
   position: absolute;
   z-index: 0;
-  grid-row: 3 / 9;
+  grid-row: 3 / 10;
   grid-column: 1;
   inset: 0;
   overflow: hidden;
@@ -386,7 +386,23 @@
 }
 
 .audio-mixer-panel.wood .audio-mixer-rack-group.sends {
+  position: relative;
+  isolation: isolate;
   max-height: 84px;
+  margin: 0 -1px -1px;
+  padding: 2px 1px 1px;
+  border-radius: 4px;
+  background:
+    linear-gradient(180deg, rgba(120, 75, 34, 0.24), rgba(40, 19, 5, 0.40)),
+    linear-gradient(90deg, rgba(255, 223, 166, 0.06), transparent 18%, transparent 82%, rgba(0, 0, 0, 0.18));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 222, 166, 0.12),
+    0 -1px 3px rgba(0, 0, 0, 0.36);
+}
+
+.audio-mixer-panel.wood .audio-mixer-rack-group.sends > * {
+  position: relative;
+  z-index: 1;
 }
 
 /* the tall fader pocket stretches the leather a lot — flatten its blotches
@@ -580,6 +596,36 @@
     inset 0 2px 4px rgba(0, 0, 0, 0.86),
     inset 0 0 7px rgba(255, 122, 0, 0.12),
     0 0 6px rgba(255, 122, 0, 0.20);
+}
+
+.audio-mixer-panel.wood .audio-mixer-fader-resize-handle {
+  z-index: 2;
+  margin: -1px 2px;
+  border-radius: 3px;
+}
+
+.audio-mixer-panel.wood .audio-mixer-fader-resize-handle::before {
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  background:
+    linear-gradient(90deg, transparent, rgba(255, 226, 156, 0.46) 18%, rgba(22, 10, 2, 0.94) 50%, rgba(255, 226, 156, 0.36) 82%, transparent),
+    #100703;
+  box-shadow:
+    0 -1px 0 rgba(255, 230, 170, 0.11),
+    0 1px 2px rgba(0, 0, 0, 0.78);
+}
+
+.audio-mixer-panel.wood .audio-mixer-fader-resize-handle:hover::before,
+.audio-mixer-panel.wood .audio-mixer-fader-resize-handle:focus-visible::before,
+.audio-mixer-panel.wood .audio-mixer-fader-resize-handle[data-dragging='true']::before {
+  background:
+    linear-gradient(90deg, transparent, rgba(255, 238, 176, 0.82) 18%, rgba(91, 53, 18, 0.98) 50%, rgba(255, 238, 176, 0.72) 82%, transparent),
+    #221006;
+  box-shadow:
+    0 0 0 1px rgba(255, 215, 124, 0.18),
+    0 0 7px rgba(255, 177, 70, 0.34),
+    0 1px 2px rgba(0, 0, 0, 0.78);
 }
 
 /* pan row -> routed slot + brass knurled knob.
@@ -792,6 +838,8 @@
 }
 
 .audio-mixer-panel.wood .audio-mixer-strip-fader[data-dragging='true'] .audio-mixer-strip-fader-thumb::after,
+.audio-mixer-panel.wood .audio-mixer-strip-fader[data-thumb-hovered='true'] .audio-mixer-strip-fader-thumb::after,
+.audio-mixer-panel.wood .audio-mixer-strip-fader-thumb:hover::after,
 .audio-mixer-panel.wood .audio-mixer-strip-fader:active .audio-mixer-strip-fader-thumb::after,
 .audio-mixer-panel.wood .audio-mixer-strip-fader:focus-visible .audio-mixer-strip-fader-thumb::after {
   opacity: 1;
@@ -863,6 +911,10 @@
 .audio-mixer-panel.wood.compact-height .audio-mixer-strip::before {
   --wood-strip-control-gap-height: 84px;
   --wood-strip-rack-pocket-height: max(27px, calc((100% - var(--wood-strip-control-gap-height)) * 0.08));
+}
+
+.audio-mixer-panel.wood.compact-height .audio-mixer-fader-resize-handle {
+  display: none;
 }
 
 .audio-mixer-panel.wood.compact-height .audio-mixer-strip-name {
