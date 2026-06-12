@@ -24,7 +24,10 @@ export function getTimelineTrackBaseHeight(
   audioDisplayMode: TimelineAudioDisplayMode,
   audioFocusMode = false,
 ): number {
-  if (track.type !== 'audio') {
+  // Only video tracks collapse into a thin context strip in audio focus mode.
+  // MIDI tracks are musical content and stay freely resizable like audio tracks
+  // (they fall through to the audio min-height path below).
+  if (track.type === 'video') {
     if (!audioFocusMode) return track.height;
     return Math.max(20, Math.min(normalizeAudioTrackHeight(track.height), AUDIO_FOCUS_VIDEO_CONTEXT_HEIGHT));
   }
