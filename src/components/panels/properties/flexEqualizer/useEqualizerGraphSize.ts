@@ -15,23 +15,27 @@ export function useEqualizerGraphSize(ref: { current: HTMLElement | null }, comp
     const element = ref.current;
     if (!element) return undefined;
 
-    const update = () => {
-      const rect = element.getBoundingClientRect();
-      const width = Math.max(1, Math.round(rect.width || DEFAULT_GRAPH_WIDTH));
+    // The canvas fills the stage's content box, so measure that (clientWidth /
+    // contentRect) instead of the border box; bail out on unchanged sizes so
+    // the initial ResizeObserver callback does not trigger a redundant render.
+    const update = (measuredWidth: number) => {
+      const width = Math.max(1, Math.round(measuredWidth || DEFAULT_GRAPH_WIDTH));
       const height = getResponsiveGraphHeight(width, compact);
-      setSize({
-        width,
-        height,
-      });
+      setSize(current => (
+        current.width === width && current.height === height ? current : { width, height }
+      ));
     };
 
-    update();
+    update(element.clientWidth);
     if (typeof ResizeObserver === 'undefined') {
-      window.addEventListener('resize', update);
-      return () => window.removeEventListener('resize', update);
+      const handleResize = () => update(element.clientWidth);
+      window.addEventListener('resize', handleResize);
+      return () => window.removeEventListener('resize', handleResize);
     }
 
-    const observer = new ResizeObserver(update);
+    const observer = new ResizeObserver(entries => {
+      update(entries[0]?.contentRect.width ?? element.clientWidth);
+    });
     observer.observe(element);
     return () => observer.disconnect();
   }, [compact, ref]);

@@ -14,6 +14,7 @@ import {
   aggregateAudioMeterSnapshots,
   createSilentAudioMeterSnapshot,
 } from './audioMetering';
+import { runtimeSpectrumTaps } from './runtimeSpectrumTaps';
 
 export const RUNTIME_AUDIO_METER_MAX_AGE_MS = 450;
 
@@ -193,6 +194,9 @@ export class RuntimeAudioMeterBus {
   }
 
   clearTrack(trackId: string): void {
+    // Explicit track teardown also ends the track's display-rate spectrum
+    // tap; taps share the meter scope lifecycle.
+    runtimeSpectrumTaps.unregisterTrack(trackId);
     if (!this.trackMeters.has(trackId)) return;
     const now = nowMs();
     const next = this.ageTrackMeters(now, RUNTIME_AUDIO_METER_MAX_AGE_MS);
@@ -202,6 +206,7 @@ export class RuntimeAudioMeterBus {
   }
 
   clearAll(): void {
+    runtimeSpectrumTaps.clearAllTracks();
     this.commit(new Map<string, AudioMeterSnapshot>(), undefined);
   }
 

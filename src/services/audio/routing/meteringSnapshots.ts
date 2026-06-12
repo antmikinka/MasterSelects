@@ -23,6 +23,16 @@ export interface ReadRouteMeterSnapshotOptions {
   includePhase?: boolean;
 }
 
+/**
+ * Allocation-free spectrum read for display-rate consumers (spectrum taps).
+ * Returns the route's shared FFT buffer; values are valid until the next read
+ * on the same route, so callers must copy synchronously.
+ */
+export function readRouteSpectrumDb(route: Pick<MeteredRoute, 'analyserNode' | 'frequencyBuffer'>): Float32Array {
+  route.analyserNode.getFloatFrequencyData(route.frequencyBuffer);
+  return route.frequencyBuffer;
+}
+
 export function readRouteMeterSnapshot(
   route: MeteredRoute,
   updatedAt: number,

@@ -159,13 +159,21 @@ function drawCachedEqualizerStaticOverlay(
   let overlay = cache.overlayKey === overlayKey ? cache.overlayCanvas : undefined;
 
   if (!overlay) {
-    overlay = document.createElement('canvas');
-    overlay.width = pixelWidth;
-    overlay.height = pixelHeight;
+    // Reuse the cached canvas across redraws: band drags invalidate the key on
+    // every frame, and allocating a fresh DPR-sized canvas per move causes
+    // visible GC churn.
+    overlay = cache.overlayCanvas ?? document.createElement('canvas');
     const overlayContext = overlay.getContext('2d');
     if (!overlayContext) {
       drawEqualizerStaticOverlay(ctx, view, params, hoveredBandId, selectedBandIds, soloBandIds, graphMode, sketchPoints);
       return;
+    }
+    if (overlay.width !== pixelWidth || overlay.height !== pixelHeight) {
+      overlay.width = pixelWidth;
+      overlay.height = pixelHeight;
+    } else {
+      overlayContext.setTransform(1, 0, 0, 1, 0, 0);
+      overlayContext.clearRect(0, 0, pixelWidth, pixelHeight);
     }
     overlayContext.setTransform(dpr, 0, 0, dpr, 0, 0);
     drawEqualizerStaticOverlay(overlayContext, view, params, hoveredBandId, selectedBandIds, soloBandIds, graphMode, sketchPoints);
@@ -189,9 +197,11 @@ export function drawEqualizerCanvas(
   sketchPoints: readonly AudioEqCurvePoint[],
   staticVersion: number,
 ): void {
-  const rect = canvas.getBoundingClientRect();
-  const width = Math.max(1, Math.round(rect.width || DEFAULT_GRAPH_WIDTH));
-  const height = Math.max(1, Math.round(rect.height || DEFAULT_GRAPH_HEIGHT));
+  // The view model carries the ResizeObserver-driven graph size; reading
+  // layout here (getBoundingClientRect) would force a reflow on every
+  // analyzer frame while the spectrum animates at up to 60fps.
+  const width = Math.max(1, Math.round(view.width || DEFAULT_GRAPH_WIDTH));
+  const height = Math.max(1, Math.round(view.height || DEFAULT_GRAPH_HEIGHT));
   const dpr = Math.max(1, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1);
   const pixelWidth = Math.round(width * dpr);
   const pixelHeight = Math.round(height * dpr);

@@ -14,7 +14,8 @@
 import { Logger } from './logger';
 import type { AudioRouteEffectSettings, LiveAudioRouteProcessor } from './audio/audioGraphRouteSettings';
 import { buildAudioRoutingDebugSnapshot } from './audio/routing/debugSnapshots';
-import { readRouteMeterSnapshot, type ReadRouteMeterSnapshotOptions } from './audio/routing/meteringSnapshots';
+import { readRouteMeterSnapshot, readRouteSpectrumDb, type ReadRouteMeterSnapshotOptions } from './audio/routing/meteringSnapshots';
+import { runtimeSpectrumTaps } from './audio/runtimeSpectrumTaps';
 import { reconnectCustomProcessorInternal } from './audio/routing/processorGraphReconnect';
 import { createProcessorNode } from './audio/routing/processorNodeFactory';
 import { updateProcessorNode } from './audio/routing/processorNodeUpdate';
@@ -81,6 +82,25 @@ class AudioRoutingManager {
       damping,
     ),
   };
+
+  constructor() {
+    // The master tap resolves the route lazily, so registering once at
+    // construction covers context/route rebuilds for the manager's lifetime.
+    runtimeSpectrumTaps.registerMaster(() => (
+      this.masterRoute ? readRouteSpectrumDb(this.masterRoute) : null
+    ));
+  }
+
+  /**
+   * Allocation-free display-rate spectrum read for a routed element. Returns
+   * the route's shared FFT buffer (copy synchronously) or null when the
+   * element has no connected route.
+   */
+  readElementSpectrumDb(element: HTMLMediaElement): Float32Array | null {
+    const route = this.routes.get(element);
+    if (!route || !route.isConnected) return null;
+    return readRouteSpectrumDb(route);
+  }
 
   /**
    * Get or create the shared AudioContext
@@ -290,6 +310,7 @@ class AudioRoutingManager {
       // Ignore disconnect errors
     }
     this.nodeRoutes.delete(key);
+    runtimeSpectrumTaps.unregisterTrack(key);
   }
 
   private getOrCreateNodeRoute(key: string, sourceNode: AudioNode, ctx: AudioContext): AudioRoute {
@@ -312,6 +333,12 @@ class AudioRoutingManager {
     const route = createAudioRouteGraph(ctx, sourceNode);
     this.reconnectRouteChain(route);
     this.nodeRoutes.set(key, route);
+    // Node routes are keyed by track id, so they double as the track's
+    // display-rate spectrum tap (resolved via the map to survive re-wires).
+    runtimeSpectrumTaps.registerTrack(key, () => {
+      const current = this.nodeRoutes.get(key);
+      return current ? readRouteSpectrumDb(current) : null;
+    });
     return route;
   }
 

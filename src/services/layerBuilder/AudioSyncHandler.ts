@@ -9,6 +9,7 @@ import { playheadState, setMasterAudio } from './PlayheadState';
 import { audioManager, audioStatusTracker } from '../audioManager';
 import { audioRoutingManager } from '../audioRoutingManager';
 import { runtimeAudioMeterBus } from '../audio/runtimeAudioMeterBus';
+import { runtimeSpectrumTaps } from '../audio/runtimeSpectrumTaps';
 import { vfPipelineMonitor } from '../vfPipelineMonitor';
 import { useTimelineStore } from '../../stores/timeline';
 import { createSilentAudioMeterSnapshot } from '../audio/audioMetering';
@@ -503,6 +504,11 @@ export class AudioSyncHandler {
       includeSpectrum: runtimeAudioMeterBus.hasDemand(masterScope, 'spectrum'),
     });
     if (snapshot) {
+      // Refresh the track's display-rate spectrum tap to the element that is
+      // currently audible. The closure holds the only element reference; the
+      // meter bus unregisters it on track teardown/project reset, and the
+      // reader returns null once the element's route is gone.
+      runtimeSpectrumTaps.registerTrack(trackId, () => audioRoutingManager.readElementSpectrumDb(element));
       this.publishMeter(trackId, snapshot, masterSnapshot ?? undefined);
       return { trackSnapshot: snapshot, masterSnapshot };
     }

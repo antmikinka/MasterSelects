@@ -12,6 +12,31 @@ import {
 
 const graphXPositionCache = new Map<string, Float32Array>();
 const frequencyGridCache = new Map<string, HTMLCanvasElement>();
+// Keyed per context so a gradient never outlives its canvas; the analyzer
+// redraws at up to 60fps and would otherwise allocate gradients every frame.
+const analyzerGradientCache = new WeakMap<CanvasRenderingContext2D, Map<string, CanvasGradient>>();
+
+function getAnalyzerFillGradient(
+  ctx: CanvasRenderingContext2D,
+  height: number,
+  fillColor: string,
+): CanvasGradient {
+  let byKey = analyzerGradientCache.get(ctx);
+  if (!byKey) {
+    byKey = new Map();
+    analyzerGradientCache.set(ctx, byKey);
+  }
+  const key = `${height}:${fillColor}`;
+  let gradient = byKey.get(key);
+  if (!gradient) {
+    gradient = ctx.createLinearGradient(0, 0, 0, height);
+    gradient.addColorStop(0, fillColor);
+    gradient.addColorStop(1, 'rgba(178, 186, 204, 0.03)');
+    byKey.set(key, gradient);
+    pruneCache(byKey);
+  }
+  return gradient;
+}
 
 export function getLogSampleXPositions(sampleCount: number, width: number): Float32Array {
   const count = Math.max(0, sampleCount);
@@ -166,10 +191,7 @@ export function drawAnalyzer(
   }
   ctx.lineTo(width, height);
   ctx.closePath();
-  const fill = ctx.createLinearGradient(0, 0, 0, height);
-  fill.addColorStop(0, fillColor);
-  fill.addColorStop(1, 'rgba(178, 186, 204, 0.03)');
-  ctx.fillStyle = fill;
+  ctx.fillStyle = getAnalyzerFillGradient(ctx, height, fillColor);
   ctx.fill();
 
   ctx.beginPath();

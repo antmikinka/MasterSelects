@@ -69,6 +69,7 @@ import {
 } from './flexEqualizer/graphMath';
 import { SelectedBandControls } from './flexEqualizer/SelectedBandControls';
 import { TopControls } from './flexEqualizer/TopControls';
+import { useBandDragCommits } from './flexEqualizer/useBandDragCommits';
 import { useFlexEqualizerPresetBrowser } from './flexEqualizer/useFlexEqualizerPresetBrowser';
 import { useEqualizerGraphSize } from './flexEqualizer/useEqualizerGraphSize';
 import { useRuntimeAnalyzerStream, type RuntimeAnalyzerScope } from './useThrottledRuntimeAnalyzer';
@@ -265,6 +266,8 @@ export function FlexEqualizerControl({
     if (patch.spectralDynamics !== undefined) updatePath(`eq.audible.bands.${bandId}.spectralDynamics`, patch.spectralDynamics as unknown as AudioEffectParamValue);
   };
 
+  const { scheduleBandDragCommit, flushBandDragCommit } = useBandDragCommits(updateBand);
+
   const updateBandDynamics = (band: AudioEqBand, patch: Partial<AudioEqBandDynamics>) => {
     updateBand(band.id, {
       dynamic: {
@@ -386,7 +389,7 @@ export function FlexEqualizerControl({
     const nextGain = bandNeedsGain(band)
       ? clamp(graphYToDb(point.y, size.height, normalized.display.graphRangeDb), -60, 60)
       : band.gainDb;
-    updateBand(bandId, {
+    scheduleBandDragCommit(bandId, {
       frequencyHz: quantize(nextFrequency, nextFrequency < 100 ? 1 : nextFrequency < 1000 ? 5 : 10),
       gainDb: nextGain,
     });
@@ -423,6 +426,9 @@ export function FlexEqualizerControl({
     activeBandIdRef.current = bandId;
     setSelectedBand(bandId);
     updateBandFromPointer(event, bandId);
+    // Commit the initial grab immediately so the band snaps to the pointer
+    // without waiting for the first coalescing frame.
+    flushBandDragCommit();
   };
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -485,6 +491,7 @@ export function FlexEqualizerControl({
     }
     activePointerIdRef.current = null;
     activeBandIdRef.current = null;
+    flushBandDragCommit();
   };
 
   const addBand = (type: AudioEqBandType, frequencyHz: number) => {
