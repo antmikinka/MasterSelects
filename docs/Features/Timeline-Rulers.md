@@ -150,7 +150,15 @@ Original spec:
   compositions and back → lanes survive (proves the `CompositionTimelineData`
   round-trip, not just file load).
 
-### Packet 2 — TempoMap pure module
+### Packet 2 — TempoMap pure module — ✅ Implemented
+Done. `src/timeline/tempo/TempoMap.ts` exports `secondsToBarBeat`,
+`barBeatToSeconds`, and `iterateBarBeatLines`, built on a segment walk over the
+events (continuous monotonic "bar phase"; BPM = quarter-notes/min, a beat =
+4/denominator quarter notes). Single 4/4@60 reduces to bar N at (N-1)*4s with
+beats on integer seconds; multi-segment tempo and meter changes convert across
+the boundary. Covered by `tests/unit/tempoMap.test.ts`.
+
+Original spec:
 - New `src/timeline/tempo/TempoMap.ts` (pure, no runtime handles — satisfies the
   durable-store rules; sits beside `geometry/` and `projection/`). Functions:
   `secondsToBarBeat(map, t)`, `barBeatToSeconds(map, bar, beat)`,
@@ -160,7 +168,20 @@ Original spec:
 - **Check:** unit tests — 4/4@60 puts bar N at `(N-1)*4s`, beats at integer
   seconds; a hand-written 2-segment map converts correctly across the boundary.
 
-### Packet 3 — Ruler store slice
+### Packet 3 — Ruler store slice — ✅ Implemented
+Done. `src/stores/timeline/rulerSlice.ts` provides `addRulerLane` (no-op if the
+format is present; returns the lane id), `removeRulerLane` (repoints the active
+lane if it was removed), `setActiveRulerLane` (validates the id; accepts null),
+and `reorderRulerLanes` (the future drag-reorder seam). Lanes are kept in
+canonical stacking order (`time → timecode → frames → bars`) via `toSorted()`;
+ids are the deterministic `ruler-lane-<format>` (shared `rulerLaneIdForFormat`
+in `rulerDefaults`). Wired into the store index, `selectors.ts`
+(`selectRulerLanes` / `selectActiveRulerLaneId` / `selectTempoMap` +
+`selectRulerLaneActions`), and the test store factory. Lane state is **excluded
+from `historyStore`** (view state) — confirmed absent from the snapshot field
+lists. Covered by `tests/stores/timeline/rulerSlice.test.ts`.
+
+Original spec:
 - New `src/stores/timeline/rulerSlice.ts`, mirroring `markerSlice.ts` but using
   `toSorted()` (not `.sort()` — `markerSlice` predates the rule; don't copy the
   debt): `addRulerLane(format)` (no-op if format present), `removeRulerLane(id)`,

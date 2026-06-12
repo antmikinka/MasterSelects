@@ -33,6 +33,7 @@ import { createSelectionSlice } from './selectionSlice';
 import { createKeyframeSlice } from './keyframeSlice';
 import { createMaskSlice } from './maskSlice';
 import { createMarkerSlice } from './markerSlice';
+import { createRulerSlice } from './rulerSlice';
 import { createTransitionSlice } from './transitionSlice';
 import { createNodeGraphSlice } from './nodeGraphSlice';
 import { createClipboardSlice } from './clipboardSlice';
@@ -97,6 +98,7 @@ export const useTimelineStore = create<TimelineStore>()(
     const keyframeActions = createKeyframeSlice(set, get);
     const maskActions = createMaskSlice(set, get);
     const markerActions = createMarkerSlice(set, get);
+    const rulerActions = createRulerSlice(set, get);
     const transitionActions = createTransitionSlice(set, get);
     const nodeGraphActions = createNodeGraphSlice(set, get);
     const clipboardActions = createClipboardSlice(set, get);
@@ -391,6 +393,7 @@ export const useTimelineStore = create<TimelineStore>()(
       ...layerActions,
       ...maskActions,
       ...markerActions,
+      ...rulerActions,
       ...transitionActions,
       ...nodeGraphActions,
       ...clipboardActions,

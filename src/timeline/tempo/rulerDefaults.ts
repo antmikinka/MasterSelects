@@ -13,9 +13,15 @@ export const DEFAULT_TEMPO_BPM = 60;
 export const DEFAULT_TIME_SIGNATURE_NUMERATOR = 4;
 export const DEFAULT_TIME_SIGNATURE_DENOMINATOR = 4;
 
+// Lanes are unique per format, so a deterministic per-format id is safe and keeps
+// ids stable across remove/re-add. The slice and the defaults share this scheme.
+export function rulerLaneIdForFormat(format: RulerLaneFormat): string {
+  return `ruler-lane-${format}`;
+}
+
 // Stable id for the default Time lane so a freshly created or migrated
 // composition has a deterministic `activeRulerLaneId` to point at.
-export const TIME_RULER_LANE_ID = 'ruler-lane-time';
+export const TIME_RULER_LANE_ID = rulerLaneIdForFormat('time');
 
 export interface RulerLaneState {
   tempoMap: TempoMap;
