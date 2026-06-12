@@ -23,6 +23,12 @@ describe('timeline audio layout', () => {
     expect(getTimelineTrackBaseHeight(track('video', 24), 'spectral', true)).toBe(24);
   });
 
+  it('keeps MIDI tracks freely resizable in audio focus mode', () => {
+    expect(getTimelineTrackBaseHeight(track('midi', 60), 'compact', true)).toBe(60);
+    expect(getTimelineTrackBaseHeight(track('midi', 96), 'detailed', true)).toBe(96);
+    expect(getTimelineTrackBaseHeight(track('midi', 160), 'spectral', true)).toBe(160);
+  });
+
   it('keeps compact audio at the persisted user track height', () => {
     expect(getTimelineTrackBaseHeight(track('audio', 40), 'compact')).toBe(40);
     expect(getTimelineTrackBaseHeight(track('audio', 24), 'compact')).toBe(24);
