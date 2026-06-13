@@ -1,7 +1,7 @@
 import type { DockDragState, DockLayout, SavedDockLayout, SavedDockTimelineLayout } from '../../types/dock';
 import { FACTORY_AUDIO_EDIT_LAYOUT_ID, FACTORY_VIDEO_EDIT_LAYOUT_ID } from './panelRegistry';
 
-// Default editing layout: Media left, Preview center, Properties right, Timeline bottom.
+// Default editing layout: Media left, Preview center, Export active on the right, Timeline bottom.
 export const DEFAULT_LAYOUT: DockLayout = {
   root: {
     kind: 'split',
@@ -42,9 +42,10 @@ export const DEFAULT_LAYOUT: DockLayout = {
                 id: 'right-group',
                 panels: [
                   { id: 'clip-properties', type: 'clip-properties', title: 'Properties' },
+                  { id: 'export', type: 'export', title: 'Export' },
                   { id: 'history', type: 'history', title: 'History' },
                 ],
-                activeIndex: 0,
+                activeIndex: 1,
               },
             ],
           },
@@ -61,6 +62,7 @@ export const DEFAULT_LAYOUT: DockLayout = {
   floatingPanels: [],
   panelZoom: {
     'clip-properties': 1,
+    export: 1,
     history: 1,
   },
 };
@@ -196,7 +198,7 @@ export const FACTORY_SAVED_DOCK_LAYOUTS: SavedDockLayout[] = [
     layout: DEFAULT_LAYOUT,
     timeline: VIDEO_EDIT_TIMELINE_LAYOUT,
     createdAt: 0,
-    updatedAt: 3,
+    updatedAt: 4,
     favorite: true,
     factory: true,
   },

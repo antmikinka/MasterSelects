@@ -5,7 +5,12 @@
 
 import type { FFmpegExportSettings, ProResProfile } from '../types';
 import { Logger } from '../../../services/logger';
-import { clampGifAlphaThreshold, clampGifColors } from '../../gif/gifOptions';
+import {
+  clampGifAlphaThreshold,
+  clampGifBayerScale,
+  clampGifColors,
+  getGifRepeatCount,
+} from '../../gif/gifOptions';
 
 const log = Logger.create('FFmpegBridge');
 
@@ -154,7 +159,7 @@ function buildVideoArgs(settings: FFmpegExportSettings): string[] {
     case 'gif':
       args.push('-filter_complex', buildGifFilter(settings));
       args.push('-c:v', 'gif');
-      args.push('-loop', settings.gifLoop === 'once' ? '-1' : '0');
+      args.push('-loop', String(getGifRepeatCount(settings.gifLoop, settings.gifLoopCount)));
       if (settings.gifOptimize !== false) {
         args.push('-gifflags', '+transdiff');
       }
@@ -176,17 +181,20 @@ function buildGifFilter(settings: FFmpegExportSettings): string {
   const alphaThreshold = clampGifAlphaThreshold(settings.gifAlphaThreshold);
   const dither = settings.gifDither ?? 'sierra2_4a';
   const paletteMode = settings.gifPaletteMode ?? 'global';
+  const useTransparency = settings.gifTransparency !== false;
   const statsMode = paletteMode === 'per-frame'
     ? 'single'
     : settings.gifOptimize === false
       ? 'full'
       : 'diff';
-  const reserveTransparent = alphaThreshold < 255 ? 1 : 0;
-  const bayerScale = dither === 'bayer' ? ':bayer_scale=3' : '';
+  const reserveTransparent = useTransparency && alphaThreshold < 255 ? 1 : 0;
+  const bayerScale = dither === 'bayer' ? `:bayer_scale=${clampGifBayerScale(settings.gifBayerScale)}` : '';
+  const sourceFormat = useTransparency ? 'format=rgba' : 'format=rgb24';
   const palettegen = `palettegen=max_colors=${colors}:stats_mode=${statsMode}:reserve_transparent=${reserveTransparent}`;
-  const paletteuse = `paletteuse=dither=${dither}:alpha_threshold=${alphaThreshold}${bayerScale}${settings.gifOptimize === false ? '' : ':diff_mode=rectangle'}`;
+  const alphaOption = useTransparency ? `:alpha_threshold=${alphaThreshold}` : '';
+  const paletteuse = `paletteuse=dither=${dither}${alphaOption}${bayerScale}${settings.gifOptimize === false ? '' : ':diff_mode=rectangle'}`;
 
-  return `[0:v]split[gif_palette_src][gif_pixels];[gif_palette_src]${palettegen}[gif_palette];[gif_pixels][gif_palette]${paletteuse}`;
+  return `[0:v]${sourceFormat},split[gif_palette_src][gif_pixels];[gif_palette_src]${palettegen}[gif_palette];[gif_pixels][gif_palette]${paletteuse}`;
 }
 
 /**

@@ -46,13 +46,15 @@ export function useExportRunController({
   const ffmpegFrameRendererRef = useRef<FFmpegFrameRenderer | null>(null);
   const ffmpegAudioPipelineRef = useRef<AudioExportPipeline | null>(null);
   const exportRenderSessionRef = useRef<ExportRenderSessionImpl | null>(null);
+  const audioOnlyCancelledRef = useRef(false);
 
   const {
     encoder, width, height, customWidth, customHeight, useCustomResolution,
     fps, customFps, useCustomFps, filename, bitrate, containerFormat, videoCodec,
     rateControl, ffmpegCodec, ffmpegContainer, proresProfile, dnxhrProfile,
     ffmpegQuality, gifColors, gifDither, gifLoop, gifPaletteMode, gifOptimize,
-    gifAlphaThreshold, stackedAlpha, includeAudio, audioOnlyFormat, audioSampleRate,
+    gifLoopCount, gifTransparency, gifAlphaThreshold, gifBayerScale,
+    stackedAlpha, includeAudio, audioOnlyFormat, audioSampleRate,
     audioBitrate, normalizeAudio, videoEnabled, visualMode, imageFormat, imageQuality,
     isExporting, setIsExporting, setProgress, setFfmpegProgress, setExportPhase,
     setError, exporter, setExporter, isFFmpegReady, loadFFmpeg,
@@ -111,6 +113,7 @@ export function useExportRunController({
 
   const handleCancel = useCallback(() => {
     if (!videoEnabled) {
+      audioOnlyCancelledRef.current = true;
       ffmpegAudioPipelineRef.current?.cancel();
     } else if (visualMode === 'gif' || visualMode === 'image') {
       ffmpegFrameRendererRef.current?.cancel();
@@ -147,7 +150,8 @@ export function useExportRunController({
       const result = await runBrowserGifExport({
         width: actualWidth, height: actualHeight, fps: exportFps, startTime, endTime,
         exportMode: encoder === 'webcodecs' ? 'fast' : 'precise',
-        filename, gifColors, gifDither, gifLoop, gifPaletteMode, gifOptimize, gifAlphaThreshold,
+        filename, gifColors, gifDither, gifLoop, gifLoopCount, gifPaletteMode, gifOptimize,
+        gifTransparency, gifAlphaThreshold, gifBayerScale,
         frameRendererRef: ffmpegFrameRendererRef, renderSessionRef: exportRenderSessionRef,
         createRenderSession: (options) => new ExportRenderSessionImpl(options),
         onProgress: setProgress, onTimelineProgress: setExportProgress,
@@ -162,7 +166,7 @@ export function useExportRunController({
       setIsExporting(false);
       endExport();
     }
-  }, [customFps, customHeight, customWidth, encoder, endExport, filename, fps, getCurrentExportRange, gifAlphaThreshold, gifColors, gifDither, gifLoop, gifOptimize, gifPaletteMode, height, isExporting, setError, setExportProgress, setIsExporting, setProgress, startExport, useCustomFps, useCustomResolution, width]);
+  }, [customFps, customHeight, customWidth, encoder, endExport, filename, fps, getCurrentExportRange, gifAlphaThreshold, gifBayerScale, gifColors, gifDither, gifLoop, gifLoopCount, gifOptimize, gifPaletteMode, gifTransparency, height, isExporting, setError, setExportProgress, setIsExporting, setProgress, startExport, useCustomFps, useCustomResolution, width]);
 
   const handleFFmpegExport = useCallback(async () => {
     if (isExporting) return;
@@ -192,7 +196,8 @@ export function useExportRunController({
         width: actualWidth, height: actualHeight, fps: exportFps, startTime, endTime,
         filename, visualMode, includeAudio, audioSampleRate, audioBitrate, normalizeAudio,
         ffmpegCodec, ffmpegContainer, ffmpegQuality, proresProfile, dnxhrProfile,
-        gifColors, gifDither, gifLoop, gifPaletteMode, gifOptimize, gifAlphaThreshold,
+        gifColors, gifDither, gifLoop, gifLoopCount, gifPaletteMode, gifOptimize,
+        gifTransparency, gifAlphaThreshold, gifBayerScale,
         frameRendererRef: ffmpegFrameRendererRef, audioPipelineRef: ffmpegAudioPipelineRef,
         renderSessionRef: exportRenderSessionRef,
         createRenderSession: (options) => new ExportRenderSessionImpl(options),
@@ -217,13 +222,14 @@ export function useExportRunController({
       setExportPhase('idle');
       endExport();
     }
-  }, [audioBitrate, audioSampleRate, customFps, customHeight, customWidth, dnxhrProfile, endExport, ffmpegCodec, ffmpegContainer, ffmpegQuality, filename, fps, getCurrentExportRange, gifAlphaThreshold, gifColors, gifDither, gifLoop, gifOptimize, gifPaletteMode, height, includeAudio, isExporting, isFFmpegReady, loadFFmpeg, normalizeAudio, proresProfile, setError, setExportPhase, setExportProgress, setFfmpegProgress, setIsExporting, startExport, useCustomFps, useCustomResolution, visualMode, width]);
+  }, [audioBitrate, audioSampleRate, customFps, customHeight, customWidth, dnxhrProfile, endExport, ffmpegCodec, ffmpegContainer, ffmpegQuality, filename, fps, getCurrentExportRange, gifAlphaThreshold, gifBayerScale, gifColors, gifDither, gifLoop, gifLoopCount, gifOptimize, gifPaletteMode, gifTransparency, height, includeAudio, isExporting, isFFmpegReady, loadFFmpeg, normalizeAudio, proresProfile, setError, setExportPhase, setExportProgress, setFfmpegProgress, setIsExporting, startExport, useCustomFps, useCustomResolution, visualMode, width]);
 
   const handleExportAudioOnly = useCallback(async () => {
     if (isExporting) return;
 
     setIsExporting(true);
     setError(null);
+    audioOnlyCancelledRef.current = false;
     const { startTime, endTime } = getCurrentExportRange();
     const actualWidth = useCustomResolution ? customWidth : width;
     const actualHeight = useCustomResolution ? customHeight : height;
@@ -236,6 +242,7 @@ export function useExportRunController({
         filename, encoder, videoCodec, containerFormat, bitrate,
         audioOnlyFormat, audioSampleRate, audioBitrate, normalizeAudio,
         audioPipelineRef: ffmpegAudioPipelineRef,
+        cancelledRef: audioOnlyCancelledRef,
         onProgress: setProgress,
         onTimelineProgress: setExportProgress,
         onTimelineStart: (rangeStart, rangeEnd) => {
@@ -246,6 +253,8 @@ export function useExportRunController({
 
       if (result.kind === 'download') {
         downloadBlob(result.blob, result.filename);
+      } else if (result.kind === 'cancelled') {
+        log.info('Audio export cancelled');
       } else {
         setError(result.message);
       }

@@ -486,10 +486,10 @@ resetLayout()              // View -> Layouts
 ```
 
 The hardcoded factory layouts are `VIDEO EDIT` and `AUDIO EDIT`. `VIDEO EDIT` is the default
-layout with Media on the left, Preview in the center, Properties/History on the right, and
-Timeline at the bottom. It stores balanced timeline focus with two visible 70 px video tracks
-and one visible 48 px compact audio track, and first empty loads mark it as the active named
-layout. `AUDIO EDIT` stores audio focus with Timeline above
+layout with Media on the left, Preview in the center, Properties/Export/History on the right
+with Export active, and Timeline at the bottom. It stores balanced timeline focus with two
+visible 70 px video tracks and one visible 48 px compact audio track, and first empty loads
+mark it as the active named layout. `AUDIO EDIT` stores audio focus with Timeline above
 Media, Audio Mixer, and Properties/History, using two visible 40 px video context tracks and
 one visible 96 px audio track. Saved layouts keep per-type track slot counts, per-slot height
 and visibility, and legacy per-track-id height/visibility for exact project restores. Loading

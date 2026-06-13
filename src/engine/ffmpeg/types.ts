@@ -105,9 +105,12 @@ export interface FFmpegExportSettings extends GifExportOptions {
   gifColors?: number;
   gifDither?: GifDither;
   gifLoop?: GifLoopMode;
+  gifLoopCount?: number;
   gifPaletteMode?: GifPaletteMode;
   gifOptimize?: boolean;
+  gifTransparency?: boolean;
   gifAlphaThreshold?: number;
+  gifBayerScale?: number;
 
   // Audio settings
   audioCodec?: FFmpegAudioCodec;

@@ -67,8 +67,8 @@ describe('dock store saved layouts', () => {
 
     expect(panelTypes(leftGroup)).toEqual(['media']);
     expect(panelTypes(previewGroup)).toEqual(['preview']);
-    expect(panelTypes(rightGroup)).toEqual(['clip-properties', 'history']);
-    expect(rightGroup?.activeIndex).toBe(0);
+    expect(panelTypes(rightGroup)).toEqual(['clip-properties', 'export', 'history']);
+    expect(rightGroup?.activeIndex).toBe(1);
     expect(panelTypes(timelineGroup)).toEqual(['timeline']);
 
     const timeline = useTimelineStore.getState();
@@ -81,7 +81,7 @@ describe('dock store saved layouts', () => {
 
   it('activates the history tab when requested from the panels menu', () => {
     const initialRightGroup = findTabGroup(useDockStore.getState().layout.root, 'right-group');
-    expect(initialRightGroup?.panels[initialRightGroup.activeIndex]?.type).toBe('clip-properties');
+    expect(initialRightGroup?.panels[initialRightGroup.activeIndex]?.type).toBe('export');
 
     useDockStore.getState().activatePanelType('history');
 
@@ -137,7 +137,7 @@ describe('dock store saved layouts', () => {
     useDockStore.getState().changePanelType('clip-properties', 'audio-mixer');
 
     const rightGroup = findTabGroup(useDockStore.getState().layout.root, 'right-group');
-    expect(panelTypes(rightGroup)).toEqual(['audio-mixer', 'history']);
+    expect(panelTypes(rightGroup)).toEqual(['audio-mixer', 'export', 'history']);
     expect(rightGroup?.activeIndex).toBe(0);
     expect(useDockStore.getState().isPanelTypeVisible('clip-properties')).toBe(false);
     expect(useDockStore.getState().isPanelTypeVisible('audio-mixer')).toBe(true);
@@ -147,7 +147,7 @@ describe('dock store saved layouts', () => {
     useDockStore.getState().changePanelType('clip-properties', 'history');
 
     const rightGroup = findTabGroup(useDockStore.getState().layout.root, 'right-group');
-    expect(panelTypes(rightGroup)).toEqual(['history']);
+    expect(panelTypes(rightGroup)).toEqual(['history', 'export']);
     expect(rightGroup?.activeIndex).toBe(0);
   });
 

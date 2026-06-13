@@ -74,6 +74,13 @@ export function ExportAudioChannelCard({
                   </button>
                   <button
                     type="button"
+                    className={`export-chip${audio.audioOnlyFormat === 'mp3' ? ' is-active' : ''}`}
+                    onClick={() => actions.setAudioOnlyFormat('mp3')}
+                  >
+                    MP3
+                  </button>
+                  <button
+                    type="button"
                     className={`export-chip${audio.audioOnlyFormat === 'browser' ? ' is-active' : ''}`}
                     onClick={() => actions.setAudioOnlyFormat('browser')}
                     disabled={!mode.isAudioSupported}

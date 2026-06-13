@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  encodeAudioBufferToMp3Blob,
   encodeAudioBufferToWavBytes,
   encodeFloat32PcmChunksToWavBytes,
   estimateFloat32PcmWavByteSize,
@@ -160,18 +161,31 @@ describe('AudioFileEncoder WAV', () => {
   });
 });
 
+describe('AudioFileEncoder MP3', () => {
+  it('rejects invalid bitrates before loading the browser encoder', async () => {
+    const buffer = createAudioBufferLike({
+      channels: [new Float32Array(10), new Float32Array(10)],
+    });
+
+    await expect(encodeAudioBufferToMp3Blob(buffer as unknown as AudioBuffer, { bitrate: 0 })).rejects.toThrow('invalid bitrate');
+  });
+});
+
 describe('audio-only export settings', () => {
   it('defaults audio-only export to WAV', () => {
     expect(createDefaultExportSettings().audioOnlyFormat).toBe('wav');
   });
 
-  it('persists browser audio mode and sanitizes invalid values', () => {
+  it('persists browser and MP3 audio modes and sanitizes invalid values', () => {
     useExportStore.getState().reset();
     useExportStore.getState().setSettings({ audioOnlyFormat: 'browser' });
     expect(useExportStore.getState().settings.audioOnlyFormat).toBe('browser');
 
+    useExportStore.getState().setSettings({ audioOnlyFormat: 'mp3' });
+    expect(useExportStore.getState().settings.audioOnlyFormat).toBe('mp3');
+
     useExportStore.getState().replaceSettings({
-      audioOnlyFormat: 'mp3' as never,
+      audioOnlyFormat: 'flac' as never,
     });
     expect(useExportStore.getState().settings.audioOnlyFormat).toBe('wav');
   });

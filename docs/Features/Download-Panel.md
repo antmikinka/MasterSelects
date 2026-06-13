@@ -11,7 +11,7 @@ Paste and queue online video downloads through the Media panel, Native Helper, a
 Downloads are no longer a standalone dock tab. The old `download` and `youtube` panel types are saved-layout migration targets; the active surface is the Downloads prompt at the bottom of the Media panel. The surface supports:
 
 - direct URL paste for YouTube and other `yt-dlp`-supported sites
-- one-video format selection before queueing
+- one-item format selection before queueing, including video recommendations and YouTube MP3 audio
 - progress cards in the same Media tray queue used by AI generations
 - automatic import into Media once a download completes
 - existing-download detection inside the current project before re-downloading
@@ -59,7 +59,7 @@ Any site that `yt-dlp` can fetch can still be downloaded even if it is not liste
 Downloads require the Native Helper for the actual media transfer.
 
 1. The Media Downloads prompt asks the helper for available format recommendations
-2. The user picks a resolution/codec choice
+2. The user picks a resolution/codec choice or the MP3 audio recommendation when available
 3. The Media Downloads queue resolves metadata for the selected URL
 4. The helper runs the bundled Windows `yt-dlp.exe` or a system `yt-dlp` with the selected `formatId`
 5. Progress callbacks feed percent and transfer speed back into the shared Media queue
@@ -83,7 +83,7 @@ Each queue card can show:
 - progress bar
 - retry for failed downloads
 
-When a File System Access project is open, the queue checks whether `Downloads/<Platform>/<SanitizedTitle>.mp4` already exists and imports that file instead of downloading it again. Native Helper projects do not currently use the same download-folder existence check; their completed helper downloads are copied back through normal media import.
+When a File System Access project is open, the queue checks whether `Downloads/<Platform>/<SanitizedTitle>.<extension>` already exists and imports that file instead of downloading it again. Native Helper projects do not currently use the same download-folder existence check; their completed helper downloads are copied back through normal media import.
 
 ---
 
@@ -118,7 +118,7 @@ AI tools can still use a direct download-and-import timeline flow. That path doe
 
 ## Format Selection
 
-The Media panel prompt lists the helper's recommended formats for one pasted URL before the item enters the queue. Each option shows resolution, video codec, audio handling, and whether `yt-dlp` will merge separate streams. The selected recommendation's `formatId` is stored on the queue job and passed through to the helper download command.
+The Media panel prompt lists the helper's recommended formats for one pasted URL before the item enters the queue. Each option shows resolution, video codec, audio handling, and whether `yt-dlp` will merge separate streams. Audio-only recommendations are shown as `Audio only` when the helper can find `ffmpeg`; they use the source's best audio stream converted to MP3. The selected recommendation's `formatId` is stored on the queue job and passed through to the helper download command.
 
 AI tools can still call `listVideoFormats` and pass a specific `formatId` to `downloadAndImportVideo`.
 
@@ -129,6 +129,7 @@ The recommended order is:
 | 1 | H.264 | MP4 | best browser/export compatibility |
 | 2 | VP9 | WebM | good fallback quality |
 | 3 | AV1 | WebM | compression-efficient but more compatibility-sensitive |
+| 4 | MP3 audio | MP3 | audio-only import/download |
 
 If no recommendations are available, the prompt can still queue the helper default.
 
@@ -156,7 +157,7 @@ ProjectFolder/
     Other/
 ```
 
-File names are sanitized from the source title and saved as `.mp4`.
+File names are sanitized from the source title and saved with the downloaded extension, for example `.mp4`, `.webm`, `.m4a`, or `.mp3`.
 
 For Native Helper-backed project persistence, completed downloads are fetched from the helper and then copied into the normal project media path under `Raw/`. The Media panel still groups the imported media under Downloads/platform folders for organization.
 

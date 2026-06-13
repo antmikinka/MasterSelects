@@ -396,7 +396,7 @@ The built-in `VIDEO EDIT` layout is the default desktop layout:
 
 - Left column: Media
 - Center: Preview
-- Right column: Properties, History
+- Right column: Properties, Export, History (Export active)
 - Bottom: Timeline
 
 Its timeline defaults to balanced video/audio focus with two visible 70 px video tracks and one visible 48 px compact audio track, so audio headers keep the bottom pan rail visible without showing the inline volume fader.
@@ -404,7 +404,7 @@ On a first empty load, `VIDEO EDIT` is also the active named layout, so the head
 
 The built-in `AUDIO EDIT` layout keeps Timeline above Media, Audio Mixer, and Properties/History. Its timeline defaults to audio focus with two visible 40 px video context tracks and one visible 96 px full-height audio track.
 
-Export, Multi Preview, scopes, and other panels are available from the View menu and can be floated or docked, but they are not pinned in the built-in Video/Audio layouts.
+Multi Preview, scopes, and other panels are available from the View menu and can be floated or docked.
 
 ### Layout Persistence
 

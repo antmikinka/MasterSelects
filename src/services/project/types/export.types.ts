@@ -3,7 +3,7 @@ export type ProjectExportVisualMode = 'video' | 'image' | 'gif';
 export type ProjectExportImageFormat = 'png' | 'jpg' | 'webp' | 'bmp';
 export type ProjectExportImageMode = 'frame' | 'sequence';
 export type ProjectExportSpecialContainer = 'none' | 'xml';
-export type ProjectExportAudioFormat = 'wav' | 'browser';
+export type ProjectExportAudioFormat = 'wav' | 'mp3' | 'browser';
 export type ProjectContainerFormat = 'mp4' | 'webm';
 export type ProjectVideoCodec = 'h264' | 'h265' | 'vp9' | 'av1';
 export type ProjectFFmpegVideoCodec =
@@ -37,7 +37,7 @@ export type ProjectGifDither =
   | 'floyd_steinberg'
   | 'bayer'
   | 'none';
-export type ProjectGifLoopMode = 'forever' | 'once';
+export type ProjectGifLoopMode = 'forever' | 'once' | 'count';
 export type ProjectGifPaletteMode = 'global' | 'per-frame';
 
 export interface ProjectExportSettings {
@@ -67,9 +67,12 @@ export interface ProjectExportSettings {
   gifColors: number;
   gifDither: ProjectGifDither;
   gifLoop: ProjectGifLoopMode;
+  gifLoopCount: number;
   gifPaletteMode: ProjectGifPaletteMode;
   gifOptimize: boolean;
+  gifTransparency: boolean;
   gifAlphaThreshold: number;
+  gifBayerScale: number;
   stackedAlpha: boolean;
   includeAudio: boolean;
   audioOnlyFormat: ProjectExportAudioFormat;

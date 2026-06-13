@@ -77,6 +77,10 @@ const mockFactory = vi.hoisted(() => {
   const setFfmpegProgress = vi.fn();
   const setExportPhase = vi.fn();
   const setExporter = vi.fn();
+  const setVisualMode = vi.fn();
+  const setVideoEnabled = vi.fn();
+  const setIncludeAudio = vi.fn();
+  const setAudioOnlyFormat = vi.fn();
   const downloadBlob = vi.fn();
   const encodeBrowserGif = vi.fn(() => new Blob(['gif'], { type: 'image/gif' }));
   const createImageSequenceZip = vi.fn(() => new Blob(['zip'], { type: 'application/zip' }));
@@ -162,21 +166,27 @@ const mockFactory = vi.hoisted(() => {
       setGifDither: vi.fn(),
       gifLoop: 'forever',
       setGifLoop: vi.fn(),
+      gifLoopCount: 3,
+      setGifLoopCount: vi.fn(),
       gifPaletteMode: 'global',
       setGifPaletteMode: vi.fn(),
       gifOptimize: false,
       setGifOptimize: vi.fn(),
+      gifTransparency: true,
+      setGifTransparency: vi.fn(),
       gifAlphaThreshold: 128,
       setGifAlphaThreshold: vi.fn(),
+      gifBayerScale: 3,
+      setGifBayerScale: vi.fn(),
       isFFmpegLoading: false,
       isFFmpegReady: true,
       ffmpegLoadError: null,
       stackedAlpha: false,
       setStackedAlpha: vi.fn(),
       includeAudio: false,
-      setIncludeAudio: vi.fn(),
+      setIncludeAudio,
       audioOnlyFormat: 'wav',
-      setAudioOnlyFormat: vi.fn(),
+      setAudioOnlyFormat,
       audioSampleRate: 48000,
       setAudioSampleRate: vi.fn(),
       audioBitrate: 128000,
@@ -184,9 +194,9 @@ const mockFactory = vi.hoisted(() => {
       normalizeAudio: false,
       setNormalizeAudio: vi.fn(),
       videoEnabled: true,
-      setVideoEnabled: vi.fn(),
+      setVideoEnabled,
       visualMode: isImageScenario ? 'image' : state.scenario === 'browser-gif' ? 'gif' : 'video',
-      setVisualMode: vi.fn(),
+      setVisualMode,
       imageFormat: 'bmp',
       setImageFormat: vi.fn(),
       imageExportMode: state.scenario === 'image-sequence' ? 'sequence' : 'frame',
@@ -237,8 +247,12 @@ const mockFactory = vi.hoisted(() => {
     setExportPhase,
     setExportProgress,
     setFfmpegProgress,
+    setIncludeAudio,
     setIsExporting,
     setProgress,
+    setAudioOnlyFormat,
+    setVideoEnabled,
+    setVisualMode,
     state,
     timelineState,
   };
@@ -435,8 +449,12 @@ beforeEach(() => {
   mockFactory.setIsExporting.mockClear();
   mockFactory.setProgress.mockClear();
   mockFactory.setFfmpegProgress.mockClear();
+  mockFactory.setIncludeAudio.mockClear();
   mockFactory.setExportPhase.mockClear();
   mockFactory.setExportProgress.mockClear();
+  mockFactory.setAudioOnlyFormat.mockClear();
+  mockFactory.setVideoEnabled.mockClear();
+  mockFactory.setVisualMode.mockClear();
   mockFactory.endExport.mockClear();
 
   if (typeof globalThis.ImageData === 'undefined') {
@@ -452,6 +470,22 @@ afterEach(() => {
 });
 
 describe('ExportPanel render-session adoption', () => {
+  it('leaves GIF mode when selecting MP3 audio-only output', () => {
+    setScenario('browser-gif', false);
+
+    const { container } = render(<ExportPanel />);
+    const mp3Button = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.trim() === '.mp3');
+    expect(mp3Button).toBeDefined();
+
+    fireEvent.click(mp3Button as HTMLButtonElement);
+
+    expect(mockFactory.setVisualMode).toHaveBeenCalledWith('video');
+    expect(mockFactory.setVideoEnabled).toHaveBeenCalledWith(false);
+    expect(mockFactory.setIncludeAudio).toHaveBeenCalledWith(true);
+    expect(mockFactory.setAudioOnlyFormat).toHaveBeenCalledWith('mp3');
+  });
+
   it.each<ExportPanelScenario>([
     'browser-gif',
     'ffmpeg-video',

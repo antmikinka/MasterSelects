@@ -1,7 +1,10 @@
 import { GIFEncoder, applyPalette, quantize, type GifPalette } from 'gifenc';
 import {
   clampGifAlphaThreshold,
+  clampGifBayerScale,
   clampGifColors,
+  clampGifLoopCount,
+  getGifRepeatCount,
   type GifExportOptions,
   type GifPaletteMode,
 } from '../gif/gifOptions';
@@ -29,9 +32,12 @@ export function createDefaultBrowserGifSettings(
     gifColors: clampGifColors(settings.gifColors),
     gifDither: settings.gifDither ?? 'sierra2_4a',
     gifLoop: settings.gifLoop ?? 'forever',
+    gifLoopCount: clampGifLoopCount(settings.gifLoopCount),
     gifPaletteMode: settings.gifPaletteMode ?? 'global',
     gifOptimize: settings.gifOptimize ?? true,
+    gifTransparency: settings.gifTransparency ?? true,
     gifAlphaThreshold: clampGifAlphaThreshold(settings.gifAlphaThreshold),
+    gifBayerScale: clampGifBayerScale(settings.gifBayerScale),
   };
 }
 
@@ -49,8 +55,8 @@ export function encodeBrowserGif(
     initialCapacity: estimateInitialCapacity(frames.length, settings.width, settings.height),
   });
   const delay = Math.max(2, Math.round(1000 / settings.fps));
-  const repeat = settings.gifLoop === 'once' ? -1 : 0;
-  const format = 'rgba4444';
+  const repeat = getGifRepeatCount(settings.gifLoop, settings.gifLoopCount);
+  const format = settings.gifTransparency ? 'rgba4444' : 'rgb565';
   const alphaThreshold = settings.gifAlphaThreshold;
   const globalPalette = settings.gifPaletteMode === 'global'
     ? createGlobalPalette(frames, settings, (percent) => {
@@ -65,9 +71,14 @@ export function encodeBrowserGif(
 
   for (let index = 0; index < frames.length; index++) {
     const frame = frames[index];
-    const palette = globalPalette ?? createFramePalette(frame, settings.gifColors, alphaThreshold);
+    const palette = globalPalette ?? createFramePalette(
+      frame,
+      settings.gifColors,
+      alphaThreshold,
+      settings.gifTransparency,
+    );
     const indexedFrame = applyPalette(frame, palette, format);
-    const transparentIndex = findTransparentIndex(palette);
+    const transparentIndex = settings.gifTransparency ? findTransparentIndex(palette) : -1;
     gif.writeFrame(indexedFrame, settings.width, settings.height, {
       palette: index === 0 || settings.gifPaletteMode === 'per-frame' ? palette : undefined,
       delay,
@@ -91,11 +102,16 @@ export function encodeBrowserGif(
   return new Blob([buffer], { type: 'image/gif' });
 }
 
-function createFramePalette(frame: Uint8Array, colors: number, alphaThreshold: number): GifPalette {
+function createFramePalette(
+  frame: Uint8Array,
+  colors: number,
+  alphaThreshold: number,
+  transparency: boolean,
+): GifPalette {
   return quantize(frame, colors, {
-    format: 'rgba4444',
-    oneBitAlpha: alphaThreshold,
-    clearAlpha: true,
+    format: transparency ? 'rgba4444' : 'rgb565',
+    oneBitAlpha: transparency ? alphaThreshold : false,
+    clearAlpha: transparency,
     clearAlphaThreshold: alphaThreshold,
     clearAlphaColor: 0x00,
   });
@@ -108,7 +124,12 @@ function createGlobalPalette(
 ): GifPalette {
   const sample = sampleFrames(frames, settings.width, settings.height);
   onProgress?.(50);
-  const palette = createFramePalette(sample, settings.gifColors, settings.gifAlphaThreshold);
+  const palette = createFramePalette(
+    sample,
+    settings.gifColors,
+    settings.gifAlphaThreshold,
+    settings.gifTransparency,
+  );
   onProgress?.(100);
   return palette;
 }

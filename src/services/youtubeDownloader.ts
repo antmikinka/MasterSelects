@@ -7,6 +7,15 @@ import { NativeHelperClient } from './nativeHelper';
 const log = Logger.create('YouTubeDownloader');
 import { projectFileService } from './projectFileService';
 
+const EXTENSION_MIME_TYPES: Record<string, string> = {
+  aac: 'audio/aac',
+  m4a: 'audio/mp4',
+  mp3: 'audio/mpeg',
+  mp4: 'video/mp4',
+  ogg: 'audio/ogg',
+  webm: 'video/webm',
+};
+
 export interface DownloadProgress {
   videoId: string;
   status: 'pending' | 'downloading' | 'processing' | 'complete' | 'error';
@@ -47,6 +56,21 @@ export function subscribeToDownload(videoId: string, callback: DownloadCallback)
 function notifySubscribers(progress: DownloadProgress) {
   activeDownloads.set(progress.videoId, progress);
   downloadCallbacks.get(progress.videoId)?.forEach(cb => cb(progress));
+}
+
+function getPathExtension(path: string | undefined): string {
+  const filename = path?.split(/[\\/]/).pop() ?? '';
+  const match = filename.match(/\.([a-z0-9]+)$/i);
+  return match?.[1]?.toLowerCase() || 'mp4';
+}
+
+function getMimeTypeForExtension(extension: string): string {
+  return EXTENSION_MIME_TYPES[extension] ?? 'application/octet-stream';
+}
+
+function createDownloadedFileName(title: string, extension: string): string {
+  const sanitizedTitle = title.replace(/[^a-zA-Z0-9\s-]/g, '').substring(0, 100).trim() || 'download';
+  return `${sanitizedTitle}.${extension}`;
 }
 
 // Get download status
@@ -127,7 +151,9 @@ export async function downloadVideo(
 
     // Try to save to project's Downloads folder if a project is open
     let file: File;
-    const blob = new Blob([fileResponse], { type: 'video/mp4' });
+    const extension = getPathExtension(result.path);
+    const mimeType = getMimeTypeForExtension(extension);
+    const blob = new Blob([fileResponse], { type: mimeType });
     if (projectFileService.isProjectOpen()) {
       const savedFile = await projectFileService.saveDownload(blob, title, platform || 'youtube');
       if (savedFile) {
@@ -135,13 +161,11 @@ export async function downloadVideo(
         log.info('Saved to project downloads folder');
       } else {
         // Fallback to in-memory file
-        const sanitizedTitle = title.replace(/[^a-zA-Z0-9\s-]/g, '').substring(0, 100);
-        file = new File([fileResponse], `${sanitizedTitle}.mp4`, { type: 'video/mp4' });
+        file = new File([fileResponse], createDownloadedFileName(title, extension), { type: mimeType });
       }
     } else {
       // No project open, keep in memory
-      const sanitizedTitle = title.replace(/[^a-zA-Z0-9\s-]/g, '').substring(0, 100);
-      file = new File([fileResponse], `${sanitizedTitle}.mp4`, { type: 'video/mp4' });
+      file = new File([fileResponse], createDownloadedFileName(title, extension), { type: mimeType });
       log.debug('No project open, file kept in memory only');
     }
 

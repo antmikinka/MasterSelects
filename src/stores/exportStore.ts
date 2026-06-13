@@ -44,9 +44,12 @@ export interface ExportSettings {
   gifColors: number;
   gifDither: GifDither;
   gifLoop: GifLoopMode;
+  gifLoopCount: number;
   gifPaletteMode: GifPaletteMode;
   gifOptimize: boolean;
+  gifTransparency: boolean;
   gifAlphaThreshold: number;
+  gifBayerScale: number;
   stackedAlpha: boolean;
   includeAudio: boolean;
   audioOnlyFormat: ExportAudioFormat;
@@ -103,9 +106,9 @@ const IMAGE_FORMATS: ExportImageFormat[] = ['png', 'jpg', 'webp', 'bmp'];
 const IMAGE_EXPORT_MODES: ExportImageMode[] = ['frame', 'sequence'];
 const VISUAL_MODES: ExportVisualMode[] = ['video', 'image', 'gif'];
 const SPECIAL_CONTAINERS: ExportSpecialContainer[] = ['none', 'xml'];
-const AUDIO_FORMATS: ExportAudioFormat[] = ['wav', 'browser'];
+const AUDIO_FORMATS: ExportAudioFormat[] = ['wav', 'mp3', 'browser'];
 const GIF_DITHERS: GifDither[] = ['sierra2_4a', 'floyd_steinberg', 'bayer', 'none'];
-const GIF_LOOPS: GifLoopMode[] = ['forever', 'once'];
+const GIF_LOOPS: GifLoopMode[] = ['forever', 'once', 'count'];
 const GIF_PALETTE_MODES: GifPaletteMode[] = ['global', 'per-frame'];
 
 function createPresetId(): string {
@@ -140,9 +143,12 @@ export function createDefaultExportSettings(): ExportSettings {
     gifColors: 256,
     gifDither: 'sierra2_4a',
     gifLoop: 'forever',
+    gifLoopCount: 3,
     gifPaletteMode: 'global',
     gifOptimize: true,
+    gifTransparency: true,
     gifAlphaThreshold: 128,
+    gifBayerScale: 3,
     stackedAlpha: false,
     includeAudio: true,
     audioOnlyFormat: 'wav',
@@ -234,9 +240,12 @@ function sanitizeSettings(input?: Partial<ExportSettings> | null): ExportSetting
     gifColors: Math.round(pickNumber(input.gifColors, defaults.gifColors, { min: 2, max: 256 })),
     gifDither: pickEnumValue(input.gifDither, GIF_DITHERS, defaults.gifDither),
     gifLoop: pickEnumValue(input.gifLoop, GIF_LOOPS, defaults.gifLoop),
+    gifLoopCount: Math.round(pickNumber(input.gifLoopCount, defaults.gifLoopCount, { min: 2, max: 99 })),
     gifPaletteMode: pickEnumValue(input.gifPaletteMode, GIF_PALETTE_MODES, defaults.gifPaletteMode),
     gifOptimize: typeof input.gifOptimize === 'boolean' ? input.gifOptimize : defaults.gifOptimize,
+    gifTransparency: typeof input.gifTransparency === 'boolean' ? input.gifTransparency : defaults.gifTransparency,
     gifAlphaThreshold: Math.round(pickNumber(input.gifAlphaThreshold, defaults.gifAlphaThreshold, { min: 0, max: 255 })),
+    gifBayerScale: Math.round(pickNumber(input.gifBayerScale, defaults.gifBayerScale, { min: 0, max: 5 })),
     stackedAlpha: typeof input.stackedAlpha === 'boolean' ? input.stackedAlpha : defaults.stackedAlpha,
     includeAudio: isGifOutput ? false : typeof input.includeAudio === 'boolean' ? input.includeAudio : defaults.includeAudio,
     audioOnlyFormat: pickEnumValue(input.audioOnlyFormat, AUDIO_FORMATS, defaults.audioOnlyFormat),

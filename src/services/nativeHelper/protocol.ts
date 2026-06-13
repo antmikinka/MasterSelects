@@ -162,6 +162,7 @@ export interface FormatRecommendation {
   vcodec: string | null;
   acodec: string | null;
   needsMerge: boolean;
+  filesize?: number | null;
 }
 
 export interface VideoInfo {

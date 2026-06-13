@@ -1,4 +1,4 @@
-export type AudioOnlyExportFormat = 'wav' | 'browser';
+export type AudioOnlyExportFormat = 'wav' | 'mp3' | 'browser';
 
 export type WavBitDepth = 16;
 
@@ -11,6 +11,10 @@ export interface AudioBufferLike {
 
 export interface WavEncodeOptions {
   bitDepth?: WavBitDepth;
+}
+
+export interface Mp3EncodeOptions {
+  bitrate?: number;
 }
 
 export interface Float32PcmChunk {
@@ -27,6 +31,7 @@ export interface Float32PcmWavEncodeInput {
 
 const WAV_HEADER_BYTES = 44;
 const WAV_FORMAT_PCM = 1;
+const DEFAULT_MP3_BITRATE = 256_000;
 
 function writeAscii(view: DataView, offset: number, value: string): void {
   for (let i = 0; i < value.length; i++) {
@@ -205,6 +210,60 @@ export function encodeAudioBufferToWavBlob(buffer: AudioBufferLike, options?: Wa
   const arrayBuffer = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(arrayBuffer).set(bytes);
   return new Blob([arrayBuffer], { type: 'audio/wav' });
+}
+
+export async function encodeAudioBufferToMp3Blob(buffer: AudioBuffer, options?: Mp3EncodeOptions): Promise<Blob> {
+  const bitrate = options?.bitrate ?? DEFAULT_MP3_BITRATE;
+  if (!Number.isFinite(bitrate) || bitrate <= 0) {
+    throw new Error('Cannot encode MP3 with an invalid bitrate');
+  }
+  validateWavParams(buffer.sampleRate, buffer.numberOfChannels, buffer.length);
+
+  const [
+    {
+      AudioBufferSource,
+      BufferTarget,
+      Mp3OutputFormat,
+      Output,
+      canEncodeAudio,
+    },
+    { registerMp3Encoder },
+  ] = await Promise.all([
+    import('mediabunny'),
+    import('@mediabunny/mp3-encoder'),
+  ]);
+
+  if (!(await canEncodeAudio('mp3', {
+    numberOfChannels: buffer.numberOfChannels,
+    sampleRate: buffer.sampleRate,
+    bitrate,
+    bitrateMode: 'constant',
+  }))) {
+    registerMp3Encoder();
+  }
+
+  const target = new BufferTarget();
+  const output = new Output({
+    format: new Mp3OutputFormat(),
+    target,
+  });
+  const source = new AudioBufferSource({
+    codec: 'mp3',
+    bitrate,
+    bitrateMode: 'constant',
+  });
+
+  output.addAudioTrack(source);
+  await output.start();
+  await source.add(buffer);
+  source.close();
+  await output.finalize();
+
+  if (!target.buffer) {
+    throw new Error('MP3 encoder finalized without output data');
+  }
+
+  return new Blob([target.buffer], { type: 'audio/mpeg' });
 }
 
 export function encodeFloat32PcmChunksToWavBlob(

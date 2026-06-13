@@ -652,6 +652,7 @@ export function MediaPanel() {
           onRegenerateAudioProxy: handleRegenerateMediaAudioProxy,
           onRegenerateWaveform: handleRegenerateMediaWaveform,
           onRegenerateSpectrogram: handleRegenerateMediaSpectrogram,
+          onDownloadMediaFile: mediaContextExplorerHandlers.onDownloadMediaFile,
           onShowRawInExplorer: mediaContextExplorerHandlers.onShowRawInExplorer,
           onShowProxyInExplorer: mediaContextExplorerHandlers.onShowProxyInExplorer,
           onPickProxyFolder: mediaContextExplorerHandlers.onPickProxyFolder,

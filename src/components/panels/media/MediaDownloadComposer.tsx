@@ -4,6 +4,7 @@ import { isDownloadAvailable } from '../../../services/youtubeDownloader';
 import { parseDownloadUrls, useMediaDownloadStore } from '../../../stores/mediaDownloadStore';
 
 const EMPTY_FORMAT_RECOMMENDATIONS: FormatRecommendation[] = [];
+const AUDIO_MP3_FORMAT_ID = '__masterselects_audio_mp3';
 
 interface FormatResolutionState {
   url: string | null;
@@ -29,13 +30,28 @@ function compactCodecLabel(codec: string | null, emptyLabel: string): string {
 }
 
 function getAudioCodecLabel(format: FormatRecommendation): string {
+  if (format.id === AUDIO_MP3_FORMAT_ID || format.acodec?.toLowerCase() === 'mp3') {
+    return 'MP3';
+  }
   if (format.needsMerge && !format.acodec) {
     return 'M4A audio';
   }
   return compactCodecLabel(format.acodec, 'No audio');
 }
 
+function isAudioOnlyRecommendation(format: FormatRecommendation): boolean {
+  return format.id === AUDIO_MP3_FORMAT_ID
+    || (format.resolution.toLowerCase() === 'audio' && !format.vcodec && Boolean(format.acodec));
+}
+
 function getQueueFormatLabel(format: FormatRecommendation): string {
+  if (isAudioOnlyRecommendation(format)) {
+    return [
+      format.label || 'Audio',
+      getAudioCodecLabel(format),
+    ].filter(Boolean).join(' / ');
+  }
+
   return [
     format.resolution || 'Auto',
     compactCodecLabel(format.vcodec, 'Video'),
@@ -257,6 +273,7 @@ export function MediaDownloadComposer() {
                 <div className="media-download-format-list">
                   {recommendations.map((format) => {
                     const isSelected = selectedFormatId === format.id;
+                    const audioOnly = isAudioOnlyRecommendation(format);
                     return (
                       <button
                         key={format.id}
@@ -277,12 +294,12 @@ export function MediaDownloadComposer() {
                           {format.label || getQueueFormatLabel(format)}
                         </span>
                         <span className="media-download-format-codecs">
-                          <span>{format.resolution || 'Auto'}</span>
-                          <span>{compactCodecLabel(format.vcodec, 'Video')}</span>
+                          <span>{audioOnly ? 'Audio only' : format.resolution || 'Auto'}</span>
+                          {!audioOnly && <span>{compactCodecLabel(format.vcodec, 'Video')}</span>}
                           <span>{getAudioCodecLabel(format)}</span>
                         </span>
                         <span className="media-download-format-meta">
-                          {format.needsMerge ? 'merge' : 'single file'}
+                          {audioOnly ? 'audio only' : format.needsMerge ? 'merge' : 'single file'}
                         </span>
                       </button>
                     );

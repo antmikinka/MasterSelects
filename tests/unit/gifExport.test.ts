@@ -4,11 +4,15 @@ import {
   getCodecInfo,
   getCodecsForContainer,
 } from '../../src/engine/ffmpeg';
+import { buildEncodeArgs } from '../../src/engine/ffmpeg/bridge/ffmpegEncodeArgs';
 import {
   clampGifAlphaThreshold,
+  clampGifBayerScale,
   clampGifColors,
+  clampGifLoopCount,
   estimateGifSize,
   formatByteSize,
+  getGifRepeatCount,
 } from '../../src/engine/gif/gifOptions';
 
 describe('GIF export metadata', () => {
@@ -35,9 +39,12 @@ describe('GIF size estimation', () => {
     gifColors: 256,
     gifDither: 'sierra2_4a' as const,
     gifLoop: 'forever' as const,
+    gifLoopCount: 3,
     gifPaletteMode: 'global' as const,
     gifOptimize: true,
+    gifTransparency: true,
     gifAlphaThreshold: 128,
+    gifBayerScale: 3,
   };
 
   it('scales with frame count and resolution', () => {
@@ -75,5 +82,46 @@ describe('GIF size estimation', () => {
     expect(clampGifColors(-20)).toBe(2);
     expect(clampGifAlphaThreshold(999)).toBe(255);
     expect(clampGifAlphaThreshold(-5)).toBe(0);
+    expect(clampGifLoopCount(1)).toBe(2);
+    expect(clampGifLoopCount(120)).toBe(99);
+    expect(clampGifBayerScale(-1)).toBe(0);
+    expect(clampGifBayerScale(8)).toBe(5);
+  });
+
+  it('maps GIF loop controls to encoder repeat counts', () => {
+    expect(getGifRepeatCount('forever', 3)).toBe(0);
+    expect(getGifRepeatCount('once', 3)).toBe(-1);
+    expect(getGifRepeatCount('count', 7)).toBe(7);
+  });
+
+  it('builds FFmpeg GIF arguments for loop count, opaque output, and Bayer scale', () => {
+    const args = buildEncodeArgs({
+      codec: 'gif',
+      container: 'gif',
+      width: 320,
+      height: 180,
+      fps: 12,
+      startTime: 0,
+      endTime: 2,
+      gifColors: 32,
+      gifDither: 'bayer',
+      gifLoop: 'count',
+      gifLoopCount: 4,
+      gifPaletteMode: 'per-frame',
+      gifOptimize: true,
+      gifTransparency: false,
+      gifAlphaThreshold: 100,
+      gifBayerScale: 5,
+    }, 24, null);
+
+    expect(args).toContain('-loop');
+    expect(args[args.indexOf('-loop') + 1]).toBe('4');
+    const filter = args[args.indexOf('-filter_complex') + 1];
+    expect(filter).toContain('format=rgb24');
+    expect(filter).toContain('max_colors=32');
+    expect(filter).toContain('stats_mode=single');
+    expect(filter).toContain('dither=bayer');
+    expect(filter).toContain('bayer_scale=5');
+    expect(filter).not.toContain('alpha_threshold=');
   });
 });

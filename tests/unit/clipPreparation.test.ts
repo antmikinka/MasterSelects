@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanupExportMode, prepareClipsForExport } from '../../src/engine/export/ClipPreparation';
+import {
+  cleanupExportMode,
+  prepareClipsForExport,
+  shouldUsePreciseForFastExportFileSizes,
+} from '../../src/engine/export/ClipPreparation';
 import type { ExportSettings } from '../../src/engine/export/types';
 import { useMediaStore } from '../../src/stores/mediaStore';
 import { useTimelineStore } from '../../src/stores/timeline';
@@ -255,5 +259,28 @@ describe('ClipPreparation image export state', () => {
 
     expect(arrayBuffer).not.toHaveBeenCalled();
     expect(timelineRuntimeCoordinator.getBridgeStats().policies.export.budgetReport.usage.resources).toBe(128);
+  });
+
+  it('routes large FAST WebCodecs source sets to PRECISE preparation', () => {
+    expect(shouldUsePreciseForFastExportFileSizes({
+      totalBytes: 1024 * 1024 * 1024,
+      largestBytes: 512 * 1024 * 1024,
+      largestClipName: 'Small.mp4',
+      uniqueSourceCount: 1,
+    })).toBe(false);
+
+    expect(shouldUsePreciseForFastExportFileSizes({
+      totalBytes: 1600 * 1024 * 1024,
+      largestBytes: 1536 * 1024 * 1024,
+      largestClipName: 'Large.mp4',
+      uniqueSourceCount: 1,
+    })).toBe(true);
+
+    expect(shouldUsePreciseForFastExportFileSizes({
+      totalBytes: 2048 * 1024 * 1024,
+      largestBytes: 800 * 1024 * 1024,
+      largestClipName: 'Part.mp4',
+      uniqueSourceCount: 3,
+    })).toBe(true);
   });
 });

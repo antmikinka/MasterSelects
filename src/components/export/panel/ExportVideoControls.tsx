@@ -2,6 +2,9 @@ import {
   GIF_COLOR_PRESETS,
   GIF_DITHER_OPTIONS,
   GIF_PALETTE_MODES,
+  clampGifBayerScale,
+  clampGifColors,
+  clampGifLoopCount,
   getGifDitherLabel,
   getGifPaletteModeLabel,
 } from '../../../engine/gif/gifOptions';
@@ -129,7 +132,7 @@ export function ExportVideoControls({
             <span>{mode.isGifMode ? 'Palette' : mode.isWebCodecsEncoder ? 'Rate' : 'Quality'}</span>
             <strong>
               {mode.isGifMode
-                ? `${gif.gifColors} colors / ${getGifPaletteModeLabel(gif.gifPaletteMode)}`
+                ? `${gif.gifColors} colors / ${getGifPaletteModeLabel(gif.gifPaletteMode)} / ${gif.gifTransparency ? 'Alpha' : 'Opaque'}`
                 : mode.isWebCodecsEncoder
                 ? `${video.rateControl.toUpperCase()} / ${(video.bitrate / 1_000_000).toFixed(1)} Mbps`
                 : `MJPEG / Q${video.ffmpegQuality}`}
@@ -148,6 +151,17 @@ export function ExportVideoControls({
                     {value}
                   </button>
                 ))}
+              </div>
+              <div className="export-inline-inputs export-inline-inputs-single">
+                <input
+                  type="number"
+                  value={gif.gifColors}
+                  onChange={(e) => actions.setGifColors(clampGifColors(Number(e.target.value)))}
+                  min={2}
+                  max={256}
+                  step={1}
+                  aria-label="GIF color count"
+                />
               </div>
               <div className="export-chip-row">
                 {GIF_PALETTE_MODES.map((paletteMode) => (
@@ -174,14 +188,60 @@ export function ExportVideoControls({
                   </button>
                 ))}
               </div>
+              {!mode.isWebCodecsEncoder && gif.gifDither === 'bayer' && (
+                <div className="export-slider-control">
+                  <div className="export-slider-head">
+                    <label>Bayer Scale</label>
+                    <span className="export-slider-value">{gif.gifBayerScale}</span>
+                  </div>
+                  <input
+                    className="export-slider-input"
+                    type="range"
+                    min={0}
+                    max={5}
+                    step={1}
+                    value={gif.gifBayerScale}
+                    onChange={(e) => actions.setGifBayerScale(clampGifBayerScale(Number(e.target.value)))}
+                  />
+                </div>
+              )}
               <div className="export-chip-row">
                 <button
                   type="button"
-                  className={`export-toggle${gif.gifLoop === 'forever' ? ' is-active' : ''}`}
-                  onClick={() => actions.setGifLoop(gif.gifLoop === 'forever' ? 'once' : 'forever')}
+                  className={`export-chip${gif.gifLoop === 'forever' ? ' is-active' : ''}`}
+                  onClick={() => actions.setGifLoop('forever')}
                 >
-                  {gif.gifLoop === 'forever' ? 'Loop Forever' : 'Play Once'}
+                  Forever
                 </button>
+                <button
+                  type="button"
+                  className={`export-chip${gif.gifLoop === 'once' ? ' is-active' : ''}`}
+                  onClick={() => actions.setGifLoop('once')}
+                >
+                  Once
+                </button>
+                <button
+                  type="button"
+                  className={`export-chip${gif.gifLoop === 'count' ? ' is-active' : ''}`}
+                  onClick={() => actions.setGifLoop('count')}
+                >
+                  Count
+                </button>
+              </div>
+              {gif.gifLoop === 'count' && (
+                <div className="export-inline-inputs export-inline-inputs-single">
+                  <input
+                    type="number"
+                    value={gif.gifLoopCount}
+                    onChange={(e) => actions.setGifLoopCount(clampGifLoopCount(Number(e.target.value)))}
+                    min={2}
+                    max={99}
+                    step={1}
+                    aria-label="GIF loop count"
+                  />
+                </div>
+              )}
+              <div className="export-chip-row">
                 <button
                   type="button"
                   className={`export-toggle${gif.gifOptimize ? ' is-active' : ''}`}
@@ -190,22 +250,31 @@ export function ExportVideoControls({
                 >
                   Optimize
                 </button>
+                <button
+                  type="button"
+                  className={`export-toggle${gif.gifTransparency ? ' is-active' : ''}`}
+                  onClick={() => actions.setGifTransparency(!gif.gifTransparency)}
+                >
+                  {gif.gifTransparency ? 'Transparent' : 'Opaque'}
+                </button>
               </div>
-              <div className="export-slider-control">
-                <div className="export-slider-head">
-                  <label>Alpha Threshold</label>
-                  <span className="export-slider-value">{gif.gifAlphaThreshold}</span>
+              {gif.gifTransparency && (
+                <div className="export-slider-control">
+                  <div className="export-slider-head">
+                    <label>Alpha Threshold</label>
+                    <span className="export-slider-value">{gif.gifAlphaThreshold}</span>
+                  </div>
+                  <input
+                    className="export-slider-input"
+                    type="range"
+                    min={0}
+                    max={255}
+                    step={1}
+                    value={gif.gifAlphaThreshold}
+                    onChange={(e) => actions.setGifAlphaThreshold(Number(e.target.value))}
+                  />
                 </div>
-                <input
-                  className="export-slider-input"
-                  type="range"
-                  min={0}
-                  max={255}
-                  step={1}
-                  value={gif.gifAlphaThreshold}
-                  onChange={(e) => actions.setGifAlphaThreshold(Number(e.target.value))}
-                />
-              </div>
+              )}
               <div className="export-inline-note">
                 Estimated range: {display.gifSizeRangeLabel}. {mode.isWebCodecsEncoder ? 'Browser GIF uses fast quantization without dithering.' : `Dither: ${getGifDitherLabel(gif.gifDither)}.`}
               </div>
@@ -290,17 +359,19 @@ export function ExportVideoControls({
       <div className="export-field-card export-subcard" data-export-target="video-alpha">
         <div className="export-field-head">
           <span>{mode.isGifMode ? 'Transparency' : 'Alpha'}</span>
-          <strong>{mode.isGifMode ? `Threshold ${gif.gifAlphaThreshold}` : video.stackedAlpha ? 'Stacked' : 'Off'}</strong>
+          <strong>{mode.isGifMode ? (gif.gifTransparency ? `Threshold ${gif.gifAlphaThreshold}` : 'Opaque') : video.stackedAlpha ? 'Stacked' : 'Off'}</strong>
         </div>
         <div className="export-chip-row">
-          <button
-            type="button"
-            className={`export-toggle${video.stackedAlpha ? ' is-active' : ''}`}
-            onClick={() => actions.setStackedAlpha(!video.stackedAlpha)}
-            disabled={!mode.isWebCodecsEncoder || mode.isGifMode}
-          >
-            Stacked Alpha
-          </button>
+          {!mode.isGifMode && (
+            <button
+              type="button"
+              className={`export-toggle${video.stackedAlpha ? ' is-active' : ''}`}
+              onClick={() => actions.setStackedAlpha(!video.stackedAlpha)}
+              disabled={!mode.isWebCodecsEncoder}
+            >
+              Stacked Alpha
+            </button>
+          )}
           {mode.showRangeInVideo && (
             <button
               type="button"

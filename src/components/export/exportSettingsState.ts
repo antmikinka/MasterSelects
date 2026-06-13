@@ -80,9 +80,12 @@ export interface ExportSettingsStateInput {
   gifColors: number;
   gifDither: GifDither;
   gifLoop: GifLoopMode;
+  gifLoopCount: number;
   gifPaletteMode: GifPaletteMode;
   gifOptimize: boolean;
+  gifTransparency: boolean;
   gifAlphaThreshold: number;
+  gifBayerScale: number;
   stackedAlpha: boolean;
   includeAudio: boolean;
   audioOnlyFormat: ExportAudioFormat;
@@ -120,9 +123,12 @@ export function buildExportSettingsState(input: ExportSettingsStateInput) {
     gifColors: input.gifColors,
     gifDither: input.gifDither,
     gifLoop: input.gifLoop,
+    gifLoopCount: input.gifLoopCount,
     gifPaletteMode: input.gifPaletteMode,
     gifOptimize: input.gifOptimize,
+    gifTransparency: input.gifTransparency,
     gifAlphaThreshold: input.gifAlphaThreshold,
+    gifBayerScale: input.gifBayerScale,
   });
   const gifSizeRangeLabel = `${formatByteSize(gifSizeEstimate.minBytes)}-${formatByteSize(gifSizeEstimate.maxBytes)}`;
   const webCodecsAvailable = input.isSupported;
@@ -159,9 +165,20 @@ export function buildExportSettingsState(input: ExportSettingsStateInput) {
   const selectedImageFormat = IMAGE_FORMATS.find(({ id }) => id === input.imageFormat) ?? IMAGE_FORMATS[0];
   const browserAudioExtension = input.audioCodec === 'opus' ? 'ogg' : 'aac';
   const browserAudioCodecLabel = input.audioCodec?.toUpperCase() ?? 'AAC';
-  const audioOnlyExtension = input.audioOnlyFormat === 'wav' ? 'wav' : browserAudioExtension;
-  const audioOnlyCodecLabel = input.audioOnlyFormat === 'wav' ? 'WAV PCM' : browserAudioCodecLabel;
-  const browserAudioUnavailable = isWebCodecsEncoder && !input.isAudioSupported && !(isAudioOnlyMode && input.audioOnlyFormat === 'wav');
+  const audioOnlyExtension = input.audioOnlyFormat === 'wav'
+    ? 'wav'
+    : input.audioOnlyFormat === 'mp3'
+      ? 'mp3'
+      : browserAudioExtension;
+  const audioOnlyCodecLabel = input.audioOnlyFormat === 'wav'
+    ? 'WAV PCM'
+    : input.audioOnlyFormat === 'mp3'
+      ? 'MP3'
+      : browserAudioCodecLabel;
+  const audioOnlyUsesWebCodecs = isAudioOnlyMode && input.audioOnlyFormat === 'browser';
+  const browserAudioUnavailable = isWebCodecsEncoder
+    && !input.isAudioSupported
+    && !(isAudioOnlyMode && (input.audioOnlyFormat === 'wav' || input.audioOnlyFormat === 'mp3'));
   const currentAudioCodecLabel = isVideoMode && input.encoder === 'ffmpeg'
     ? ffmpegAudioCodecLabel
     : isAudioOnlyMode
@@ -209,7 +226,7 @@ export function buildExportSettingsState(input: ExportSettingsStateInput) {
     input.isExporting ||
     (isImageSequenceMode && input.durationEndTime <= input.durationStartTime) ||
     (!isImageMode && !isXmlMode && input.durationEndTime <= input.durationStartTime) ||
-    isAudioOnlyMode && (!input.includeAudio || (input.audioOnlyFormat === 'browser' && !input.isAudioSupported)) ||
+    isAudioOnlyMode && (!input.includeAudio || (audioOnlyUsesWebCodecs && !input.isAudioSupported)) ||
     (isVideoMode && input.encoder === 'ffmpeg' && input.isFFmpegLoading);
   const showRangeInVideo = isVideoMode;
   const showRangeInAudio = isAudioOnlyMode && input.includeAudio;

@@ -44,9 +44,12 @@ export interface FfmpegDirectExportRunnerInput {
   gifColors: number;
   gifDither: GifDither;
   gifLoop: GifLoopMode;
+  gifLoopCount: number;
   gifPaletteMode: GifPaletteMode;
   gifOptimize: boolean;
+  gifTransparency: boolean;
   gifAlphaThreshold: number;
+  gifBayerScale: number;
   frameRendererRef: { current: FFmpegFrameRenderer | null };
   audioPipelineRef: { current: AudioExportPipeline | null };
   renderSessionRef: ExportRenderSessionRef;
@@ -104,9 +107,12 @@ export async function runFfmpegDirectExport(
       gifColors: input.gifColors,
       gifDither: input.gifDither,
       gifLoop: input.gifLoop,
+      gifLoopCount: input.gifLoopCount,
       gifPaletteMode: input.gifPaletteMode,
       gifOptimize: input.gifOptimize,
+      gifTransparency: input.gifTransparency,
       gifAlphaThreshold: input.gifAlphaThreshold,
+      gifBayerScale: input.gifBayerScale,
     };
 
     log.info('Rendering frames for FFmpeg...');

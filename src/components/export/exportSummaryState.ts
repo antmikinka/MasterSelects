@@ -1,5 +1,6 @@
 import type { Composition } from '../../stores/mediaStore';
 import type { ExportAudioFormat } from '../../stores/exportStore';
+import type { GifLoopMode } from '../../engine/gif/gifOptions';
 import type { EncoderType } from './useExportState';
 
 export type ExportSummaryTarget =
@@ -41,6 +42,9 @@ export interface ExportSummaryStateInput {
   playheadPosition: number;
   imageQuality: number;
   gifColors: number;
+  gifLoop: GifLoopMode;
+  gifLoopCount: number;
+  gifTransparency: boolean;
   ffmpegQuality: number;
   bitrate: number;
   encoder: EncoderType;
@@ -157,6 +161,13 @@ export function buildSummaryBadges(args: ExportSummaryStateArgs): ExportSummaryB
           ? 'gif-palette' as const
           : input.encoder === 'ffmpeg' && !args.showFFmpegQualityControl ? 'video-codec' as const : 'video-rate' as const,
       },
+      ...(args.isGifMode ? [{
+        label: input.gifLoop === 'count' ? `${input.gifLoopCount} loops` : input.gifLoop,
+        target: 'gif-palette' as const,
+      }, {
+        label: input.gifTransparency ? 'Transparent' : 'Opaque',
+        target: 'video-alpha' as const,
+      }] : []),
     ] : []),
     ...audioSummaryBadges,
     {

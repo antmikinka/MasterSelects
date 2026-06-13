@@ -366,6 +366,7 @@ Right-click on items or empty space for context options.
 ### Single/Multi Selection
 - **Reference in AI Prompt** / **Unreference from AI Prompt** for selected image, video, and audio files
 - **Rename** (single selection only)
+- **Download** (single file selection, saves through the browser from the retained file/blob URL)
 - **Move to Folder** submenu (shows available folders + "Root")
 - **Delete** (shows count for multi-selection)
 

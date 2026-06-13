@@ -16,6 +16,7 @@ export type { AudioEncoderSettings, EncodedAudioResult, AudioEncoderProgressCall
 export {
   encodeAudioBufferToWavBlob,
   encodeAudioBufferToWavBytes,
+  encodeAudioBufferToMp3Blob,
   encodeFloat32PcmChunksToWavBlob,
   encodeFloat32PcmChunksToWavBytes,
   estimateFloat32PcmWavByteSize,
@@ -26,6 +27,7 @@ export type {
   AudioOnlyExportFormat,
   Float32PcmChunk,
   Float32PcmWavEncodeInput,
+  Mp3EncodeOptions,
   WavBitDepth,
   WavEncodeOptions,
 } from './AudioFileEncoder';

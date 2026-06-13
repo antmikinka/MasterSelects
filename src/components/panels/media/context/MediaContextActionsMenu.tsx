@@ -54,6 +54,7 @@ export interface MediaContextActionsMenuProps {
   onRegenerateAudioProxy: (mediaFile: MediaFile, force: boolean) => void;
   onRegenerateWaveform: (mediaFile: MediaFile) => void;
   onRegenerateSpectrogram: (mediaFile: MediaFile) => void;
+  onDownloadMediaFile: (mediaFile: MediaFile) => void;
   onShowRawInExplorer: (mediaFile: MediaFile) => Promise<void>;
   onShowProxyInExplorer: (mediaFile: MediaFile) => Promise<void>;
   onPickProxyFolder: () => Promise<void>;
@@ -114,6 +115,7 @@ export function MediaContextActionsMenu({
   onRegenerateAudioProxy,
   onRegenerateWaveform,
   onRegenerateSpectrogram,
+  onDownloadMediaFile,
   onShowRawInExplorer,
   onShowProxyInExplorer,
   onPickProxyFolder,
@@ -189,6 +191,12 @@ export function MediaContextActionsMenu({
           {!multiSelect && selectedItem && (
             <div className="context-menu-item" onClick={() => onStartRename(selectedItem.id, selectedItem.name)}>
               Rename
+            </div>
+          )}
+
+          {!multiSelect && mediaFile && (mediaFile.file || mediaFile.url) && (
+            <div className="context-menu-item" onClick={() => onDownloadMediaFile(mediaFile)}>
+              Download
             </div>
           )}
 

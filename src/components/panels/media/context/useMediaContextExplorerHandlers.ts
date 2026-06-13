@@ -15,9 +15,36 @@ interface UseMediaContextExplorerHandlersInput {
 }
 
 export interface MediaContextExplorerHandlers {
+  onDownloadMediaFile: (mediaFile: MediaFile) => void;
   onShowRawInExplorer: (mediaFile: MediaFile) => Promise<void>;
   onShowProxyInExplorer: (mediaFile: MediaFile) => Promise<void>;
   onPickProxyFolder: () => Promise<void>;
+}
+
+export function downloadMediaFileInBrowser(item: Pick<MediaFile, 'file' | 'name' | 'url'>): boolean {
+  const anchor = document.createElement('a');
+  anchor.download = item.name;
+  anchor.rel = 'noopener';
+
+  let objectUrl: string | null = null;
+  if (item.file) {
+    objectUrl = URL.createObjectURL(item.file);
+    anchor.href = objectUrl;
+  } else if (item.url) {
+    anchor.href = item.url;
+  } else {
+    return false;
+  }
+
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+
+  if (objectUrl) {
+    URL.revokeObjectURL(objectUrl);
+  }
+
+  return true;
 }
 
 export function useMediaContextExplorerHandlers({
@@ -25,19 +52,17 @@ export function useMediaContextExplorerHandlers({
   pickProxyFolder,
   closeContextMenu,
 }: UseMediaContextExplorerHandlersInput): MediaContextExplorerHandlers {
+  const onDownloadMediaFile = useCallback((item: MediaFile) => {
+    downloadMediaFileInBrowser(item);
+    closeContextMenu();
+  }, [closeContextMenu]);
+
   const onShowRawInExplorer = useCallback(async (item: MediaFile) => {
     const result = await showInExplorer('raw', item.id);
     if (result.success) {
       alert(result.message);
     } else if (item.file) {
-      const url = URL.createObjectURL(item.file);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = item.name;
-      document.body.appendChild(anchor);
-      anchor.click();
-      document.body.removeChild(anchor);
-      URL.revokeObjectURL(url);
+      downloadMediaFileInBrowser(item);
     }
     closeContextMenu();
   }, [closeContextMenu, showInExplorer]);
@@ -54,6 +79,7 @@ export function useMediaContextExplorerHandlers({
   }, [closeContextMenu, pickProxyFolder]);
 
   return {
+    onDownloadMediaFile,
     onShowRawInExplorer,
     onShowProxyInExplorer,
     onPickProxyFolder,

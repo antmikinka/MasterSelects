@@ -133,9 +133,12 @@ export interface ExportBasicsGifState {
   gifColors: number;
   gifDither: GifDither;
   gifLoop: GifLoopMode;
+  gifLoopCount: number;
   gifPaletteMode: GifPaletteMode;
   gifOptimize: boolean;
+  gifTransparency: boolean;
   gifAlphaThreshold: number;
+  gifBayerScale: number;
 }
 
 export interface ExportBasicsImageState {
@@ -208,8 +211,11 @@ export interface ExportBasicsActions {
   setGifColors: (colors: number) => void;
   setGifDither: (dither: GifDither) => void;
   setGifLoop: (loop: GifLoopMode) => void;
+  setGifLoopCount: (count: number) => void;
   setGifPaletteMode: (mode: GifPaletteMode) => void;
   setGifOptimize: (enabled: boolean) => void;
+  setGifTransparency: (enabled: boolean) => void;
   setGifAlphaThreshold: (threshold: number) => void;
+  setGifBayerScale: (scale: number) => void;
   loadFFmpeg: () => void;
 }

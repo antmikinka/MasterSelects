@@ -51,7 +51,8 @@ Canvas-backed sources such as text, solids, Lottie, and Rive are re-rendered for
 - Uses `ParallelDecodeManager` when multiple clips are present in the export range.
 - Parses source media with MP4Box.
 - Prefetches frames ahead of the render position.
-- Is a strict WebCodecs path. It does not auto-switch to HTMLVideo Precise when decoding fails or source files are too large.
+- Automatically prepares clips with HTMLVideo Precise when the source-file size guard would otherwise make MP4Box/WebCodecs read too much source data.
+- Decode, buffer, and unsupported-file failures still stay in the selected workflow. Those errors are logged and surfaced instead of retrying a different workflow blindly.
 
 ### Precise Mode
 
@@ -59,10 +60,11 @@ Canvas-backed sources such as text, solids, Lottie, and Rive are re-rendered for
 - Tries to wait for ready state and a fresh frame before export captures.
 - Is slower than fast mode, but it is the explicit compatibility choice for difficult files or timing cases.
 
-### Strict Fast-Mode Refusals
+### Large-Source Fast-Mode Fallback
 
-- Large source media is refused by fast mode with an error that tells the user to select HTMLVideo Precise explicitly.
-- Decode, buffer, and unsupported-file failures stay in the selected workflow. The exporter logs the failure and does not retry in another workflow automatically.
+- Large source media is routed to HTMLVideo Precise preparation before source files are read into MP4Box.
+- The export still uses the browser export writer; the fallback changes the clip decoding/preparation strategy, not the selected output container.
+- The fallback is logged with largest source size, unique source total, source count, and largest clip name.
 
 ### Current File-Size Thresholds
 
@@ -125,7 +127,8 @@ Animated GIF is exposed as `.gif` in the video container group.
 
 - Available from the WebCodecs / HTMLVideo workflow selector, but GIF is not a WebCodecs codec.
 - Uses the same frame-accurate browser render path, then encodes indexed GIF frames with the `gifenc` JavaScript encoder.
-- Supports palette size, global vs per-frame palette mode, loop mode, and binary alpha threshold.
+- Supports palette size, global vs per-frame palette mode, forever/once/count loop modes, transparent or opaque GIF output, and binary alpha threshold.
+- Uses fast quantization without dithering because `gifenc` has no dithering support.
 - Does not support audio.
 - Uses the GIF size estimator instead of video bitrate math.
 
@@ -133,12 +136,12 @@ Animated GIF is exposed as `.gif` in the video container group.
 
 - Available from the FFmpeg workflow selector.
 - Uses FFmpeg `palettegen` and `paletteuse` for palette-quality output.
-- Supports palette size, global/per-frame palette behavior, dithering, loop mode, transparency threshold, and frame-difference optimization.
+- Supports palette size, global/per-frame palette behavior, dithering, Bayer scale, forever/once/count loop modes, transparent or opaque GIF output, transparency threshold, and frame-difference optimization.
 - Does not extract or mux audio.
 
 ### Size Estimation
 
-- GIF estimates are based on output pixels, frame count, palette size, dither mode, palette mode, and optimization settings.
+- GIF estimates are based on output pixels, frame count, palette size, dither mode, palette mode, transparency mode, and optimization settings.
 - The panel shows a single estimate and a content-dependent range because GIF LZW compression varies heavily with motion, noise, and transparency.
 - MP4/WebM estimates continue to use bitrate targets.
 
@@ -158,6 +161,7 @@ Audio export is handled separately from the video encoder.
 ### Supported Behavior
 
 - Audio-only export supports uncompressed WAV (`.wav`) without WebCodecs audio encoding.
+- Audio-only export supports MP3 (`.mp3`) through the browser-side Mediabunny MP3 encoder package, without the Native Helper.
 - The existing browser-compressed audio-only path writes the detected browser codec (`.aac` or `.ogg`).
 - AAC is used for MP4 when supported.
 - Opus is used for WebM when supported.

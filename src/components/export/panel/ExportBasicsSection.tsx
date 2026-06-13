@@ -141,6 +141,7 @@ export function ExportBasicsSection({
                     className={`export-chip${!mode.isXmlMode && mode.isAudioOnlyMode && audio.audioOnlyFormat === 'wav' ? ' is-active' : ''}`}
                     onClick={() => {
                       actions.setSpecialContainer('none');
+                      actions.setVisualMode('video');
                       actions.setVideoEnabled(false);
                       actions.setIncludeAudio(true);
                       actions.setAudioOnlyFormat('wav');
@@ -150,9 +151,23 @@ export function ExportBasicsSection({
                   </button>
                   <button
                     type="button"
+                    className={`export-chip${!mode.isXmlMode && mode.isAudioOnlyMode && audio.audioOnlyFormat === 'mp3' ? ' is-active' : ''}`}
+                    onClick={() => {
+                      actions.setSpecialContainer('none');
+                      actions.setVisualMode('video');
+                      actions.setVideoEnabled(false);
+                      actions.setIncludeAudio(true);
+                      actions.setAudioOnlyFormat('mp3');
+                    }}
+                  >
+                    .mp3
+                  </button>
+                  <button
+                    type="button"
                     className={`export-chip${!mode.isXmlMode && mode.isAudioOnlyMode && audio.audioOnlyFormat === 'browser' ? ' is-active' : ''}`}
                     onClick={() => {
                       actions.setSpecialContainer('none');
+                      actions.setVisualMode('video');
                       actions.setVideoEnabled(false);
                       actions.setIncludeAudio(true);
                       actions.setAudioOnlyFormat('browser');

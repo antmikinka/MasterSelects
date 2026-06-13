@@ -263,7 +263,7 @@ export function ExportAdvancedVideoSection({
         <div className="control-row">
           <label>GIF Palette</label>
           <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-            {gif.gifColors} colors, {getGifPaletteModeLabel(gif.gifPaletteMode)}, {display.estimatedSizeLabel}
+            {gif.gifColors} colors, {getGifPaletteModeLabel(gif.gifPaletteMode)}, {gif.gifLoop === 'count' ? `${gif.gifLoopCount} loops` : gif.gifLoop}, {gif.gifTransparency ? 'transparent' : 'opaque'}, {display.estimatedSizeLabel}
           </span>
         </div>
       ) : (mode.encoder === 'webcodecs' || mode.encoder === 'htmlvideo') ? (

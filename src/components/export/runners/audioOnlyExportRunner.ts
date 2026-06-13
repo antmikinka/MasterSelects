@@ -1,7 +1,9 @@
 import {
   AudioExportPipeline,
+  encodeAudioBufferToMp3Blob,
   encodeAudioBufferToWavBlob,
 } from '../../../engine/audio';
+import type { AudioOnlyExportFormat } from '../../../engine/audio';
 import type { ExportProgress, VideoCodec, ContainerFormat } from '../../../engine/export';
 import {
   canRetainExportRunJob,
@@ -22,11 +24,12 @@ export interface AudioOnlyExportRunnerInput {
   videoCodec: VideoCodec;
   containerFormat: ContainerFormat;
   bitrate: number;
-  audioOnlyFormat: 'wav' | 'browser';
+  audioOnlyFormat: AudioOnlyExportFormat;
   audioSampleRate: 44100 | 48000;
   audioBitrate: number;
   normalizeAudio: boolean;
   audioPipelineRef: { current: AudioExportPipeline | null };
+  cancelledRef?: { current: boolean };
   onProgress: (progress: ExportProgress) => void;
   onTimelineStart: (startTime: number, endTime: number) => void;
   onTimelineProgress: (percent: number, time: number) => void;
@@ -34,6 +37,7 @@ export interface AudioOnlyExportRunnerInput {
 
 export type AudioOnlyExportRunnerResult =
   | { kind: 'download'; blob: Blob; filename: string }
+  | { kind: 'cancelled' }
   | { kind: 'error'; message: string };
 
 export async function runAudioOnlyExport(
@@ -96,7 +100,7 @@ export async function runAudioOnlyExport(
     reportExportRunJob(runJobReport);
     input.onTimelineStart(input.startTime, input.endTime);
 
-    if (input.audioOnlyFormat === 'wav') {
+    if (input.audioOnlyFormat === 'wav' || input.audioOnlyFormat === 'mp3') {
       const audioBuffer = await audioPipeline.exportRawAudio(
         input.startTime,
         input.endTime,
@@ -105,7 +109,30 @@ export async function runAudioOnlyExport(
         },
       );
 
+      if (isAudioOnlyExportCancelled(input)) {
+        return { kind: 'cancelled' };
+      }
+
       if (audioBuffer && audioBuffer.length > 0) {
+        if (input.audioOnlyFormat === 'mp3') {
+          reportAudioProgress(input, { phase: 'encoding', percent: 99 });
+          if (isAudioOnlyExportCancelled(input)) {
+            return { kind: 'cancelled' };
+          }
+          const blob = await encodeAudioBufferToMp3Blob(audioBuffer, { bitrate: input.audioBitrate });
+          if (isAudioOnlyExportCancelled(input)) {
+            return { kind: 'cancelled' };
+          }
+          return {
+            kind: 'download',
+            blob,
+            filename: `${input.filename}.mp3`,
+          };
+        }
+
+        if (isAudioOnlyExportCancelled(input)) {
+          return { kind: 'cancelled' };
+        }
         return {
           kind: 'download',
           blob: encodeAudioBufferToWavBlob(audioBuffer),
@@ -127,6 +154,10 @@ export async function runAudioOnlyExport(
       },
     );
 
+    if (isAudioOnlyExportCancelled(input)) {
+      return { kind: 'cancelled' };
+    }
+
     if (!audioResult || audioResult.chunks.length === 0) {
       return {
         kind: 'error',
@@ -141,6 +172,9 @@ export async function runAudioOnlyExport(
       audioBlobs.push(new Blob([buffer]));
     }
 
+    if (isAudioOnlyExportCancelled(input)) {
+      return { kind: 'cancelled' };
+    }
     const mimeType = audioResult.codec === 'opus' ? 'audio/ogg' : 'audio/aac';
     const extension = audioResult.codec === 'opus' ? 'ogg' : 'aac';
     return {
@@ -152,6 +186,10 @@ export async function runAudioOnlyExport(
     input.audioPipelineRef.current = null;
     releaseExportRunResources(exportRunId);
   }
+}
+
+function isAudioOnlyExportCancelled(input: AudioOnlyExportRunnerInput): boolean {
+  return input.cancelledRef?.current === true;
 }
 
 function reportAudioProgress(

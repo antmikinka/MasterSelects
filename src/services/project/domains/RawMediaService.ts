@@ -19,6 +19,15 @@ type IterableDirectoryHandle = FileSystemDirectoryHandle & {
 
 export class RawMediaService {
   private fileStorage: FileStorageService;
+  private static readonly DOWNLOAD_EXTENSIONS_BY_MIME: Record<string, string> = {
+    'audio/aac': 'aac',
+    'audio/mp4': 'm4a',
+    'audio/mpeg': 'mp3',
+    'audio/ogg': 'ogg',
+    'video/mp4': 'mp4',
+    'video/webm': 'webm',
+  };
+  private static readonly DOWNLOAD_LOOKUP_EXTENSIONS = ['mp4', 'webm', 'mp3', 'm4a', 'aac', 'ogg'] as const;
 
   constructor(fileStorage: FileStorageService) {
     this.fileStorage = fileStorage;
@@ -304,8 +313,33 @@ export class RawMediaService {
   }
 
   /** Get the expected filename for a download */
-  static getDownloadFileName(title: string): string {
-    return `${RawMediaService.sanitizeDownloadName(title)}.mp4`;
+  static getDownloadFileName(title: string, extension = 'mp4'): string {
+    const safeExtension = extension.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'mp4';
+    return `${RawMediaService.sanitizeDownloadName(title) || 'download'}.${safeExtension}`;
+  }
+
+  static getDownloadExtension(blob: Blob): string {
+    return RawMediaService.DOWNLOAD_EXTENSIONS_BY_MIME[blob.type] ?? 'mp4';
+  }
+
+  private static getDownloadLookupFileNames(title: string): string[] {
+    return RawMediaService.DOWNLOAD_LOOKUP_EXTENSIONS.map((extension) =>
+      RawMediaService.getDownloadFileName(title, extension)
+    );
+  }
+
+  private static async getExistingDownloadFileHandle(
+    folder: FileSystemDirectoryHandle,
+    title: string,
+  ): Promise<FileSystemFileHandle | null> {
+    for (const fileName of RawMediaService.getDownloadLookupFileNames(title)) {
+      try {
+        return await folder.getFileHandle(fileName, { create: false });
+      } catch {
+        // Try the next extension.
+      }
+    }
+    return null;
   }
 
   /** Get the expected folder path for a platform download */
@@ -326,9 +360,7 @@ export class RawMediaService {
       const folderPath = RawMediaService.getDownloadFolderPath(platform);
       const folder = await this.fileStorage.navigateToFolder(projectHandle, folderPath, false);
       if (!folder) return false;
-      const fileName = RawMediaService.getDownloadFileName(title);
-      await folder.getFileHandle(fileName, { create: false });
-      return true;
+      return (await RawMediaService.getExistingDownloadFileHandle(folder, title)) !== null;
     } catch {
       return false;
     }
@@ -346,8 +378,8 @@ export class RawMediaService {
       const folderPath = RawMediaService.getDownloadFolderPath(platform);
       const folder = await this.fileStorage.navigateToFolder(projectHandle, folderPath, false);
       if (!folder) return null;
-      const fileName = RawMediaService.getDownloadFileName(title);
-      const fileHandle = await folder.getFileHandle(fileName, { create: false });
+      const fileHandle = await RawMediaService.getExistingDownloadFileHandle(folder, title);
+      if (!fileHandle) return null;
       return await fileHandle.getFile();
     } catch {
       return null;
@@ -366,8 +398,7 @@ export class RawMediaService {
   ): Promise<File | null> {
     try {
       // Sanitize filename
-      const sanitizedTitle = RawMediaService.sanitizeDownloadName(title);
-      const fileName = `${sanitizedTitle}.mp4`;
+      const fileName = RawMediaService.getDownloadFileName(title, RawMediaService.getDownloadExtension(blob));
 
       // Determine subfolder from platform
       const subfolder = RawMediaService.PLATFORM_FOLDERS[platform] || 'Other';
@@ -387,7 +418,7 @@ export class RawMediaService {
       await writable.close();
 
       // Return as File object
-      const file = new File([blob], fileName, { type: 'video/mp4' });
+      const file = new File([blob], fileName, { type: blob.type || 'application/octet-stream' });
       log.debug(`Saved download: ${folderPath}/${fileName}`);
       return file;
     } catch (e) {

@@ -20,14 +20,16 @@ use crate::utils;
 
 const YTDLP_NOT_FOUND_MESSAGE: &str =
     "yt-dlp not found. Install or update the Native Helper MSI, or install yt-dlp on PATH.";
+const FFMPEG_NOT_FOUND_MESSAGE: &str =
+    "MP3 audio download requires ffmpeg. Install ffmpeg on PATH or ship it next to the Native Helper.";
+const AUDIO_MP3_FORMAT_ID: &str = "__masterselects_audio_mp3";
 
 /// Type for sending WebSocket messages (for progress streaming)
-pub type WsSender = Arc<tokio::sync::Mutex<
-    futures_util::stream::SplitSink<
-        tokio_tungstenite::WebSocketStream<TcpStream>,
-        Message,
+pub type WsSender = Arc<
+    tokio::sync::Mutex<
+        futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<TcpStream>, Message>,
     >,
->>;
+>;
 
 fn executable_works(path: &Path) -> bool {
     if !path.exists() || !path.is_file() {
@@ -107,10 +109,41 @@ pub fn find_ytdlp() -> Option<PathBuf> {
     None
 }
 
+/// Find ffmpeg executable for yt-dlp post-processing.
+pub fn find_ffmpeg() -> Option<PathBuf> {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            #[cfg(windows)]
+            {
+                let bundled = exe_dir.join("ffmpeg.exe");
+                if executable_works(&bundled) {
+                    return Some(bundled);
+                }
+            }
+
+            #[cfg(not(windows))]
+            {
+                let bundled = exe_dir.join("ffmpeg");
+                if executable_works(&bundled) {
+                    return Some(bundled);
+                }
+            }
+        }
+    }
+
+    if command_works("ffmpeg") {
+        return Some(PathBuf::from("ffmpeg"));
+    }
+
+    None
+}
+
 /// Find deno executable for yt-dlp JavaScript runtime
 pub fn find_deno() -> Option<PathBuf> {
     // Check if deno is in PATH
-    if let Ok(output) = crate::utils::no_window_std(std::process::Command::new("deno").arg("--version")).output() {
+    if let Ok(output) =
+        crate::utils::no_window_std(std::process::Command::new("deno").arg("--version")).output()
+    {
         if output.status.success() {
             return Some(PathBuf::from("deno"));
         }
@@ -165,7 +198,11 @@ pub async fn handle_list_formats(id: &str, url: &str) -> Response {
     use std::process::Stdio;
 
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Response::error(id, error_codes::INVALID_URL, "URL must start with http:// or https://");
+        return Response::error(
+            id,
+            error_codes::INVALID_URL,
+            "URL must start with http:// or https://",
+        );
     }
 
     let ytdlp_cmd = get_ytdlp_command();
@@ -196,28 +233,45 @@ pub async fn handle_list_formats(id: &str, url: &str) -> Response {
                     Ok(info) => {
                         return build_formats_response(id, &info);
                     }
-                    Err(e) => return Response::error(id, error_codes::DOWNLOAD_FAILED, format!("Failed to parse yt-dlp output: {}", e)),
+                    Err(e) => {
+                        return Response::error(
+                            id,
+                            error_codes::DOWNLOAD_FAILED,
+                            format!("Failed to parse yt-dlp output: {}", e),
+                        )
+                    }
                 }
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let stderr_str = stderr.to_string();
                 // If bot-blocked and haven't tried cookies yet, retry with cookies
-                if !use_cookies && (stderr_str.contains("Sign in to confirm") || stderr_str.contains("not a bot")) {
+                if !use_cookies
+                    && (stderr_str.contains("Sign in to confirm")
+                        || stderr_str.contains("not a bot"))
+                {
                     info!("YouTube bot detection triggered, will retry with cookies");
                     continue;
                 }
                 // If cookie access failed, that's OK — report the actual download error
-                if use_cookies && (stderr_str.contains("Could not copy") || stderr_str.contains("cookie database")) {
+                if use_cookies
+                    && (stderr_str.contains("Could not copy")
+                        || stderr_str.contains("cookie database"))
+                {
                     warn!("Could not access browser cookies — YouTube requires authentication for this video");
                     return Response::error(id, error_codes::DOWNLOAD_FAILED,
                         "YouTube requires sign-in for this video. Close Chrome and retry, or try a different video.".to_string());
                 }
                 // Filter to only ERROR lines for the response
-                let error_lines: Vec<&str> = stderr_str.lines()
+                let error_lines: Vec<&str> = stderr_str
+                    .lines()
                     .filter(|l| l.contains("ERROR:"))
                     .collect();
-                let error_msg = if error_lines.is_empty() { stderr_str } else { error_lines.join("\n") };
+                let error_msg = if error_lines.is_empty() {
+                    stderr_str
+                } else {
+                    error_lines.join("\n")
+                };
                 return Response::error(id, error_codes::DOWNLOAD_FAILED, error_msg);
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -227,16 +281,29 @@ pub async fn handle_list_formats(id: &str, url: &str) -> Response {
         }
     }
 
-    Response::error(id, error_codes::DOWNLOAD_FAILED, "Download failed after retries")
+    Response::error(
+        id,
+        error_codes::DOWNLOAD_FAILED,
+        "Download failed after retries",
+    )
 }
 
 /// Build format recommendations from yt-dlp JSON info
 fn build_formats_response(id: &str, info: &serde_json::Value) -> Response {
-    let title = info.get("title").and_then(|v| v.as_str()).unwrap_or("Unknown");
-    let uploader = info.get("uploader").and_then(|v| v.as_str()).unwrap_or("Unknown");
+    let title = info
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown");
+    let uploader = info
+        .get("uploader")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown");
     let duration = info.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
     let thumbnail = info.get("thumbnail").and_then(|v| v.as_str()).unwrap_or("");
-    let platform = info.get("extractor_key").and_then(|v| v.as_str()).unwrap_or("generic");
+    let platform = info
+        .get("extractor_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("generic");
 
     let mut recommendations = Vec::new();
     if let Some(formats) = info.get("formats").and_then(|v| v.as_array()) {
@@ -259,24 +326,29 @@ fn build_formats_response(id: &str, info: &serde_json::Value) -> Response {
 
         for height in heights.into_iter().take(6) {
             if let Some(fmts) = by_height.get(&height) {
-                let best = fmts.iter()
-                    .max_by_key(|f| {
-                        let vcodec = f.get("vcodec").and_then(|v| v.as_str()).unwrap_or("");
-                        let tbr = f.get("tbr").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                        let codec_score = if vcodec.contains("avc") { 1000.0 } else { 0.0 };
-                        (codec_score + tbr) as i64
-                    });
+                let best = fmts.iter().max_by_key(|f| {
+                    let vcodec = f.get("vcodec").and_then(|v| v.as_str()).unwrap_or("");
+                    let tbr = f.get("tbr").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let codec_score = if vcodec.contains("avc") { 1000.0 } else { 0.0 };
+                    (codec_score + tbr) as i64
+                });
 
                 if let Some(fmt) = best {
                     let format_id = fmt.get("format_id").and_then(|v| v.as_str()).unwrap_or("");
                     let vcodec = fmt.get("vcodec").and_then(|v| v.as_str()).unwrap_or("");
                     let fps = fmt.get("fps").and_then(|v| v.as_f64()).unwrap_or(30.0);
-                    let filesize = fmt.get("filesize").and_then(|v| v.as_i64())
+                    let filesize = fmt
+                        .get("filesize")
+                        .and_then(|v| v.as_i64())
                         .or_else(|| fmt.get("filesize_approx").and_then(|v| v.as_i64()));
 
-                    let codec_name = if vcodec.contains("avc") { "H.264" }
-                        else if vcodec.contains("vp9") { "VP9" }
-                        else { vcodec };
+                    let codec_name = if vcodec.contains("avc") {
+                        "H.264"
+                    } else if vcodec.contains("vp9") {
+                        "VP9"
+                    } else {
+                        vcodec
+                    };
 
                     recommendations.push(serde_json::json!({
                         "id": format_id,
@@ -298,7 +370,9 @@ fn build_formats_response(id: &str, info: &serde_json::Value) -> Response {
 
             for fmt in formats {
                 let vcodec = fmt.get("vcodec").and_then(|v| v.as_str()).unwrap_or("none");
-                if vcodec == "none" { continue; }
+                if vcodec == "none" {
+                    continue;
+                }
                 let height = fmt.get("height").and_then(|v| v.as_i64()).unwrap_or(0);
                 let tbr = fmt.get("tbr").and_then(|v| v.as_f64()).unwrap_or(0.0);
                 let score = height * 1000 + tbr as i64;
@@ -309,10 +383,15 @@ fn build_formats_response(id: &str, info: &serde_json::Value) -> Response {
             }
 
             if let Some(fmt) = best_combined {
-                let format_id = fmt.get("format_id").and_then(|v| v.as_str()).unwrap_or("best");
+                let format_id = fmt
+                    .get("format_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("best");
                 let height = fmt.get("height").and_then(|v| v.as_i64()).unwrap_or(0);
                 let fps = fmt.get("fps").and_then(|v| v.as_f64()).unwrap_or(30.0);
-                let filesize = fmt.get("filesize").and_then(|v| v.as_i64())
+                let filesize = fmt
+                    .get("filesize")
+                    .and_then(|v| v.as_i64())
                     .or_else(|| fmt.get("filesize_approx").and_then(|v| v.as_i64()));
 
                 let label = if height > 0 {
@@ -332,16 +411,49 @@ fn build_formats_response(id: &str, info: &serde_json::Value) -> Response {
                 }));
             }
         }
+
+        let best_audio = formats
+            .iter()
+            .filter(|fmt| {
+                let acodec = fmt.get("acodec").and_then(|v| v.as_str()).unwrap_or("none");
+                let vcodec = fmt.get("vcodec").and_then(|v| v.as_str()).unwrap_or("none");
+                acodec != "none" && vcodec == "none"
+            })
+            .max_by_key(|fmt| {
+                let abr = fmt.get("abr").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let tbr = fmt.get("tbr").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                abr.max(tbr) as i64
+            });
+
+        if let (Some(fmt), Some(_ffmpeg)) = (best_audio, find_ffmpeg()) {
+            let filesize = fmt
+                .get("filesize")
+                .and_then(|v| v.as_i64())
+                .or_else(|| fmt.get("filesize_approx").and_then(|v| v.as_i64()));
+
+            recommendations.push(serde_json::json!({
+                "id": AUDIO_MP3_FORMAT_ID,
+                "label": "MP3 audio",
+                "resolution": "Audio",
+                "vcodec": serde_json::Value::Null,
+                "acodec": "MP3",
+                "needsMerge": false,
+                "filesize": filesize,
+            }));
+        }
     }
 
-    Response::ok(id, serde_json::json!({
-        "title": title,
-        "uploader": uploader,
-        "duration": duration,
-        "thumbnail": thumbnail,
-        "platform": platform,
-        "recommendations": recommendations,
-    }))
+    Response::ok(
+        id,
+        serde_json::json!({
+            "title": title,
+            "uploader": uploader,
+            "duration": duration,
+            "thumbnail": thumbnail,
+            "platform": platform,
+            "recommendations": recommendations,
+        }),
+    )
 }
 
 /// Result from a single yt-dlp download attempt
@@ -360,6 +472,7 @@ async fn run_download(
     url: &str,
     format_str: &str,
     output_template: &str,
+    audio_mp3: bool,
     use_cookies: bool,
     ws_sender: &Option<WsSender>,
 ) -> DownloadResult {
@@ -367,6 +480,20 @@ async fn run_download(
 
     let ytdlp_cmd = get_ytdlp_command();
     let deno_args = get_deno_args();
+    let ffmpeg_cmd = if audio_mp3 {
+        match find_ffmpeg() {
+            Some(ffmpeg) => Some(ffmpeg),
+            None => {
+                return DownloadResult::Failed(Response::error(
+                    id,
+                    error_codes::DOWNLOAD_FAILED,
+                    FFMPEG_NOT_FOUND_MESSAGE,
+                ));
+            }
+        }
+    } else {
+        None
+    };
 
     let mut cmd = TokioCommand::new(&ytdlp_cmd);
     crate::utils::no_window(&mut cmd);
@@ -374,41 +501,72 @@ async fn run_download(
         cmd.arg(arg);
     }
 
-    let mut args = vec![
-        "-f", format_str,
-        "--merge-output-format", "mp4",
-        "-o", output_template,
-        "--print", "after_move:filepath",
-        "--no-playlist",
-        "--newline",
-        "--progress",
-        "--concurrent-fragments", "5",
-        "--restrict-filenames",
-        "--windows-filenames",
-        "--force-ipv4",
-    ];
-    if use_cookies {
-        args.extend_from_slice(&["--cookies-from-browser", "chrome"]);
+    let mut args = Vec::<String>::new();
+    if audio_mp3 {
+        args.extend([
+            "-f".to_string(),
+            "bestaudio/best".to_string(),
+            "-x".to_string(),
+            "--audio-format".to_string(),
+            "mp3".to_string(),
+            "--audio-quality".to_string(),
+            "0".to_string(),
+        ]);
+        if let Some(ffmpeg_path) = ffmpeg_cmd.as_deref().filter(|path| path.is_absolute()) {
+            args.extend([
+                "--ffmpeg-location".to_string(),
+                ffmpeg_path.to_string_lossy().to_string(),
+            ]);
+        }
+    } else {
+        args.extend([
+            "-f".to_string(),
+            format_str.to_string(),
+            "--merge-output-format".to_string(),
+            "mp4".to_string(),
+        ]);
     }
-    args.push(url);
+    args.extend([
+        "-o".to_string(),
+        output_template.to_string(),
+        "--print".to_string(),
+        "after_move:filepath".to_string(),
+        "--no-playlist".to_string(),
+        "--newline".to_string(),
+        "--progress".to_string(),
+        "--concurrent-fragments".to_string(),
+        "5".to_string(),
+        "--restrict-filenames".to_string(),
+        "--windows-filenames".to_string(),
+        "--force-ipv4".to_string(),
+    ]);
+    if use_cookies {
+        args.extend(["--cookies-from-browser".to_string(), "chrome".to_string()]);
+    }
+    args.push(url.to_string());
 
     let mut child = match cmd
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn() {
-            Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return DownloadResult::Failed(
-                    Response::error(id, error_codes::YTDLP_NOT_FOUND, YTDLP_NOT_FOUND_MESSAGE)
-                );
-            }
-            Err(e) => {
-                return DownloadResult::Failed(
-                    Response::error(id, error_codes::DOWNLOAD_FAILED, e.to_string())
-                );
-            }
-        };
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return DownloadResult::Failed(Response::error(
+                id,
+                error_codes::YTDLP_NOT_FOUND,
+                YTDLP_NOT_FOUND_MESSAGE,
+            ));
+        }
+        Err(e) => {
+            return DownloadResult::Failed(Response::error(
+                id,
+                error_codes::DOWNLOAD_FAILED,
+                e.to_string(),
+            ));
+        }
+    };
 
     // Read stderr concurrently — collect full output for bot-detection, and ERROR-only for user display
     let stderr = child.stderr.take();
@@ -459,7 +617,8 @@ async fn run_download(
                     last_sent_percent = merge_percent;
                     info!("[yt-dlp] Merging streams...");
                     if let Some(ref sender) = ws_sender {
-                        let progress_msg = Response::download_progress(id, merge_percent, None, None);
+                        let progress_msg =
+                            Response::download_progress(id, merge_percent, None, None);
                         let json = serde_json::to_string(&progress_msg).unwrap();
                         let mut sender = sender.lock().await;
                         let _ = sender.send(Message::Text(json)).await;
@@ -471,7 +630,11 @@ async fn run_download(
             if line.contains('%') {
                 let mut percent_val: Option<f32> = None;
                 if let Some(pct_str) = line.split('%').next() {
-                    let pct_part = pct_str.trim().rsplit_once(' ').map(|(_, p)| p).unwrap_or(pct_str.trim());
+                    let pct_part = pct_str
+                        .trim()
+                        .rsplit_once(' ')
+                        .map(|(_, p)| p)
+                        .unwrap_or(pct_str.trim());
                     if let Ok(pct) = pct_part.trim().parse::<f32>() {
                         percent_val = Some(pct.min(100.0));
                     }
@@ -482,7 +645,11 @@ async fn run_download(
                         let after_at = &line[at_idx + 4..];
                         let speed_str = after_at.trim().split_whitespace().next().unwrap_or("");
                         let cleaned = speed_str.trim_start_matches('~');
-                        if cleaned.contains("/s") { Some(cleaned.to_string()) } else { None }
+                        if cleaned.contains("/s") {
+                            Some(cleaned.to_string())
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     };
@@ -490,7 +657,11 @@ async fn run_download(
                     let eta: Option<String> = if let Some(eta_idx) = line.find("ETA ") {
                         let after_eta = &line[eta_idx + 4..];
                         let eta_str = after_eta.trim().split_whitespace().next().unwrap_or("");
-                        if !eta_str.is_empty() && eta_str != "Unknown" { Some(eta_str.to_string()) } else { None }
+                        if !eta_str.is_empty() && eta_str != "Unknown" {
+                            Some(eta_str.to_string())
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     };
@@ -503,11 +674,16 @@ async fn run_download(
 
                     if overall > last_sent_percent {
                         last_sent_percent = overall;
-                        info!("[yt-dlp] Phase {} raw={:.1}% overall={}% speed={:?} eta={:?}", download_phase, raw_percent, overall, speed, eta);
+                        info!(
+                            "[yt-dlp] Phase {} raw={:.1}% overall={}% speed={:?} eta={:?}",
+                            download_phase, raw_percent, overall, speed, eta
+                        );
                         if let Some(ref sender) = ws_sender {
                             let progress_msg = Response::download_progress(
-                                id, overall,
-                                speed.as_deref(), eta.as_deref(),
+                                id,
+                                overall,
+                                speed.as_deref(),
+                                eta.as_deref(),
                             );
                             let json = serde_json::to_string(&progress_msg).unwrap();
                             let mut sender = sender.lock().await;
@@ -531,9 +707,11 @@ async fn run_download(
         Ok(s) if s.success() => {
             let output_path = final_filepath.unwrap_or_default();
             if output_path.is_empty() {
-                DownloadResult::Failed(
-                    Response::error(id, error_codes::DOWNLOAD_FAILED, "yt-dlp did not return output path")
-                )
+                DownloadResult::Failed(Response::error(
+                    id,
+                    error_codes::DOWNLOAD_FAILED,
+                    "yt-dlp did not return output path",
+                ))
             } else {
                 info!("Download complete: {}", output_path);
                 DownloadResult::Success(output_path)
@@ -541,7 +719,11 @@ async fn run_download(
         }
         Ok(s) => {
             // Use full stderr to detect bot-blocking (ERROR line might not always be present)
-            if !use_cookies && (full_stderr.contains("Sign in to confirm") || full_stderr.contains("not a bot") || full_stderr.contains("No title found in player responses")) {
+            if !use_cookies
+                && (full_stderr.contains("Sign in to confirm")
+                    || full_stderr.contains("not a bot")
+                    || full_stderr.contains("No title found in player responses"))
+            {
                 warn!("YouTube bot detection triggered, will retry with cookies");
                 return DownloadResult::BotBlocked(full_stderr);
             }
@@ -556,20 +738,16 @@ async fn run_download(
             };
 
             warn!("yt-dlp failed: {}", error_msg);
-            DownloadResult::Failed(
-                Response::error(id, error_codes::DOWNLOAD_FAILED, error_msg)
-            )
+            DownloadResult::Failed(Response::error(id, error_codes::DOWNLOAD_FAILED, error_msg))
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            DownloadResult::Failed(
-                Response::error(id, error_codes::YTDLP_NOT_FOUND, YTDLP_NOT_FOUND_MESSAGE)
-            )
-        }
-        Err(e) => {
-            DownloadResult::Failed(
-                Response::error(id, error_codes::DOWNLOAD_FAILED, e.to_string())
-            )
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DownloadResult::Failed(
+            Response::error(id, error_codes::YTDLP_NOT_FOUND, YTDLP_NOT_FOUND_MESSAGE),
+        ),
+        Err(e) => DownloadResult::Failed(Response::error(
+            id,
+            error_codes::DOWNLOAD_FAILED,
+            e.to_string(),
+        )),
     }
 }
 
@@ -583,7 +761,11 @@ pub async fn handle_download(
     ws_sender: Option<WsSender>,
 ) -> Response {
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Response::error(id, error_codes::INVALID_URL, "URL must start with http:// or https://");
+        return Response::error(
+            id,
+            error_codes::INVALID_URL,
+            "URL must start with http:// or https://",
+        );
     }
 
     let download_dir = output_dir
@@ -591,21 +773,41 @@ pub async fn handle_download(
         .unwrap_or_else(utils::get_download_dir);
 
     if let Err(e) = std::fs::create_dir_all(&download_dir) {
-        return Response::error(id, error_codes::PERMISSION_DENIED, format!("Cannot create directory: {}", e));
+        return Response::error(
+            id,
+            error_codes::PERMISSION_DENIED,
+            format!("Cannot create directory: {}", e),
+        );
     }
 
     info!("Downloading: {} to {:?}", url, download_dir);
 
-    let output_template = download_dir.join("%(title)s.%(ext)s").to_string_lossy().to_string();
+    let output_template = download_dir
+        .join("%(title)s.%(ext)s")
+        .to_string_lossy()
+        .to_string();
 
-    let format_str = if let Some(fid) = format_id {
+    let audio_mp3 = matches!(format_id, Some(fid) if fid == AUDIO_MP3_FORMAT_ID);
+    let format_str = if audio_mp3 {
+        "bestaudio/best".to_string()
+    } else if let Some(fid) = format_id {
         format!("{}+bestaudio[ext=m4a]/{}+bestaudio/{}/best", fid, fid, fid)
     } else {
         "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best".to_string()
     };
 
     // Attempt 1: without cookies
-    match run_download(id, url, &format_str, &output_template, false, &ws_sender).await {
+    match run_download(
+        id,
+        url,
+        &format_str,
+        &output_template,
+        audio_mp3,
+        false,
+        &ws_sender,
+    )
+    .await
+    {
         DownloadResult::Success(path) => {
             return Response::ok(id, serde_json::json!({ "path": path }));
         }
@@ -619,10 +821,18 @@ pub async fn handle_download(
     }
 
     // Attempt 2: with Chrome cookies
-    match run_download(id, url, &format_str, &output_template, true, &ws_sender).await {
-        DownloadResult::Success(path) => {
-            Response::ok(id, serde_json::json!({ "path": path }))
-        }
+    match run_download(
+        id,
+        url,
+        &format_str,
+        &output_template,
+        audio_mp3,
+        true,
+        &ws_sender,
+    )
+    .await
+    {
+        DownloadResult::Success(path) => Response::ok(id, serde_json::json!({ "path": path })),
         _ => {
             // If cookies also failed, give a helpful error
             warn!("Download failed even with cookies");

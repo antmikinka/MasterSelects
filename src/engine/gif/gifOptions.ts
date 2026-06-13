@@ -4,16 +4,19 @@ export type GifDither =
   | 'bayer'
   | 'none';
 
-export type GifLoopMode = 'forever' | 'once';
+export type GifLoopMode = 'forever' | 'once' | 'count';
 export type GifPaletteMode = 'global' | 'per-frame';
 
 export interface GifExportOptions {
   gifColors?: number;
   gifDither?: GifDither;
   gifLoop?: GifLoopMode;
+  gifLoopCount?: number;
   gifPaletteMode?: GifPaletteMode;
   gifOptimize?: boolean;
+  gifTransparency?: boolean;
   gifAlphaThreshold?: number;
+  gifBayerScale?: number;
 }
 
 export interface GifSizeEstimateInput extends Required<GifExportOptions> {
@@ -31,7 +34,7 @@ export interface GifSizeEstimate {
   bytesPerPixelFrame: number;
 }
 
-export const GIF_COLOR_PRESETS = [64, 128, 256] as const;
+export const GIF_COLOR_PRESETS = [2, 4, 8, 16, 32, 64, 128, 256] as const;
 
 export const GIF_DITHER_OPTIONS: Array<{ id: GifDither; label: string; sizeFactor: number }> = [
   { id: 'sierra2_4a', label: 'Sierra', sizeFactor: 1.22 },
@@ -57,6 +60,30 @@ export function clampGifAlphaThreshold(value: number | undefined): number {
     return 128;
   }
   return Math.max(0, Math.min(255, Math.round(value ?? 128)));
+}
+
+export function clampGifLoopCount(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return 3;
+  }
+  return Math.max(2, Math.min(99, Math.round(value ?? 3)));
+}
+
+export function clampGifBayerScale(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return 3;
+  }
+  return Math.max(0, Math.min(5, Math.round(value ?? 3)));
+}
+
+export function getGifRepeatCount(loopMode: GifLoopMode | undefined, loopCount: number | undefined): number {
+  if (loopMode === 'once') {
+    return -1;
+  }
+  if (loopMode === 'count') {
+    return clampGifLoopCount(loopCount);
+  }
+  return 0;
 }
 
 export function getGifDitherLabel(dither: GifDither): string {
@@ -96,9 +123,10 @@ export function estimateGifSize(input: GifSizeEstimateInput): GifSizeEstimate {
 
   const colorFactor = 0.24 + (colors / 256) * 0.38;
   const optimizeFactor = input.gifOptimize ? 0.9 : 1;
+  const transparencyFactor = input.gifTransparency ? 1.04 : 0.96;
   const bytesPerPixelFrame = Math.max(
     0.16,
-    Math.min(1.35, colorFactor * dither.sizeFactor * paletteMode.sizeFactor * optimizeFactor),
+    Math.min(1.35, colorFactor * dither.sizeFactor * paletteMode.sizeFactor * optimizeFactor * transparencyFactor),
   );
 
   const pixelPayload = width * height * frameCount * bytesPerPixelFrame;

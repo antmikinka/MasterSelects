@@ -19,6 +19,13 @@ const log = Logger.create('ClipPreparation');
 const FAST_EXPORT_SINGLE_FILE_LIMIT_BYTES = 1536 * 1024 * 1024; // 1.5 GB
 const FAST_EXPORT_TOTAL_FILE_LIMIT_BYTES = 2048 * 1024 * 1024; // 2 GB
 
+interface FastExportFileSizeStats {
+  totalBytes: number;
+  largestBytes: number;
+  largestClipName: string | null;
+  uniqueSourceCount: number;
+}
+
 export type { ExportClipState, ExportMode } from './types';
 export { cleanupExportMode, loadClipFileData };
 
@@ -27,6 +34,25 @@ export interface ClipPreparationResult {
   parallelDecoder: ParallelDecodeManager | null;
   useParallelDecode: boolean;
   exportMode: ExportMode;
+}
+
+export function shouldUsePreciseForFastExportFileSizes(stats: FastExportFileSizeStats): boolean {
+  return stats.largestBytes >= FAST_EXPORT_SINGLE_FILE_LIMIT_BYTES ||
+    stats.totalBytes >= FAST_EXPORT_TOTAL_FILE_LIMIT_BYTES;
+}
+
+function formatLargeFastExportFallbackMessage(
+  stats: FastExportFileSizeStats,
+  videoClipCount: number
+): string {
+  const largestMb = (stats.largestBytes / 1024 / 1024).toFixed(0);
+  const totalMb = (stats.totalBytes / 1024 / 1024).toFixed(0);
+  return (
+    `FAST export is using HTMLVideo Precise for large source media ` +
+    `(largest=${largestMb}MB, uniqueTotal=${totalMb}MB, ` +
+    `uniqueSources=${stats.uniqueSourceCount}/${videoClipCount}, ` +
+    `largestClip="${stats.largestClipName ?? 'unknown'}").`
+  );
 }
 
 function shouldAutoFallbackToPrecise(error: unknown): boolean {
@@ -115,12 +141,12 @@ export async function prepareClipsForExport(
     return result;
   }
 
-  const { totalBytes, largestBytes, largestClipName, uniqueSourceCount } = getFastModeFileSizeStats(videoClips, mediaFiles);
-  if (largestBytes >= FAST_EXPORT_SINGLE_FILE_LIMIT_BYTES || totalBytes >= FAST_EXPORT_TOTAL_FILE_LIMIT_BYTES) {
+  const fileSizeStats = getFastModeFileSizeStats(videoClips, mediaFiles);
+  if (shouldUsePreciseForFastExportFileSizes(fileSizeStats)) {
+    log.warn(formatLargeFastExportFallbackMessage(fileSizeStats, videoClips.length));
+    const result = await initializePreciseMode(videoClips, clipStates, mediaFiles, startTime, exportRunId);
     endPrepare();
-    throw new Error(
-      `FAST export refused large source media (largest=${(largestBytes / 1024 / 1024).toFixed(0)}MB, uniqueTotal=${(totalBytes / 1024 / 1024).toFixed(0)}MB, uniqueSources=${uniqueSourceCount}/${videoClips.length}, largestClip="${largestClipName ?? 'unknown'}"). Select HTMLVideo Precise explicitly if this export should use HTMLVideo decoding.`
-    );
+    return result;
   }
 
   try {

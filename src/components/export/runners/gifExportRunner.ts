@@ -24,9 +24,12 @@ export interface GifExportRunnerInput {
   gifColors: number;
   gifDither: GifDither;
   gifLoop: GifLoopMode;
+  gifLoopCount: number;
   gifPaletteMode: GifPaletteMode;
   gifOptimize: boolean;
+  gifTransparency: boolean;
   gifAlphaThreshold: number;
+  gifBayerScale: number;
   frameRendererRef: { current: FFmpegFrameRenderer | null };
   renderSessionRef: ExportRenderSessionRef;
   createRenderSession: ExportRenderSessionFactory;
@@ -125,9 +128,12 @@ export async function runBrowserGifExport(
       gifColors: input.gifColors,
       gifDither: input.gifDither,
       gifLoop: input.gifLoop,
+      gifLoopCount: input.gifLoopCount,
       gifPaletteMode: input.gifPaletteMode,
       gifOptimize: input.gifOptimize,
+      gifTransparency: input.gifTransparency,
       gifAlphaThreshold: input.gifAlphaThreshold,
+      gifBayerScale: input.gifBayerScale,
     }, (gifProgress) => {
       const percent = 60 + (gifProgress.percent / 100) * 40;
       input.onProgress({

@@ -145,4 +145,27 @@ describe('RawMediaService', () => {
     expect(result?.file).toBe(frame);
     expect(result?.handle).toBe(handle);
   });
+
+  it('reuses saved downloads with non-MP4 extensions', async () => {
+    const service = createService();
+    const project = new FakeDirectoryHandle('Project');
+    const downloads = await project.getDirectoryHandle('Downloads', { create: true });
+    const youtubeFolder = await downloads.getDirectoryHandle('YT', { create: true });
+    const file = new File(['video'], 'Great Clip.webm', { type: 'video/webm' });
+    const handle = await youtubeFolder.getFileHandle('Great Clip.webm', { create: true });
+    const writable = await handle.createWritable();
+    await writable.write(file);
+    await writable.close();
+
+    await expect(service.checkDownloadExists(
+      project as unknown as FileSystemDirectoryHandle,
+      'Great Clip',
+      'youtube',
+    )).resolves.toBe(true);
+    await expect(service.getDownloadFile(
+      project as unknown as FileSystemDirectoryHandle,
+      'Great Clip',
+      'youtube',
+    )).resolves.toBe(file);
+  });
 });
