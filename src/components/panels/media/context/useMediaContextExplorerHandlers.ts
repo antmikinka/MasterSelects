@@ -1,7 +1,10 @@
 import { useCallback } from 'react';
 import type { MediaFile } from '../../../../stores/mediaStore';
+import { projectDB } from '../../../../services/projectDB';
+import { projectFileService } from '../../../../services/projectFileService';
 
 type MediaExplorerTarget = 'raw' | 'proxy';
+type BrowserDownloadMediaFile = Pick<MediaFile, 'file' | 'hasFileHandle' | 'id' | 'name' | 'projectPath' | 'url'>;
 
 interface MediaExplorerResult {
   success: boolean;
@@ -15,20 +18,60 @@ interface UseMediaContextExplorerHandlersInput {
 }
 
 export interface MediaContextExplorerHandlers {
-  onDownloadMediaFile: (mediaFile: MediaFile) => void;
+  onDownloadMediaFile: (mediaFile: MediaFile) => Promise<void>;
   onShowRawInExplorer: (mediaFile: MediaFile) => Promise<void>;
   onShowProxyInExplorer: (mediaFile: MediaFile) => Promise<void>;
   onPickProxyFolder: () => Promise<void>;
 }
 
-export function downloadMediaFileInBrowser(item: Pick<MediaFile, 'file' | 'name' | 'url'>): boolean {
+export function canDownloadMediaFileInBrowser(item: Pick<MediaFile, 'file' | 'hasFileHandle' | 'projectPath' | 'url'>): boolean {
+  return Boolean(item.file || item.projectPath || item.hasFileHandle || item.url);
+}
+
+async function getDownloadFileFromProject(item: BrowserDownloadMediaFile): Promise<File | null> {
+  if (item.file) {
+    return item.file;
+  }
+
+  if (item.projectPath && projectFileService.isProjectOpen()) {
+    const result = await projectFileService.getFileFromRaw(item.projectPath);
+    if (result?.file) return result.file;
+  }
+
+  if (!item.hasFileHandle) {
+    return null;
+  }
+
+  try {
+    const storedHandle = await projectDB.getStoredHandle(`media_${item.id}`);
+    if (!storedHandle || storedHandle.kind !== 'file' || !('getFile' in storedHandle)) {
+      return null;
+    }
+
+    const handle = storedHandle as FileSystemFileHandle;
+    const permission = await handle.queryPermission({ mode: 'read' });
+    const granted = permission === 'granted'
+      || await handle.requestPermission({ mode: 'read' }) === 'granted';
+
+    if (!granted) {
+      return null;
+    }
+
+    return handle.getFile();
+  } catch {
+    return null;
+  }
+}
+
+export async function downloadMediaFileInBrowser(item: BrowserDownloadMediaFile): Promise<boolean> {
   const anchor = document.createElement('a');
   anchor.download = item.name;
   anchor.rel = 'noopener';
 
   let objectUrl: string | null = null;
-  if (item.file) {
-    objectUrl = URL.createObjectURL(item.file);
+  const file = await getDownloadFileFromProject(item);
+  if (file) {
+    objectUrl = URL.createObjectURL(file);
     anchor.href = objectUrl;
   } else if (item.url) {
     anchor.href = item.url;
@@ -52,8 +95,11 @@ export function useMediaContextExplorerHandlers({
   pickProxyFolder,
   closeContextMenu,
 }: UseMediaContextExplorerHandlersInput): MediaContextExplorerHandlers {
-  const onDownloadMediaFile = useCallback((item: MediaFile) => {
-    downloadMediaFileInBrowser(item);
+  const onDownloadMediaFile = useCallback(async (item: MediaFile) => {
+    const didDownload = await downloadMediaFileInBrowser(item);
+    if (!didDownload) {
+      alert('Media source is not available for browser download.');
+    }
     closeContextMenu();
   }, [closeContextMenu]);
 
@@ -61,8 +107,8 @@ export function useMediaContextExplorerHandlers({
     const result = await showInExplorer('raw', item.id);
     if (result.success) {
       alert(result.message);
-    } else if (item.file) {
-      downloadMediaFileInBrowser(item);
+    } else if (canDownloadMediaFileInBrowser(item)) {
+      await downloadMediaFileInBrowser(item);
     }
     closeContextMenu();
   }, [closeContextMenu, showInExplorer]);

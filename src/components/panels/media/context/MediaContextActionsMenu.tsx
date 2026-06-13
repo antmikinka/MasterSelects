@@ -12,6 +12,7 @@ import { handleSubmenuHover, handleSubmenuLeave } from '../submenuPosition';
 import { MediaContextExplorerSubmenu } from './MediaContextExplorerSubmenu';
 import { MediaContextMoveFolderSubmenu } from './MediaContextMoveFolderSubmenu';
 import { MediaContextRegenerateSubmenu } from './MediaContextRegenerateSubmenu';
+import { canDownloadMediaFileInBrowser } from './useMediaContextExplorerHandlers';
 
 export interface MediaContextActionsMenuProps {
   showBoardAnnotationAction: boolean;
@@ -54,7 +55,7 @@ export interface MediaContextActionsMenuProps {
   onRegenerateAudioProxy: (mediaFile: MediaFile, force: boolean) => void;
   onRegenerateWaveform: (mediaFile: MediaFile) => void;
   onRegenerateSpectrogram: (mediaFile: MediaFile) => void;
-  onDownloadMediaFile: (mediaFile: MediaFile) => void;
+  onDownloadMediaFile: (mediaFile: MediaFile) => Promise<void>;
   onShowRawInExplorer: (mediaFile: MediaFile) => Promise<void>;
   onShowProxyInExplorer: (mediaFile: MediaFile) => Promise<void>;
   onPickProxyFolder: () => Promise<void>;
@@ -194,8 +195,8 @@ export function MediaContextActionsMenu({
             </div>
           )}
 
-          {!multiSelect && mediaFile && (mediaFile.file || mediaFile.url) && (
-            <div className="context-menu-item" onClick={() => onDownloadMediaFile(mediaFile)}>
+          {!multiSelect && mediaFile && canDownloadMediaFileInBrowser(mediaFile) && (
+            <div className="context-menu-item" onClick={() => { void onDownloadMediaFile(mediaFile); }}>
               Download
             </div>
           )}
