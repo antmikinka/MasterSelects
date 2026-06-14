@@ -5,7 +5,7 @@ import { AudioEffectStackControl } from '../properties/AudioEffectStackControl';
 import type { FxWindowTarget } from './audioMixerTypes';
 import { getTrackAudioState } from './audioMixerMath';
 import { getEffectName } from './audioMixerEffects';
-import { MIXER_METER_DYNAMICS_FEATURES, useMixerRuntimeAudioMeter } from './MixerMeter';
+import { MIXER_METER_DYNAMICS_FEATURES, useMixerRuntimeAudioMeter } from './mixerMeterRuntime';
 
 export function MixerFxWindow({
   target,

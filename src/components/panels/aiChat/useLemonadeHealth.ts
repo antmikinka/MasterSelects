@@ -18,7 +18,11 @@ export function useLemonadeHealth(
     }
 
     let cancelled = false;
-    setLemonadeStatus('checking');
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setLemonadeStatus('checking');
+      }
+    });
 
     void checkLemonadeHealth(lemonadeEndpoint).then((health) => {
       if (cancelled) {

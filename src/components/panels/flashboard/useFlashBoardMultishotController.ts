@@ -101,25 +101,37 @@ export function useFlashBoardMultishotController({
   }, [duration, generateAudio, multiShots, setGenerateAudio]);
 
   useEffect(() => {
-    if (multiShots) {
-      setRenderMultiShotPanel(true);
-      setIsMultiShotPanelClosing(false);
-      return;
-    }
+    let cancelled = false;
+    let timeoutId: number | null = null;
 
-    if (!renderMultiShotPanel) {
-      setIsMultiShotPanelClosing(false);
-      return;
-    }
+    queueMicrotask(() => {
+      if (cancelled) return;
 
-    setIsMultiShotPanelClosing(true);
-    const timeoutId = window.setTimeout(() => {
-      setRenderMultiShotPanel(false);
-      setIsMultiShotPanelClosing(false);
-      setMultiPrompt([]);
-    }, MULTI_SHOT_PANEL_EXIT_MS);
+      if (multiShots) {
+        setRenderMultiShotPanel(true);
+        setIsMultiShotPanelClosing(false);
+        return;
+      }
 
-    return () => window.clearTimeout(timeoutId);
+      if (!renderMultiShotPanel) {
+        setIsMultiShotPanelClosing(false);
+        return;
+      }
+
+      setIsMultiShotPanelClosing(true);
+      timeoutId = window.setTimeout(() => {
+        setRenderMultiShotPanel(false);
+        setIsMultiShotPanelClosing(false);
+        setMultiPrompt([]);
+      }, MULTI_SHOT_PANEL_EXIT_MS);
+    });
+
+    return () => {
+      cancelled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
   }, [multiShots, renderMultiShotPanel]);
 
   const handleMultiShotToggle = useCallback(() => {

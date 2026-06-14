@@ -9,13 +9,16 @@ import { AudioLevelMeter } from '../../timeline/components/AudioLevelMeter';
 import type { FxWindowTarget } from './audioMixerTypes';
 import { formatDb, getPreflightStatus } from './audioMixerMath';
 import {
-  getMixerRuntimeAudioMeterScope,
   MixerMeterReadout,
   MixerMeterScale,
-  MIXER_METER_VISUAL_FEATURES,
 } from './MixerMeter';
+import {
+  getMixerRuntimeAudioMeterScope,
+  MIXER_METER_VISUAL_FEATURES,
+} from './mixerMeterRuntime';
 import { MixerFaderResizeHandle, type MixerFaderResizeHandleProps } from './MixerFaderResizeHandle';
-import { MixerRack, stopPropagation } from './MixerRack';
+import { MixerRack } from './MixerRack';
+import { stopPropagation } from './mixerEventUtils';
 import { MixerVolumeFader } from './MixerVolumeFader';
 import { useMixerFaderDraft } from './useMixerFaderDraft';
 

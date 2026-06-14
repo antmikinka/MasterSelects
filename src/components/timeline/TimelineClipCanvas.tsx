@@ -209,7 +209,8 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
     requestRedraw: bumpRedraw,
   });
   const workerPreparedResourcesByClipId = useMemo(
-    () => createTimelineClipCanvasWorkerPreparedResourcesByClipId({
+    () => {
+      const preparedResources = createTimelineClipCanvasWorkerPreparedResourcesByClipId({
       clips,
       waveformPyramids,
       spectrogramTileSets,
@@ -228,7 +229,10 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
       maxThumbnailSlots: MAX_THUMB_SLOTS,
       resolveGeometry: (clip) => resolveClipGeometry(clip as TimelinePaintSourceClip, geometryProps),
       getMediaStatus: (clip) => getMediaFileCanvasStatus(clip as TimelinePaintSourceClip, mediaFileStatusById),
-    }),
+    });
+      void redrawNonce;
+      return preparedResources;
+    },
     [audioDisplayMode, canvasOffsetX, clipTrim, clips, cssWidth, geometryProps, height, mediaFileStatusById, redrawNonce, scrollX, spectrogramTileSets, timeToPixel, viewportWidth, waveformPyramids, waveformsEnabled],
   );
   const workerDrawableClips = useMemo(

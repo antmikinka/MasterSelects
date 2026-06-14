@@ -131,15 +131,13 @@ export function TextPreviewEditor({
       viewZoom,
     });
   }, [
-    canvasInContainer.x,
-    canvasInContainer.y,
-    canvasSize.height,
-    canvasSize.width,
+    activeTextBounds,
+    canvasInContainer,
+    canvasSize,
     clip,
     effectiveResolution,
     layer,
     textProperties,
-    activeTextBounds,
     viewZoom,
   ]);
 
@@ -613,7 +611,7 @@ export function TextPreviewEditor({
       end: Math.max(event.target.selectionStart, event.target.selectionEnd),
     });
     updateTextProperties(clip.id, { text: nextText });
-  }, [clip.id, updateTextProperties]);
+  }, [clip.id, setTextSelection, updateTextProperties]);
 
   const handleTextKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
     event.stopPropagation();
@@ -656,7 +654,7 @@ export function TextPreviewEditor({
       isEditing,
       textSelection,
     });
-  }, [draftText, geometry, isEditing, textProperties, textSelection.end, textSelection.start]);
+  }, [draftText, geometry, isEditing, textProperties, textSelection]);
 
   const selectionClipPathId = `preview-text-selection-clip-${clip.id.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 

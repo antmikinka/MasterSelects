@@ -263,10 +263,10 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
   }, [panelId]);
 
   const startSceneNavHistoryBatch = useCallback((label: string) => {
-    if (editCameraModeActiveRef.current || sceneNavHistoryBatchActiveRef.current) return;
+    if (editCameraModeActive || sceneNavHistoryBatchActiveRef.current) return;
     startBatch(label);
     sceneNavHistoryBatchActiveRef.current = true;
-  }, []);
+  }, [editCameraModeActive, sceneNavHistoryBatchActiveRef]);
 
   const endSceneNavHistoryBatch = useCallback(() => {
     if (!sceneNavHistoryBatchActiveRef.current) return;
@@ -337,7 +337,6 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
     applyNavigationCameraValues,
     editCameraClipIdRef,
     editCameraGizmoTransform,
-    editCameraModeActiveRef,
     editCameraOrthoFrame,
     editCameraOrthoHint,
     editCameraOrthoMode,

@@ -132,6 +132,7 @@ export function useMediaPanelSourceReveal({
   }, [allProjectItemsById, folders, setGridFolderId, setMediaSearchQuery, setSelection, viewMode]);
 
   useEffect(() => {
+    let cancelled = false;
     const handleMediaSourceReveal = (event: Event) => {
       if (!isMediaSourceRevealEvent(event)) {
         return;
@@ -146,10 +147,17 @@ export function useMediaPanelSourceReveal({
       lastRequest
       && Date.now() - lastRequest.createdAt <= MEDIA_PANEL_REVEAL_REQUEST_MAX_AGE_MS
     ) {
-      prepareMediaSourceReveal(lastRequest);
+      queueMicrotask(() => {
+        if (!cancelled) {
+          prepareMediaSourceReveal(lastRequest);
+        }
+      });
     }
 
-    return () => window.removeEventListener(MEDIA_SOURCE_REVEAL_EVENT, handleMediaSourceReveal);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(MEDIA_SOURCE_REVEAL_EVENT, handleMediaSourceReveal);
+    };
   }, [prepareMediaSourceReveal]);
 
   useLayoutEffect(() => {
@@ -159,8 +167,15 @@ export function useMediaPanelSourceReveal({
 
     const item = allProjectItemsById.get(pendingMediaReveal.mediaFileId);
     if (!item) {
-      setPendingMediaReveal(null);
-      return;
+      let cancelled = false;
+      queueMicrotask(() => {
+        if (!cancelled) {
+          setPendingMediaReveal(null);
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
     }
 
     if (viewMode === 'classic') {

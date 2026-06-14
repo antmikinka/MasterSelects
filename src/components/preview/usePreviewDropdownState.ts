@@ -35,29 +35,39 @@ export function usePreviewDropdownState(): PreviewDropdownState {
   }, [selectorOpen, qualityOpen]);
 
   useEffect(() => {
-    if (selectorOpen && dropdownRef.current) {
-      const rect = dropdownRef.current.getBoundingClientRect();
-      const style: CSSProperties = {};
+    let cancelled = false;
+    const frameId = window.requestAnimationFrame(() => {
+      if (cancelled) return;
 
-      if (rect.left < 8) {
-        style.left = '0';
-        style.right = 'auto';
-      }
-      if (rect.right > window.innerWidth - 8) {
-        style.right = '0';
-        style.left = 'auto';
-      }
-      if (rect.bottom > window.innerHeight - 8) {
-        style.bottom = '100%';
-        style.top = 'auto';
-        style.marginTop = '0';
-        style.marginBottom = '4px';
-      }
+      if (selectorOpen && dropdownRef.current) {
+        const rect = dropdownRef.current.getBoundingClientRect();
+        const style: CSSProperties = {};
 
-      setDropdownStyle(style);
-    } else {
-      setDropdownStyle({});
-    }
+        if (rect.left < 8) {
+          style.left = '0';
+          style.right = 'auto';
+        }
+        if (rect.right > window.innerWidth - 8) {
+          style.right = '0';
+          style.left = 'auto';
+        }
+        if (rect.bottom > window.innerHeight - 8) {
+          style.bottom = '100%';
+          style.top = 'auto';
+          style.marginTop = '0';
+          style.marginBottom = '4px';
+        }
+
+        setDropdownStyle(style);
+      } else {
+        setDropdownStyle({});
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frameId);
+    };
   }, [selectorOpen]);
 
   return {

@@ -1,7 +1,7 @@
 import { LABEL_COLORS } from '../labelColors';
 import { formatMediaDuration } from '../grid/format';
 import { getItemImportProgress, getItemWaveformProgress, isImportedMediaFileItem } from '../itemTypeGuards';
-import { MEDIA_CLASSIC_COLUMN_LABELS } from './MediaClassicColumnHeaders';
+import { MEDIA_CLASSIC_COLUMN_LABELS } from './classicColumnLabels';
 import type { MediaClassicColumnId, MediaClassicDynamicColumnWidths, MediaClassicListRowData } from './types';
 import { isProxyFrameCountComplete } from '../../../../stores/mediaStore/helpers/proxyCompleteness';
 import type { Composition, MediaFile, ProjectItem, SignalAssetItem } from '../../../../stores/mediaStore';

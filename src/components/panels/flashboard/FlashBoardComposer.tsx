@@ -459,8 +459,10 @@ export function FlashBoardComposer({
     sunoWeirdnessConstraint,
     version,
   });
-  promptRefineCallbacksRef.current.clearPromptRefineError = clearPromptRefineError;
-  promptRefineCallbacksRef.current.clearPromptRefineState = clearPromptRefineState;
+  useEffect(() => {
+    promptRefineCallbacksRef.current.clearPromptRefineError = clearPromptRefineError;
+    promptRefineCallbacksRef.current.clearPromptRefineState = clearPromptRefineState;
+  }, [clearPromptRefineError, clearPromptRefineState]);
 
   const {
     handleAudioToggle, handleGenerate, handleKeyDown, handleProviderChange,
@@ -515,9 +517,16 @@ export function FlashBoardComposer({
   });
 
   useEffect(() => {
-    if (popover === 'model') {
-      setActiveModelCategory(selectedModelCategory);
-    }
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled && popover === 'model') {
+        setActiveModelCategory(selectedModelCategory);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [popover, selectedModelCategory]);
 
   if (!hasGenerationBoard) return null;

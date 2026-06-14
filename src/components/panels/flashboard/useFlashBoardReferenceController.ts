@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useLayoutEffect,
   useMemo,
   useRef,
   type CSSProperties,
@@ -28,6 +29,8 @@ type ReferenceControllerEntry = Pick<
   CatalogEntry,
   'maxReferenceImages' | 'maxReferenceMedia' | 'supportsImageToVideo'
 > | null | undefined;
+
+const EMPTY_REFERENCE_MEDIA_FILE_IDS: string[] = [];
 
 interface UseFlashBoardReferenceValidationControllerInput {
   composer: FlashBoardComposerState;
@@ -104,9 +107,11 @@ export function useFlashBoardReferenceController({
   setHoveredComposerReference,
   updateComposer,
 }: UseFlashBoardReferenceControllerInput) {
-  const referenceMediaFileIds = composer.referenceMediaFileIds ?? [];
+  const referenceMediaFileIds = composer.referenceMediaFileIds ?? EMPTY_REFERENCE_MEDIA_FILE_IDS;
   const currentReferenceMediaFileIdsRef = useRef(referenceMediaFileIds);
-  currentReferenceMediaFileIdsRef.current = referenceMediaFileIds;
+  useLayoutEffect(() => {
+    currentReferenceMediaFileIdsRef.current = referenceMediaFileIds;
+  }, [referenceMediaFileIds]);
 
   const {
     handleReferenceStripPointerLeave,

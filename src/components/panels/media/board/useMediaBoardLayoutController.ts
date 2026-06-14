@@ -124,6 +124,8 @@ export function useMediaBoardLayoutController({
   }, []);
 
   useEffect(() => {
+    // Synchronous reconciliation keeps board nodes available in the same act cycle.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMediaBoardOrder((current) => {
       let changed = false;
       const validFolderKeys = new Set([MEDIA_BOARD_ROOT_ORDER_KEY, ...folders.map((folder) => folder.id)]);
@@ -142,6 +144,8 @@ export function useMediaBoardLayoutController({
   }, [folders, mediaBoardItemIds]);
 
   useEffect(() => {
+    // Synchronous reconciliation keeps board group offsets coherent before layout geometry is read.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMediaBoardGroupOffsets((current) => {
       const validFolderIds = new Set(folders.map((folder) => folder.id));
       let changed = false;
@@ -158,6 +162,8 @@ export function useMediaBoardLayoutController({
   }, [folders]);
 
   useEffect(() => {
+    // Synchronous reconciliation preserves same-cycle board mounting for tests and user interactions.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMediaBoardLayouts((current) => {
       const { next, changed } = reconcileMediaBoardLayouts(current, mediaBoardItems, sortItems);
       return changed ? next : current;

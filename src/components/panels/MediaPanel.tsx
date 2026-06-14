@@ -499,17 +499,18 @@ export function MediaPanel() {
     viewMode,
   });
 
+  const { reloadMediaBoardState } = mediaBoardController;
   useEffect(() => {
     const handleProjectUiLoaded = () => {
       resetClassicListUiState();
       setViewMode(loadMediaPanelViewMode());
-      mediaBoardController.reloadMediaBoardState();
+      reloadMediaBoardState();
       setGridFolderId(null);
     };
 
     window.addEventListener(MEDIA_PANEL_PROJECT_UI_LOADED_EVENT, handleProjectUiLoaded);
     return () => window.removeEventListener(MEDIA_PANEL_PROJECT_UI_LOADED_EVENT, handleProjectUiLoaded);
-  }, [mediaBoardController.reloadMediaBoardState, resetClassicListUiState, setGridFolderId, setViewMode]);
+  }, [reloadMediaBoardState, resetClassicListUiState, setGridFolderId, setViewMode]);
   const {
     filesNeedReload,
     filesNeedReloadCount,

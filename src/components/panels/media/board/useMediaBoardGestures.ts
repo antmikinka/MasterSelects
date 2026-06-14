@@ -172,7 +172,7 @@ export function useMediaBoardGestures({
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
     window.addEventListener('blur', handleMouseUp);
-  }, [applyMediaBoardViewportPreview, closeContextMenu, mediaBoardViewportRef, setMediaBoardPerformanceMode, setMediaBoardViewport, setSelection]);
+  }, [applyMediaBoardViewportPreview, boardInteractionFrameRef, closeContextMenu, mediaBoardViewportRef, setMediaBoardPerformanceMode, setMediaBoardViewport, setSelection]);
 
   const startMediaBoardMarqueeGesture = useCallback((event: ReactMouseEvent) => {
     const startPoint = screenToMediaBoard(event.clientX, event.clientY);

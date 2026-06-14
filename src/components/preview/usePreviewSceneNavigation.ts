@@ -1,4 +1,4 @@
-import { useCallback, useEffect, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from 'react';
+import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 
 import {
@@ -174,7 +174,8 @@ export function usePreviewSceneNavigation({
   stopGaussianKeyboardLoop,
   stopGaussianKeyboardMovement,
 }: UsePreviewSceneNavigationOptions): PreviewSceneNavigationHandlers {
-  const tickGaussianKeyboardMovement = useCallback(function tickGaussianKeyboard(timestamp: number) {
+  const tickGaussianKeyboardMovementRef = useRef<(timestamp: number) => void>(() => undefined);
+  const tickGaussianKeyboardMovement = useCallback((timestamp: number) => {
     gaussianKeyboardFrameRef.current = null;
 
     if (!sceneNavEnabled || !navigationSceneNavClip || document.activeElement !== containerRef.current) {
@@ -242,7 +243,7 @@ export function usePreviewSceneNavigation({
       positionZ: freshTransform.position.z + positionDelta.z,
     });
 
-    gaussianKeyboardFrameRef.current = window.requestAnimationFrame(tickGaussianKeyboard);
+    gaussianKeyboardFrameRef.current = window.requestAnimationFrame(tickGaussianKeyboardMovementRef.current);
   }, [
     applyNavigationCameraValues,
     containerRef,
@@ -261,6 +262,10 @@ export function usePreviewSceneNavigation({
     stopGaussianKeyboardLoop,
     stopGaussianKeyboardMovement,
   ]);
+
+  useEffect(() => {
+    tickGaussianKeyboardMovementRef.current = tickGaussianKeyboardMovement;
+  }, [tickGaussianKeyboardMovement]);
 
   const startGaussianKeyboardMovement = useCallback(() => {
     if (gaussianKeyboardFrameRef.current !== null) return;
@@ -339,18 +344,21 @@ export function usePreviewSceneNavigation({
   ]);
 
   useEffect(() => {
+    const gaussianOrbitStartState = gaussianOrbitStart.current;
+    const gaussianPanStartState = gaussianPanStart.current;
+
     return () => {
       if (gaussianWheelBatchTimerRef.current !== null) {
         window.clearTimeout(gaussianWheelBatchTimerRef.current);
         gaussianWheelBatchTimerRef.current = null;
         endSceneNavHistoryBatch();
       }
-      if (gaussianOrbitStart.current.clipId) {
-        gaussianOrbitStart.current.clipId = null;
+      if (gaussianOrbitStartState.clipId) {
+        gaussianOrbitStartState.clipId = null;
         endSceneNavHistoryBatch();
       }
-      if (gaussianPanStart.current.clipId) {
-        gaussianPanStart.current.clipId = null;
+      if (gaussianPanStartState.clipId) {
+        gaussianPanStartState.clipId = null;
         endSceneNavHistoryBatch();
       }
       stopGaussianFpsLook();

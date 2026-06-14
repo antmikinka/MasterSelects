@@ -223,12 +223,14 @@ export function useMediaBoardController({
     )
   ), [mediaBoardAnnotations, selectedMediaBoardAnnotationId, viewport.mediaBoardVisibleRect]);
 
+  const { reloadMediaBoardLayoutState } = layout;
+  const { reloadMediaBoardViewport } = viewport;
   const reloadMediaBoardState = useCallback(() => {
-    viewport.reloadMediaBoardViewport();
-    layout.reloadMediaBoardLayoutState();
+    reloadMediaBoardViewport();
+    reloadMediaBoardLayoutState();
     reloadMediaBoardAnnotations();
     setSelectedMediaBoardAnnotationId(null);
-  }, [layout.reloadMediaBoardLayoutState, reloadMediaBoardAnnotations, setSelectedMediaBoardAnnotationId, viewport.reloadMediaBoardViewport]);
+  }, [reloadMediaBoardAnnotations, reloadMediaBoardLayoutState, reloadMediaBoardViewport, setSelectedMediaBoardAnnotationId]);
 
   const renderMediaBoardView = () => (
     <MediaBoardMount

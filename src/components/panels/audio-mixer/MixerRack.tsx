@@ -1,10 +1,7 @@
 import type { AudioEffectInstance, AudioSendState } from '../../../types/audio';
 import { formatDbLong } from './audioMixerMath';
 import { getEffectName, getEffectRackLabel } from './audioMixerEffects';
-
-function stopPropagation(event: { stopPropagation: () => void }) {
-  event.stopPropagation();
-}
+import { stopPropagation } from './mixerEventUtils';
 
 export function MixerRack({
   effects,
@@ -69,5 +66,3 @@ export function MixerRack({
     </div>
   );
 }
-
-export { stopPropagation };

@@ -319,9 +319,18 @@ export function usePreviewEditCameraController({
   useEffect(() => {
     editCameraSettingsRef.current = { ...DEFAULT_EDIT_CAMERA_SETTINGS };
     editCameraOrbitCenterRef.current = null;
-    setEditCameraViewMode('camera');
-    setEditCameraOrthoFrame(null);
-    setIsEditCameraOrthoPanning(false);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+
+      setEditCameraViewMode('camera');
+      setEditCameraOrthoFrame(null);
+      setIsEditCameraOrthoPanning(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeEditCameraClipId]);
 
   useEffect(() => {
