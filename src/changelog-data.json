@@ -1,6 +1,13 @@
 [
   {
     "date": "2026-06-14",
+    "type": "new",
+    "title": "MasterSelects 2.2.5",
+    "description": "Panel workspace release: every dock tab can now be undocked into a floating editor panel or opened in a separate browser window. Detached windows render through the main app runtime, so their controls affect the same project state, and closing the window or pressing Dock back returns the panel to the dock layout.",
+    "section": "Release"
+  },
+  {
+    "date": "2026-06-14",
     "type": "fix",
     "title": "MasterSelects 2.2.4",
     "description": "Export workflow release: Export is now the default right-side panel tab, media panel items can be downloaded through the browser context menu, and Browser GIF stops before oversized in-memory exports instead of hanging. GIF export also gains a pro control surface for palette size, global/per-frame palettes, loop modes, transparency, alpha threshold, and FFmpeg dithering options.",
