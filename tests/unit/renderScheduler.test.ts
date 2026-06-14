@@ -93,8 +93,9 @@ vi.mock('../../src/utils/renderTargetVisibility', () => ({
   isRenderTargetRenderable: vi.fn(() => true),
 }));
 
-import { renderScheduler } from '../../src/services/renderScheduler';
+import { normalizeIsolatedLayerPreview, renderScheduler } from '../../src/services/renderScheduler';
 import { playheadState } from '../../src/services/layerBuilder/PlayheadState';
+import type { Layer } from '../../src/types';
 
 type RenderSchedulerTestAccess = typeof renderScheduler & {
   registeredTargets: Set<string>;
@@ -175,5 +176,18 @@ describe('renderScheduler playback timing', () => {
 
     expect(hoisted.evaluateAtTime).toHaveBeenCalledWith('comp-2', 5);
     expect(hoisted.renderToPreviewCanvas).toHaveBeenCalledWith('preview-comp-2', []);
+  });
+
+  it('normalizes blend modes for isolated layer preview renders', () => {
+    const original = [
+      { id: 'normal-layer', blendMode: 'normal' },
+      { id: 'screen-layer', blendMode: 'screen' },
+    ] as Layer[];
+
+    const normalized = normalizeIsolatedLayerPreview(original);
+
+    expect(normalized[0]).toBe(original[0]);
+    expect(normalized[1]).not.toBe(original[1]);
+    expect(normalized[1].blendMode).toBe('normal');
   });
 });

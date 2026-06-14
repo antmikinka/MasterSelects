@@ -10,7 +10,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import { createTextBoundsNumericProperty } from "../../types/animationProperties";
-import type { MaskVertex } from "../../types/masks";
+import type { MaskVertex, TextBoundsPath } from "../../types/masks";
 import {
   createTextBoundsFromRect,
 } from '../../services/textLayout';
@@ -32,9 +32,34 @@ import type {
   TextPreviewEditorProps,
 } from './textPreview/textPreviewTypes';
 import { useTextSelectionState } from './textPreview/useTextSelectionState';
+import {
+  getCanvasSnapPoints,
+  getRectSnapPoints,
+  resolveSnapDelta,
+  snapPointToTargets,
+  type AxisSnapPoints,
+} from './editModeSnapping';
 
 function shouldMoveWholeText(event: Pick<ReactPointerEvent, 'ctrlKey' | 'metaKey'>): boolean {
   return event.ctrlKey || event.metaKey;
+}
+
+const TEXT_SNAP_THRESHOLD_SOURCE_PX = 10;
+
+function getTextBoundsSourceRect(
+  bounds: TextBoundsPath,
+  sourceWidth: number,
+  sourceHeight: number,
+  position: TextBoundsPath['position'] = bounds.position,
+) {
+  const xs = bounds.vertices.map((vertex) => (vertex.x + position.x) * sourceWidth);
+  const ys = bounds.vertices.map((vertex) => (vertex.y + position.y) * sourceHeight);
+  return {
+    left: Math.min(...xs),
+    top: Math.min(...ys),
+    right: Math.max(...xs),
+    bottom: Math.max(...ys),
+  };
 }
 
 export function TextPreviewEditor({
@@ -153,18 +178,45 @@ export function TextPreviewEditor({
     viewZoom,
   ]);
 
-  const applyMoveDrag = useCallback((drag: DragState, point: OverlayPoint) => {
+  const sourceSnapTargets = useMemo<AxisSnapPoints | null>(() => (
+    geometry ? getCanvasSnapPoints(geometry.sourceWidth, geometry.sourceHeight) : null
+  ), [geometry]);
+
+  const snapSourcePoint = useCallback((
+    point: OverlayPoint,
+    axes: { x?: boolean; y?: boolean } = { x: true, y: true },
+  ): OverlayPoint => (
+    sourceSnapTargets
+      ? snapPointToTargets(point, sourceSnapTargets, TEXT_SNAP_THRESHOLD_SOURCE_PX, axes)
+      : point
+  ), [sourceSnapTargets]);
+
+  const applyMoveDrag = useCallback((drag: DragState, point: OverlayPoint, snapToGuides = false) => {
     if (!geometry) return;
     const start = sourcePointFromContainer(drag.start);
     const current = sourcePointFromContainer(point);
     if (!start || !current) return;
-    const nextX = drag.startBounds.position.x + (current.x - start.x) / geometry.sourceWidth;
-    const nextY = drag.startBounds.position.y + (current.y - start.y) / geometry.sourceHeight;
+    let nextX = drag.startBounds.position.x + (current.x - start.x) / geometry.sourceWidth;
+    let nextY = drag.startBounds.position.y + (current.y - start.y) / geometry.sourceHeight;
+    if (snapToGuides && sourceSnapTargets) {
+      const snapDelta = resolveSnapDelta(
+        getRectSnapPoints(getTextBoundsSourceRect(
+          drag.startBounds,
+          geometry.sourceWidth,
+          geometry.sourceHeight,
+          { x: nextX, y: nextY },
+        )),
+        sourceSnapTargets,
+        TEXT_SNAP_THRESHOLD_SOURCE_PX,
+      );
+      nextX += snapDelta.x / geometry.sourceWidth;
+      nextY += snapDelta.y / geometry.sourceHeight;
+    }
     setPropertyValue(clip.id, createTextBoundsNumericProperty('position.x'), nextX);
     setPropertyValue(clip.id, createTextBoundsNumericProperty('position.y'), nextY);
-  }, [clip.id, geometry, setPropertyValue, sourcePointFromContainer]);
+  }, [clip.id, geometry, setPropertyValue, sourcePointFromContainer, sourceSnapTargets]);
 
-  const applyVertexDrag = useCallback((drag: DragState, point: OverlayPoint, recordKeyframe: boolean, freeMove = false) => {
+  const applyVertexDrag = useCallback((drag: DragState, point: OverlayPoint, recordKeyframe: boolean, freeMove = false, snapToGuides = false) => {
     if (!geometry || !drag.vertexId) return;
     const startVertex = drag.startBounds.vertices.find(vertex => vertex.id === drag.vertexId);
     if (!startVertex) return;
@@ -186,8 +238,16 @@ export function TextPreviewEditor({
       const centerY = (minY + maxY) / 2;
       const draggedLeft = startVertex.x <= centerX;
       const draggedTop = startVertex.y <= centerY;
-      const newX = startVertex.x + dx;
-      const newY = startVertex.y + dy;
+      let newX = startVertex.x + dx;
+      let newY = startVertex.y + dy;
+      if (snapToGuides) {
+        const snappedPoint = snapSourcePoint({
+          x: (newX + drag.startBounds.position.x) * geometry.sourceWidth,
+          y: (newY + drag.startBounds.position.y) * geometry.sourceHeight,
+        });
+        newX = snappedPoint.x / geometry.sourceWidth - drag.startBounds.position.x;
+        newY = snappedPoint.y / geometry.sourceHeight - drag.startBounds.position.y;
+      }
       const resetHandles = {
         handleIn: { x: 0, y: 0 },
         handleOut: { x: 0, y: 0 },
@@ -205,17 +265,24 @@ export function TextPreviewEditor({
       return;
     }
 
+    const nextPoint = snapToGuides
+      ? snapSourcePoint({
+        x: (startVertex.x + dx + drag.startBounds.position.x) * geometry.sourceWidth,
+        y: (startVertex.y + dy + drag.startBounds.position.y) * geometry.sourceHeight,
+      })
+      : null;
     updateTextBoundsVertex(clip.id, drag.vertexId, {
-      x: startVertex.x + dx,
-      y: startVertex.y + dy,
+      x: nextPoint ? nextPoint.x / geometry.sourceWidth - drag.startBounds.position.x : startVertex.x + dx,
+      y: nextPoint ? nextPoint.y / geometry.sourceHeight - drag.startBounds.position.y : startVertex.y + dy,
     }, recordKeyframe);
-  }, [clip.id, geometry, sourcePointFromContainer, updateTextBoundsVertex, updateTextBoundsVertices]);
+  }, [clip.id, geometry, snapSourcePoint, sourcePointFromContainer, updateTextBoundsVertex, updateTextBoundsVertices]);
 
   const applyEdgeDrag = useCallback((
     drag: DragState,
     point: OverlayPoint,
     recordKeyframe: boolean,
     snapStraight: boolean,
+    snapToGuides = false,
   ) => {
     if (!geometry || !drag.edgeVertexIds) return;
     const startPoint = drag.startSourcePoint ?? sourcePointFromContainer(drag.start);
@@ -235,6 +302,21 @@ export function TextPreviewEditor({
       });
     }
     if (movedVertices.length === 0) return;
+
+    if (snapToGuides && sourceSnapTargets) {
+      const snapDelta = resolveSnapDelta(
+        {
+          x: movedVertices.map((entry) => (entry.x + drag.startBounds.position.x) * geometry.sourceWidth),
+          y: movedVertices.map((entry) => (entry.y + drag.startBounds.position.y) * geometry.sourceHeight),
+        },
+        sourceSnapTargets,
+        TEXT_SNAP_THRESHOLD_SOURCE_PX,
+      );
+      for (const entry of movedVertices) {
+        entry.x += snapDelta.x / geometry.sourceWidth;
+        entry.y += snapDelta.y / geometry.sourceHeight;
+      }
+    }
 
     const resetHandles = {
       handleIn: { x: 0, y: 0 },
@@ -304,7 +386,7 @@ export function TextPreviewEditor({
 
     if (vertexUpdates.length === 0) return;
     updateTextBoundsVertices(clip.id, vertexUpdates, recordKeyframe);
-  }, [clip.id, geometry, sourcePointFromContainer, updateTextBoundsVertices]);
+  }, [clip.id, geometry, sourcePointFromContainer, sourceSnapTargets, updateTextBoundsVertices]);
 
   const straightenEdge = useCallback((fromVertexId: string, toVertexId: string) => {
     if (!geometry) return;
@@ -336,7 +418,7 @@ export function TextPreviewEditor({
     ], true);
   }, [clip.id, geometry, updateTextBoundsVertices]);
 
-  const finishDrag = useCallback((target: HTMLElement, pointerId: number, finalPoint?: OverlayPoint, freeMove = false) => {
+  const finishDrag = useCallback((target: HTMLElement, pointerId: number, finalPoint?: OverlayPoint, freeMove = false, snapToGuides = false) => {
     const drag = dragStateRef.current;
     dragStateRef.current = null;
     setDragSelection(null);
@@ -351,17 +433,17 @@ export function TextPreviewEditor({
     const current = finalPoint ?? drag.current;
 
     if (drag.kind === 'move') {
-      applyMoveDrag(drag, current);
+      applyMoveDrag(drag, current, snapToGuides);
       return;
     }
 
     if (drag.kind === 'vertex') {
-      applyVertexDrag(drag, current, true, freeMove);
+      applyVertexDrag(drag, current, true, freeMove, snapToGuides);
       return;
     }
 
     if (drag.kind === 'edge') {
-      applyEdgeDrag(drag, current, true, !freeMove);
+      applyEdgeDrag(drag, current, true, !freeMove, snapToGuides);
       return;
     }
 
@@ -371,9 +453,11 @@ export function TextPreviewEditor({
       return;
     }
 
-    const start = sourcePointFromContainer(drag.start);
-    const end = sourcePointFromContainer(current);
-    if (!start || !end) return;
+    const rawStart = sourcePointFromContainer(drag.start);
+    const rawEnd = sourcePointFromContainer(current);
+    if (!rawStart || !rawEnd) return;
+    const start = snapToGuides ? snapSourcePoint(rawStart) : rawStart;
+    const end = snapToGuides ? snapSourcePoint(rawEnd) : rawEnd;
 
     const x = Math.round(Math.min(start.x, end.x));
     const y = Math.round(Math.min(start.y, end.y));
@@ -407,6 +491,7 @@ export function TextPreviewEditor({
     clip.id,
     focusEditor,
     geometry,
+    snapSourcePoint,
     sourcePointFromContainer,
     textProperties,
     updateTextProperties,
@@ -496,13 +581,13 @@ export function TextPreviewEditor({
     if (drag.kind === 'create') {
       setDragSelection({ start: drag.start, current: point });
     } else if (drag.kind === 'move') {
-      applyMoveDrag(drag, point);
+      applyMoveDrag(drag, point, event.shiftKey);
     } else if (drag.kind === 'vertex') {
       // Default = rectangular resize; Ctrl = free vertex. (#205)
-      applyVertexDrag(drag, point, true, event.ctrlKey || event.metaKey);
+      applyVertexDrag(drag, point, true, event.ctrlKey || event.metaKey, event.shiftKey);
     } else if (drag.kind === 'edge') {
       // Default = keep the box rectangular (no Shift needed); Ctrl = free edge. (#205)
-      applyEdgeDrag(drag, point, true, !(event.ctrlKey || event.metaKey));
+      applyEdgeDrag(drag, point, true, !(event.ctrlKey || event.metaKey), event.shiftKey);
     }
     event.preventDefault();
     event.stopPropagation();
@@ -515,7 +600,7 @@ export function TextPreviewEditor({
     finishDrag(event.currentTarget, event.pointerId, {
       x: event.clientX - rect.left,
       y: event.clientY - rect.top,
-    }, event.ctrlKey || event.metaKey);
+    }, event.ctrlKey || event.metaKey, event.shiftKey);
     event.preventDefault();
     event.stopPropagation();
   }, [finishDrag]);

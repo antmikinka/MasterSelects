@@ -233,8 +233,30 @@ export function getMediaFileCodecLabel(mediaFile: MediaFile | null): string | un
   return undefined;
 }
 
+function getAudioWaveformColumnLabel(mediaFile: MediaFile): string {
+  const channelCount = mediaFile.waveformChannels?.length;
+  if (mediaFile.waveformStatus === 'generating') return `Wave ${mediaFile.waveformProgress ?? 0}%`;
+  if (mediaFile.waveformStatus === 'error') return 'Wave error';
+  if (mediaFile.waveformStatus === 'skipped') return 'Wave skipped';
+  if (channelCount) return `${channelCount}ch wave`;
+  if (mediaFile.waveform?.length || mediaFile.audioAnalysisRefs?.waveformPyramidId) return 'Waveform';
+  return 'No waveform';
+}
+
+function getAudioProxyColumnLabel(mediaFile: MediaFile): string {
+  if (mediaFile.audioProxyStatus === 'generating') return `Proxy ${mediaFile.audioProxyProgress ?? 0}%`;
+  if (mediaFile.audioProxyStatus === 'ready') return 'Proxy WAV';
+  if (mediaFile.audioProxyStatus === 'error') return 'Proxy error';
+  return 'Source';
+}
+
+function getSignalKindLabel(item: SignalAssetItem): string {
+  return item.signalKinds.length > 0 ? item.signalKinds.join(', ') : 'Signal';
+}
+
 export function getClassicMediaColumnText(item: ProjectItem, colId: Exclude<MediaClassicColumnId, 'name' | 'badges'>): string {
   const mediaFile = isImportedMediaFileItem(item) ? item : null;
+  const signalAsset = isSignalAssetItem(item) ? item : null;
   switch (colId) {
     case 'label':
       return '\u25cf';
@@ -245,19 +267,32 @@ export function getClassicMediaColumnText(item: ProjectItem, colId: Exclude<Medi
         : ('duration' in item && item.duration ? formatMediaDuration(item.duration) : '\u2013');
     }
     case 'resolution':
+      if (mediaFile?.type === 'audio') return getAudioWaveformColumnLabel(mediaFile);
+      if (signalAsset) return getSignalKindLabel(signalAsset);
       return getGaussianSplatResolutionLabel(item) ??
         ('width' in item && 'height' in item && item.width && item.height ? `${item.width}\u00d7${item.height}` : '\u2013');
     case 'fps':
+      if (mediaFile?.type === 'audio') return mediaFile.stemInfo?.label || mediaFile.stemInfo?.kind || 'Audio';
+      if (mediaFile?.type === 'image') return 'Still';
+      if (signalAsset) return `${signalAsset.artifacts.length} assets`;
       return mediaFile?.fps
         ? `${mediaFile.fps}`
         : ('type' in item && item.type === 'composition' ? `${(item as Composition).frameRate}` : '\u2013');
     case 'container':
+      if ('type' in item && item.type === 'composition') return 'Comp';
+      if (signalAsset) return signalAsset.providerId || 'Signal';
       return getMediaFileContainerLabel(mediaFile) || '\u2013';
     case 'codec':
+      if (mediaFile?.type === 'audio') return mediaFile.audioCodec || getMediaFileCodecLabel(mediaFile) || '\u2013';
+      if (mediaFile?.type === 'image') return getMediaFileCodecLabel(mediaFile) || 'Raster';
+      if ('type' in item && item.type === 'composition') return 'Timeline';
+      if (signalAsset) return signalAsset.asset.source.extension || signalAsset.asset.source.mimeType || signalAsset.asset.source.kind;
       return getMediaFileCodecLabel(mediaFile) || '\u2013';
     case 'audio':
-      return mediaFile?.type === 'audio' ? 'Yes' :
-        mediaFile?.type === 'image' ? '\u2013' :
+      return mediaFile?.type === 'audio' ? getAudioProxyColumnLabel(mediaFile) :
+        mediaFile?.type === 'image' ? 'Image' :
+        'type' in item && item.type === 'composition' ? 'Timeline' :
+        signalAsset ? `${signalAsset.diagnostics?.length ?? 0} diag` :
         mediaFile?.hasAudio === true ? 'Yes' :
         mediaFile?.hasAudio === false ? 'No' : '\u2013';
     case 'bitrate':
@@ -321,14 +356,21 @@ export function getClassicMediaSortValue(item: ProjectItem, colId: MediaClassicC
     }
     case 'duration': return 'duration' in item && item.duration ? item.duration : 0;
     case 'resolution':
+      if (mediaFile?.type === 'audio') {
+        return mediaFile.waveformChannels?.length ?? mediaFile.waveform?.length ?? 0;
+      }
       if (mediaFile?.type === 'gaussian-splat') {
         return getGaussianSplatTotalCount(mediaFile) ?? getGaussianSplatFirstFrameCount(mediaFile) ?? 0;
       }
+      if (isSignalAssetItem(item)) return item.artifacts.length;
       return 'width' in item && 'height' in item && item.width && item.height ? item.width * item.height : 0;
     case 'fps': return mediaFile?.fps || ('type' in item && item.type === 'composition' ? (item as Composition).frameRate : 0);
     case 'container': return getMediaFileContainerLabel(mediaFile)?.toLowerCase() || '';
     case 'codec': return getMediaFileCodecLabel(mediaFile)?.toLowerCase() || '';
-    case 'audio': return mediaFile?.hasAudio ? 1 : 0;
+    case 'audio':
+      if (mediaFile?.type === 'audio') return 2;
+      if (isSignalAssetItem(item)) return item.diagnostics?.length ?? 0;
+      return mediaFile?.hasAudio ? 1 : 0;
     case 'bitrate': return mediaFile?.bitrate || 0;
     case 'size': return mediaFile?.fileSize || (isSignalAssetItem(item) ? item.fileSize ?? 0 : 0);
     default: return 0;

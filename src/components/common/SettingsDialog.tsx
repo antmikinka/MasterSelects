@@ -4,6 +4,7 @@ import { useState, useCallback, useMemo, useRef } from 'react';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useDraggableDialog } from './settings/useDraggableDialog';
 import { AppearanceSettings } from './settings/AppearanceSettings';
+import { AudioSettings } from './settings/AudioSettings';
 import { GeneralSettings } from './settings/GeneralSettings';
 import { MidiSettings } from './settings/MidiSettings';
 import { TranscriptionSettings } from './settings/TranscriptionSettings';
@@ -21,6 +22,7 @@ type SettingsCategory =
   | 'midi'
   | 'shortcuts'
   | 'appearance'
+  | 'audio'
   | 'transcription'
   | 'nativeHelper'
   | 'apiKeys';
@@ -36,6 +38,7 @@ const categories: CategoryConfig[] = [
   { id: 'midi', label: 'MIDI', icon: '\u266B' },
   { id: 'shortcuts', label: 'Shortcuts', icon: '\u2328' },
   { id: 'appearance', label: 'Appearance', icon: '\uD83C\uDFA8' },
+  { id: 'audio', label: 'Audio', icon: '\uD83D\uDD0A' },
   { id: 'transcription', label: 'Transcription', icon: '\uD83C\uDFA4' },
   { id: 'nativeHelper', label: 'Native Helper', icon: '\u26A1' },
   { id: 'apiKeys', label: 'API Keys', icon: '\uD83D\uDD11' },
@@ -76,6 +79,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
       case 'midi': return <MidiSettings />;
       case 'shortcuts': return <ShortcutsSettings />;
       case 'appearance': return <AppearanceSettings />;
+      case 'audio': return <AudioSettings />;
       case 'transcription': return <TranscriptionSettings localKeys={localKeys} />;
       case 'nativeHelper': return <NativeHelperSettings />;
       case 'apiKeys': return <ApiKeysSettings localKeys={localKeys} onKeyChange={handleKeyChange} />;

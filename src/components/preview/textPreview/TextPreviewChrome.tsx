@@ -133,7 +133,7 @@ export function TextPreviewChrome({
             onPointerDown={(event) => onEdgePointerDown(event, edge.fromVertexId, edge.toVertexId)}
             onDoubleClick={(event) => onEdgeDoubleClick(event, edge.fromVertexId, edge.toVertexId)}
           >
-            <title>Drag edge to resize. Ctrl-drag for free edge. Double-click to straighten.</title>
+            <title>Drag edge to resize. Shift-drag to snap. Ctrl-drag for free edge. Double-click to straighten.</title>
           </path>
         ))}
         {geometry.edges.map(edge => (
@@ -147,7 +147,7 @@ export function TextPreviewChrome({
             onPointerDown={(event) => onEdgePointerDown(event, edge.fromVertexId, edge.toVertexId)}
             onDoubleClick={(event) => onEdgeDoubleClick(event, edge.fromVertexId, edge.toVertexId)}
           >
-            <title>Drag edge to resize. Ctrl-drag for free edge. Double-click to straighten.</title>
+            <title>Drag edge to resize. Shift-drag to snap. Ctrl-drag for free edge. Double-click to straighten.</title>
           </rect>
         ))}
         {geometry.vertices.map(({ vertex, point }) => (

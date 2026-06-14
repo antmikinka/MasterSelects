@@ -46,6 +46,7 @@ When a 2D text clip is selected and the preview is in Edit mode, the preview sho
 - Click the active text bounds to type directly in the preview.
 - Drag in empty preview space to define a new paragraph bounds rectangle for the selected text clip.
 - Drag red vertices to reshape the text bounds.
+- Hold Shift while creating, moving, or resizing bounds to snap to the source canvas edges and center guides.
 - Hold Ctrl or Command while dragging to move the whole text bounds path.
 - The bounds are stored as `textBounds` using mask-style vertices plus legacy `boxX`, `boxY`, `boxWidth`, and `boxHeight` fallback values.
 - Preview text editing is disabled during playback, source monitor, scene navigation, and mask navigation.

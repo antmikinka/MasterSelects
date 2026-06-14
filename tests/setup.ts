@@ -146,7 +146,7 @@ vi.mock('../src/stores/settingsStore', () => ({
 }))
 
 // Mock window.matchMedia (jsdom does not implement it). Components such as
-// IssueCreditCampaignBanner, useTheme, and DockContainer query media features
+// useTheme and DockContainer query media features
 // in passive effects, which throws "matchMedia is not a function" otherwise.
 if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
   Object.defineProperty(window, 'matchMedia', {

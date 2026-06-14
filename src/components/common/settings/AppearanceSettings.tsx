@@ -1,4 +1,10 @@
 import { useSettingsStore, type ThemeMode } from '../../../stores/settingsStore';
+import {
+  MAX_INTERFACE_TEXT_SCALE,
+  MIN_INTERFACE_TEXT_SCALE,
+  useUiSettingsStore,
+  type InterfaceFontFamily,
+} from '../../../stores/uiSettingsStore';
 
 const themeOptions: { id: ThemeMode; label: string; bg: string; bar: string; accent: string }[] = [
   { id: 'dark',     label: 'Dark',     bg: '#1e1e1e', bar: '#0f0f0f', accent: '#2D8CEB' },
@@ -27,6 +33,12 @@ export function AppearanceSettings() {
   const setAudioMixerWoodThemeEnabled = useSettingsStore((s) => s.setAudioMixerWoodThemeEnabled);
   const mediaPanelWoodThemeEnabled = useSettingsStore((s) => s.mediaPanelWoodThemeEnabled);
   const setMediaPanelWoodThemeEnabled = useSettingsStore((s) => s.setMediaPanelWoodThemeEnabled);
+  const interfaceTextScale = useUiSettingsStore((s) => s.interfaceTextScale);
+  const setInterfaceTextScale = useUiSettingsStore((s) => s.setInterfaceTextScale);
+  const interfaceFontFamily = useUiSettingsStore((s) => s.interfaceFontFamily);
+  const setInterfaceFontFamily = useUiSettingsStore((s) => s.setInterfaceFontFamily);
+  const highReadabilityMode = useUiSettingsStore((s) => s.highReadabilityMode);
+  const setHighReadabilityMode = useUiSettingsStore((s) => s.setHighReadabilityMode);
 
   return (
     <div className="settings-category-content">
@@ -58,6 +70,51 @@ export function AppearanceSettings() {
         >
           Ctrl + Scroll here to zoom the interface
         </div>
+      </div>
+
+      <div className="settings-group">
+        <div className="settings-group-title">Text and Readability</div>
+
+        <label className="settings-row shortcut-display-size-row">
+          <span className="settings-label">Interface text size</span>
+          <span className="shortcut-display-size-control">
+            <input
+              type="range"
+              min={MIN_INTERFACE_TEXT_SCALE}
+              max={MAX_INTERFACE_TEXT_SCALE}
+              step={0.05}
+              value={interfaceTextScale}
+              onChange={(event) => setInterfaceTextScale(Number(event.target.value))}
+              className="settings-range"
+            />
+            <span className="shortcut-display-size-value">{Math.round(interfaceTextScale * 100)}%</span>
+          </span>
+        </label>
+
+        <label className="settings-row">
+          <span className="settings-label">Interface font</span>
+          <select
+            value={interfaceFontFamily}
+            onChange={(event) => setInterfaceFontFamily(event.target.value as InterfaceFontFamily)}
+            className="settings-select"
+          >
+            <option value="system">System</option>
+            <option value="segoe">Segoe UI</option>
+            <option value="arial">Arial</option>
+            <option value="verdana">Verdana</option>
+            <option value="mono">Monospace</option>
+          </select>
+        </label>
+
+        <label className="settings-row">
+          <span className="settings-label">High readability colors</span>
+          <input
+            type="checkbox"
+            checked={highReadabilityMode}
+            onChange={(event) => setHighReadabilityMode(event.target.checked)}
+            className="settings-checkbox"
+          />
+        </label>
       </div>
 
       <div className="settings-group">

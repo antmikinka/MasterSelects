@@ -1,14 +1,56 @@
 import { useEffect, useMemo } from 'react';
 import { useSettingsStore } from '../stores/settingsStore';
 import type { ThemeMode } from '../stores/settingsStore';
+import { useUiSettingsStore, type InterfaceFontFamily } from '../stores/uiSettingsStore';
 
 type ResolvedTheme = 'dark' | 'light' | 'midnight' | 'crazy' | 'custom';
+
+const FONT_FAMILY_STACKS: Record<InterfaceFontFamily, string> = {
+  system: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  segoe: "'Segoe UI', Arial, sans-serif",
+  arial: "Arial, Helvetica, sans-serif",
+  verdana: "Verdana, Geneva, sans-serif",
+  mono: "var(--font-mono, 'Cascadia Code', Consolas, monospace)",
+};
+
+const BASE_FONT_SIZES = {
+  '--font-2xs': 9,
+  '--font-xs': 10,
+  '--font-sm': 11,
+  '--font-md': 12,
+  '--font-lg': 13,
+  '--font-xl': 14,
+  '--font-2xl': 16,
+  '--font-3xl': 18,
+} as const;
 
 function resolveTheme(theme: ThemeMode): ResolvedTheme {
   if (theme === 'system') {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
   return theme;
+}
+
+function applyInterfaceTypography(root: HTMLElement, scale: number, fontFamily: InterfaceFontFamily): void {
+  root.style.setProperty('--font-family', FONT_FAMILY_STACKS[fontFamily]);
+  Object.entries(BASE_FONT_SIZES).forEach(([token, value]) => {
+    root.style.setProperty(token, `${Math.round(value * scale * 10) / 10}px`);
+  });
+}
+
+function applyHighReadability(root: HTMLElement, resolvedTheme: ResolvedTheme): void {
+  if (resolvedTheme === 'light') {
+    root.style.setProperty('--text-primary', '#05070a');
+    root.style.setProperty('--text-secondary', '#242a33');
+    root.style.setProperty('--text-muted', '#4a5563');
+    root.style.setProperty('--border-strong', '#5f6c7a');
+    return;
+  }
+
+  root.style.setProperty('--text-primary', '#f7f9fc');
+  root.style.setProperty('--text-secondary', '#d5dce7');
+  root.style.setProperty('--text-muted', '#a7b1c2');
+  root.style.setProperty('--border-strong', '#6f7d91');
 }
 
 /** Generate a colorful random palette — each section gets its own distinct hue */
@@ -175,6 +217,9 @@ export function useTheme() {
   const setTheme = useSettingsStore((s) => s.setTheme);
   const customHue = useSettingsStore((s) => s.customHue);
   const customBrightness = useSettingsStore((s) => s.customBrightness);
+  const interfaceTextScale = useUiSettingsStore((s) => s.interfaceTextScale);
+  const interfaceFontFamily = useUiSettingsStore((s) => s.interfaceFontFamily);
+  const highReadabilityMode = useUiSettingsStore((s) => s.highReadabilityMode);
 
   const resolvedTheme = useMemo(() => resolveTheme(theme), [theme]);
 
@@ -194,6 +239,10 @@ export function useTheme() {
     } else if (theme === 'custom') {
       applyCustomColors(root, customHue, customBrightness);
     }
+    applyInterfaceTypography(root, interfaceTextScale, interfaceFontFamily);
+    if (highReadabilityMode) {
+      applyHighReadability(root, resolved);
+    }
 
     requestAnimationFrame(() => {
       requestAnimationFrame(() => root.classList.remove('theme-transitioning'));
@@ -203,12 +252,16 @@ export function useTheme() {
     if (theme === 'system') {
       const mql = window.matchMedia('(prefers-color-scheme: dark)');
       const handler = () => {
-        root.dataset.theme = resolveTheme(theme);
+        const nextResolved = resolveTheme(theme);
+        root.dataset.theme = nextResolved;
+        if (highReadabilityMode) {
+          applyHighReadability(root, nextResolved);
+        }
       };
       mql.addEventListener('change', handler);
       return () => mql.removeEventListener('change', handler);
     }
-  }, [theme, customHue, customBrightness]);
+  }, [theme, customHue, customBrightness, interfaceTextScale, interfaceFontFamily, highReadabilityMode]);
 
   return { theme, resolvedTheme, setTheme };
 }

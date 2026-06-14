@@ -123,6 +123,7 @@ RAM preview is implemented by `RamPreviewEngine` and the timeline RAM preview sl
 - Multi-preview renders four slots in a shared panel.
 - Slots can follow the active composition or pin a specific composition.
 - The auto-distribute mode maps the first four layers of a chosen composition to the four slots.
+- Isolated layer slots render the layer as its source by normalizing non-normal blend modes for that slot only. The original composition layer keeps its stored blend mode.
 
 ### Output Routing
 
@@ -148,6 +149,7 @@ Edit mode is a canvas overlay for layer transforms.
 - Camera Edit mode uses a separate free-camera lens with a 35 mm default. Timeline camera lens settings and keyframes do not change that edit-view lens.
 - The projected timeline-camera frame in camera Edit mode is drawn from the camera's FOV/mm and Resolution X/Y, so wide lenses draw a larger front frame, tele lenses draw a smaller one, and the frame aspect follows the camera resolution.
 - Edit views can render a projected world grid that follows camera-view animation instead of snapping as a screen overlay. The grid plane matches the edit view: Front uses XY at `z=0`, Side uses YZ at `x=0`, and Top/free camera uses XZ at `y=0`.
+- Holding Shift while dragging a layer in Edit mode enables snapping for that drag. The layer can snap to composition edges/center and to the bounds of other visible layers; without Shift, layer movement stays free.
 
 ### Scene Camera Navigation
 

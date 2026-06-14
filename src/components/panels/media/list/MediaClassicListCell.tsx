@@ -1,13 +1,12 @@
 import type { MouseEvent } from 'react';
 
-import type { Composition, MediaFile, ProjectItem } from '../../../../stores/mediaStore';
+import type { MediaFile, ProjectItem } from '../../../../stores/mediaStore';
 import { FileTypeIcon } from '../FileTypeIcon';
 import { getItemImportProgress, getItemWaveformProgress } from '../itemTypeGuards';
 import { getLabelHex } from '../labelColors';
+import { getClassicMediaColumnText } from './classicListPlanning';
 import type { MediaClassicBadgeTarget, MediaClassicColumnId } from './types';
 
-const MISSING_VALUE = '\u2013';
-const RESOLUTION_SEPARATOR = '\u00d7';
 const LONG_DASH = '\u2014';
 
 export interface MediaClassicListCellProps {
@@ -180,13 +179,7 @@ export function MediaClassicListCell({
   onNameClick,
   onBadgeClick,
   getProjectItemIconType,
-  getGaussianSplatResolutionLabel,
-  getMediaFileContainerLabel,
-  getMediaFileCodecLabel,
   isProxyFrameCountComplete,
-  formatDuration,
-  formatFileSize,
-  formatBitrate,
 }: MediaClassicListCellProps) {
   const importProgress = getItemImportProgress(item);
   const waveformProgress = getItemWaveformProgress(item);
@@ -291,41 +284,35 @@ export function MediaClassicListCell({
     case 'duration':
       return (
         <div className="media-col media-col-duration">
-          {importProgress !== null
-            ? `Import ${importProgress}%`
-            : ('duration' in item && item.duration ? formatDuration(item.duration) : MISSING_VALUE)}
+          {getClassicMediaColumnText(item, 'duration')}
         </div>
       );
     case 'resolution':
       return (
-        <div className="media-col media-col-resolution" title={getGaussianSplatResolutionLabel(item) ?? undefined}>
-          {getGaussianSplatResolutionLabel(item) ??
-            ('width' in item && 'height' in item && item.width && item.height ? `${item.width}${RESOLUTION_SEPARATOR}${item.height}` : MISSING_VALUE)}
+        <div className="media-col media-col-resolution" title={getClassicMediaColumnText(item, 'resolution')}>
+          {getClassicMediaColumnText(item, 'resolution')}
         </div>
       );
     case 'fps':
       return (
         <div className="media-col media-col-fps">
-          {mediaFile?.fps ? `${mediaFile.fps}` : ('type' in item && item.type === 'composition' ? (item as Composition).frameRate : MISSING_VALUE)}
+          {getClassicMediaColumnText(item, 'fps')}
         </div>
       );
     case 'container':
-      return <div className="media-col media-col-container">{getMediaFileContainerLabel(mediaFile) || MISSING_VALUE}</div>;
+      return <div className="media-col media-col-container">{getClassicMediaColumnText(item, 'container')}</div>;
     case 'codec':
-      return <div className="media-col media-col-codec">{getMediaFileCodecLabel(mediaFile) || MISSING_VALUE}</div>;
+      return <div className="media-col media-col-codec">{getClassicMediaColumnText(item, 'codec')}</div>;
     case 'audio':
       return (
         <div className="media-col media-col-audio">
-          {mediaFile?.type === 'audio' ? 'Yes' :
-           mediaFile?.type === 'image' ? MISSING_VALUE :
-           mediaFile?.hasAudio === true ? 'Yes' :
-           mediaFile?.hasAudio === false ? 'No' : MISSING_VALUE}
+          {getClassicMediaColumnText(item, 'audio')}
         </div>
       );
     case 'bitrate':
-      return <div className="media-col media-col-bitrate">{mediaFile?.bitrate ? formatBitrate(mediaFile.bitrate) : MISSING_VALUE}</div>;
+      return <div className="media-col media-col-bitrate">{getClassicMediaColumnText(item, 'bitrate')}</div>;
     case 'size':
-      return <div className="media-col media-col-size">{mediaFile ? formatFileSize(mediaFile.fileSize) : MISSING_VALUE}</div>;
+      return <div className="media-col media-col-size">{getClassicMediaColumnText(item, 'size')}</div>;
     default:
       return null;
   }

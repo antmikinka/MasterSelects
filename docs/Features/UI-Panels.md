@@ -508,15 +508,16 @@ Edit menu -> Settings
 
 | Category | Contents |
 |----------|----------|
-| **Appearance** | Theme selection and custom theme controls |
-| **General** | Save mode, autosave interval/enable state, import copy behavior, timeline zoom anchor, shortcut/mouse input display, and mobile/desktop view mode |
+| **General** | Save mode, autosave interval/enable state, import copy behavior, timeline zoom anchor, shortcut/mouse input display, output defaults, preview quality, GPU preference, AI feature settings, and mobile/desktop view mode |
 | **MIDI** | Browser MIDI permission state, transport learning, and device list |
-| **Previews** | Preview resolution quality and transparency grid info |
-| **Import** | Copy media to project folder toggle |
+| **Shortcuts** | Preset selection, overrides, recorder, reset, and custom preset controls |
+| **Appearance** | Theme selection, custom theme controls, interface text scale, interface font, high-readability colors, and studio surface skins |
+| **Audio** | Browser input/output device selection, latency mode, device API status, output-routing status, and AudioContext diagnostics |
 | **Transcription** | Provider selection and pricing |
-| **Output** | Default resolution and frame rate for new compositions |
-| **Performance** | GPU power preference, Native Helper, and decode settings |
+| **Native Helper** | Native helper connection, port, helper-backed flows, and decode settings |
 | **API Keys** | OpenAI, AssemblyAI, Deepgram, Kie.ai, PiAPI (legacy/compat), ElevenLabs, and YouTube |
+
+The Preferences dialog drag position is updated at animation-frame cadence during mouse movement so moving the dialog does not force React state updates for every raw mouse event.
 
 ### API Keys
 

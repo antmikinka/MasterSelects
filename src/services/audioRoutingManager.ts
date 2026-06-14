@@ -27,6 +27,7 @@ import {
   processorSignature,
 } from './audio/routing/routeEffectState';
 import { createAudioRouteGraph, createMasterRouteGraph } from './audio/routing/routeGraphFactory';
+import { applyAudioContextOutputDevice, applyMediaElementOutputDevice } from './audio/routing/outputDeviceRouting';
 import type {
   AudioRoute,
   AudioRoutingDebugCounters,
@@ -44,6 +45,8 @@ const log = Logger.create('AudioRouting');
 
 const ROUTE_CREATE_RETRY_COOLDOWN_MS = 5000;
 const ROUTE_CREATE_WARNING_INTERVAL_MS = 15000;
+
+type AudioLatencyHintSetting = 'interactive' | 'balanced' | 'playback';
 
 const audioRoutingDebugCounters: AudioRoutingDebugCounters = {
   applyEffectsCalls: 0,
@@ -65,6 +68,8 @@ class AudioRoutingManager {
   private audioContext: AudioContext | null = null;
   private masterRoute: MasterAudioRoute | null = null;
   private routes = new Map<HTMLMediaElement, AudioRoute>();
+  private outputDeviceId = '';
+  private latencyHint: AudioLatencyHintSetting = 'interactive';
   // Routes whose source is an arbitrary AudioNode (e.g. the per-track MIDI synth
   // bus), keyed by a stable string id (the track id). They reuse the exact same
   // gain/FX/EQ/pan/meter chain as media routes and feed the shared master bus.
@@ -107,7 +112,7 @@ class AudioRoutingManager {
    */
   private async getContext(): Promise<AudioContext> {
     if (!this.audioContext || this.audioContext.state === 'closed') {
-      this.audioContext = new AudioContext();
+      this.audioContext = this.createAudioContext();
       this.masterRoute = null;
       log.info('Created new AudioContext');
     }
@@ -164,6 +169,7 @@ class AudioRoutingManager {
       this.reconnectRouteChain(route);
 
       this.routes.set(element, route);
+      void this.applyElementOutputDevice(element);
       this.routeCreateFailures.delete(element);
       audioRoutingDebugCounters.routeCreates++;
       log.debug('Created audio route for element');
@@ -230,7 +236,7 @@ class AudioRoutingManager {
    */
   ensureSharedContext(): AudioContext {
     if (!this.audioContext || this.audioContext.state === 'closed') {
-      this.audioContext = new AudioContext();
+      this.audioContext = this.createAudioContext();
       this.masterRoute = null;
       log.info('Created new AudioContext (shared)');
     }
@@ -251,6 +257,20 @@ class AudioRoutingManager {
   /** The active shared AudioContext, or null before one is created. */
   getActiveContext(): AudioContext | null {
     return this.audioContext;
+  }
+
+  setLatencyHint(hint: AudioLatencyHintSetting): void {
+    this.latencyHint = hint;
+  }
+  getLatencyHint(): AudioLatencyHintSetting {
+    return this.latencyHint;
+  }
+  async setOutputDevice(deviceId: string): Promise<boolean> {
+    this.outputDeviceId = deviceId;
+    return this.applyOutputDevice();
+  }
+  getOutputDeviceId(): string {
+    return this.outputDeviceId;
   }
 
   async resumeContext(): Promise<void> {
@@ -491,6 +511,30 @@ class AudioRoutingManager {
       reverbImpulseCacheSize: reverbImpulseCache.size,
       resumePending: this.contextResumePromise !== null,
     });
+  }
+
+  private createAudioContext(): AudioContext {
+    const context = new AudioContext({ latencyHint: this.latencyHint });
+    void this.applyContextOutputDevice(context);
+    return context;
+  }
+
+  private async applyOutputDevice(): Promise<boolean> {
+    const contextApplied = this.audioContext
+      ? await this.applyContextOutputDevice(this.audioContext)
+      : false;
+    const elementResults = await Promise.all(
+      [...this.routes.keys()].map(element => this.applyElementOutputDevice(element)),
+    );
+    return contextApplied || elementResults.some(Boolean);
+  }
+
+  private async applyContextOutputDevice(context: AudioContext): Promise<boolean> {
+    return applyAudioContextOutputDevice(context, this.outputDeviceId, (message, error) => log.warn(message, error));
+  }
+
+  private async applyElementOutputDevice(element: HTMLMediaElement): Promise<boolean> {
+    return applyMediaElementOutputDevice(element, this.outputDeviceId, (message, error) => log.warn(message, error));
   }
 
   private disconnectMasterRoute(): void {

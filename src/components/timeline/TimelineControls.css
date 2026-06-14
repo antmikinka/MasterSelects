@@ -178,8 +178,12 @@
 .timeline-tool-palette {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
+  padding: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.18);
 }
 
 .timeline-tool-button {
@@ -187,10 +191,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   padding: 0;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 3px;
   outline: none;
   background: transparent;
@@ -200,23 +204,30 @@
   transition:
     color 120ms ease,
     filter 120ms ease,
-    background-color 120ms ease;
+    background-color 120ms ease,
+    border-color 120ms ease,
+    transform 80ms ease;
 }
 
 .timeline-tool-button:focus,
 .timeline-tool-button:focus-visible {
   outline: none;
-  box-shadow: none;
+  box-shadow: 0 0 0 1px rgba(45, 140, 235, 0.65);
 }
 
 .timeline-tool-button:hover {
-  background: transparent;
+  background: rgba(255, 255, 255, 0.08);
   color: #fff;
 }
 
 .timeline-tool-button.active {
-  background: transparent;
+  background: rgba(45, 140, 235, 0.18);
+  border-color: rgba(45, 140, 235, 0.45);
   color: var(--timeline-toggle-active-color);
+}
+
+.timeline-tool-button:active {
+  transform: translateY(1px);
 }
 
 .timeline-tool-button:hover .timeline-tool-button-icon {
@@ -233,6 +244,7 @@
    which tool category they are acting on while the dropdown is up. */
 .timeline-tool-button.open {
   background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.22);
   color: #fff;
 }
 

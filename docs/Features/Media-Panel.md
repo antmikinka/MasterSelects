@@ -138,6 +138,7 @@ When **Wooden media panel theme** is enabled in Appearance settings, the Classic
 - Nested folder tree with expand/collapse arrows
 - Column headers for sorting and drag-to-reorder
 - Resizable name column (120px - 500px range, saved to localStorage)
+- Metadata columns keep a stable header set but show type-specific values. Audio files reuse the visual columns for waveform state, stem label, audio codec, and audio proxy state; still images show still/raster/image labels; Signal assets show signal kinds, provider, artifact count, file type, and diagnostics count.
 
 ### Icons View
 - Thumbnail grid with file names below each item

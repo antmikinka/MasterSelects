@@ -23,6 +23,14 @@ interface NestedCompInfo {
   clipOutPoint: number;
 }
 
+export function normalizeIsolatedLayerPreview(layers: Layer[]): Layer[] {
+  return layers.map((layer) => (
+    layer.blendMode === 'normal'
+      ? layer
+      : { ...layer, blendMode: 'normal' }
+  ));
+}
+
 class RenderSchedulerService {
   private registeredTargets: Set<string> = new Set();
   private preparedCompositions: Set<string> = new Set();
@@ -282,6 +290,7 @@ class RenderSchedulerService {
         } else {
           filtered = this.activeCompLayers;
         }
+        filtered = normalizeIsolatedLayerPreview(filtered);
         engine.renderToPreviewCanvas(targetId, filtered);
         continue;
       }
@@ -330,6 +339,9 @@ class RenderSchedulerService {
       } else if (target.source.type === 'layer-index') {
         const idx = target.source.layerIndex;
         evalLayers = idx < evalLayers.length ? [evalLayers[idx]] : [];
+      }
+      if (target.source.type === 'layer' || target.source.type === 'layer-index') {
+        evalLayers = normalizeIsolatedLayerPreview(evalLayers);
       }
 
       // Render to the target canvas (empty = black)

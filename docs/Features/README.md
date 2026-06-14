@@ -77,7 +77,6 @@ The docs in this folder were re-audited against the current codebase and now tra
 | Document | Description |
 |---|---|
 | [Landing Page](./Landing-Page.md) | Dev-only front page concept, separate URL strategy, and current landing/editor split |
-| [Issue Credit Campaign](./Issue-Credit-Campaign.md) | Refresh-visible version 2.0 issue campaign banner with GitHub issue CTA and confetti |
 | [AI Integration](./AI-Integration.md) | OpenAI/Cloud and Lemonade chat, 86 exported model tools, segmentation, transcription, and bridge behavior |
 | [Guided Action Runtime Plan](./Guided-Action-Runtime-Plan.md) | Target architecture for AI action replay, interactive tutorials, guided workflows, and parallel implementation workstreams |
 | [FlashBoard](./FlashBoard.md) | Media Panel generation tray for video, image, speech, and music generation |

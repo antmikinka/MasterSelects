@@ -1,6 +1,7 @@
 import type { AudioRecordingPhase, AudioRecordingTarget } from '../../types/audio';
 import type { TimelineTrack } from '../../types';
 import { useTimelineStore } from '../../stores/timeline';
+import { useUiSettingsStore } from '../../stores/uiSettingsStore';
 import { audioRecordingService } from './AudioRecordingService';
 
 export interface TimelineRecordingRange {
@@ -75,10 +76,11 @@ export function resolveTimelineRecordingRange(input: {
 }
 
 export function createAudioRecordingTargets(tracks: readonly TimelineTrack[]): AudioRecordingTarget[] {
+  const defaultInputDeviceId = useUiSettingsStore.getState().audioInputDeviceId || undefined;
   return tracks.map(track => ({
     trackId: track.id,
     trackName: track.name,
-    inputDeviceId: track.audioState?.inputDeviceId,
+    inputDeviceId: track.audioState?.inputDeviceId || defaultInputDeviceId,
   }));
 }
 

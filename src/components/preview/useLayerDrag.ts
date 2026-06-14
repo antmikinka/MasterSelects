@@ -10,6 +10,12 @@ import {
   type LayerOverlayBounds,
   type OverlayPoint,
 } from './editModeOverlayMath';
+import {
+  getCanvasSnapPoints,
+  getLayerBoundsSnapPoints,
+  mergeSnapPointSets,
+  resolveSnapDelta,
+} from './editModeSnapping';
 
 interface UseLayerDragParams {
   editMode: boolean;
@@ -62,6 +68,8 @@ interface MovePositionBasis {
   yPlusBounds: LayerOverlayBounds;
 }
 
+const LAYER_SNAP_THRESHOLD_SCREEN_PX = 10;
+
 type PendingDragUpdate =
   | {
       mode: 'move';
@@ -75,6 +83,39 @@ type PendingDragUpdate =
       clipId?: string;
       scale: { x: number; y: number };
     };
+
+function resolveLayerMoveSnapDelta(params: {
+  layer: Layer;
+  candidatePosition: { x: number; y: number };
+  layers: readonly Layer[];
+  canvasSize: { width: number; height: number };
+  threshold: number;
+  calculateLayerBounds: UseLayerDragParams['calculateLayerBounds'];
+}): OverlayPoint {
+  const {
+    layer,
+    candidatePosition,
+    layers,
+    canvasSize,
+    threshold,
+    calculateLayerBounds,
+  } = params;
+  const movedBounds = calculateLayerBounds(layer, canvasSize.width, canvasSize.height, candidatePosition);
+  const targetSets = [
+    getCanvasSnapPoints(canvasSize.width, canvasSize.height),
+    ...layers
+      .filter((candidate) => candidate?.id !== layer.id && candidate?.visible && candidate?.source)
+      .map((candidate) => getLayerBoundsSnapPoints(
+        calculateLayerBounds(candidate, canvasSize.width, canvasSize.height),
+      )),
+  ];
+
+  return resolveSnapDelta(
+    getLayerBoundsSnapPoints(movedBounds),
+    mergeSnapPointSets(targetSets),
+    threshold,
+  );
+}
 
 export function useLayerDrag({
   editMode,
@@ -503,8 +544,29 @@ export function useLayerDrag({
           { x: dx / viewZoom, y: dy / viewZoom },
         );
 
-        const newPosX = dragStart.current.layerPosX + positionDelta.x;
-        const newPosY = dragStart.current.layerPosY + positionDelta.y;
+        let newPosX = dragStart.current.layerPosX + positionDelta.x;
+        let newPosY = dragStart.current.layerPosY + positionDelta.y;
+
+        if (e.shiftKey) {
+          const snapDelta = resolveLayerMoveSnapDelta({
+            layer,
+            candidatePosition: { x: newPosX, y: newPosY },
+            layers: layersRef.current,
+            canvasSize,
+            threshold: LAYER_SNAP_THRESHOLD_SCREEN_PX / Math.max(0.0001, viewZoom),
+            calculateLayerBounds,
+          });
+          if (snapDelta.x !== 0 || snapDelta.y !== 0) {
+            const snappedPositionDelta = resolvePositionDeltaForCanvasDelta(
+              basis.baseBounds,
+              basis.xPlusBounds,
+              basis.yPlusBounds,
+              snapDelta,
+            );
+            newPosX += snappedPositionDelta.x;
+            newPosY += snappedPositionDelta.y;
+          }
+        }
 
         currentDragPos.current = { x: newPosX, y: newPosY };
 

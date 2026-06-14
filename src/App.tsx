@@ -22,7 +22,6 @@ import { ProjectLoadProgressOverlay } from './components/common/ProjectLoadProgr
 import { PricingDialog } from './components/common/PricingDialog';
 import { HistoryActionToast } from './components/common/HistoryActionToast';
 import { ShortcutDisplayOverlay } from './components/common/ShortcutDisplayOverlay';
-import { IssueCreditCampaignBanner } from './components/common/IssueCreditCampaignBanner';
 import { GuidedActionOverlay } from './components/guidedActions/GuidedActionOverlay';
 import { TutorialOverlay } from './components/common/TutorialOverlay';
 import { TutorialCampaignDialog } from './components/common/TutorialCampaignDialog';
@@ -41,8 +40,10 @@ import { useIsMobile, useForceMobile } from './hooks/useIsMobile';
 import { useMIDIRuntime } from './hooks/useMIDIRuntime';
 import { useAccountStore } from './stores/accountStore';
 import { useSettingsStore } from './stores/settingsStore';
+import { useUiSettingsStore } from './stores/uiSettingsStore';
 import { projectDB } from './services/projectDB';
 import { projectFileService } from './services/projectFileService';
+import { audioRoutingManager } from './services/audioRoutingManager';
 import { APP_VERSION, shouldAutoShowChangelog } from './version';
 import './styles/app-shell.css';
 import './styles/shared-controls.css';
@@ -91,6 +92,14 @@ function App() {
 
   // Browser MIDI runtime
   useMIDIRuntime();
+
+  const audioOutputDeviceId = useUiSettingsStore((s) => s.audioOutputDeviceId);
+  const audioLatencyHint = useUiSettingsStore((s) => s.audioLatencyHint);
+
+  useEffect(() => {
+    audioRoutingManager.setLatencyHint(audioLatencyHint);
+    void audioRoutingManager.setOutputDevice(audioOutputDeviceId);
+  }, [audioOutputDeviceId, audioLatencyHint]);
 
   useEffect(() => {
     const preventBrowserContextMenu = (event: MouseEvent) => {
@@ -297,10 +306,6 @@ function App() {
   const shouldShowChangelogOnStartup = SHOW_CHANGELOG
     && shouldAutoShowChangelog(showChangelogOnStartup, lastSeenChangelogVersion, APP_VERSION);
 
-  // Arm the issue-credit banner only once the startup overlays (splash/welcome/
-  // changelog) are gone — it then appears after a delay and auto-hides (#195).
-  const creditBannerArmed = !isChecking && !showWelcome && !showSplash && !showChangelog;
-
   // Show Splash screen after initial check (when no welcome overlay)
   // This effect intentionally sets state based on derived conditions
   useEffect(() => {
@@ -457,7 +462,6 @@ function App() {
     <div className="app">
       <LinuxVulkanWarning />
       <Toolbar onOpenChangelog={() => setShowChangelog(true)} onOpenSplash={() => setShowSplash(true)} />
-      <IssueCreditCampaignBanner armed={creditBannerArmed} />
       <DockContainer />
       <GuidedActionOverlay />
       <ShortcutDisplayOverlay />

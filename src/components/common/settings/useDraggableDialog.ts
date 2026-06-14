@@ -4,6 +4,8 @@ export function useDraggableDialog(dialogRef: React.RefObject<HTMLDivElement | n
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const dragOffset = useRef({ x: 0, y: 0 });
+  const pendingPosition = useRef<{ x: number; y: number } | null>(null);
+  const dragFrame = useRef<number | null>(null);
 
   // Center dialog on mount
   useEffect(() => {
@@ -52,6 +54,12 @@ export function useDraggableDialog(dialogRef: React.RefObject<HTMLDivElement | n
   useEffect(() => {
     if (!isDragging) return;
 
+    const flushPendingPosition = () => {
+      if (!pendingPosition.current) return;
+      setPosition(pendingPosition.current);
+      pendingPosition.current = null;
+    };
+
     const handleMouseMove = (e: MouseEvent) => {
       const newX = e.clientX - dragOffset.current.x;
       const newY = e.clientY - dragOffset.current.y;
@@ -59,13 +67,24 @@ export function useDraggableDialog(dialogRef: React.RefObject<HTMLDivElement | n
       const maxX = window.innerWidth - (dialogRef.current?.offsetWidth || 720);
       const maxY = window.innerHeight - (dialogRef.current?.offsetHeight || 560);
 
-      setPosition({
+      pendingPosition.current = {
         x: Math.max(0, Math.min(newX, maxX)),
         y: Math.max(0, Math.min(newY, maxY)),
-      });
+      };
+      if (dragFrame.current === null) {
+        dragFrame.current = requestAnimationFrame(() => {
+          dragFrame.current = null;
+          flushPendingPosition();
+        });
+      }
     };
 
     const handleMouseUp = () => {
+      if (dragFrame.current !== null) {
+        cancelAnimationFrame(dragFrame.current);
+        dragFrame.current = null;
+      }
+      flushPendingPosition();
       setIsDragging(false);
     };
 
@@ -75,6 +94,10 @@ export function useDraggableDialog(dialogRef: React.RefObject<HTMLDivElement | n
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
+      if (dragFrame.current !== null) {
+        cancelAnimationFrame(dragFrame.current);
+        dragFrame.current = null;
+      }
     };
   }, [isDragging, dialogRef]);
 
