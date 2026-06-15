@@ -40,6 +40,7 @@ describe('transition choice metadata', () => {
     expect(getLightGlyphClass('film-burn')).toBe('transition-light-glyph-flash');
     expect(getThreeDGlyphClass('spinback-3d')).toBe('transition-three-d-glyph-spinback');
     expect(getPatternGlyphClass('puzzle-push')).toBe('transition-pattern-glyph-puzzle');
+    expect(getPatternGlyphClass('shatter-glass')).toBe('transition-pattern-glyph-shatter');
     expect(getPatternGlyphClass('magnetic-tiles')).toBe('transition-pattern-glyph-magnetic');
     expect(getStylizeGlyphClass('kaleidoscope')).toBe('transition-stylize-glyph-kaleidoscope');
     expect(getRotateGlyphClass('rotate-right')).toBe('transition-stylize-glyph-rotate-right');

@@ -80,6 +80,7 @@ describe('transition registry', () => {
       'venetian-blinds-vertical',
       'zig-zag-blocks',
       'puzzle-push',
+      'shatter-glass',
       'magnetic-tiles',
       'flip-horizontal',
       'flip-vertical',
@@ -172,6 +173,7 @@ describe('transition registry', () => {
       'venetian-blinds-vertical',
       'zig-zag-blocks',
       'puzzle-push',
+      'shatter-glass',
       'magnetic-tiles',
     ]);
     expect(getTransitionsByCategory('stylize').map((transition) => transition.id)).toEqual([
@@ -379,6 +381,18 @@ describe('transition registry', () => {
       curve: 'ease-out',
     });
     expect(getDefaultTransitionParams(getTransition('puzzle-push'))).toEqual({ seed: 0 });
+    expect(getTransition('shatter-glass')?.recipe).toContainEqual({
+      kind: 'multi-panel',
+      target: 'outgoing',
+      rows: 4,
+      columns: 6,
+      order: 'random',
+      motion: 'shatter',
+      seed: 0,
+      stagger: 0.22,
+      curve: 'ease-in',
+    });
+    expect(getDefaultTransitionParams(getTransition('shatter-glass'))).toEqual({ seed: 0 });
     expect(getTransition('magnetic-tiles')?.recipe).toContainEqual({
       kind: 'multi-panel',
       target: 'incoming',
@@ -732,6 +746,8 @@ describe('transition registry', () => {
     });
     expect(getTransition('puzzle-push')?.capability).toBeUndefined();
     expect(getRuntimeTransition('puzzle-push')?.id).toBe('puzzle-push');
+    expect(getTransition('shatter-glass')?.capability).toBeUndefined();
+    expect(getRuntimeTransition('shatter-glass')?.id).toBe('shatter-glass');
     expect(getTransition('magnetic-tiles')?.capability).toBeUndefined();
     expect(getRuntimeTransition('magnetic-tiles')?.id).toBe('magnetic-tiles');
     expect(getDefaultTransitionParams(getTransition('water-drop'))).toEqual({ seed: 0 });
@@ -751,7 +767,6 @@ describe('transition registry', () => {
       'cube-3d',
       'door-3d',
       'fold-3d',
-      'shatter-glass',
       'origami-fold',
       'neural-dream',
     ];

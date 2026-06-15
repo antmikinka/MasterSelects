@@ -477,6 +477,24 @@ describe('ExportLayerBuilder', () => {
       height: 0.25,
     });
 
+    const shatterLayers = buildTransitionExportLayers({ transitionType: 'shatter-glass' }).layers;
+    const shatterPanelLayers = shatterLayers.filter((layer) =>
+      layer.id.includes(':outgoing:outgoing:') && layer.sourceRect
+    );
+    expect(shatterPanelLayers).toHaveLength(24);
+    expect(shatterLayers.find((layer) => layer.sourceClipId === 'outgoing' && !layer.sourceRect)).toBeUndefined();
+    expect(shatterLayers.find((layer) => layer.sourceClipId === 'incoming')).toBeTruthy();
+    const shatterTopLeftLayer = shatterPanelLayers.find((layer) =>
+      layer.sourceRect?.x === 0 && layer.sourceRect.y === 0
+    );
+    expect(shatterTopLeftLayer?.sourceRect).toEqual({
+      x: 0,
+      y: 0,
+      width: 1 / 6,
+      height: 0.25,
+    });
+    expect(shatterTopLeftLayer?.opacity).toBeLessThan(1);
+
     const threeDLayers = buildTransitionExportLayers({ transitionType: 'roll-3d' }).layers;
     const incoming3DLayer = threeDLayers.find((layer) => layer.sourceClipId === 'incoming');
     const outgoing3DLayer = threeDLayers.find((layer) => layer.sourceClipId === 'outgoing');

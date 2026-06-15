@@ -1127,6 +1127,26 @@
     linear-gradient(currentColor 0 0) 21px 11px / 3px 7px no-repeat;
 }
 
+.transition-pattern-glyph-shatter::before {
+  inset: 4px;
+  background:
+    linear-gradient(currentColor 0 0) 1px 1px / 9px 6px no-repeat,
+    linear-gradient(currentColor 0 0) 15px 0 / 8px 6px no-repeat,
+    linear-gradient(currentColor 0 0) 4px 12px / 7px 5px no-repeat,
+    linear-gradient(currentColor 0 0) 17px 13px / 6px 4px no-repeat;
+}
+
+.transition-pattern-glyph.transition-pattern-glyph-shatter::after {
+  left: 5px;
+  top: 5px;
+  width: 22px;
+  height: 15px;
+  background:
+    linear-gradient(68deg, transparent 0 48%, currentColor 49% 52%, transparent 53%),
+    linear-gradient(112deg, transparent 0 48%, currentColor 49% 52%, transparent 53%);
+  opacity: 0.42;
+}
+
 .transition-pattern-glyph-magnetic::before {
   inset: 4px;
   background:

@@ -2,6 +2,13 @@
   {
     "date": "2026-06-15",
     "type": "new",
+    "title": "MasterSelects 2.2.7",
+    "description": "Transition suite update: Shatter Glass is now a visible Pattern-family transition using deterministic rectangular sourceRect panels that rotate, fly away, and fade over the incoming clip. Multi-panel seed controls now drive random panel ordering correctly, Dev-Bridge QA covers the new transition, and Origami/Fold remains planned until true per-panel 3D UV and hinge contracts exist.",
+    "section": "Release"
+  },
+  {
+    "date": "2026-06-15",
+    "type": "new",
     "title": "MasterSelects 2.2.6",
     "description": "Transition suite release: the Transitions panel now groups 2D and 3D families, shows variant counts, expands families on click for direct dragging, and exposes richer direction/color/style controls in Properties. The suite adds new dissolve, dip, wipe, iris, push, slide, light/film, glitch, pattern, and early 3D transition families, with shared preview metadata plus runtime/export assembly for multi-panel sourceRect transitions such as Puzzle Push and Magnetic Tiles. This release also includes the credit-claim page/API groundwork and updated transition/playback planning docs.",
     "section": "Release"

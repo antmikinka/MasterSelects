@@ -173,6 +173,7 @@ export function TransitionPreview({ type }: TransitionPreviewProps) {
     type === 'paint-splatter' ||
     type === 'polka-dot-curtain' ||
     type === 'puzzle-push' ||
+    type === 'shatter-glass' ||
     type === 'magnetic-tiles' ||
     type === 'random-blocks' ||
     type === 'venetian-blinds-horizontal' ||
@@ -185,6 +186,7 @@ export function TransitionPreview({ type }: TransitionPreviewProps) {
     const isPaintSplatter = type === 'paint-splatter';
     const isPolkaDot = type === 'polka-dot-curtain';
     const isPuzzle = type === 'puzzle-push';
+    const isShatter = type === 'shatter-glass';
     const isMagnetic = type === 'magnetic-tiles';
     const isRandomBlocks = type === 'random-blocks';
     const isZigZag = type === 'zig-zag-blocks';
@@ -195,7 +197,7 @@ export function TransitionPreview({ type }: TransitionPreviewProps) {
         ? 12
         : isPaintSplatter
           ? 24
-          : isPuzzle || isMagnetic || isRandomBlocks
+          : isPuzzle || isShatter || isMagnetic || isRandomBlocks
             ? 20
             : isVertical
               ? 10
@@ -206,7 +208,7 @@ export function TransitionPreview({ type }: TransitionPreviewProps) {
         ? 12
         : isPaintSplatter
           ? 18
-          : isPuzzle || isMagnetic || isRandomBlocks
+          : isPuzzle || isShatter || isMagnetic || isRandomBlocks
             ? 12
             : isVertical
               ? 40
@@ -220,7 +222,9 @@ export function TransitionPreview({ type }: TransitionPreviewProps) {
           : isDoomBars
             ? 'M16 8v24M28 8v24M40 8v24M52 8v24M64 8v24'
             : isMagnetic
-              ? 'M23 8v24M40 8v24M57 8v24M6 20h68M40 20m-8 0a8 8 0 1 0 16 0a8 8 0 1 0-16 0'
+            ? 'M23 8v24M40 8v24M57 8v24M6 20h68M40 20m-8 0a8 8 0 1 0 16 0a8 8 0 1 0-16 0'
+            : isShatter
+              ? 'M18 9l10 23M39 8l-6 24M55 9l8 23M7 20h66'
             : isPuzzle
               ? 'M23 8v24M40 8v24M57 8v24M6 20h68'
               : isRandomBlocks
@@ -272,6 +276,13 @@ export function TransitionPreview({ type }: TransitionPreviewProps) {
                 <rect x="11" y="5" width="7" height="7" fill="#ff6b4a" />
                 <rect x="3" y="9" width="6" height="3" fill="#ff6b4a" opacity="0.8" />
                 <circle cx="10" cy="6" r="5" fill="#111827" opacity="0.28" />
+              </>
+            ) : isShatter ? (
+              <>
+                <rect x="0" y="0" width="8" height="5" fill="#ff6b4a" transform="rotate(-10 4 3)" />
+                <rect x="11" y="1" width="7" height="6" fill="#ff6b4a" opacity="0.78" transform="rotate(12 14 4)" />
+                <rect x="2" y="8" width="6" height="4" fill="#ff6b4a" opacity="0.9" transform="rotate(18 5 10)" />
+                <rect x="12" y="9" width="5" height="3" fill="#ff6b4a" opacity="0.65" transform="rotate(-16 14 10)" />
               </>
             ) : isPuzzle ? (
               <>

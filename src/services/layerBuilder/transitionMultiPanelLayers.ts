@@ -100,12 +100,15 @@ export function createTransitionMultiPanelLayers({
   progress,
   seed,
 }: CreateTransitionMultiPanelLayersInput): Layer[] {
+  const plannerSeed = Number.isFinite(seed)
+    ? seed
+    : primitive.seed ?? 0;
   const panelPlan = createTransitionMultiPanelPlan({
     rows: primitive.rows,
     columns: primitive.columns,
     progress: clamp01(progress),
     order: primitive.order,
-    seed: primitive.seed ?? seed,
+    seed: plannerSeed,
     stagger: primitive.stagger,
   });
 

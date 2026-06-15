@@ -270,7 +270,9 @@ MasterSelects currently exposes 18 active dockable panel types, plus the Slot Gr
   pixelate, and scanline variants even though the palette shows one Glitch
   family card. Light search includes Flash, Light Leak, Light Sweep, Projector
   Flicker, Film Roll, and Vignette Bloom variants while the palette keeps them
-  grouped as one Light family. 3D search includes separate Flip, Tumble, Roll,
+  grouped as one Light family. Pattern search includes visible multi-panel
+  Puzzle Push, Shatter Glass, and Magnetic Tiles variants through the grouped
+  Pattern family. 3D search includes separate Flip, Tumble, Roll,
   and Spin families for the current runtime effects; planned dev metadata adds
   non-draggable Cube, Door, Fold, and Peel families.
   Search results stay expanded even if a section was collapsed before searching.

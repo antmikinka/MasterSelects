@@ -117,12 +117,6 @@ export const plannedTransitions: readonly TransitionDefinition[] = [
     description: 'Planned heat-map color ramp bloom transition',
   }),
   plannedTransition({
-    id: 'shatter-glass',
-    name: 'Shatter Glass',
-    category: 'pattern',
-    description: 'Planned seeded shard rotation and reveal',
-  }),
-  plannedTransition({
     id: 'cube-3d',
     name: 'Cube 3D',
     category: '3d',

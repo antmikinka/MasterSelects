@@ -112,7 +112,7 @@ describe('TransitionsPanel', () => {
     expect(screen.getByText('Puzzle Push').closest('.transition-item')?.getAttribute('draggable')).toBe('true');
     expect(getRenderedItemLabels(container)).toContain('Magnetic Tiles');
     expect(screen.getByText('Magnetic Tiles').closest('.transition-item')?.getAttribute('draggable')).toBe('true');
-    expect(screen.getByText('Shatter Glass').closest('.transition-item')?.getAttribute('draggable')).toBe('false');
-    expect(screen.getByText('Shatter Glass').closest('.transition-item')?.getAttribute('aria-disabled')).toBe('true');
+    expect(screen.getByText('Shatter Glass').closest('.transition-item')?.getAttribute('draggable')).toBe('true');
+    expect(screen.getByText('Shatter Glass').closest('.transition-item')?.getAttribute('aria-disabled')).toBeNull();
   });
 });

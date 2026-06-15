@@ -119,4 +119,59 @@ describe('transition multi-panel layers', () => {
     expect(topLeftLayer?.position.x).toBeCloseTo(-0.3875);
     expect(topLeftLayer?.position.y).toBeCloseTo(-0.3875);
   });
+
+  it('shatters outgoing panels away from center with fading rotation', () => {
+    const primitive: Extract<TransitionPrimitive, { kind: 'multi-panel' }> = {
+      kind: 'multi-panel',
+      target: 'outgoing',
+      rows: 2,
+      columns: 2,
+      order: 'row-major',
+      motion: 'shatter',
+      stagger: 0,
+    };
+
+    const layers = createTransitionMultiPanelLayers({
+      baseLayer: createBaseLayer(),
+      primitive,
+      progress: 0.5,
+      seed: 0,
+    });
+    const topLeftLayer = layers.find((layer) => layer.sourceRect?.x === 0 && layer.sourceRect.y === 0);
+    const rotation = topLeftLayer?.rotation;
+
+    expect(layers).toHaveLength(4);
+    expect(topLeftLayer?.opacity).toBeCloseTo(0.5);
+    expect(topLeftLayer?.position.x).toBeLessThan(-0.5);
+    expect(topLeftLayer?.position.y).toBeLessThan(-0.5);
+    expect(typeof rotation === 'number' ? rotation : rotation?.z).toBeCloseTo(0.14);
+  });
+
+  it('lets the transition seed drive random panel ordering', () => {
+    const primitive: Extract<TransitionPrimitive, { kind: 'multi-panel' }> = {
+      kind: 'multi-panel',
+      target: 'incoming',
+      rows: 2,
+      columns: 3,
+      order: 'random',
+      motion: 'puzzle',
+      seed: 0,
+      stagger: 0.6,
+    };
+
+    const firstSeedLayers = createTransitionMultiPanelLayers({
+      baseLayer: createBaseLayer(),
+      primitive,
+      progress: 0.3,
+      seed: 1,
+    });
+    const secondSeedLayers = createTransitionMultiPanelLayers({
+      baseLayer: createBaseLayer(),
+      primitive,
+      progress: 0.3,
+      seed: 2,
+    });
+
+    expect(firstSeedLayers.map((layer) => layer.id)).not.toEqual(secondSeedLayers.map((layer) => layer.id));
+  });
 });

@@ -120,12 +120,14 @@ source states fall back to the compositor transform path. Cube, Door, Fold,
 and Page Peel remain planned until origin, panel-slicing, or mesh-strip
 renderer contracts exist. Kaleidoscope is available as the first exotic
 pattern-lab transition by reusing transition-scoped registered effect
-primitives rather than adding a one-off compositor path. `Puzzle Push` and
-`Magnetic Tiles` are the first visible multi-panel transitions: the layer
-contract now supports normalized `sourceRect` sampling, and transition
-assembly clones the incoming participant into deterministic staggered panels
-or center-magnetic tiles. Shatter Glass and Origami Fold remain planned until
-their shard, shadow, and pivot/hinge contracts exist. Planned transitions that
+primitives rather than adding a one-off compositor path. `Puzzle Push`,
+`Magnetic Tiles`, and `Shatter Glass` are the first visible multi-panel
+transitions: the layer contract now supports normalized `sourceRect` sampling,
+and transition assembly clones transition participants into deterministic
+staggered panels, center-magnetic tiles, or rectangular outgoing tile-shatter.
+True Voronoi glass shards and cast shadows remain planned, and Origami Fold
+remains planned until per-panel 3D source UVs plus pivot/hinge contracts
+exist. Planned transitions that
 need true two-participant sampling, luma/matte comparison, mesh strips, richer
 visible multi-panel rendering, or temporal frame history remain out of the
 production palette until those renderer contracts exist.

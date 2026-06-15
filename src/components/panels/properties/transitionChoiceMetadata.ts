@@ -126,6 +126,7 @@ export function getPatternGlyphClass(option: string): string {
   if (option === 'paint-splatter') return 'transition-pattern-glyph-paint-splatter';
   if (option === 'polka-dot') return 'transition-pattern-glyph-polka-dot';
   if (option === 'puzzle-push') return 'transition-pattern-glyph-puzzle';
+  if (option === 'shatter-glass') return 'transition-pattern-glyph-shatter';
   if (option === 'magnetic-tiles') return 'transition-pattern-glyph-magnetic';
   if (option === 'random-blocks') return 'transition-pattern-glyph-random-blocks';
   if (option === 'venetian-horizontal') return 'transition-pattern-glyph-venetian-horizontal';

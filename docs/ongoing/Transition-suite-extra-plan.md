@@ -112,9 +112,12 @@ Verified on 2026-06-15:
   general `Layer.sourceRect` sampling contract, compositor shader/uniform
   support, and transition-layer panel cloning. EX13D-MP2 promotes
   `Magnetic Tiles` on the same rectangular panel path with center-magnetic
-  ordering and tile pull-in motion. `Shatter Glass` and `Origami Fold` stay
-  planned until shard semantics, shadows, and pivot/hinge contracts are
-  explicit.
+  ordering and tile pull-in motion. EX13D-MP3 promotes `Shatter Glass` as a
+  visible rectangular tile-shatter transition on the same multi-panel planner:
+  outgoing source-rect tiles fly and rotate away over the incoming clip with
+  deterministic seeded ordering. True Voronoi glass shards, cast shadows, and
+  `Origami Fold` remain planned until shard, shadow, per-panel UV, and
+  pivot/hinge contracts are explicit.
 - EX10 first Light-family step is implemented with `Flash`. It uses the shared
   generated-solid layer path plus deterministic multi-segment solid opacity, so
   preview/export stay on the existing transition layer assembly path.
@@ -476,6 +479,17 @@ Verified on 2026-06-15:
   zero browser errors, zero missing-pipeline matches, zero runtime diagnostics
   errors, and zero shader warnings, and the timeline restored to the pre-QA
   `lens-flare` transition.
+  `Shatter Glass` was verified through the same visible-browser DOM-mode
+  Dev-Bridge path after promotion to the runtime multi-panel planner:
+  `C:\Users\admin\AppData\Local\Temp\masterselects-shatter-glass-qa-20260615-165150\shatter-glass-grid.png`
+  and
+  `C:\Users\admin\AppData\Local\Temp\masterselects-shatter-glass-qa-20260615-165150\shatter-glass-mid.png`.
+  Visual inspection confirmed rectangular outgoing panel slices rotating and
+  flying away over the incoming clip. The midpoint capture came from
+  `renderTarget:preview` at 1920x1080. Runtime diagnostics and
+  transition-filtered WARN logs both reported zero entries, and the timeline
+  restored to the pre-QA `lens-flare` transition with the same duration and
+  default color.
 - A read-only Light/Blur sidecar recommends the next EX10 step as a small
   transition-scoped `effect` primitive contract that appends existing
   `Layer.effects` to transition participants. That enables an honest
@@ -798,7 +812,7 @@ distortion, generated overlays, and deterministic randomness.
 | Thermal Bloom | Stylized/Color | Heat-map color ramp blooms through the cut. |
 | Ink Bleed | Organic/Mask | Expanding soft procedural ink mask. |
 | Smoke Reveal | Organic/Overlay | Noise-flow alpha reveal with soft smoke-like edges. |
-| Shatter Glass | Exotic/Pattern | Voronoi shards rotate/slide away. |
+| Shatter Glass | Exotic/Pattern | Implemented as deterministic rectangular source-rect tiles that rotate/slide away; true Voronoi shards and cast shadows remain planned. |
 | Magnetic Tiles | Exotic/Pattern | Implemented as center-magnetic source-rect tiles pulling into place. |
 | Origami Fold | Exotic/3D | Multiple panels fold like paper. |
 | Portal Ring | Exotic/3D/Light | Ring mask with glow opens to incoming clip. |
@@ -812,9 +826,10 @@ Implementation guidance:
 - Start with procedural full-screen shader versions for Water Drop, Swirl,
   Kaleidoscope, Hex Pixelize, Doom Bars, Ink Bleed, and CRT Collapse.
 - Treat Shatter Glass, Magnetic Tiles, Puzzle Push, and Origami Fold as
-  multi-panel transitions. Puzzle Push and Magnetic Tiles now prove the
-  rectangular source-rect/panel-clone path; Shatter Glass and Origami Fold
-  still need shard, shadow, or hinge semantics before promotion.
+  multi-panel transitions. Puzzle Push, Magnetic Tiles, and Shatter Glass now
+  prove the rectangular source-rect/panel-clone path; Origami Fold and true
+  glass-shard variants still need shard, shadow, per-panel UV, or hinge
+  semantics before promotion.
 - Treat Smoke Reveal, Portal Ring, Thermal Bloom, and VHS Head Switch as
   overlay/distortion composites with explicit pass plans.
 - Keep "Neural Dream" and any AI/morph-driven transition planned only until
@@ -1653,9 +1668,11 @@ per-participant UV remap effects.
   planned metadata only.
 - EX13D Multi-Panel Lab: MP0 deterministic ordering/source-rect planning,
   MP1 visible `Puzzle Push` source-rect rendering, and MP2 visible
-  `Magnetic Tiles` center-magnetic tile rendering are implemented. Shatter
-  Glass and Origami Fold remain planned metadata until shard, shadow, and
-  pivot/hinge support exist.
+  `Magnetic Tiles` center-magnetic tile rendering are implemented. MP3
+  promotes `Shatter Glass` as a visible rectangular outgoing tile-shatter on
+  the same source-rect planner. Origami Fold and true Voronoi glass shards
+  remain planned metadata until shard, shadow, per-panel UV, and pivot/hinge
+  support exist.
 
 **Write set:**
 
@@ -1842,9 +1859,12 @@ Manual QA for a representative set:
       rendering through the general `Layer.sourceRect` sampling path.
 - [x] Magnetic Tiles uses the multi-panel planner in visible preview/export
       rendering with center-magnetic ordering and panel pull-in motion.
-- [ ] Shatter/Origami transitions use the multi-panel planner in visible
-      preview/export rendering after shard, shadow, and pivot/hinge contracts
-      are implemented.
+- [x] Shatter Glass uses the multi-panel planner in visible preview/export
+      rendering as deterministic rectangular source-rect tiles with seeded
+      ordering, fly-away offset, rotation, and fade.
+- [x] Origami Fold remains planned until per-panel 3D source UVs, transform
+      origins, pivot/hinge semantics, depth ordering, and shadow contracts are
+      implemented; it is not exposed as a 2.5D approximation.
 - [x] AI/neural transitions remain planned until derived-frame cache and export
       behavior are specified.
 - [x] Transitions panel scales by category/search without hard-coded layout

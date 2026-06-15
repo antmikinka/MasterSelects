@@ -26,6 +26,7 @@ describe('transition panel items', () => {
       ['lens flares burn chroma', ['light']],
       ['venetian blinds', ['pattern']],
       ['puzzle pieces', ['pattern']],
+      ['shatter tiles', ['pattern']],
       ['magnetic tiles', ['pattern']],
       ['tumble depth', ['tumble']],
       ['kaleidoscope prism', ['stylize']],
@@ -70,7 +71,7 @@ describe('transition panel items', () => {
     expect(items.find((item) => item.key === 'spin')?.variants.map((variant) => variant.id))
       .toEqual(['card-spin', 'spinback-3d']);
     expect(items.find((item) => item.key === 'rotate')?.variantCount).toBe(3);
-    expect(items.find((item) => item.key === 'pattern')?.variantCount).toBe(10);
+    expect(items.find((item) => item.key === 'pattern')?.variantCount).toBe(11);
     expect(items.find((item) => item.key === 'stylize')?.variantCount).toBe(4);
     expect(items.some((item) => item.key === 'wipe-up')).toBe(false);
     expect(items.some((item) => item.key === 'light-leak')).toBe(false);
