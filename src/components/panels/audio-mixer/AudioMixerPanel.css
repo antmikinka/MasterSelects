@@ -517,6 +517,7 @@
 }
 
 .audio-mixer-fader-meter {
+  --audio-mixer-fader-thumb-height: 34px;
   display: grid;
   grid-template-columns: 30px 24px 18px;
   align-items: stretch;
@@ -643,14 +644,26 @@
 }
 
 .audio-mixer-meter-scale-labels {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  align-items: flex-end;
+  position: relative;
+  min-height: 0;
   color: #d4d8d1;
   font-size: 9px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
+}
+
+.audio-mixer-meter-scale-label-inner {
+  position: absolute;
+  top: calc(var(--audio-mixer-fader-thumb-height, 34px) / 2);
+  right: 0;
+  bottom: calc(var(--audio-mixer-fader-thumb-height, 34px) / 2);
+  left: 0;
+}
+
+.audio-mixer-meter-scale-labels span {
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
 }
 
 .audio-mixer-meter .audio-level-meter-scale,

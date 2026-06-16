@@ -360,6 +360,7 @@
 /* fx rack + fader area -> routed pockets */
 .audio-mixer-panel.wood .audio-mixer-rack,
 .audio-mixer-panel.wood .audio-mixer-fader-meter {
+  --audio-mixer-fader-thumb-height: 64px;
   position: relative;
   background: transparent;
   border: 1px solid #080401;
@@ -880,6 +881,10 @@
 
 .audio-mixer-panel.wood .audio-mixer-fader-meter.master .audio-mixer-strip-fader {
   --audio-mixer-fader-thumb-width: 44px;
+  --audio-mixer-fader-thumb-height: 81px;
+}
+
+.audio-mixer-panel.wood .audio-mixer-fader-meter.master {
   --audio-mixer-fader-thumb-height: 81px;
 }
 

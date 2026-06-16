@@ -13,7 +13,7 @@
 
 
 <p>
-  GPU-first media editing with <b>33 effects</b>, <b>37 blend modes</b>, <b>23 audio FX</b>, <b>stem separation</b>, <b>native WebGPU 3D</b>, and <b>19 direct runtime dependencies</b>.<br>
+  GPU-first media editing with <b>33 effects</b>, <b>74 runtime transitions</b>, <b>37 blend modes</b>, <b>23 audio FX</b>, <b>stem separation</b>, <b>native WebGPU 3D</b>, and <b>19 direct runtime dependencies</b>.<br>
   Built from scratch in <b>4.1k+ lines of WGSL</b> and <b>330k+ lines of TypeScript/TSX app code</b>.<br>
   Import <b>.lottie, .riv, Lottie JSON, OBJ, glTF, GLB, PLY, SPLAT, KSPLAT, SPZ, SOG, LCC</b> assets and play <b>PLY / GLB sequences</b> directly on the timeline. Built with one coding-agent subscription from January to now.
 </p>
