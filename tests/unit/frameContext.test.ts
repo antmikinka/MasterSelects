@@ -252,3 +252,57 @@ describe('FrameContext clipsAtTime', () => {
     expect(dragTime.clipTime).toBe(4);
   });
 });
+
+describe('FrameContext audible solo group (issue #260)', () => {
+  beforeEach(() => {
+    playheadState.isUsingInternalPosition = false;
+    playheadState.position = 0;
+    hoisted.timelineState = createTimelineState();
+  });
+
+  it('keeps every audio track audible when nothing is soloed', () => {
+    hoisted.timelineState = createTimelineState({
+      tracks: [
+        createMockTrack({ id: 'audio-1', type: 'audio' }),
+        createMockTrack({ id: 'midi-1', type: 'midi' }),
+      ],
+    });
+
+    const ctx = createFrameContext();
+
+    expect(ctx.anyAudioSolo).toBe(false);
+    expect(ctx.unmutedAudioTrackIds.has('audio-1')).toBe(true);
+  });
+
+  it('silences non-soloed audio tracks when a MIDI track is soloed', () => {
+    hoisted.timelineState = createTimelineState({
+      tracks: [
+        createMockTrack({ id: 'audio-1', type: 'audio' }),
+        createMockTrack({ id: 'midi-1', type: 'midi', solo: true }),
+      ],
+    });
+
+    const ctx = createFrameContext();
+
+    // A soloed MIDI track marks the audible group as soloed, so non-soloed
+    // audio tracks drop out of the live mix.
+    expect(ctx.anyAudioSolo).toBe(true);
+    expect(ctx.unmutedAudioTrackIds.has('audio-1')).toBe(false);
+  });
+
+  it('keeps a soloed audio track audible alongside a soloed MIDI track', () => {
+    hoisted.timelineState = createTimelineState({
+      tracks: [
+        createMockTrack({ id: 'audio-1', type: 'audio', solo: true }),
+        createMockTrack({ id: 'audio-2', type: 'audio' }),
+        createMockTrack({ id: 'midi-1', type: 'midi' }),
+      ],
+    });
+
+    const ctx = createFrameContext();
+
+    expect(ctx.anyAudioSolo).toBe(true);
+    expect(ctx.unmutedAudioTrackIds.has('audio-1')).toBe(true);
+    expect(ctx.unmutedAudioTrackIds.has('audio-2')).toBe(false);
+  });
+});

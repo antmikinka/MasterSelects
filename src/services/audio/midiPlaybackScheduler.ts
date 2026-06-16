@@ -31,6 +31,7 @@ import {
   createTrackLiveAudioRouteSettings,
   getTrackAudioMuted,
   getTrackAudioSolo,
+  hasAnyAudibleSolo,
 } from './audioGraphRouteSettings';
 import { runtimeAudioMeterBus } from './runtimeAudioMeterBus';
 import { Logger } from '../logger';
@@ -329,7 +330,9 @@ class MidiPlaybackScheduler {
     }
     if (midiTracks.length === 0) return;
 
-    const hasSolo = midiTracks.some((track) => getTrackAudioSolo(track));
+    // Solo spans the whole audible group (audio + MIDI), so soloing an audio
+    // track silences MIDI tracks too, and vice versa (issue #260).
+    const hasSolo = hasAnyAudibleSolo(state.tracks);
 
     for (const track of midiTracks) {
       const instrument = track.midiInstrument ?? createDefaultMidiInstrument();

@@ -31,6 +31,21 @@ export function getTrackAudioSolo(track: TimelineTrack): boolean {
   return track.audioState?.solo ?? track.solo === true;
 }
 
+/**
+ * Tracks that produce audible output. MIDI tracks (issue #182) play through the
+ * synth, so for mute/solo they form one group with audio tracks: soloing a MIDI
+ * track must silence audio tracks and vice versa (issue #260). Video solo stays
+ * a separate, visual-only group.
+ */
+export function isAudibleTrack(track: Pick<TimelineTrack, 'type'>): boolean {
+  return track.type === 'audio' || track.type === 'midi';
+}
+
+/** True when any audible (audio or MIDI) track is soloed. */
+export function hasAnyAudibleSolo(tracks: readonly TimelineTrack[]): boolean {
+  return tracks.some(track => isAudibleTrack(track) && getTrackAudioSolo(track));
+}
+
 export function getTrackVolumeDb(track: TimelineTrack): number {
   const runtimeVolumeDb = getRuntimeTrackVolumeDbOverride(track.id);
   if (runtimeVolumeDb !== undefined) return runtimeVolumeDb;
