@@ -9,7 +9,7 @@ import { useMediaStore } from '../../stores/mediaStore';
 import { applyClipDragPreview } from '../../stores/timeline/clipDragPreview';
 import { getPlayheadPosition } from './PlayheadState';
 import type { Composition, MediaFile } from '../../stores/mediaStore/types';
-import { getTrackAudioMuted, getTrackAudioSolo } from '../audio/audioGraphRouteSettings';
+import { getTrackAudioMuted, getTrackAudioSolo, hasAnyAudibleSolo } from '../audio/audioGraphRouteSettings';
 
 function getClipsAtTime(clips: TimelineClip[], playheadPosition: number): TimelineClip[] {
   const EPSILON = 1e-6;
@@ -177,7 +177,9 @@ export function createFrameContext(): FrameContext {
 
     get anyAudioSolo(): boolean {
       if (_anyAudioSolo === null) {
-        _anyAudioSolo = this.audioTracks.some(getTrackAudioSolo);
+        // MIDI tracks share the audible solo group with audio tracks, so soloing
+        // a MIDI track also silences non-soloed audio tracks (issue #260).
+        _anyAudioSolo = hasAnyAudibleSolo(tracks);
       }
       return _anyAudioSolo;
     },

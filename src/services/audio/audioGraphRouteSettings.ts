@@ -12,6 +12,8 @@ import {
   getTrackAudioSolo,
   getTrackPan,
   getTrackVolumeDb,
+  hasAnyAudibleSolo,
+  isAudibleTrack,
   mergeEffectSettings,
 } from './graphRoute/routeSettingsMath';
 import { collectTrackRouteEffectSettings } from './graphRoute/trackRouteSettings';
@@ -33,6 +35,8 @@ export {
   getTrackAudioSolo,
   getTrackPan,
   getTrackVolumeDb,
+  hasAnyAudibleSolo,
+  isAudibleTrack,
 };
 
 /**
