@@ -1,6 +1,6 @@
 // App version
 // Format: MAJOR.MINOR.PATCH
-export const APP_VERSION = '2.2.7';
+export const APP_VERSION = '2.2.8';
 
 export interface ChangelogNotice {
   type: 'info' | 'warning' | 'success' | 'danger';
@@ -27,8 +27,8 @@ export const FEATURED_VIDEO: {
   title: 'MasterSelects Demo',
   banner: {
     type: 'success',
-    title: 'MasterSelects 2.2.7',
-    message: 'Transition suite update: Shatter Glass joins the visible Pattern family through deterministic rectangular multi-panel rendering, with honest 3D Origami work kept behind explicit renderer contracts.',
+    title: 'MasterSelects 2.2.8',
+    message: 'Worker-first playback renderer evidence is now merged: render-host routing, shadow parity, runtime export/playback smokes, and platform proof tooling are in place, with real Mac Safari/Firefox packages remaining as the final external gate.',
     animated: true,
   },
 };
@@ -36,8 +36,8 @@ export const FEATURED_VIDEO: {
 // Build/Platform notice shown at top of changelog (set to null to hide)
 export const BUILD_NOTICE: ChangelogNotice | null = {
   type: 'success',
-  title: 'MasterSelects 2.2.7',
-  message: 'Transition suite update: Shatter Glass joins the visible Pattern family through deterministic rectangular multi-panel rendering, with honest 3D Origami work kept behind explicit renderer contracts.',
+  title: 'MasterSelects 2.2.8',
+  message: 'Worker-first playback renderer evidence is now merged: render-host routing, shadow parity, runtime export/playback smokes, and platform proof tooling are in place, with real Mac Safari/Firefox packages remaining as the final external gate.',
   animated: true,
 };
 
