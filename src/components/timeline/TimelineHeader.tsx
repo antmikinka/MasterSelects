@@ -152,9 +152,9 @@ function TimelineHeaderComponent({
 
   const handleHeaderClick = (e: React.MouseEvent) => {
     if (isEditing) return;
-    if ((e.target as HTMLElement).closest('.track-controls')) return;
-    if ((e.target as HTMLElement).closest('.audio-track-faders')) return;
-    if ((e.target as HTMLElement).closest('.audio-track-popover')) return;
+    // Bail only on real interactive controls, not the `.track-controls` grid
+    // container whose empty cells/gaps (e.g. right of FX) must still select. #280
+    if ((e.target as HTMLElement).closest('button, input, select, .audio-track-faders, .audio-track-popover')) return;
     setTargetTrack(track.id);
     if (isMixerTrack) {
       useTimelineStore.getState().selectTrackProperties(track.id);
