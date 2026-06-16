@@ -1,5 +1,12 @@
 [
   {
+    "date": "2026-06-16",
+    "type": "refactor",
+    "title": "MasterSelects 2.2.8",
+    "description": "Worker-first playback renderer release: render-host routing now covers preview, playback, export, cache, wake, and target ownership paths; clone-safe render graph/provider contracts and scheduler/cache registries are in place; Worker-First golden fixtures, shadow parity runners, visible-pixel proofs, runtime export/playback smokes, and platform evidence tooling are merged. Windows Chromium plus Linux Chromium/Mesa and Linux Firefox/Mesa packages are valid, with real Mac Safari and Mac Firefox packages still required as the remaining external platform gate.",
+    "section": "Release"
+  },
+  {
     "date": "2026-06-15",
     "type": "new",
     "title": "MasterSelects 2.2.7",
