@@ -1,6 +1,6 @@
 // App version
 // Format: MAJOR.MINOR.PATCH
-export const APP_VERSION = '2.2.9';
+export const APP_VERSION = '2.2.10';
 
 export interface ChangelogNotice {
   type: 'info' | 'warning' | 'success' | 'danger';
@@ -27,8 +27,8 @@ export const FEATURED_VIDEO: {
   title: 'MasterSelects Demo',
   banner: {
     type: 'success',
-    title: 'MasterSelects 2.2.9',
-    message: 'Image crop tools are now available from the Media Panel and source monitor, creating a new CROP-prefixed media file without touching the original.',
+    title: 'MasterSelects 2.2.10',
+    message: 'Worker GPU playback is now stabilized with Worker WebCodecs frame delivery for normal forward playback, reverse prefetch support, and Safari/native export playback fixes merged into the release line.',
     animated: true,
   },
 };
@@ -36,8 +36,8 @@ export const FEATURED_VIDEO: {
 // Build/Platform notice shown at top of changelog (set to null to hide)
 export const BUILD_NOTICE: ChangelogNotice | null = {
   type: 'success',
-  title: 'MasterSelects 2.2.9',
-  message: 'Image crop tools are now available from the Media Panel and source monitor, creating a new CROP-prefixed media file without touching the original.',
+  title: 'MasterSelects 2.2.10',
+  message: 'Worker GPU playback is now stabilized with Worker WebCodecs frame delivery for normal forward playback, reverse prefetch support, and Safari/native export playback fixes merged into the release line.',
   animated: true,
 };
 
