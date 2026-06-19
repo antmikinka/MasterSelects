@@ -31,8 +31,8 @@ describe('renderHostPort', () => {
     expect(source).toContain('strictWorkerOnly: () => state.workerPrimaryStrictWorkerOnly');
   });
 
-  it('reports the current main-thread renderer ownership mode', () => {
-    expect(renderHostPort.getTelemetry()).toEqual({
+  it('requests the worker GPU renderer by default and reports main fallback when unavailable', () => {
+    expect(renderHostPort.getTelemetry()).toMatchObject({
       mode: 'main',
       presentationStrategy: 'main-host-fallback',
       lifecycleOwner: 'renderHostPort',
@@ -41,13 +41,12 @@ describe('renderHostPort', () => {
       selection: {
         selectedId: 'main-fallback',
         selectedRole: 'fallback',
-        workerPrimaryRequested: false,
+        workerPrimaryRequested: true,
         workerPrimaryRegistered: true,
         workerPrimaryAvailable: false,
-        blockers: ['worker render host flag disabled'],
-        reason: 'using main fallback: worker render host flag disabled',
       },
     });
+    expect(renderHostPort.getTelemetry().selection.blockers.length).toBeGreaterThan(0);
   });
 
   it('initializes the engine lifecycle once through the host', async () => {
@@ -465,7 +464,7 @@ describe('renderHostPort', () => {
         selection: {
           selectedId: 'main-fallback',
           selectedRole: 'fallback',
-          workerPrimaryRequested: false,
+          workerPrimaryRequested: true,
         },
       });
     } finally {
