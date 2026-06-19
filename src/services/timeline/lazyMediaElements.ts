@@ -1,9 +1,12 @@
 import type { TimelineClip } from '../../types';
+import { useMediaStore, type MediaFile } from '../../stores/mediaStore';
 import type { FrameContext } from '../layerBuilder/types';
 import { Logger } from '../logger';
+import { NativeHelperClient } from '../nativeHelper/NativeHelperClient';
 import { renderHostPort } from '../render/renderHostPort';
 import {
   createMediaObjectUrl,
+  createPrimaryMediaObjectUrl,
   getLazyMediaElementObjectUrlKey,
   mediaObjectUrlManager,
 } from '../project/mediaObjectUrlManager';
@@ -47,8 +50,15 @@ const AUDIO_LOOKAHEAD_SECONDS = 1.25;
 const IDLE_RELEASE_MS = 1800;
 const MAX_LAZY_MEDIA_ELEMENTS = 24;
 const MAX_DESIRED_CLIPS_PER_TRACK = 3;
+const NATIVE_FILE_REFERENCE_PREFIX = 'native-helper-file://';
 
 const lazyMediaRecords = new Map<string, LazyMediaRecord>();
+const nativeReferenceResolutions = new Map<string, Promise<void>>();
+
+type NativeReferenceClient = {
+  parseFileReferenceUrl?: (url: string | undefined) => string | null;
+  getReferencedFile?: (url: string, fileName: string) => Promise<File | null>;
+};
 
 interface LazyClipCandidate {
   clip: TimelineClip;
@@ -87,14 +97,76 @@ function getMediaFileForLazyClip(ctx: FrameContext, clip: TimelineClip) {
   return clip.name ? ctx.mediaFileByName.get(clip.name.replace(/ \(Audio\)$/, '')) ?? ctx.mediaFileByName.get(clip.name) : undefined;
 }
 
+function parseNativeFileReferenceUrl(url: string | undefined): string | null {
+  if (!url?.startsWith(NATIVE_FILE_REFERENCE_PREFIX)) return null;
+
+  const client = NativeHelperClient as NativeReferenceClient;
+  return typeof client.parseFileReferenceUrl === 'function'
+    ? client.parseFileReferenceUrl(url)
+    : null;
+}
+
+function getNativeReferencedFile(url: string, fileName: string): Promise<File | null> {
+  const client = NativeHelperClient as NativeReferenceClient;
+  return typeof client.getReferencedFile === 'function'
+    ? client.getReferencedFile(url, fileName)
+    : Promise.resolve(null);
+}
+
+function ensureNativeReferenceResolved(mediaFile: MediaFile, sourceUrl: string): void {
+  const nativePath = parseNativeFileReferenceUrl(sourceUrl);
+  if (!nativePath) return;
+
+  const resolutionKey = `${mediaFile.id}:${sourceUrl}`;
+  if (nativeReferenceResolutions.has(resolutionKey)) return;
+
+  const resolution = getNativeReferencedFile(sourceUrl, mediaFile.name)
+    .then((file) => {
+      if (!file) return;
+
+      const url = createPrimaryMediaObjectUrl(mediaFile.id, file);
+      useMediaStore.setState((state) => ({
+        files: state.files.map((entry) => (
+          entry.id === mediaFile.id
+            ? {
+                ...entry,
+                file,
+                url,
+                hasFileHandle: true,
+                absolutePath: entry.absolutePath ?? nativePath,
+              }
+            : entry
+        )),
+      }));
+      renderHostPort.requestNewFrameRender();
+    })
+    .catch((error) => {
+      log.warn('Could not resolve native lazy media reference', {
+        mediaFileId: mediaFile.id,
+        name: mediaFile.name,
+        error,
+      });
+    })
+    .finally(() => {
+      nativeReferenceResolutions.delete(resolutionKey);
+    });
+
+  nativeReferenceResolutions.set(resolutionKey, resolution);
+}
+
 function getLazySource(ctx: FrameContext, clip: TimelineClip, kind: LazyMediaKind): {
   url: string;
   objectUrl?: string;
   managedObjectUrl?: LazyMediaRecord['managedObjectUrl'];
 } | null {
   const mediaFile = getMediaFileForLazyClip(ctx, clip);
-  if (mediaFile?.url) {
-    return { url: mediaFile.url };
+  const mediaUrl = mediaFile?.url;
+  const nativeReferenceUrl = mediaUrl && parseNativeFileReferenceUrl(mediaUrl)
+    ? mediaUrl
+    : null;
+
+  if (mediaUrl && !nativeReferenceUrl) {
+    return { url: mediaUrl };
   }
 
   const file = getUsableFile(clip.file) ?? getUsableFile(clip.source?.file) ?? getUsableFile(mediaFile?.file);
@@ -118,8 +190,11 @@ function getLazySource(ctx: FrameContext, clip: TimelineClip, kind: LazyMediaKin
     return { url: objectUrl, objectUrl };
   }
 
-  const url = mediaFile?.url;
-  return url ? { url } : null;
+  if (nativeReferenceUrl && mediaFile) {
+    ensureNativeReferenceResolved(mediaFile, nativeReferenceUrl);
+  }
+
+  return null;
 }
 
 function updateNaturalDuration(

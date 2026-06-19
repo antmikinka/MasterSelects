@@ -111,7 +111,7 @@ export function createStemBufferMixerSession(
     rightMeterSamples: new Float32Array(rightAnalyser.fftSize) as Float32Array<ArrayBuffer>,
     meterTrackId,
     getSourceTime: () => {
-      if (context.state === 'closed') return null;
+      if (context.state !== 'running') return null;
       const sourceTime = startOffset + (context.currentTime - startAt);
       return Number.isFinite(sourceTime) ? Math.max(0, sourceTime) : null;
     },
