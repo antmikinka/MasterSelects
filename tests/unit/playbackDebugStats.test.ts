@@ -249,7 +249,7 @@ describe('playback debug stats', () => {
           t: 16,
           frameId: 'preview:video-frame:2',
           targetId: 'preview',
-          source: 'worker-gpu-only:VideoFrame',
+          source: 'worker-gpu-only:video-frame',
         },
         {
           t: 33,
@@ -292,7 +292,7 @@ describe('playback debug stats', () => {
 
     expect(stats.previewPathCounts).toMatchObject({
       'worker-gpu-only:gpu-test-pattern': 1,
-      'worker-gpu-only:VideoFrame': 1,
+      'worker-gpu-only:video-frame': 1,
       'worker-gpu-only:solid': 1,
       'worker-gpu-only:image': 1,
       'worker-gpu-only:text': 1,
@@ -308,7 +308,7 @@ describe('playback debug stats', () => {
       unknownSourceFrames: 0,
       pathCounts: {
         'worker-gpu-only:gpu-test-pattern': 1,
-        'worker-gpu-only:VideoFrame': 1,
+        'worker-gpu-only:video-frame': 1,
         'worker-gpu-only:solid': 1,
         'worker-gpu-only:image': 1,
         'worker-gpu-only:text': 1,

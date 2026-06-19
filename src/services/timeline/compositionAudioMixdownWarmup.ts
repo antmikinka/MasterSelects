@@ -25,7 +25,7 @@ export interface CompositionAudioMixdownWarmupRequest {
 }
 
 export interface CompositionAudioMixdownWarmupDeps {
-  getState: () => CompositionAudioMixdownWarmupState;
+  getWarmupState: () => CompositionAudioMixdownWarmupState;
   setClips: (updater: (clips: readonly TimelineClip[]) => TimelineClip[]) => void;
   requestMixdown?: (clip: TimelineClip) => Promise<CompositionAudioMixdownRequestResult | null>;
   setTimeout?: typeof setTimeout;
@@ -111,7 +111,7 @@ function findCurrentClip(
   deps: CompositionAudioMixdownWarmupDeps,
   request: CompositionAudioMixdownWarmupRequest,
 ): TimelineClip | null {
-  const state = deps.getState();
+  const state = deps.getWarmupState();
   if (state.timelineSessionId !== request.timelineSessionId) return null;
   return state.clips.find((clip) => clip.id === request.clipId) ?? null;
 }
@@ -121,7 +121,7 @@ function updateWarmupGenerating(
   request: CompositionAudioMixdownWarmupRequest,
   mixdownGenerating: boolean,
 ): void {
-  if (deps.getState().timelineSessionId !== request.timelineSessionId) return;
+  if (deps.getWarmupState().timelineSessionId !== request.timelineSessionId) return;
   deps.setClips((clips) => setCompositionAudioMixdownGenerating(clips, request.clipId, mixdownGenerating));
 }
 
@@ -175,7 +175,7 @@ export async function warmCompositionAudioMixdowns(
 ): Promise<CompositionAudioMixdownWarmupResult[]> {
   const results: CompositionAudioMixdownWarmupResult[] = [];
   for (const request of requests) {
-    if (options.deps.getState().timelineSessionId !== request.timelineSessionId) {
+    if (options.deps.getWarmupState().timelineSessionId !== request.timelineSessionId) {
       results.push({ clipId: request.clipId, status: 'stale' });
       continue;
     }
@@ -188,7 +188,7 @@ export function scheduleCompositionAudioMixdownWarmup(
   options: CompositionAudioMixdownWarmupOptions,
 ): () => void {
   const deps = options.deps;
-  const requests = collectCompositionAudioMixdownWarmupRequests(deps.getState());
+  const requests = collectCompositionAudioMixdownWarmupRequests(deps.getWarmupState());
   if (requests.length === 0) return () => {};
 
   const { setTimeout: scheduleTimeout, clearTimeout: cancelTimeout } = getTimerDeps(deps);

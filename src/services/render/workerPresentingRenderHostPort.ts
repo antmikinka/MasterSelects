@@ -8,8 +8,8 @@ import type {
   ScrubbingCacheStats,
   WorkerFirstCacheRuntimeSnapshot,
 } from '../../engine/texture/ScrubbingCache';
-import type { EngineStats } from '../../types';
-import type { Layer } from '../../types';
+import type { EngineStats } from '../../types/engineStats';
+import type { Layer } from '../../types/layers';
 import { useEngineStore } from '../../stores/engineStore';
 import { useMediaStore } from '../../stores/mediaStore';
 import { useRenderTargetStore } from '../../stores/renderTargetStore';
@@ -1562,7 +1562,7 @@ class WorkerPresentingRenderHostPortCore {
         recordWorkerFirstPresentedFrame({
           frameId: `${targetId}:${sourceId}:worker-stream:${previousPresented + index + 1}`,
           targetId,
-          source: 'worker-gpu-only:VideoFrame',
+          source: 'worker-gpu-only:video-frame',
           changed,
           targetMoved: true,
           t: now - (deltaPresented - index - 1) * frameIntervalMs,
@@ -1905,7 +1905,7 @@ class WorkerPresentingRenderHostPortCore {
       this.recordRuntimeOutput(output, {
         changed: true,
         targetMoved: true,
-        source: 'worker-gpu-only:VideoFrame',
+        source: 'worker-gpu-only:video-frame',
       });
       if (this.runtimeOutputHasError(output) && !output.presentedFrameId) {
         this.presentationFailures += 1;
@@ -2003,7 +2003,7 @@ class WorkerPresentingRenderHostPortCore {
         this.recordRuntimeOutput(output, {
           changed: sourceFrameChanged,
           targetMoved: playbackTargetMoved,
-          source: 'worker-gpu-only:VideoFrame',
+          source: 'worker-gpu-only:video-frame',
         });
         if (!presented) {
           this.presentationFailures += 1;

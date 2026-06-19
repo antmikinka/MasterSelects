@@ -300,14 +300,14 @@ describe('worker-first runtime counter sources', () => {
       realSourceFrames: 0,
       pathCounts: {
         'worker-gpu-only:gpu-test-pattern': 1,
-        'worker-gpu-only:VideoFrame': 0,
+        'worker-gpu-only:video-frame': 0,
       },
     });
 
     recordWorkerFirstPresentedFrame({
       frameId: 'preview:video-frame:2',
       targetId: 'preview',
-      source: 'worker-gpu-only:VideoFrame',
+      source: 'worker-gpu-only:video-frame',
       t: 20,
     }, 20);
     recordWorkerFirstPresentedFrame({
@@ -325,7 +325,7 @@ describe('worker-first runtime counter sources', () => {
       realSourceFrames: 2,
       pathCounts: {
         'worker-gpu-only:gpu-test-pattern': 1,
-        'worker-gpu-only:VideoFrame': 1,
+        'worker-gpu-only:video-frame': 1,
         'worker-gpu-only:solid': 0,
         'worker-gpu-only:image': 0,
         'worker-gpu-only:text': 0,

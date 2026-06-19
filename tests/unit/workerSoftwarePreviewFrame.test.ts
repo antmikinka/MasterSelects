@@ -9,7 +9,7 @@ import {
   cacheWorkerSoftwareHtmlVideoSnapshot,
   hasCachedWorkerSoftwareHtmlVideoSnapshot,
 } from '../../src/services/render/workerSoftwareHtmlVideoSnapshotCache';
-import type { Layer } from '../../src/types';
+import type { Layer } from '../../src/types/layers';
 import { DEFAULT_PRIMARY_COLOR_PARAMS } from '../../src/types/colorCorrection';
 
 function videoLayer(videoElement: HTMLVideoElement, mediaTime: number): Layer {

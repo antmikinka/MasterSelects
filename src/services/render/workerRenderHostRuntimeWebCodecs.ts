@@ -991,10 +991,12 @@ async function bitmapResultForSource(
 
 async function loadSource(command: Extract<WorkerWebCodecsCommand, { readonly type: 'loadWebCodecsSource' }>) {
   sources.get(command.sourceId)?.player.destroy?.();
+  const retainedBuffer = command.buffer.slice(0);
+  const hardwareAcceleration = command.hardwareAcceleration ?? 'prefer-software';
   const sourceRef: { current: WorkerWebCodecsSource | null } = { current: null };
   const player = new WebCodecsPlayer({
     loop: false,
-    hardwareAcceleration: command.hardwareAcceleration ?? 'prefer-software',
+    hardwareAcceleration,
     useSimpleMode: false,
     onDecodedFrame: (frame) => {
       const source = sourceRef.current;
@@ -1007,7 +1009,13 @@ async function loadSource(command: Extract<WorkerWebCodecsCommand, { readonly ty
   const source: WorkerWebCodecsSource = {
     sourceId: command.sourceId,
     player,
+    retainedBuffer,
+    hardwareAcceleration,
     reverseFrameCache: new Map(),
+    reverseCaptureWindows: [],
+    reversePrefetchPlayer: null,
+    reversePrefetchLoadPromise: null,
+    reversePrefetchTargetSeconds: null,
     lastError: null,
     reverseCaptureTargetSeconds: null,
     reverseCaptureWindowMinSeconds: null,

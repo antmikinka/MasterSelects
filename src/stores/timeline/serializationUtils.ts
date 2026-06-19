@@ -188,7 +188,7 @@ export const createSerializationUtils: SliceCreator<SerializationUtils> = (set, 
     const scheduleRestoredCompositionAudioWarmup = () => {
       scheduleCompositionAudioMixdownWarmup({
         deps: {
-          getState: () => ({
+          getWarmupState: () => ({
             clips: get().clips,
             timelineSessionId,
           }),

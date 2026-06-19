@@ -89,7 +89,7 @@ describe('compositionAudioMixdownWarmup', () => {
     const cancel = scheduleCompositionAudioMixdownWarmup({
       delayMs: 25,
       deps: {
-        getState: () => ({ clips, timelineSessionId }),
+        getWarmupState: () => ({ clips, timelineSessionId }),
         setClips: (updater) => {
           clips = updater(clips);
         },
@@ -128,7 +128,7 @@ describe('compositionAudioMixdownWarmup', () => {
     scheduleCompositionAudioMixdownWarmup({
       delayMs: 25,
       deps: {
-        getState: () => ({ clips, timelineSessionId }),
+        getWarmupState: () => ({ clips, timelineSessionId }),
         setClips: (updater) => {
           clips = updater(clips);
         },

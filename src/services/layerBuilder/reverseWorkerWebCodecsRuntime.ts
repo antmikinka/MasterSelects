@@ -234,7 +234,7 @@ function bindReverseWorkerRuntimeSourceForPlaybackPrime(
 
   const mediaFile = findMediaFileForClip(mediaFiles, clip);
   const mediaFileId = clip.mediaFileId ?? clip.source?.mediaFileId ?? mediaFile?.id;
-  const file = clip.file ?? mediaFile?.file;
+  const file = clip.file ?? clip.source?.file ?? mediaFile?.file;
   if (!mediaFileId || !file) {
     return null;
   }
@@ -254,7 +254,7 @@ function bindReverseWorkerRuntimeSourceForPlaybackPrime(
 
 export async function primeReverseWorkerRuntimeSourcesForPlayback(input: {
   readonly clips: readonly TimelineClip[];
-  readonly mediaFiles: readonly MediaFile[];
+  readonly mediaFiles?: readonly MediaFile[];
   readonly playheadPosition: number;
   readonly playbackSpeed: number;
   readonly getSourceTimeForClip: (clipId: string, clipLocalTime: number) => number;
@@ -271,7 +271,7 @@ export async function primeReverseWorkerRuntimeSourcesForPlayback(input: {
     const reverseRequested = input.playbackSpeed < 0 || clip.reversed === true;
     if (!reverseRequested || clip.source?.type !== 'video') continue;
 
-    const source = bindReverseWorkerRuntimeSourceForPlaybackPrime(clip, input.mediaFiles);
+    const source = bindReverseWorkerRuntimeSourceForPlaybackPrime(clip, input.mediaFiles ?? []);
     if (!source?.runtimeSourceId || !source.runtimeSessionKey) continue;
 
     const clipTime = calculateReversePrimeClipTime({

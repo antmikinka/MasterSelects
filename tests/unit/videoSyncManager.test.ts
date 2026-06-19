@@ -23,7 +23,7 @@ import {
   releaseAllLazyTimelineMediaElements,
 } from '../../src/services/timeline/lazyMediaElements';
 import type { FrameContext } from '../../src/services/layerBuilder/types';
-import type { TimelineClip } from '../../src/types';
+import type { TimelineClip } from '../../src/types/timeline';
 
 type EngineTestAccess = typeof engine & {
   ensureVideoFrameCached: ReturnType<typeof vi.fn>;

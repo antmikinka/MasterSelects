@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { TimelineClip, TimelineTrack } from '../../src/types';
+import type { TimelineClip, TimelineTrack } from '../../src/types/timeline';
 import {
   dispatchTimelineClipPointerClick,
   dispatchTimelineClipPointerMove,

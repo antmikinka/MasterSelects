@@ -433,7 +433,7 @@ describe('AI stats timeline runtime coordinator bridge field', () => {
     recordWorkerFirstPresentedFrame({
       frameId: 'preview:video-frame:2',
       targetId: 'preview',
-      source: 'worker-gpu-only:VideoFrame',
+      source: 'worker-gpu-only:video-frame',
       t: now - 10,
     }, 20);
 
@@ -445,7 +445,7 @@ describe('AI stats timeline runtime coordinator bridge field', () => {
     }).playback;
     expect(playback.previewPathCounts).toMatchObject({
       'worker-gpu-only:gpu-test-pattern': 1,
-      'worker-gpu-only:VideoFrame': 1,
+      'worker-gpu-only:video-frame': 1,
     });
     expect(playback).toMatchObject({
       workerGpuOnly: {
@@ -456,7 +456,7 @@ describe('AI stats timeline runtime coordinator bridge field', () => {
         unknownSourceFrames: 0,
         pathCounts: {
           'worker-gpu-only:gpu-test-pattern': 1,
-          'worker-gpu-only:VideoFrame': 1,
+          'worker-gpu-only:video-frame': 1,
         },
       },
     });

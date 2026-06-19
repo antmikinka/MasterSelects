@@ -2,7 +2,7 @@ import { act, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TransformTab } from '../../src/components/panels/properties/TransformTab';
 import { KEYFRAME_RECORDING_FEEDBACK_EVENT } from '../../src/utils/keyframeRecordingFeedback';
-import type { BlendMode } from '../../src/types';
+import type { BlendMode } from '../../src/types/blendMode';
 
 const mockState = vi.hoisted(() => ({
   sourceType: 'gaussian-splat',

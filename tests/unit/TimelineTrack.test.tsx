@@ -8,7 +8,7 @@ import {
 } from '../../src/services/timeline/timelineCanvasDiagnostics';
 import { useMediaStore } from '../../src/stores/mediaStore';
 import { useTimelineStore } from '../../src/stores/timeline';
-import type { TimelineClip, TimelineTrack as TimelineTrackType } from '../../src/types';
+import type { TimelineClip, TimelineTrack as TimelineTrackType } from '../../src/types/timeline';
 
 function createTrack(): TimelineTrackType {
   return {

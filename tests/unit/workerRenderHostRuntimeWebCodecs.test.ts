@@ -31,6 +31,7 @@ const workerRuntimeWebCodecsMocks = vi.hoisted(() => {
       isDecodePending: ReturnType<typeof vi.fn>;
       getDebugInfo: ReturnType<typeof vi.fn>;
       getReverseDecodeWindowForTimeSeconds: ReturnType<typeof vi.fn>;
+      decodeReverseWindowForTimeSeconds: ReturnType<typeof vi.fn>;
       seek: ReturnType<typeof vi.fn>;
       advanceToTime: ReturnType<typeof vi.fn>;
       startWorkerStreamPlayback: ReturnType<typeof vi.fn>;
@@ -70,6 +71,9 @@ vi.mock('../../src/engine/WebCodecsPlayer', () => {
         : null,
     }));
     getReverseDecodeWindowForTimeSeconds = vi.fn(() => null);
+    decodeReverseWindowForTimeSeconds = vi.fn((timeSeconds: number) => {
+      this.seek(timeSeconds, { previewMode: 'strict' });
+    });
     advanceToTime = vi.fn((timeSeconds: number) => {
       this.currentTime = timeSeconds;
       this.currentFrame = workerRuntimeWebCodecsMocks.makeFrame(timeSeconds);
@@ -587,8 +591,12 @@ describe('worker render host runtime WebCodecs commands', () => {
     });
 
     expect(output.frame?.timestamp).toBe(2_750_000);
-    expect(player.seek.mock.calls[0]?.[0]).toBeCloseTo(2.83);
-    expect(player.seek.mock.calls[0]?.[1]).toEqual({ previewMode: 'strict' });
+    await vi.waitFor(() => {
+      expect(workerRuntimeWebCodecsMocks.instances[1]?.decodeReverseWindowForTimeSeconds).toHaveBeenCalled();
+    });
+    const prefetchPlayer = workerRuntimeWebCodecsMocks.instances[1]!;
+    expect(prefetchPlayer.decodeReverseWindowForTimeSeconds.mock.calls[0]?.[0]).toBeCloseTo(2.83);
+    expect(player.seek).not.toHaveBeenCalled();
   });
 
   it('primes the next GPU reverse window at the lower cache edge even when the old decode is still pending', async () => {
@@ -625,8 +633,12 @@ describe('worker render host runtime WebCodecs commands', () => {
     });
 
     expect(output.frame?.timestamp).toBe(2_500_000);
-    expect(player.seek.mock.calls[0]?.[0]).toBeCloseTo(2.58);
-    expect(player.seek.mock.calls[0]?.[1]).toEqual({ previewMode: 'strict' });
+    await vi.waitFor(() => {
+      expect(workerRuntimeWebCodecsMocks.instances[1]?.decodeReverseWindowForTimeSeconds).toHaveBeenCalled();
+    });
+    const prefetchPlayer = workerRuntimeWebCodecsMocks.instances[1]!;
+    expect(prefetchPlayer.decodeReverseWindowForTimeSeconds.mock.calls[0]?.[0]).toBeCloseTo(2.58);
+    expect(player.seek).not.toHaveBeenCalled();
   });
 
   it('uses the worker streaming queue for normal GPU playback without per-frame seeking', async () => {

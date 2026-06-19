@@ -1,6 +1,6 @@
 export const WORKER_GPU_ONLY_PREVIEW_PATH_LABELS = [
   'worker-gpu-only:gpu-test-pattern',
-  'worker-gpu-only:VideoFrame',
+  'worker-gpu-only:video-frame',
   'worker-gpu-only:solid',
   'worker-gpu-only:image',
   'worker-gpu-only:text',

@@ -1,4 +1,4 @@
-import type { TimelineClip } from '../../types';
+import type { TimelineClip } from '../../types/timeline';
 import { flags } from '../../engine/featureFlags';
 import { renderHostPort } from '../render/renderHostPort';
 import { scrubSettleState } from '../scrubSettleState';
@@ -16,13 +16,9 @@ import {
 } from './videoSyncTransitionQueries';
 import type { VideoSyncWarmupState } from './videoSyncWarmupState';
 
-type VideoFrameCallbackVideo = HTMLVideoElement & {
-  requestVideoFrameCallback: (callback: () => void) => number;
-};
+type VideoFrameCallbackVideo = HTMLVideoElement & { requestVideoFrameCallback: (callback: () => void) => number };
 
-function hasVideoFrameCallback(video: HTMLVideoElement): video is VideoFrameCallbackVideo {
-  return 'requestVideoFrameCallback' in video;
-}
+function hasVideoFrameCallback(video: HTMLVideoElement): video is VideoFrameCallbackVideo { return 'requestVideoFrameCallback' in video; }
 
 export type VideoSyncWarmupCoordinatorDeps = {
   warmups: VideoSyncWarmupState;
@@ -34,12 +30,9 @@ export type VideoSyncWarmupCoordinatorDeps = {
   clearHtmlSeekState: (clipId: string, video?: HTMLVideoElement) => void;
   prewarmUpcomingWebCodecsClip: (ctx: FrameContext, clip: TimelineClip, clipTime: number) => void;
   usesFullWebCodecsPreview: (clip: TimelineClip) => boolean;
-  startTargetedWarmup: (
-    clipId: string,
-    video: HTMLVideoElement,
-    targetTime: number,
-    options?: { proactive?: boolean; requestRender?: boolean; resumeAfterWarmup?: boolean }
-  ) => void;
+  startTargetedWarmup: (clipId: string, video: HTMLVideoElement, targetTime: number, options?: {
+    proactive?: boolean; requestRender?: boolean; resumeAfterWarmup?: boolean;
+  }) => void;
   clearWarmupState: (video: HTMLVideoElement) => void;
 };
 

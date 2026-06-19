@@ -59,7 +59,7 @@ This is not real video playback yet. It proves the worker-owned WebGPU surface
 is visible and can submit/present without CPU, 2D canvas, software preview, or
 main-thread render rescue. The next gate is replacing the test pattern with a
 worker-owned source texture path: provider frame -> GPU texture registry ->
-minimal GPU compositor -> `worker-gpu-only:VideoFrame`.
+minimal GPU compositor -> `worker-gpu-only:video-frame`.
 
 ## Size Estimate
 
@@ -317,7 +317,7 @@ Exit:
 
 - Comp 2 capture is visibly non-black and shows the video frame.
 - Playback stats show `previewFrames > 0` and a GPU path count such as
-  `worker-gpu-only:VideoFrame`.
+  `worker-gpu-only:video-frame`.
 - Software blocked counters no longer need to rise for ordinary render ticks
   once GPU source coverage is present.
 

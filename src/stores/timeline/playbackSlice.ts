@@ -150,12 +150,10 @@ function primeReverseWorkerWebCodecsPlayback(input: {
   if (input.playbackSpeed >= 0 && !input.clips.some((clip) => clip.reversed === true)) {
     return Promise.resolve(0);
   }
-  const mediaFiles = useMediaStore.getState().files;
   return loadReverseWorkerRuntimeModule()
     .then(({ primeReverseWorkerRuntimeSourcesForPlayback }) => {
       return primeReverseWorkerRuntimeSourcesForPlayback({
         clips: input.clips,
-        mediaFiles,
         playheadPosition: input.playheadPosition,
         playbackSpeed: input.playbackSpeed,
         getSourceTimeForClip: input.getSourceTimeForClip,

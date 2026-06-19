@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TrackContextMenu, type TrackContextMenuState } from '../../src/components/timeline/TrackContextMenu';
-import type { TimelineClip, TimelineTrack } from '../../src/types';
+import type { TimelineClip, TimelineTrack } from '../../src/types/timeline';
 
 const timelineStore = vi.hoisted(() => ({
   current: {

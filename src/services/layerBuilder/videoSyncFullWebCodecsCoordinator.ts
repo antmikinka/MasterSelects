@@ -35,21 +35,15 @@ import {
   type VideoSyncHtmlAudioFallbackTarget,
 } from './videoSyncWebCodecsPolicy';
 import type { VideoSyncWebCodecsSeekState } from './videoSyncWebCodecsSeekState';
+import {
+  syncPausedWebCodecsProvider as syncPausedWebCodecsProviderState,
+  type PausedWebCodecsProvider,
+} from './videoSyncPausedWebCodecsProvider';
+import {
+  shouldSeekReversePlaybackProvider as shouldSeekReversePlaybackProviderPolicy,
+} from './videoSyncReversePlaybackProvider';
 
 const log = Logger.create('CutTransition');
-
-type PausedWebCodecsProvider = {
-  currentTime: number;
-  seek: (time: number) => void;
-  scrubSeek?: (time: number) => void;
-  fastSeek?: (time: number) => void;
-  isPlaying?: boolean;
-  pause?: () => void;
-  getPendingSeekTime?: () => number | null | undefined;
-  isDecodePending?: () => boolean;
-  hasFrame?: () => boolean;
-  getCurrentFrame?: () => unknown;
-};
 
 export type VideoSyncFullWebCodecsCoordinatorDeps = {
   wcSeeks: VideoSyncWebCodecsSeekState;
@@ -66,9 +60,6 @@ export type VideoSyncFullWebCodecsCoordinatorDeps = {
 };
 
 export class VideoSyncFullWebCodecsCoordinator {
-  private static readonly MANUAL_TELEPORT_FAST_SEEK_THRESHOLD = 0.35;
-  private static readonly DEFAULT_REVERSE_PLAYBACK_FRAME_RATE = 30;
-  private static readonly REVERSE_PLAYBACK_SEEK_FRAME_FRACTION = 0.45;
   private readonly deps: VideoSyncFullWebCodecsCoordinatorDeps;
 
   constructor(deps: VideoSyncFullWebCodecsCoordinatorDeps) {
@@ -147,39 +138,7 @@ export class VideoSyncFullWebCodecsCoordinator {
     provider: RuntimeFrameProvider | null | undefined,
     targetTime: number
   ): boolean {
-    if (!provider) return false;
-
-    const frameRate = provider.getFrameRate?.() ??
-      VideoSyncFullWebCodecsCoordinator.DEFAULT_REVERSE_PLAYBACK_FRAME_RATE;
-    const frameInterval = frameRate > 0
-      ? 1 / frameRate
-      : 1 / VideoSyncFullWebCodecsCoordinator.DEFAULT_REVERSE_PLAYBACK_FRAME_RATE;
-    const seekThreshold =
-      frameInterval * VideoSyncFullWebCodecsCoordinator.REVERSE_PLAYBACK_SEEK_FRAME_FRACTION;
-    const pendingTarget = provider.getPendingSeekTime?.();
-    if (
-      typeof pendingTarget === 'number' &&
-      Number.isFinite(pendingTarget) &&
-      Math.abs(pendingTarget - targetTime) < seekThreshold
-    ) {
-      return false;
-    }
-
-    const debugFrameTime = provider.getDebugInfo?.()?.currentFrameTimestampSeconds;
-    const displayedFrameTime =
-      typeof debugFrameTime === 'number' && Number.isFinite(debugFrameTime)
-        ? debugFrameTime
-        : provider.hasFrame?.() === true
-          ? provider.currentTime
-          : null;
-    if (
-      typeof displayedFrameTime === 'number' &&
-      Math.abs(displayedFrameTime - targetTime) < frameInterval * 0.5
-    ) {
-      return false;
-    }
-
-    return true;
+    return shouldSeekReversePlaybackProviderPolicy(provider, targetTime);
   }
 
   syncPausedWebCodecsProvider(
@@ -190,79 +149,17 @@ export class VideoSyncFullWebCodecsCoordinator {
     schedulePreciseSeek = false,
     allowSequentialDuringDrag = true
   ): void {
-    if (!provider) {
-      return;
-    }
-
-    if (provider.isPlaying) {
-      provider.pause?.();
-    }
-
-    if (isDragging) {
-      const interactiveSeek =
-        typeof provider.scrubSeek === 'function'
-          ? provider.scrubSeek.bind(provider)
-          : provider.seek.bind(provider);
-      const supportsInteractiveScrub = typeof provider.scrubSeek === 'function';
-      const decodeBusy = provider.isDecodePending?.() ?? false;
-      const effectivePos = provider.getPendingSeekTime?.() ?? provider.currentTime;
-      const dragDelta = Math.abs(effectivePos - targetTime);
-
-      if (allowSequentialDuringDrag && supportsInteractiveScrub) {
-        const canRetargetBusyInteractiveSeek =
-          decodeBusy &&
-          dragDelta >= 0.12 &&
-          performance.now() - (this.deps.wcSeeks.getLastPreciseSeekAt(providerKey) ?? 0) >= 24;
-        if (
-          (!decodeBusy || canRetargetBusyInteractiveSeek) &&
-          (!videoSyncProviderHasFrame(provider) || dragDelta > 0.01)
-        ) {
-          this.clearFastSeekTracking(providerKey);
-          interactiveSeek(targetTime);
-          this.deps.wcSeeks.setLastPreciseSeekAt(providerKey, performance.now());
-        }
-        return;
-      }
-
-      if (allowSequentialDuringDrag && this.shouldUseSequentialScrubSeek(provider, targetTime)) {
-        this.clearFastSeekTracking(providerKey);
-        interactiveSeek(targetTime);
-        return;
-      }
-
-      if (this.shouldFastSeekPausedWebCodecsProvider(provider, providerKey, targetTime)) {
-        provider.fastSeek?.(targetTime);
-        this.deps.wcSeeks.setFastSeek(providerKey, targetTime, performance.now());
-        if (schedulePreciseSeek) {
-          this.schedulePreciseWcSeek(providerKey, provider, targetTime);
-        }
-      }
-      return;
-    }
-
-    const effectivePos = provider.getPendingSeekTime?.() ?? provider.currentTime;
-    const lastFastSeekTarget = this.deps.wcSeeks.getLastFastSeekTarget(providerKey);
-    const targetMovedSinceFastSeek =
-      lastFastSeekTarget === undefined ||
-      Math.abs(lastFastSeekTarget - targetTime) > 0.01;
-    const shouldPrimeManualTeleport =
-      typeof provider.fastSeek === 'function' &&
-      targetMovedSinceFastSeek &&
-      !provider.isDecodePending?.() &&
-      Math.abs(effectivePos - targetTime) >=
-        VideoSyncFullWebCodecsCoordinator.MANUAL_TELEPORT_FAST_SEEK_THRESHOLD;
-
-    if (shouldPrimeManualTeleport) {
-      provider.fastSeek?.(targetTime);
-      this.deps.wcSeeks.setFastSeek(providerKey, targetTime, performance.now());
-      return;
-    }
-
-    this.clearFastSeekTracking(providerKey);
-    if (this.shouldSeekPausedWebCodecsProvider(provider, targetTime, providerKey)) {
-      provider.seek(targetTime);
-      this.deps.wcSeeks.setLastPreciseSeekAt(providerKey, performance.now());
-    }
+    syncPausedWebCodecsProviderState({
+      provider,
+      providerKey,
+      targetTime,
+      isDragging,
+      schedulePreciseSeek,
+      allowSequentialDuringDrag,
+      wcSeeks: this.deps.wcSeeks,
+      schedulePreciseWcSeek: (key, pausedProvider, time) =>
+        this.schedulePreciseWcSeek(key, pausedProvider, time),
+    });
   }
 
   syncFullWebCodecs(clip: TimelineClip, ctx: FrameContext): void {

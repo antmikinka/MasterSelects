@@ -35,7 +35,7 @@ Canonical files:
   sampled capture pixels non-black. This is a surface/present proof only; next
   work is the real worker-owned video source path:
   provider frame -> texture registry/import -> minimal GPU compositor ->
-  `worker-gpu-only:VideoFrame`.
+  `worker-gpu-only:video-frame`.
 - Local Windows/Chromium dev testing can run `worker-presenting` preview through
   `window.__MS_RENDER_HOST__.enableWorkerPresenting()` or persisted
   `masterselects.renderHostMode=worker-presenting`; `getStats` reports

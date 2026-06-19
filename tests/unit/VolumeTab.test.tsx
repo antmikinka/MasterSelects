@@ -4,7 +4,7 @@ import { VolumeTab } from '../../src/components/panels/properties/VolumeTab';
 import { useTimelineStore } from '../../src/stores/timeline';
 import { runtimeAudioMeterBus } from '../../src/services/audio/runtimeAudioMeterBus';
 import { normalizeAudioEqParams } from '../../src/engine/audio/eq/AudioEqLegacy';
-import type { AudioEffectInstance } from '../../src/types';
+import type { AudioEffectInstance } from '../../src/types/audio';
 import { createMockClip, createMockTrack } from '../helpers/mockData';
 
 function createStackEqEffect(id = 'eq-1'): AudioEffectInstance {

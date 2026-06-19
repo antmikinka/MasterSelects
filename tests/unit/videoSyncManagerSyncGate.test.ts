@@ -49,7 +49,7 @@ import { getClipTimeInfo } from '../../src/services/layerBuilder/FrameContext';
 import type { FrameContext } from '../../src/services/layerBuilder/types';
 import { ensureRuntimeFrameProvider, getRuntimeFrameProvider } from '../../src/services/mediaRuntime/runtimePlayback';
 import { releaseAllLazyTimelineMediaElements } from '../../src/services/timeline/lazyMediaElements';
-import type { TimelineClip } from '../../src/types';
+import type { TimelineClip } from '../../src/types/timeline';
 
 type VideoSyncManagerTestAccess = VideoSyncManager & {
   syncClipVideo(clip: TimelineClip, ctx: FrameContext): void;

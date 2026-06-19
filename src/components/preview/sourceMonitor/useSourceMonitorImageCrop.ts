@@ -5,6 +5,10 @@ import { createSourceMonitorCroppedFile } from './sourceMonitorImageCropFile';
 
 export function useSourceMonitorImageCrop(file: MediaFile, isImage: boolean) {
   const sourceMonitorCropRequestId = useMediaStore(state => state.sourceMonitorCropRequestId);
+  const files = useMediaStore(state => state.files);
+  const importFile = useMediaStore(state => state.importFile);
+  const setSelection = useMediaStore(state => state.setSelection);
+  const setSourceMonitorFile = useMediaStore(state => state.setSourceMonitorFile);
   const handledCropRequestIdRef = useRef(0);
   const [cropMode, setCropMode] = useState(false);
   const [cropBusy, setCropBusy] = useState(false);
@@ -28,21 +32,19 @@ export function useSourceMonitorImageCrop(file: MediaFile, isImage: boolean) {
     setCropError(null);
 
     try {
-      const mediaState = useMediaStore.getState();
       const croppedFile = await createSourceMonitorCroppedFile({
         sourceFile: file,
         image,
         crop,
-        existingNames: mediaState.files.map((entry) => entry.name),
+        existingNames: files.map((entry) => entry.name),
       });
-      const imported = await mediaState.importFile(croppedFile, file.parentId, {
+      const imported = await importFile(croppedFile, file.parentId, {
         forceCopyToProject: Boolean(file.projectPath),
       });
 
       if ('url' in imported) {
-        const latestState = useMediaStore.getState();
-        latestState.setSelection([imported.id]);
-        latestState.setSourceMonitorFile(imported.id);
+        setSelection([imported.id]);
+        setSourceMonitorFile(imported.id);
       }
       setCropMode(false);
     } catch (error) {
@@ -50,7 +52,7 @@ export function useSourceMonitorImageCrop(file: MediaFile, isImage: boolean) {
     } finally {
       setCropBusy(false);
     }
-  }, [cropBusy, file, isImage]);
+  }, [cropBusy, file, files, importFile, isImage, setSelection, setSourceMonitorFile]);
 
   const cancelImageCrop = useCallback(() => {
     setCropMode(false);

@@ -18,7 +18,8 @@ import { scanlineGlitch } from '../../src/transitions/scanlineGlitch';
 import { swirl } from '../../src/transitions/swirl';
 import { vignetteBloom } from '../../src/transitions/vignetteBloom';
 import { waterDrop } from '../../src/transitions/waterDrop';
-import type { Layer, TimelineClip } from '../../src/types';
+import type { Layer } from '../../src/types/layers';
+import type { TimelineClip } from '../../src/types/timeline';
 
 const outgoingClip = {
   id: 'clip-a',

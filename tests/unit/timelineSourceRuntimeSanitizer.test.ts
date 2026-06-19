@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TimelineClip } from '../../src/types';
+import type { TimelineClip } from '../../src/types/timeline';
 import { DEFAULT_TRACKS, useTimelineStore } from '../../src/stores/timeline';
 import {
   hasTimelineSourceRuntimeHandles,

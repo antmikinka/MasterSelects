@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { TimelineClip } from '../../src/types';
+import type { TimelineClip } from '../../src/types/timeline';
 
 vi.mock('../../src/services/audioRoutingManager', () => ({
   audioRoutingManager: {

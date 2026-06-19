@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RenderHostPort } from '../../src/services/render/renderHostTypes';
-import type { TimelineClip } from '../../src/types';
+import type { TimelineClip } from '../../src/types/timeline';
 import {
   hasWorkerGpuPlaybackStartVideoSource,
   isWorkerGpuPlaybackStartFrameReady,
