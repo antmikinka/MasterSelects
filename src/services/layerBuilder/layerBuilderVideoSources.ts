@@ -1,4 +1,5 @@
 import type { Layer, TimelineClip } from '../../types';
+import type { MediaFile } from '../../stores/mediaStore/types';
 import { flags } from '../../engine/featureFlags';
 import {
   canUseSharedPreviewRuntimeSession,
@@ -7,12 +8,21 @@ import {
   getScrubRuntimeSource,
 } from '../mediaRuntime/runtimePlayback';
 import type { RuntimeFrameProvider } from '../mediaRuntime/types';
+import { renderHostPort } from '../render/renderHostPort';
 import { scrubSettleState } from '../scrubSettleState';
 import { getLazyTimelineVideoElementForClip } from '../timeline/lazyMediaElements';
 import { selectPausedWebCodecsProvider } from './videoSyncWebCodecsPolicy';
 import type { FrameContext } from './types';
+import { getReverseWorkerRuntimeSource } from './reverseWorkerWebCodecsRuntime';
 
 type LayerVideoSource = NonNullable<Layer['source']>;
+
+interface WorkerGpuFileVideoSource {
+  readonly file: File;
+  readonly mediaFileId?: string;
+  readonly width?: number;
+  readonly height?: number;
+}
 
 export interface LayerBuilderVideoSourceResolution {
   source: LayerVideoSource;
@@ -24,6 +34,38 @@ export interface LayerBuilderVideoSourceResolution {
 
 function getLayerBuilderVideoElement(clip: TimelineClip): HTMLVideoElement | null {
   return getLazyTimelineVideoElementForClip(clip) ?? clip.source?.videoElement ?? null;
+}
+
+function isWorkerGpuOnlyRenderHost(): boolean {
+  return renderHostPort.getTelemetry().mode === 'worker-gpu-only';
+}
+
+function resolveWorkerGpuFileVideoSource(
+  clip: TimelineClip,
+  mediaFile?: Pick<MediaFile, 'id' | 'file' | 'width' | 'height'>,
+): WorkerGpuFileVideoSource | null {
+  const file = mediaFile?.file ?? clip.source?.file ?? clip.file;
+  if (!file) return null;
+  return {
+    file,
+    mediaFileId: mediaFile?.id ?? clip.mediaFileId ?? clip.source?.mediaFileId,
+    width: mediaFile?.width,
+    height: mediaFile?.height,
+  };
+}
+
+function shouldPresentReverseRuntimeProvider(input: {
+  readonly provider: RuntimeFrameProvider | null | undefined;
+  readonly hasFrame: boolean;
+}): boolean {
+  if (!input.provider?.isFullMode?.()) {
+    return false;
+  }
+  return input.hasFrame;
+}
+
+export function resetLayerBuilderReverseRuntimePresentationForTests(): void {
+  // Kept for tests that reset layer-builder preview policy between cases.
 }
 
 export interface LayerBuilderVideoSourceDebugInfo {
@@ -38,7 +80,11 @@ export interface LayerBuilderVideoSourceDebugInfo {
 export function hasLayerBuilderRenderableVideoSource(
   source: TimelineClip['source'] | undefined,
   clip?: TimelineClip,
+  mediaFile?: Pick<MediaFile, 'id' | 'file' | 'width' | 'height'>,
 ): boolean {
+  if (clip && isWorkerGpuOnlyRenderHost()) {
+    return !!resolveWorkerGpuFileVideoSource(clip, mediaFile);
+  }
   return !!(
     (clip ? getLayerBuilderVideoElement(clip) : source?.videoElement) ||
     source?.webCodecsPlayer?.isFullMode?.()
@@ -92,15 +138,55 @@ export function resolveLayerBuilderVideoSource(params: {
   targetTime: number;
   allowSharedPreviewSession: boolean;
   continuationVideo?: HTMLVideoElement | null;
+  workerGpuMediaFile?: Pick<MediaFile, 'id' | 'file' | 'width' | 'height'>;
 }): LayerBuilderVideoSourceResolution | null {
   const { clip, ctx, targetTime } = params;
+  const workerGpuFileSource = isWorkerGpuOnlyRenderHost()
+    ? resolveWorkerGpuFileVideoSource(clip, params.workerGpuMediaFile)
+    : null;
+  if (workerGpuFileSource) {
+    return {
+      source: {
+        type: 'video',
+        file: workerGpuFileSource.file,
+        mediaTime: targetTime,
+        targetMediaTime: targetTime,
+        mediaFileId: workerGpuFileSource.mediaFileId,
+        runtimeSourceId: clip.source?.runtimeSourceId,
+        runtimeSessionKey: clip.source?.runtimeSessionKey,
+      },
+      intrinsicSize: {
+        width: workerGpuFileSource.width,
+        height: workerGpuFileSource.height,
+      },
+    };
+  }
+  if (isWorkerGpuOnlyRenderHost()) {
+    return null;
+  }
+
   const htmlVideoElement = params.continuationVideo ?? getLayerBuilderVideoElement(clip) ?? undefined;
   const isInteractivePreview = ctx.isDraggingPlayhead || ctx.hasClipDragPreview;
   const keepScrubRuntimeActive = isInteractivePreview || scrubSettleState.isPending(clip.id);
+  const reverseWorkerRuntimeSource = getReverseWorkerRuntimeSource(clip, ctx);
+  const baseRuntimeSource = reverseWorkerRuntimeSource ?? clip.source;
+  const allowSharedRuntimeSession =
+    reverseWorkerRuntimeSource ? false : params.allowSharedPreviewSession;
   const runtimeSource = keepScrubRuntimeActive
-    ? getScrubRuntimeSource(clip.source, clip.trackId, params.allowSharedPreviewSession)
-    : getPreviewRuntimeSource(clip.source, clip.trackId, params.allowSharedPreviewSession);
+    ? getScrubRuntimeSource(baseRuntimeSource, clip.trackId, allowSharedRuntimeSession)
+    : getPreviewRuntimeSource(baseRuntimeSource, clip.trackId, allowSharedRuntimeSession);
   const runtimeProvider = getRuntimeFrameProvider(runtimeSource);
+  const reversePresentationProvider =
+    runtimeProvider ?? runtimeSource?.webCodecsPlayer ?? clip.source?.webCodecsPlayer;
+  const runtimeProviderHasFrame =
+    reversePresentationProvider?.hasFrame?.() === true ||
+    Boolean(reversePresentationProvider?.getCurrentFrame());
+  const presentReverseRuntimeFrame = reverseWorkerRuntimeSource
+    ? shouldPresentReverseRuntimeProvider({
+        provider: reversePresentationProvider,
+        hasFrame: runtimeProviderHasFrame,
+      })
+    : true;
 
   const preferHtmlScrubPreview =
     !flags.disableHtmlPreviewFallback &&
@@ -118,8 +204,17 @@ export function resolveLayerBuilderVideoSource(params: {
       : selectLayerBuilderPausedVisualProvider(clip.source, runtimeProvider, targetTime, {
           preferFreshRuntime: keepScrubRuntimeActive,
         });
+  const presentedVisualProvider = reverseWorkerRuntimeSource && !presentReverseRuntimeFrame
+    ? undefined
+    : visualProvider;
+  const presentedRuntimeSourceId = reverseWorkerRuntimeSource && !presentReverseRuntimeFrame
+    ? undefined
+    : runtimeSource?.runtimeSourceId;
+  const presentedRuntimeSessionKey = reverseWorkerRuntimeSource && !presentReverseRuntimeFrame
+    ? undefined
+    : runtimeSource?.runtimeSessionKey;
 
-  if (!htmlVideoElement && !visualProvider) {
+  if (!htmlVideoElement && !presentedVisualProvider) {
     return null;
   }
 
@@ -128,9 +223,12 @@ export function resolveLayerBuilderVideoSource(params: {
       type: 'video',
       videoElement: htmlVideoElement,
       mediaTime: targetTime,
-      webCodecsPlayer: visualProvider,
-      runtimeSourceId: preferHtmlScrubPreview ? undefined : runtimeSource?.runtimeSourceId,
-      runtimeSessionKey: preferHtmlScrubPreview ? undefined : runtimeSource?.runtimeSessionKey,
+      webCodecsPlayer: presentedVisualProvider,
+      runtimeSourceId: preferHtmlScrubPreview ? undefined : presentedRuntimeSourceId,
+      runtimeSessionKey: preferHtmlScrubPreview ? undefined : presentedRuntimeSessionKey,
+      ...(reverseWorkerRuntimeSource && presentReverseRuntimeFrame && !preferHtmlScrubPreview && runtimeProviderHasFrame
+        ? { forceRuntimeFramePreview: true }
+        : {}),
     },
     intrinsicSize: {
       width: htmlVideoElement?.videoWidth,

@@ -1,6 +1,10 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { getDurationSecondsFromSamples } from '../../src/services/proxyGenerator';
+import { getDurationSecondsFromSamples, ProxyGeneratorWebCodecs } from '../../src/services/proxyGenerator';
 import type { Sample } from '../../src/engine/webCodecsTypes';
+
+const repoRoot = process.cwd();
 
 function sample(overrides: Partial<Sample>): Sample {
   return {
@@ -37,5 +41,16 @@ describe('proxyGenerator timing helpers', () => {
     ];
 
     expect(getDurationSecondsFromSamples(samples)).toBeCloseTo(4004 / 30000, 6);
+  });
+
+  it('does not expose the retired all-intra MP4 proxy generation path', () => {
+    const generator = new ProxyGeneratorWebCodecs() as unknown as Record<string, unknown>;
+    const source = readFileSync(path.join(repoRoot, 'src/services/proxyGenerator.ts'), 'utf8');
+
+    expect(generator.generateAllIntraVideo).toBeUndefined();
+    expect(source).not.toContain('generateAllIntraVideo');
+    expect(source).not.toContain('all-intra-mp4');
+    expect(source).not.toContain('VideoEncoderWrapper');
+    expect(source).not.toContain('new VideoFrame(slot.canvas');
   });
 });

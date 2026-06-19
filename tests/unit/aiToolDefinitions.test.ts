@@ -147,6 +147,7 @@ describe('expected tools exist', () => {
     expect(toolNames).toContain('getTimelineState');
     expect(toolNames).toContain('setPlayhead');
     expect(toolNames).toContain('setInOutPoints');
+    expect(toolNames).toContain('simulateFrameKeypresses');
   });
 
   it('includes core clip editing tools', () => {
@@ -186,6 +187,7 @@ describe('expected tools exist', () => {
     expect(toolNames).toContain('runWorkerFirstPlatformEvidencePackage');
     expect(toolNames).toContain('verifyWorkerFirstPlatformEvidenceMatrix');
     expect(toolNames).toContain('runWorkerFirstRuntimeExportPlaybackSmoke');
+    expect(toolNames).toContain('runWorkerFirstRealVideoRuntimeSmoke');
     expect(toolNames).toContain('runWorkerFirstEffectsMasksTransitionsGoldenFixture');
     expect(toolNames).toContain('runWorkerFirstEffectsMasksTransitionsShadowParity');
     expect(toolNames).toContain('runWorkerFirstNestedCompsGoldenFixture');
@@ -200,6 +202,7 @@ describe('expected tools exist', () => {
     expect(toolNames).toContain('captureWorkerFirstGoldenFixtureFingerprint');
     expect(toolNames).toContain('captureWorkerFirstVisiblePresentationProof');
     expect(toolNames).toContain('runWorkerFirstVisiblePresentationStressProof');
+    expect(toolNames).toContain('setRenderHostMode');
   });
 
   it('includes analysis tools', () => {
@@ -256,6 +259,24 @@ describe('parameter schemas for key tools', () => {
   it('getTimelineState has no required parameters', () => {
     const tool = findTool('getTimelineState');
     expect(tool.function.parameters.required).toEqual([]);
+  });
+
+  it('setRenderHostMode requires a known mode enum', () => {
+    const tool = findTool('setRenderHostMode');
+    expect(tool.function.parameters.required).toEqual(['mode']);
+    const mode = tool.function.parameters.properties.mode as Record<string, unknown>;
+    expect(mode.enum).toEqual(['main', 'worker-shadow', 'worker-presenting', 'worker-only', 'worker-gpu-only', 'default']);
+  });
+
+  it('simulateFrameKeypresses exposes frame-step key routing options', () => {
+    const tool = findTool('simulateFrameKeypresses');
+    expect(tool.function.parameters.required).toEqual([]);
+    expect(Object.keys(tool.function.parameters.properties)).toEqual(expect.arrayContaining([
+      'direction',
+      'sequence',
+      'delayMs',
+      'target',
+    ]));
   });
 
   it('moveClip requires clipId and newStartTime, newTrackId is optional', () => {

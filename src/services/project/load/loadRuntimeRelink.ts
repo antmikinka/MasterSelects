@@ -1,5 +1,6 @@
 import { Logger } from '../../logger';
 import { useMediaStore } from '../../../stores/mediaStore';
+import { useTimelineStore } from '../../../stores/timeline';
 import {
   createMediaSourceReplacementPatch,
   updateTimelineClips,
@@ -23,8 +24,78 @@ import {
 import { reloadNestedCompositionClips } from './loadTimelineHydration';
 
 const log = Logger.create('ProjectSync');
+const EAGER_METADATA_RESTORE_MEDIA_LIMIT = 120;
+const DEFERRED_PROJECT_RESTORE_DELAY_MS = 12_000;
+const DEFERRED_PROJECT_RESTORE_PLAYBACK_POLL_MS = 500;
+const DEFERRED_PROJECT_RESTORE_MAX_PLAYBACK_WAIT_MS = 120_000;
+
+let postLoadRestorationRunId = 0;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTimelineBusyForDeferredRestore(): boolean {
+  const timelineState = useTimelineStore.getState();
+  return timelineState.isPlaying || timelineState.playbackWarmup !== null;
+}
+
+async function waitForDeferredProjectRestoreWindow(
+  runId: number,
+  initialDelayMs = DEFERRED_PROJECT_RESTORE_DELAY_MS,
+): Promise<boolean> {
+  await sleep(initialDelayMs);
+  if (runId !== postLoadRestorationRunId) return false;
+
+  for (
+    let waitedMs = 0;
+    waitedMs <= DEFERRED_PROJECT_RESTORE_MAX_PLAYBACK_WAIT_MS;
+    waitedMs += DEFERRED_PROJECT_RESTORE_PLAYBACK_POLL_MS
+  ) {
+    if (runId !== postLoadRestorationRunId) return false;
+    if (!isTimelineBusyForDeferredRestore()) {
+      await yieldToBrowser();
+      return true;
+    }
+    await sleep(DEFERRED_PROJECT_RESTORE_PLAYBACK_POLL_MS);
+  }
+
+  log.info('Deferred project cache restoration skipped while playback stayed active');
+  return false;
+}
+
+async function runDeferredProjectCacheRestore(
+  projectData: ProjectFile,
+  hydrateFiles: boolean,
+  runId: number,
+): Promise<void> {
+  if (!await waitForDeferredProjectRestoreWindow(runId)) return;
+
+  const cachedThumbnailCandidates = projectData.media.filter(isProjectMediaThumbnailCandidate).length;
+  if (cachedThumbnailCandidates > 0) {
+    const restoredCount = await restoreCachedMediaThumbnails(projectData.media);
+    log.info('Restored cached media thumbnails', { restoredCount, candidateCount: cachedThumbnailCandidates });
+  }
+  if (runId !== postLoadRestorationRunId || !hydrateFiles) return;
+
+  if (projectData.media.length > EAGER_METADATA_RESTORE_MEDIA_LIMIT) {
+    log.info('Skipping deferred metadata/cache restoration for large project', {
+      mediaCount: projectData.media.length,
+    });
+    return;
+  }
+
+  log.info('Running deferred project metadata/cache restoration', {
+    mediaCount: projectData.media.length,
+  });
+  await refreshMediaMetadata();
+  if (runId !== postLoadRestorationRunId) return;
+  await yieldToBrowser();
+  await restoreDeferredMediaCacheState(projectData.media);
+}
 
 export async function runPostLoadRestoration(projectData: ProjectFile, hydrateFiles: boolean): Promise<void> {
+  const runId = ++postLoadRestorationRunId;
   try {
     if (hydrateFiles) {
       setProjectLoadProgress({ phase: 'relink', percent: 72, message: 'Checking missing media', blocking: false });
@@ -35,77 +106,10 @@ export async function runPostLoadRestoration(projectData: ProjectFile, hydrateFi
 
     await yieldToBrowser();
 
-    const cachedThumbnailCandidates = projectData.media.filter(isProjectMediaThumbnailCandidate).length;
-    if (cachedThumbnailCandidates > 0) {
-      setProjectLoadProgress({
-        phase: 'thumbnails',
-        percent: 78,
-        message: 'Restoring cached thumbnails',
-        itemsDone: 0,
-        itemsTotal: cachedThumbnailCandidates,
-        blocking: false,
-      });
-      const restoredCount = await restoreCachedMediaThumbnails(projectData.media, (done, total, name) => {
-        const ratio = total > 0 ? done / total : 1;
-        setProjectLoadProgress({
-          phase: 'thumbnails',
-          percent: 78 + ratio * 8,
-          message: 'Restoring cached thumbnails',
-          detail: name,
-          itemsDone: done,
-          itemsTotal: total,
-          blocking: false,
-        });
-      });
-      log.info('Restored cached media thumbnails', { restoredCount, candidateCount: cachedThumbnailCandidates });
-    }
-
-    if (!hydrateFiles) {
-      completeProjectLoadProgress('Project ready');
-      return;
-    }
-
-    const eagerMetadataLimit = 120;
-    if (projectData.media.length <= eagerMetadataLimit) {
-      setProjectLoadProgress({ phase: 'metadata', percent: 86, message: 'Refreshing media metadata', blocking: false });
-      await refreshMediaMetadata((done, total, name) => {
-        const ratio = total > 0 ? done / total : 1;
-        setProjectLoadProgress({
-          phase: 'metadata',
-          percent: 86 + ratio * 6,
-          message: 'Refreshing media metadata',
-          detail: name,
-          itemsDone: done,
-          itemsTotal: total,
-          blocking: false,
-        });
-      });
-
-      setProjectLoadProgress({
-        phase: 'caches',
-        percent: 92,
-        message: 'Checking project caches',
-        itemsDone: 0,
-        itemsTotal: projectData.media.length,
-        blocking: false,
-      });
-      await restoreDeferredMediaCacheState(projectData.media, (done, total, name, itemProgress) => {
-        const ratio = total > 0 ? (done + (itemProgress ?? 0)) / total : 1;
-        setProjectLoadProgress({
-          phase: 'caches',
-          percent: 92 + ratio * 7,
-          message: 'Checking project caches',
-          detail: name,
-          itemsDone: done,
-          itemsTotal: total,
-          blocking: false,
-        });
-      });
-    } else {
-      log.info('Skipping eager metadata/cache restoration for large project', { mediaCount: projectData.media.length });
-    }
-
     completeProjectLoadProgress('Project ready');
+    void runDeferredProjectCacheRestore(projectData, hydrateFiles, runId).catch((error: unknown) => {
+      log.warn('Deferred project cache restoration finished with warnings', error);
+    });
   } catch (error) {
     log.warn('Post-load project restoration finished with warnings', error);
     completeProjectLoadProgress('Project ready with warnings');

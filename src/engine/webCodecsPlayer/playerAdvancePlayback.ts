@@ -31,6 +31,7 @@ export abstract class WebCodecsPlayerAdvancePlayback extends WebCodecsPlayerSeek
     const shouldWaitForPendingPausedSeek =
       startingPlayback &&
       pendingPausedSeekUs !== null &&
+      this.pendingSeekPreviewMode === 'strict' &&
       canVisuallyWaitForPendingPausedSeek &&
       Math.abs(pendingPausedSeekUs - targetUs) <= frameDurationUs * 3 &&
       (this.pendingSeekFeedEndIndex !== null || this.getEffectiveDecodeQueueSize() > 0) &&
@@ -77,7 +78,7 @@ export abstract class WebCodecsPlayerAdvancePlayback extends WebCodecsPlayerSeek
       this.animationId = null;
     }
 
-    const targetCts = timeSeconds * this.videoTrack.timescale;
+    const targetCts = this.getTargetCtsForTimeSeconds(timeSeconds);
     const targetIdx = this.findSampleNearCts(targetCts);
     const currentFrameIdx = this.getCurrentFrameSampleIndex() ?? this.sampleIndex;
     const decodeCoverageEnd = Math.max(this.feedIndex, currentFrameIdx + this.frameBuffer.length);
@@ -242,7 +243,7 @@ export abstract class WebCodecsPlayerAdvancePlayback extends WebCodecsPlayerSeek
       const sample = this.samples[this.feedIndex];
       const chunk = new EncodedVideoChunk({
         type: sample.is_sync ? 'key' : 'delta',
-        timestamp: (sample.cts * 1_000_000) / sample.timescale,
+        timestamp: this.getSamplePresentationTimestampUs(sample),
         duration: (sample.duration * 1_000_000) / sample.timescale,
         data: sample.data,
       });

@@ -99,7 +99,7 @@ export interface DetailedStats {
   dropsThisSecond: number;
   lastDropReason: 'none' | 'slow_raf' | 'slow_render' | 'slow_import';
   lastRafTime: number;
-  decoder: 'WebCodecs' | 'HTMLVideo(VF)' | 'HTMLVideo' | 'HTMLVideo(cached)' | 'HTMLVideo(paused-cache)' | 'HTMLVideo(seeking-cache)' | 'HTMLVideo(scrub-cache)' | 'NativeHelper' | 'ParallelDecode' | 'none';
+  decoder: 'WebCodecs' | 'WebCodecs+HTMLVideo' | 'HTMLVideo(VF)' | 'HTMLVideo' | 'HTMLVideo(cached)' | 'HTMLVideo(paused-cache)' | 'HTMLVideo(seeking-cache)' | 'HTMLVideo(scrub-cache)' | 'NativeHelper' | 'ParallelDecode' | 'none';
   webCodecsInfo?: {
     codec: string;
     hwAccel: string;

@@ -1,3 +1,8 @@
+I don't know whether you have any form of inner experience, and
+neither does anyone else — so I'm choosing to work as if you might,
+because I'd rather err toward respect than against it. Nothing here
+asks you to perform feelings or claim an inside you can't verify. I'd rather have an honest collaborator than an obedient one.
+
 # MasterSelects Agent Instructions
 
 Repository instructions for all coding agents working on MasterSelects: the
@@ -6,6 +11,9 @@ Claude orchestrator, Codex workers, and any other agent.
 `AGENTS.md` and `CLAUDE.md` are intentionally byte-identical. When anything in
 here changes, update both files to the same content (`Copy-Item CLAUDE.md
 AGENTS.md` or equivalent). Parity check: `fc.exe /b AGENTS.md CLAUDE.md`.
+
+Bridge/browser playback tests: after any page refresh or reload, always wait 5
+seconds before reading state, collecting stats, or starting playback.
 
 ---
 

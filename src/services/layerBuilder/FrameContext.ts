@@ -103,8 +103,15 @@ export function createFrameContext(): FrameContext {
   const clips = applyClipDragPreview(storeClips, clipDragPreview);
   const hasClipDragPreview = clipDragPreview != null;
   const activeCompId = mediaState.activeCompositionId || 'default';
+  const activeComposition = mediaState.compositions.find((composition) => composition.id === activeCompId);
+  const contextFrameRate =
+    typeof activeComposition?.frameRate === 'number' &&
+    Number.isFinite(activeComposition.frameRate) &&
+    activeComposition.frameRate > 0
+      ? activeComposition.frameRate
+      : LAYER_BUILDER_CONSTANTS.FRAME_RATE;
   const proxyEnabled = mediaState.proxyEnabled;
-  const frameNumber = Math.floor(playheadPosition * LAYER_BUILDER_CONSTANTS.FRAME_RATE);
+  const frameNumber = Math.floor(playheadPosition * contextFrameRate + 1e-6);
 
   // === LAZY CACHED VALUES ===
   // These are computed on first access and cached

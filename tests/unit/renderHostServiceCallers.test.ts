@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -6,6 +6,18 @@ const repoRoot = process.cwd();
 
 function readSource(repoPath: string): string {
   return readFileSync(path.join(repoRoot, repoPath), 'utf8');
+}
+
+function collectSourceFiles(repoPath: string): string[] {
+  const absolutePath = path.join(repoRoot, repoPath);
+  const stats = statSync(absolutePath);
+
+  if (stats.isFile()) {
+    return /\.(?:ts|tsx)$/.test(repoPath) ? [repoPath.replaceAll('\\', '/')] : [];
+  }
+
+  return readdirSync(absolutePath)
+    .flatMap((entry) => collectSourceFiles(path.join(repoPath, entry)));
 }
 
 describe('render host service caller boundary', () => {
@@ -24,7 +36,7 @@ describe('render host service caller boundary', () => {
     'src/services/aiTools/devBridge/browser/debugActions/performance.ts',
     'src/services/aiTools/handlers/smokes/smokeRuntime.ts',
     'src/services/aiTools/handlers/smokes/smokeFixtures.ts',
-    'src/services/aiTools/handlers/preview.ts',
+    'src/services/aiTools/previewCapture.ts',
     'src/services/aiTools/utils.ts',
     'src/services/previewFrameCapture.ts',
     'src/services/clipAnalyzer.ts',
@@ -102,6 +114,32 @@ describe('render host service caller boundary', () => {
       expect(source, repoPath).toContain('renderHostPort.getRamPreviewRenderEngine()');
       expect(source, repoPath).not.toMatch(/new\s+RamPreviewEngine\(engine\)/);
       expect(source, repoPath).not.toMatch(/(?:from\s+['"][^'"]*WebGPUEngine|import\(['"][^'"]*WebGPUEngine)/);
+    }
+  });
+
+  it('keeps preview handlers routed through the render-host capture adapter', () => {
+    const source = readSource('src/services/aiTools/handlers/preview.ts');
+
+    expect(source).toContain('captureRenderHostFrame');
+    expect(source).toContain('../previewCapture');
+    expect(source).not.toContain('renderHostPort');
+    expect(source).not.toMatch(/(?:from\s+['"][^'"]*WebGPUEngine|import\(['"][^'"]*WebGPUEngine)/);
+    expect(source).not.toMatch(/\bengine\./);
+  });
+
+  it('keeps the legacy main renderer fallback isolated to render host adapters', () => {
+    const allowedEngineImporters = new Set([
+      'src/services/render/mainFallbackRenderHostPort.ts',
+      'src/engine/export/exportRenderHostPort.ts',
+    ]);
+
+    for (const repoPath of collectSourceFiles('src')) {
+      const source = readSource(repoPath);
+      const importsEngineSingleton = /(?:from\s+['"][^'"]*WebGPUEngine|import\(['"][^'"]*WebGPUEngine)/.test(source);
+
+      if (!importsEngineSingleton) continue;
+
+      expect(allowedEngineImporters.has(repoPath), repoPath).toBe(true);
     }
   });
 });

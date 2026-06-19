@@ -308,7 +308,7 @@ export class FrameExporter {
     });
     this.renderSession = renderSession;
     try {
-      renderSession.begin();
+      await renderSession.begin();
     } catch (error) {
       this.abortExportSetup(exportRunId, error, renderSession);
       throw error;

@@ -10,7 +10,7 @@
   border-radius: 9px;
   background:
     linear-gradient(90deg, rgba(40, 18, 7, 0.34), rgba(120, 70, 30, 0.14), rgba(35, 16, 7, 0.36)),
-    url('../audio-mixer/wood-theme/wood-body.png');
+    url('../audio-mixer/wood-theme/wood-body.webp');
   background-size: 100% 100%;
   color: var(--media-wood-cream);
   box-shadow:
@@ -44,7 +44,7 @@
   background:
     linear-gradient(rgba(74, 144, 226, 0.16), rgba(74, 144, 226, 0.16)),
     linear-gradient(90deg, rgba(40, 18, 7, 0.34), rgba(120, 70, 30, 0.14), rgba(35, 16, 7, 0.36)),
-    url('../audio-mixer/wood-theme/wood-body.png');
+    url('../audio-mixer/wood-theme/wood-body.webp');
   background-size: 100% 100%, 100% 100%, 100% 100%;
 }
 
@@ -57,7 +57,7 @@
   border-radius: 6px;
   background:
     linear-gradient(180deg, rgba(255, 238, 194, 0.34) 0%, rgba(154, 113, 48, 0.18) 52%, rgba(44, 27, 7, 0.38) 100%),
-    url('../audio-mixer/wood-theme/plate-bronze.jpg');
+    url('../audio-mixer/wood-theme/plate-bronze.webp');
   background-size: 100% 100%, 150% auto;
   box-shadow:
     inset 0 1px 0 rgba(255, 238, 194, 0.5),
@@ -83,7 +83,7 @@
   border-radius: 6px;
   background:
     linear-gradient(rgba(7, 4, 2, 0.56), rgba(7, 4, 2, 0.56)),
-    url('../audio-mixer/wood-theme/pocket-leather.jpg');
+    url('../audio-mixer/wood-theme/pocket-leather.webp');
   background-size: 100% auto, 190% auto;
   background-position: center, 42% 26%;
   color: #efdec1;
@@ -120,7 +120,7 @@
   border-radius: 7px;
   background:
     linear-gradient(180deg, rgba(255, 238, 194, 0.28), rgba(91, 59, 19, 0.36)),
-    url('../audio-mixer/wood-theme/plate-bronze.jpg');
+    url('../audio-mixer/wood-theme/plate-bronze.webp');
   background-size: 100% 100%, 150% auto;
   box-shadow:
     inset 0 1px 0 rgba(255, 245, 213, 0.44),
@@ -157,7 +157,7 @@
   border-radius: 8px;
   background:
     linear-gradient(rgba(12, 7, 3, 0.52), rgba(12, 7, 3, 0.52)),
-    url('../audio-mixer/wood-theme/pocket-leather.jpg');
+    url('../audio-mixer/wood-theme/pocket-leather.webp');
   background-size: 100% auto, 160% auto;
   background-position: center, 50% 20%;
   box-shadow:
@@ -177,7 +177,7 @@
   border-bottom-color: rgba(188, 137, 70, 0.58);
   background:
     linear-gradient(180deg, rgba(47, 31, 16, 0.88), rgba(18, 10, 5, 0.84)),
-    url('../audio-mixer/wood-theme/pocket-leather.jpg');
+    url('../audio-mixer/wood-theme/pocket-leather.webp');
   background-size: 100% 100%, 160% auto;
   color: #d7c29a;
   letter-spacing: 0;
@@ -197,7 +197,7 @@
 .media-panel.wood .media-panel-table-wrapper .media-column-headers .media-col-name {
   background:
     linear-gradient(90deg, rgba(18, 10, 5, 0.92), rgba(28, 16, 8, 0.86)),
-    url('../audio-mixer/wood-theme/pocket-leather.jpg');
+    url('../audio-mixer/wood-theme/pocket-leather.webp');
   background-size: 100% 100%, 180% auto;
   box-shadow:
     1px 0 0 var(--media-wood-line),
@@ -226,14 +226,14 @@
 .media-panel.wood .media-panel-table-wrapper .media-item:hover .media-col-name {
   background:
     linear-gradient(90deg, rgba(44, 25, 10, 0.94), rgba(32, 18, 8, 0.9)),
-    url('../audio-mixer/wood-theme/pocket-leather.jpg');
+    url('../audio-mixer/wood-theme/pocket-leather.webp');
 }
 
 .media-panel.wood .media-item.selected {
   border-left-color: #d8ae62;
   background:
     linear-gradient(180deg, rgba(255, 237, 187, 0.5), rgba(176, 129, 54, 0.58) 48%, rgba(92, 62, 22, 0.62)),
-    url('../audio-mixer/wood-theme/plate-bronze.jpg');
+    url('../audio-mixer/wood-theme/plate-bronze.webp');
   background-size: 100% 100%, 160% auto;
   box-shadow:
     inset 0 1px 0 rgba(255, 240, 195, 0.5),
@@ -243,7 +243,7 @@
 .media-panel.wood .media-item.selected:hover {
   background:
     linear-gradient(180deg, rgba(255, 241, 199, 0.58), rgba(196, 145, 62, 0.66) 48%, rgba(102, 68, 25, 0.66)),
-    url('../audio-mixer/wood-theme/plate-bronze.jpg');
+    url('../audio-mixer/wood-theme/plate-bronze.webp');
 }
 
 .media-panel.wood .media-panel-table-wrapper .media-item.selected .media-col-name,
@@ -298,7 +298,7 @@
 .media-panel.wood .media-board-wrapper {
   background:
     linear-gradient(rgba(12, 7, 3, 0.54), rgba(12, 7, 3, 0.54)),
-    url('../audio-mixer/wood-theme/pocket-leather.jpg');
+    url('../audio-mixer/wood-theme/pocket-leather.webp');
   background-size: 100% auto, 180% auto;
   background-position: center, 44% 24%;
   scrollbar-color: rgba(211, 166, 96, 0.56) rgba(12, 7, 3, 0.62);
@@ -322,7 +322,7 @@
   border-radius: 6px;
   background:
     linear-gradient(180deg, rgba(83, 49, 21, 0.52), rgba(28, 15, 6, 0.78)),
-    url('../audio-mixer/wood-theme/wood-body.png');
+    url('../audio-mixer/wood-theme/wood-body.webp');
   background-size: 100% 100%;
   box-shadow:
     inset 0 1px 0 rgba(255, 221, 163, 0.14),
@@ -333,14 +333,14 @@
   border-color: rgba(213, 163, 88, 0.78);
   background:
     linear-gradient(180deg, rgba(103, 61, 26, 0.58), rgba(33, 18, 8, 0.74)),
-    url('../audio-mixer/wood-theme/wood-body.png');
+    url('../audio-mixer/wood-theme/wood-body.webp');
 }
 
 .media-panel.wood .media-grid-item.selected {
   border-color: #d7ac62;
   background:
     linear-gradient(180deg, rgba(255, 237, 187, 0.36), rgba(176, 129, 54, 0.44)),
-    url('../audio-mixer/wood-theme/plate-bronze.jpg');
+    url('../audio-mixer/wood-theme/plate-bronze.webp');
   box-shadow:
     inset 0 1px 0 rgba(255, 241, 199, 0.48),
     0 0 0 1px rgba(49, 29, 8, 0.78),
@@ -353,7 +353,7 @@
   border-radius: 5px;
   background:
     linear-gradient(rgba(7, 4, 2, 0.42), rgba(7, 4, 2, 0.42)),
-    url('../audio-mixer/wood-theme/pocket-leather.jpg');
+    url('../audio-mixer/wood-theme/pocket-leather.webp');
   background-size: 100% auto, 190% auto;
   box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.72);
 }
@@ -374,7 +374,7 @@
     linear-gradient(rgba(210, 165, 96, 0.08) 1px, transparent 1px),
     linear-gradient(90deg, rgba(210, 165, 96, 0.08) 1px, transparent 1px),
     linear-gradient(rgba(12, 7, 3, 0.54), rgba(12, 7, 3, 0.54)),
-    url('../audio-mixer/wood-theme/pocket-leather.jpg');
+    url('../audio-mixer/wood-theme/pocket-leather.webp');
   background-size:
     var(--media-board-grid-size, 32px) var(--media-board-grid-size, 32px),
     var(--media-board-grid-size, 32px) var(--media-board-grid-size, 32px),
@@ -391,7 +391,7 @@
   border-bottom-color: rgba(188, 137, 70, 0.58);
   background:
     linear-gradient(180deg, rgba(255, 238, 194, 0.25), rgba(73, 46, 15, 0.42)),
-    url('../audio-mixer/wood-theme/plate-bronze.jpg');
+    url('../audio-mixer/wood-theme/plate-bronze.webp');
   background-size: 100% 100%, 150% auto;
 }
 
@@ -409,7 +409,7 @@
   border-color: rgba(129, 83, 36, 0.74);
   background:
     linear-gradient(180deg, rgba(80, 47, 19, 0.48), rgba(28, 15, 6, 0.76)),
-    url('../audio-mixer/wood-theme/wood-body.png');
+    url('../audio-mixer/wood-theme/wood-body.webp');
   background-size: 100% 100%;
   box-shadow:
     inset 0 1px 0 rgba(255, 221, 163, 0.13),
@@ -419,7 +419,7 @@
 .media-panel.wood .media-board-node-thumb {
   background:
     linear-gradient(rgba(7, 4, 2, 0.48), rgba(7, 4, 2, 0.48)),
-    url('../audio-mixer/wood-theme/pocket-leather.jpg');
+    url('../audio-mixer/wood-theme/pocket-leather.webp');
   background-size: 100% auto, 180% auto;
 }
 
@@ -447,7 +447,7 @@
   border-color: #140a03;
   background:
     linear-gradient(rgba(12, 7, 3, 0.58), rgba(12, 7, 3, 0.58)),
-    url('../audio-mixer/wood-theme/pocket-leather.jpg');
+    url('../audio-mixer/wood-theme/pocket-leather.webp');
   background-size: 100% auto, 160% auto;
   box-shadow:
     inset 0 1px 0 rgba(255, 224, 163, 0.12),

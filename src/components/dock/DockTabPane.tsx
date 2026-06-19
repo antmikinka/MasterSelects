@@ -6,6 +6,7 @@ import { useShallow } from 'zustand/react/shallow';
 import type { DockPanel, DockTabGroup } from '../../types/dock';
 import { useDockStore } from '../../stores/dockStore';
 import { useMediaStore } from '../../stores/mediaStore';
+import { useSettingsStore } from '../../stores/settingsStore';
 import { useTimelineStore } from '../../stores/timeline';
 import { DockDropOverlays } from './tabPane/DockDropOverlays';
 import { DockTabMenus } from './tabPane/DockTabMenus';
@@ -17,6 +18,8 @@ import { useDockPaneDropTarget } from './tabPane/useDockPaneDropTarget';
 import { useDockTabHoldDrag } from './tabPane/useDockTabHoldDrag';
 import { useTabBarScrollZoom } from './tabPane/useTabBarScrollZoom';
 import { useTabPaneMenus } from './tabPane/useTabPaneMenus';
+import '../panels/audio-mixer/wood-theme/wood-theme.css';
+import '../panels/audio-mixer/wood-theme/wood-center-well.css';
 
 interface DockTabPaneProps {
   group: DockTabGroup;
@@ -90,8 +93,10 @@ export function DockTabPane({ group }: DockTabPaneProps) {
     masterAudioState: s.masterAudioState,
     propertiesSelection: s.propertiesSelection,
   })));
+  const audioMixerWoodThemeEnabled = useSettingsStore(state => state.audioMixerWoodThemeEnabled);
 
   const activePanel = group.panels[group.activeIndex];
+  const isAudioMixerWoodPane = activePanel?.type === 'audio-mixer' && audioMixerWoodThemeEnabled;
   const isDropTarget = dragState.dropTarget?.scope !== 'root-edge' && dragState.dropTarget?.groupId === group.id;
   const dropPosition = isDropTarget ? dragState.dropTarget?.position : undefined;
   const showTabSlotOverlay = isDropTarget && dropPosition === 'center' && dragState.dropTarget?.tabInsertIndex !== undefined;
@@ -300,8 +305,9 @@ export function DockTabPane({ group }: DockTabPaneProps) {
   return (
     <div
       ref={containerRef}
-      className={`dock-tab-pane ${isDropTarget ? 'drop-target' : ''} ${groupContainsMaximizedPanel ? 'is-maximized-pane' : ''}`}
+      className={`dock-tab-pane ${isDropTarget ? 'drop-target' : ''} ${groupContainsMaximizedPanel ? 'is-maximized-pane' : ''} ${isAudioMixerWoodPane ? 'audio-mixer-wood-pane' : ''}`}
       data-group-id={group.id}
+      data-active-panel-type={activePanel?.type}
       data-dock-layout-anim-id={layoutAnimationId}
       data-dock-layout-anim-title={activePanel?.title ?? group.id}
       onMouseEnter={handlePaneMouseEnter}

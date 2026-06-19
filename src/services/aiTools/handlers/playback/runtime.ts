@@ -3,6 +3,7 @@ import { playbackHealthMonitor } from '../../../playbackHealthMonitor';
 import { buildPlaybackRunDiagnostics } from '../../../playbackDebugStats';
 import { vfPipelineMonitor } from '../../../vfPipelineMonitor';
 import { wcPipelineMonitor } from '../../../wcPipelineMonitor';
+import { getWorkerFirstPresentedFrameEvents } from '../../workerFirstCounterSources';
 
 export type TimelineStore = ReturnType<typeof import('../../../../stores/timeline').useTimelineStore.getState>;
 
@@ -94,6 +95,7 @@ export function readDurationMsArg(
 export function collectPlaybackRunDiagnostics(startMs: number, endMs: number) {
   const windowMs = Math.max(100, Math.ceil(endMs - startMs + 250));
   const { engineStats } = useEngineStore.getState();
+  const workerPreviewEvents = getWorkerFirstPresentedFrameEvents(windowMs, endMs);
   const healthAnomalies = playbackHealthMonitor
     .anomalies()
     .filter((anomaly) => anomaly.timestamp >= startMs && anomaly.timestamp <= endMs);
@@ -104,6 +106,7 @@ export function collectPlaybackRunDiagnostics(startMs: number, endMs: number) {
     endMs,
     wcEvents: wcPipelineMonitor.timeline(windowMs),
     vfEvents: vfPipelineMonitor.timeline(windowMs),
+    workerPreviewEvents,
     healthVideos: playbackHealthMonitor.videos(),
     healthAnomalies,
   });

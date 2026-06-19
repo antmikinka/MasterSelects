@@ -21,7 +21,12 @@ import type {
   WorkerVisiblePresentationProof,
 } from './workerFirstW5Gates';
 
-export type WorkerFirstRendererMode = 'main' | 'worker-shadow' | 'worker-presenting' | 'worker-only';
+export type WorkerFirstRendererMode =
+  | 'main'
+  | 'worker-shadow'
+  | 'worker-presenting'
+  | 'worker-only'
+  | 'worker-gpu-only';
 
 export type WorkerFirstGoldenProjectId =
   | 'solid-text-image'
@@ -87,9 +92,42 @@ export interface WorkerFirstProofCounters {
   };
 }
 
+export interface WorkerFirstRenderHostTelemetry {
+  readonly mode: WorkerFirstRendererMode;
+  readonly presentationStrategy: RenderPresentationStrategy;
+  readonly lifecycleOwner: string;
+  readonly statsOwner: string;
+  readonly watchdogOwner: string;
+  readonly diagnostics?: Record<string, unknown>;
+  readonly selection?: {
+    readonly selectedId: string;
+    readonly selectedRole: string;
+    readonly workerPrimaryRequested: boolean;
+    readonly workerPrimaryRegistered: boolean;
+    readonly workerPrimaryAvailable: boolean;
+    readonly blockers: readonly string[];
+    readonly reason: string;
+  };
+}
+
+export interface WorkerFirstRenderHostSnapshot extends WorkerFirstRenderHostTelemetry {
+  readonly fallbackActive: boolean;
+  readonly fallbackReason: string | null;
+  readonly activation: WorkerFirstRenderHostActivation;
+}
+
+export interface WorkerFirstRenderHostActivation {
+  readonly requestedMode: WorkerFirstRendererMode;
+  readonly requestedStrategy: RenderPresentationStrategy;
+  readonly workerHostAllowed: boolean;
+  readonly workerHostActive: boolean;
+  readonly blockers: readonly string[];
+}
+
 export interface WorkerFirstProofSnapshot {
   readonly mode: WorkerFirstRendererMode;
   readonly selectedStrategy: RenderPresentationStrategy;
+  readonly renderHost: WorkerFirstRenderHostSnapshot;
   readonly w5GateEvidenceMode: 'stats-observation' | 'accepted-gate-run';
   readonly activeJobId: string | null;
   readonly activeJobType: string | null;
@@ -249,9 +287,11 @@ export function createWorkerFirstProofSnapshot(options: {
   shadowSamples?: readonly WorkerShadowParitySample[];
   visibleProofs?: readonly WorkerVisiblePresentationProof[];
   proofCaptures?: WorkerFirstProofCaptureSnapshot | null;
+  renderHostTelemetry?: WorkerFirstRenderHostTelemetry;
   allowW5StartFromCapturedEvidence?: boolean;
 } = {}): WorkerFirstProofSnapshot {
-  const selectedStrategy = options.capabilityProbe?.selectedStrategy ?? 'main-host-dev';
+  const renderHostTelemetry = normalizeRenderHostTelemetry(options.renderHostTelemetry);
+  const selectedStrategy = options.capabilityProbe?.selectedStrategy ?? renderHostTelemetry.presentationStrategy;
   const counters = options.counters ?? buildWorkerFirstProofCounters(options.counterSources);
   const providedProofCaptures = options.proofCaptures ?? createEmptyProofCaptures();
   const goldenFixtures = options.goldenFixtureCaptures ?? providedProofCaptures.goldenFixtures;
@@ -274,16 +314,22 @@ export function createWorkerFirstProofSnapshot(options: {
     visibleProofs,
   });
   const guardedW5Prerequisites = options.allowW5StartFromCapturedEvidence === true
-    ? w5Prerequisites
-    : {
-        ...w5Prerequisites,
-        canStartWorkerWebGpu: false,
-        canStartWorkerPresentation: false,
-        canStartRenderDispatcherCutover: false,
-      };
+      ? w5Prerequisites
+      : {
+          ...w5Prerequisites,
+          canStartWorkerWebGpu: false,
+          canStartWorkerPresentation: false,
+          canStartRenderDispatcherCutover: false,
+        };
+  const renderHost = createRenderHostSnapshot(
+    renderHostTelemetry,
+    options.capabilityProbe ?? null,
+    guardedW5Prerequisites,
+  );
   return {
-    mode: 'main',
+    mode: renderHost.mode,
     selectedStrategy,
+    renderHost,
     w5GateEvidenceMode: options.allowW5StartFromCapturedEvidence === true
       ? 'accepted-gate-run'
       : 'stats-observation',
@@ -301,5 +347,90 @@ export function createWorkerFirstProofSnapshot(options: {
     capabilityProbeStatus: options.capabilityProbe ? 'captured' : 'missing',
     capabilityProbe: options.capabilityProbe ?? null,
     w5Prerequisites: guardedW5Prerequisites,
+  };
+}
+
+function createRenderHostSnapshot(
+  host: WorkerFirstRenderHostTelemetry,
+  capabilityProbe: RenderCapabilityProbeResult | null,
+  w5Prerequisites: WorkerFirstProofSnapshot['w5Prerequisites'],
+): WorkerFirstRenderHostSnapshot {
+  const activation = createRenderHostActivation(host, capabilityProbe, w5Prerequisites);
+  const fallbackActive = host.mode === 'main' || host.presentationStrategy === 'main-host-fallback';
+  const fallbackReason = fallbackActive
+    ? activation.workerHostAllowed
+      ? 'worker host is allowed by W5 but is not mounted behind renderHostPort; using isolated legacy fallback'
+      : `using isolated legacy fallback: ${activation.blockers.join('; ')}`
+    : null;
+
+  return {
+    ...host,
+    fallbackActive,
+    fallbackReason,
+    activation,
+  };
+}
+
+function normalizeRenderHostTelemetry(
+  telemetry: WorkerFirstRenderHostTelemetry | undefined,
+): WorkerFirstRenderHostTelemetry {
+  return telemetry ?? {
+    mode: 'main',
+    presentationStrategy: 'main-host-fallback',
+    lifecycleOwner: 'renderHostPort',
+    statsOwner: 'renderHostPort',
+    watchdogOwner: 'renderHostPort',
+  };
+}
+
+function isWorkerPresentationStrategy(strategy: RenderPresentationStrategy): boolean {
+  return strategy !== 'main-host-fallback';
+}
+
+function createRenderHostActivation(
+  host: WorkerFirstRenderHostTelemetry,
+  capabilityProbe: RenderCapabilityProbeResult | null,
+  w5Prerequisites: WorkerFirstProofSnapshot['w5Prerequisites'],
+): WorkerFirstRenderHostActivation {
+  const requestedStrategy = capabilityProbe?.selectedStrategy ?? host.presentationStrategy;
+  const blockers: string[] = [];
+
+  if (!capabilityProbe) {
+    blockers.push('capability probe missing');
+  }
+  if (!isWorkerPresentationStrategy(requestedStrategy)) {
+    blockers.push('selected strategy is main-host-fallback');
+  }
+  if (w5Prerequisites.workerShadowParity.status !== 'passed') {
+    blockers.push(`W5_WORKER_SHADOW_PARITY:${w5Prerequisites.workerShadowParity.status}`);
+  }
+  if (w5Prerequisites.visiblePresentation.status !== 'passed') {
+    blockers.push(`W5_VISIBLE_PRESENTATION_PROVEN:${w5Prerequisites.visiblePresentation.status}`);
+  }
+  if (!w5Prerequisites.canStartWorkerWebGpu) {
+    blockers.push('canStartWorkerWebGpu:false');
+  }
+  if (!w5Prerequisites.canStartWorkerPresentation) {
+    blockers.push('canStartWorkerPresentation:false');
+  }
+  if (!w5Prerequisites.canStartRenderDispatcherCutover) {
+    blockers.push('canStartRenderDispatcherCutover:false');
+  }
+
+  const workerHostAllowed = blockers.length === 0;
+  const workerHostActive =
+    host.mode === 'worker-presenting' ||
+    host.mode === 'worker-only' ||
+    host.mode === 'worker-gpu-only';
+  const activationBlockers = workerHostAllowed && !workerHostActive
+    ? ['worker render host is not mounted behind renderHostPort']
+    : blockers;
+
+  return {
+    requestedMode: workerHostAllowed ? 'worker-presenting' : 'main',
+    requestedStrategy,
+    workerHostAllowed,
+    workerHostActive,
+    blockers: activationBlockers,
   };
 }

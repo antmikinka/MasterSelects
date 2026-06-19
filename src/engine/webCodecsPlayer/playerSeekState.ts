@@ -18,12 +18,13 @@ export abstract class WebCodecsPlayerSeekState extends WebCodecsPlayerLoading {
     if (this.currentFrameTimestampUs === null || !this.videoTrack) {
       return null;
     }
-    const currentCts = (this.currentFrameTimestampUs * this.videoTrack.timescale) / 1_000_000;
+    const currentCts = this.getTargetCtsForTimeSeconds(this.currentFrameTimestampUs / 1_000_000);
     return this.findSampleNearCts(currentCts);
   }
 
   protected getSampleTimestampUs(index: number): number | null {
-    return this.sampleTimeline.getSampleTimestampUs(index);
+    const sample = this.samples[index];
+    return sample ? this.getSamplePresentationTimestampUs(sample) : null;
   }
 
   protected beginPendingSeek(kind: 'seek' | 'advance', targetUs: number): void {

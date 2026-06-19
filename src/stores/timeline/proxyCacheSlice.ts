@@ -15,6 +15,30 @@ import {
 
 const log = Logger.create('ProxyCacheSlice');
 
+interface TimelineCacheRange {
+  start: number;
+  end: number;
+}
+
+function normalizeTimelineCacheRanges(ranges: unknown): TimelineCacheRange[] {
+  if (!Array.isArray(ranges)) {
+    return [];
+  }
+
+  return ranges.filter((range): range is TimelineCacheRange => {
+    if (!range || typeof range !== 'object') {
+      return false;
+    }
+
+    const { start, end } = range as Partial<TimelineCacheRange>;
+    return typeof start === 'number'
+      && typeof end === 'number'
+      && Number.isFinite(start)
+      && Number.isFinite(end)
+      && end > start;
+  });
+}
+
 export const createProxyCacheSlice: SliceCreator<ProxyCacheActions> = (set, get) => ({
   // Get proxy frame cached ranges (for yellow timeline indicator)
   // Returns ranges in timeline time coordinates
@@ -36,7 +60,9 @@ export const createProxyCacheSlice: SliceCreator<ProxyCacheActions> = (set, get)
       if (!mediaFile?.proxyFps || mediaFile.proxyStatus !== 'ready') continue;
 
       // Get cached ranges for this media file (in media time)
-      const mediaCachedRanges = proxyFrameCache.getCachedRanges(mediaFileId, mediaFile.proxyFps);
+      const mediaCachedRanges = normalizeTimelineCacheRanges(
+        proxyFrameCache.getCachedRanges(mediaFileId, mediaFile.proxyFps),
+      );
 
       // Convert media time ranges to timeline time ranges
       const playbackRate = clip.speed || 1;
@@ -70,7 +96,9 @@ export const createProxyCacheSlice: SliceCreator<ProxyCacheActions> = (set, get)
           const nestedMediaFile = mediaFiles.find(f => f.id === nestedClip.mediaFileId);
           if (!nestedMediaFile?.proxyFps || nestedMediaFile.proxyStatus !== 'ready') continue;
 
-          const nestedCachedRanges = proxyFrameCache.getCachedRanges(nestedMediaFile.id, nestedMediaFile.proxyFps);
+          const nestedCachedRanges = normalizeTimelineCacheRanges(
+            proxyFrameCache.getCachedRanges(nestedMediaFile.id, nestedMediaFile.proxyFps),
+          );
           const nestedPlaybackRate = nestedClip.speed || 1;
 
           for (const range of nestedCachedRanges) {
@@ -139,7 +167,9 @@ export const createProxyCacheSlice: SliceCreator<ProxyCacheActions> = (set, get)
       const videoSrc = getTimelineClipScrubCacheVideoSrc(clip);
       if (!videoSrc) return;
 
-      const mediaCachedRanges = renderHostPort.getScrubbingCachedRanges(videoSrc);
+      const mediaCachedRanges = normalizeTimelineCacheRanges(
+        renderHostPort.getScrubbingCachedRanges(videoSrc),
+      );
       if (mediaCachedRanges.length === 0) return;
 
       const playbackRate = Math.max(Math.abs(clip.speed || 1), 0.001);
@@ -216,9 +246,11 @@ export const createProxyCacheSlice: SliceCreator<ProxyCacheActions> = (set, get)
     set({
       ...resetVideoBakeState,
       isRamPreviewing: false,
+      isClipVideoBakeRendering: false,
       cachedFrameTimes: new Set(),
       ramPreviewRange: null,
       ramPreviewProgress: null,
+      clipVideoBakeProgress: null,
     });
     // Immediately clear all caches and request render
     layerBuilder.invalidateCache(); // Force layer rebuild

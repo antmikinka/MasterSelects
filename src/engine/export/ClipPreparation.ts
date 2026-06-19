@@ -162,7 +162,13 @@ export async function prepareClipsForExport(
     );
   } catch (e) {
     if (shouldAutoFallbackToPrecise(e)) {
-      log.error('FAST export failed; strict export will not auto-switch to PRECISE mode', e);
+      log.warn('FAST export failed; retrying with PRECISE HTMLVideo export mode', e);
+      cleanupExportMode(clipStates, null);
+      clipStates.clear();
+      await prepareImageClipsForExport(videoClips, mediaFiles, clipStates, exportRunId);
+      const result = await initializePreciseMode(videoClips, clipStates, mediaFiles, startTime, exportRunId);
+      endPrepare();
+      return result;
     }
     cleanupExportMode(clipStates, null);
     endPrepare();

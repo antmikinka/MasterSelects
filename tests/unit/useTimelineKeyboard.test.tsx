@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useTimelineKeyboard } from '../../src/components/timeline/hooks/useTimelineKeyboard';
 import { ALL_BLEND_MODES } from '../../src/components/timeline/constants';
 import { useTimelineStore } from '../../src/stores/timeline';
+import type { Composition } from '../../src/stores/mediaStore';
 import type { TimelineEditOperationActions } from '../../src/stores/timeline/types';
 import type { TimelineClip } from '../../src/types';
 import { createMockClip } from '../helpers/mockData';
@@ -12,11 +13,19 @@ function KeyboardHarness({
   selectedClipIds = new Set<string>(),
   selectedKeyframeIds = new Set<string>(),
   clipMap = new Map<string, TimelineClip>(),
+  activeComposition = null,
+  playheadPosition = 0,
+  duration = 10,
+  setPlayheadPosition = vi.fn(),
   applyTimelineEditOperation,
 }: {
   selectedClipIds?: Set<string>;
   selectedKeyframeIds?: Set<string>;
   clipMap?: Map<string, TimelineClip>;
+  activeComposition?: Composition | null;
+  playheadPosition?: number;
+  duration?: number;
+  setPlayheadPosition?: (time: number) => void;
   applyTimelineEditOperation: TimelineEditOperationActions['applyTimelineEditOperation'];
 }) {
   useTimelineKeyboard({
@@ -40,10 +49,10 @@ function KeyboardHarness({
     toolMode: 'select',
     toggleCutTool: vi.fn(),
     clipMap,
-    activeComposition: null,
-    playheadPosition: 0,
-    duration: 10,
-    setPlayheadPosition: vi.fn(),
+    activeComposition,
+    playheadPosition,
+    duration,
+    setPlayheadPosition,
     addMarker: vi.fn(),
   });
 
@@ -58,6 +67,7 @@ describe('useTimelineKeyboard edit operation routing', () => {
       propertiesSelection: null,
       selectedClipIds: new Set(),
       primarySelectedClipId: null,
+      playheadPosition: 0,
     });
     applyTimelineEditOperation = vi.fn(() => ({
       success: true,
@@ -189,5 +199,44 @@ describe('useTimelineKeyboard edit operation routing', () => {
     fireEvent.keyDown(getByTestId('text-input'), { key: 'Delete' });
 
     expect(applyTimelineEditOperation).not.toHaveBeenCalled();
+  });
+
+  it('steps repeated frame shortcuts from the fresh store position without waiting for rerender', () => {
+    const activeComposition: Composition = {
+      id: 'comp-60fps',
+      name: '60 fps comp',
+      type: 'composition',
+      parentId: null,
+      createdAt: 0,
+      width: 1920,
+      height: 1080,
+      frameRate: 60,
+      duration: 10,
+      backgroundColor: '#000000',
+    };
+    const setPlayheadPosition = vi.fn((time: number) => {
+      useTimelineStore.setState({ playheadPosition: time });
+    });
+
+    useTimelineStore.setState({ playheadPosition: 6 });
+
+    render(
+      <KeyboardHarness
+        activeComposition={activeComposition}
+        playheadPosition={6}
+        duration={10}
+        setPlayheadPosition={setPlayheadPosition}
+        applyTimelineEditOperation={applyTimelineEditOperation}
+      />,
+    );
+
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+
+    expect(setPlayheadPosition).toHaveBeenCalledTimes(3);
+    expect(setPlayheadPosition.mock.calls[0][0]).toBeCloseTo(5.983333333333333, 8);
+    expect(setPlayheadPosition.mock.calls[1][0]).toBeCloseTo(5.966666666666667, 8);
+    expect(setPlayheadPosition.mock.calls[2][0]).toBeCloseTo(5.983333333333333, 8);
   });
 });

@@ -18,8 +18,27 @@ interface MultiPreviewPanelProps {
   data: MultiPreviewPanelData;
 }
 
+function MultiPreviewStatsOverlay({
+  expanded,
+  onToggle,
+  resolution,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  resolution: { width: number; height: number };
+}) {
+  const engineStats = useEngineStore((state) => state.engineStats);
+  return (
+    <StatsOverlay
+      stats={engineStats}
+      resolution={resolution}
+      expanded={expanded}
+      onToggle={onToggle}
+    />
+  );
+}
+
 export function MultiPreviewPanel({ panelId, data }: MultiPreviewPanelProps) {
-  const { engineStats } = useEngineStore();
   const compositions = useMediaStore((s) => s.compositions);
   const { previewQuality, setPreviewQuality } = useSettingsStore();
   const updatePanelData = useDockStore((s) => s.updatePanelData);
@@ -222,8 +241,7 @@ export function MultiPreviewPanel({ panelId, data }: MultiPreviewPanelProps) {
       </div>
 
       {/* Single stats overlay over the whole panel */}
-      <StatsOverlay
-        stats={engineStats}
+      <MultiPreviewStatsOverlay
         resolution={outputResolution}
         expanded={statsExpanded}
         onToggle={() => setStatsExpanded(!statsExpanded)}

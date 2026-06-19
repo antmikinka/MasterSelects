@@ -124,7 +124,7 @@ export class PlaybackHealthMonitor {
   private checkHealth(): void {
     const { clipDragPreview } = useTimelineStore.getState();
     const ctx = createFrameContext();
-    const { isPlaying, clips, tracks, playheadPosition } = ctx;
+    const { isPlaying, isDraggingPlayhead, clips, tracks, playheadPosition } = ctx;
     const now = performance.now();
     const hasVisualRenderDemand = hasTimelineVisualRenderDemand({
       clips,
@@ -135,7 +135,10 @@ export class PlaybackHealthMonitor {
 
     // Gather visible video clips at the effective playhead.
     const videoClips = getVisibleHtmlVideoClipsAtPlayhead(ctx);
-    const htmlHealthVideoClips = videoClips.filter(shouldMonitorHtmlVideoHealth);
+    const htmlHealthVideoClips =
+      renderHostPort.getTelemetry().mode === 'worker-gpu-only'
+        ? []
+        : videoClips.filter(shouldMonitorHtmlVideoHealth);
 
     const vsm = layerBuilder.getVideoSyncManager();
 
@@ -258,7 +261,13 @@ export class PlaybackHealthMonitor {
 
     // 8. HIGH_DROP_RATE
     const stats = renderHostPort.getStats();
-    if (hasVisualRenderDemand && stats.drops && stats.drops.lastSecond > HIGH_DROP_THRESHOLD) {
+    const hasActivePlaybackDemand = isPlaying || isDraggingPlayhead || clipDragPreview != null;
+    if (
+      hasVisualRenderDemand &&
+      hasActivePlaybackDemand &&
+      stats.drops &&
+      stats.drops.lastSecond > HIGH_DROP_THRESHOLD
+    ) {
       this.recordAnomaly('HIGH_DROP_RATE', undefined, `${stats.drops.lastSecond} drops/sec`);
     }
 

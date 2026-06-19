@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { exportRenderHostPort } from '../../src/engine/export/exportRenderHostPort';
+
 const repoRoot = process.cwd();
 
 function readSource(repoPath: string): string {
@@ -29,5 +31,13 @@ describe('export render host port boundary', () => {
     const source = readSource('src/engine/export/exportRenderHostPort.ts');
 
     expect(source).toMatch(/from\s+['"]\.\.\/WebGPUEngine['"]/);
+  });
+
+  it('reports export rendering as the isolated legacy fallback host', () => {
+    expect(exportRenderHostPort.getTelemetry()).toEqual({
+      mode: 'main',
+      presentationStrategy: 'main-host-fallback',
+      lifecycleOwner: 'exportRenderHostPort',
+    });
   });
 });

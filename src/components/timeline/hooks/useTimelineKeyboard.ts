@@ -68,6 +68,11 @@ function blurFocusedShortcutControl(target: EventTarget | null): void {
   }
 }
 
+function getFreshPlayheadPosition(fallbackPosition: number): number {
+  const storePosition = useTimelineStore.getState().playheadPosition;
+  return Number.isFinite(storePosition) ? storePosition : fallbackPosition;
+}
+
 interface UseTimelineKeyboardProps {
   // Playback
   isPlaying: boolean;
@@ -412,7 +417,8 @@ export function useTimelineKeyboard({
         e.preventDefault();
         if (activeComposition) {
           const frameRate = Math.max(1, activeComposition.frameRate || 30);
-          const currentFrame = Math.round(playheadPosition * frameRate);
+          const currentPosition = getFreshPlayheadPosition(playheadPosition);
+          const currentFrame = Math.round(currentPosition * frameRate);
           const newPosition = Math.max(0, (currentFrame - 1) / frameRate);
           setPlayheadPosition(newPosition);
         }
@@ -424,7 +430,8 @@ export function useTimelineKeyboard({
         e.preventDefault();
         if (activeComposition) {
           const frameRate = Math.max(1, activeComposition.frameRate || 30);
-          const currentFrame = Math.round(playheadPosition * frameRate);
+          const currentPosition = getFreshPlayheadPosition(playheadPosition);
+          const currentFrame = Math.round(currentPosition * frameRate);
           const maxFrame = Math.round(duration * frameRate);
           const newPosition = Math.min(duration, (Math.min(maxFrame, currentFrame + 1)) / frameRate);
           setPlayheadPosition(newPosition);

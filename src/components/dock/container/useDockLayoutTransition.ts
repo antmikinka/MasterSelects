@@ -21,6 +21,85 @@ export function useDockLayoutTransition({
   const layoutAnimationTimeoutRef = useRef<number | null>(null);
   const layoutAnimationsRef = useRef<Animation[]>([]);
   const pendingLayoutAnimationRef = useRef<DockLayoutAnimationSnapshot | null>(null);
+  const hasWarmedLayoutAnimationRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let warmupFrameId: number | null = null;
+    let warmupSecondFrameId: number | null = null;
+    let warmupIdleId: number | null = null;
+    let warmupTimeoutId: number | null = null;
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    const warmLayoutAnimationRuntime = () => {
+      if (cancelled || hasWarmedLayoutAnimationRef.current) return;
+
+      const container = containerRef.current;
+      if (
+        !container
+        || !container.isConnected
+        || container.classList.contains('layout-switch-animating')
+      ) {
+        return;
+      }
+
+      hasWarmedLayoutAnimationRef.current = true;
+      const snapshot = captureDockLayoutAnimationSnapshot(container, 1);
+      const animations = animateDockLayoutTransition(container, snapshot);
+      animations.forEach((animation) => animation.cancel());
+
+      const probe = document.createElement('div');
+      probe.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;contain:layout paint style;';
+      container.appendChild(probe);
+      if (typeof probe.animate !== 'function') {
+        probe.remove();
+        return;
+      }
+
+      const animation = probe.animate(
+        [
+          { transform: 'translate3d(0, 0, 0)', opacity: 0 },
+          { transform: 'translate3d(0.01px, 0, 0)', opacity: 0 },
+        ],
+        { duration: 1, fill: 'both' },
+      );
+      const cleanup = () => probe.remove();
+      animation.addEventListener('finish', cleanup, { once: true });
+      animation.addEventListener('cancel', cleanup, { once: true });
+    };
+
+    const scheduleIdleWarmup = () => {
+      if (cancelled) return;
+      if (typeof idleWindow.requestIdleCallback === 'function') {
+        warmupIdleId = idleWindow.requestIdleCallback(warmLayoutAnimationRuntime, { timeout: 1400 });
+        return;
+      }
+      warmupTimeoutId = window.setTimeout(warmLayoutAnimationRuntime, 650);
+    };
+
+    warmupFrameId = window.requestAnimationFrame(() => {
+      warmupSecondFrameId = window.requestAnimationFrame(scheduleIdleWarmup);
+    });
+
+    return () => {
+      cancelled = true;
+      if (warmupFrameId !== null) {
+        window.cancelAnimationFrame(warmupFrameId);
+      }
+      if (warmupSecondFrameId !== null) {
+        window.cancelAnimationFrame(warmupSecondFrameId);
+      }
+      if (warmupIdleId !== null && typeof idleWindow.cancelIdleCallback === 'function') {
+        idleWindow.cancelIdleCallback(warmupIdleId);
+      }
+      if (warmupTimeoutId !== null) {
+        window.clearTimeout(warmupTimeoutId);
+      }
+    };
+  }, [containerRef]);
 
   useEffect(() => {
     const handleLayoutTransition = (event: Event) => {

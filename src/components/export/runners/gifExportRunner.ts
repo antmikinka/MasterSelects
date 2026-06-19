@@ -101,7 +101,7 @@ export async function runBrowserGifExport(
     attachRenderSession(input.renderSessionRef, renderSession);
 
     try {
-      renderSession.begin();
+      await renderSession.begin();
 
       for (let i = 0; i < totalFrames; i++) {
         if (frameRenderer.isCancelled()) {

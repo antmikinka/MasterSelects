@@ -485,8 +485,8 @@
   <!-- ====================== BODY ====================== -->
   <rect x="2" y="2" width="216" height="1236" rx="12" fill="#0a0400"/>
   <g clip-path="url(#bodyClip)">
-    <!-- real photo texture (wood-theme/wood-body.png) -->
-    <image href="wood-theme/wood-body.png" x="5" y="5" width="210" height="1230" preserveAspectRatio="none"/>
+    <!-- real photo texture (wood-theme/wood-body.webp) -->
+    <image href="wood-theme/wood-body.webp" x="5" y="5" width="210" height="1230" preserveAspectRatio="none"/>
     <!-- darken toward the reference photo -->
     <rect x="5" y="5" width="210" height="1230" fill="#5a3617" opacity="0.20" style="mix-blend-mode:multiply"/>
     <rect x="5" y="5" width="210" height="1230" fill="url(#woodSide)"/>
@@ -536,7 +536,7 @@
     <clipPath id="namePlateClip"><rect x="16" y="30" width="188" height="60" rx="6"/></clipPath>
     <rect x="16" y="30" width="188" height="60" rx="6" fill="url(#plateBrass)" stroke="#190d01" stroke-width="1.2"/>
     <g clip-path="url(#namePlateClip)">
-      <image href="wood-theme/plate-bronze.jpg" x="16" y="30" width="188" height="126" preserveAspectRatio="xMidYMin slice"/>
+      <image href="wood-theme/plate-bronze.webp" x="16" y="30" width="188" height="126" preserveAspectRatio="xMidYMin slice"/>
     </g>
     <rect x="16" y="30" width="188" height="60" rx="6" fill="url(#plateSheen)"/>
     <rect x="16" y="30" width="188" height="60" rx="6" fill="url(#plateAge)"/>
@@ -564,7 +564,7 @@
   <clipPath id="fxPocketClip"><rect x="16" y="100" width="188" height="218" rx="8"/></clipPath>
   <rect x="16" y="100" width="188" height="218" rx="8" fill="url(#pocketWood)" stroke="#080401" stroke-width="1.4"/>
   <g clip-path="url(#fxPocketClip)">
-    <image href="wood-theme/pocket-leather.jpg" x="16" y="100" width="188" height="758" preserveAspectRatio="xMidYMin slice"/>
+    <image href="wood-theme/pocket-leather.webp" x="16" y="100" width="188" height="758" preserveAspectRatio="xMidYMin slice"/>
     <rect x="16" y="100" width="188" height="218" fill="#0e0803" opacity="0.35"/>
   </g>
   <rect x="16" y="100" width="188" height="218" rx="8" fill="#000" filter="url(#innerShadowDeep)"/>
@@ -601,7 +601,7 @@
     <!-- brass knurled knob (photo asset) -->
     <ellipse cx="119" cy="358" rx="10" ry="9" fill="#000" opacity="0.5" filter="url(#fcSoft3)"/>
     <ellipse cx="113" cy="356.5" rx="11" ry="10" fill="#000" opacity="0.3" filter="url(#fcSoft1)"/>
-    <image href="wood-theme/pan-knob.png" x="98" y="342.5" width="24" height="24"/>
+    <image href="wood-theme/pan-knob.webp" x="98" y="342.5" width="24" height="24"/>
   </g>
 
   <!-- ====================== R / IN ====================== -->
@@ -666,7 +666,7 @@
   <clipPath id="faderPocketClip"><rect x="16" y="518" width="188" height="608" rx="8"/></clipPath>
   <rect x="16" y="518" width="188" height="608" rx="8" fill="url(#pocketWood)" stroke="#080401" stroke-width="1.4"/>
   <g clip-path="url(#faderPocketClip)">
-    <image href="wood-theme/pocket-leather.jpg" x="16" y="518" width="188" height="758" preserveAspectRatio="xMidYMin slice"/>
+    <image href="wood-theme/pocket-leather.webp" x="16" y="518" width="188" height="758" preserveAspectRatio="xMidYMin slice"/>
     <rect x="16" y="518" width="188" height="608" fill="#0e0803" opacity="0.35"/>
   </g>
   <rect x="16" y="518" width="188" height="608" rx="8" fill="#000" filter="url(#innerShadowDeep)"/>
@@ -734,7 +734,7 @@
   <!-- new photographed steel fader cap -->
   <ellipse cx="82" cy="717" rx="26" ry="45" fill="#000" opacity="0.5" filter="url(#fcSoft3)"/>
   <ellipse cx="64" cy="714" rx="24" ry="45" fill="#000" opacity="0.35" filter="url(#fcSoft1)"/>
-  <image href="wood-theme/fadercap-steel.png" x="36" y="666" width="48" height="91" preserveAspectRatio="xMidYMid meet"/>
+  <image href="wood-theme/fadercap-steel.webp" x="36" y="666" width="48" height="91" preserveAspectRatio="xMidYMid meet"/>
 
   <!-- ====================== OUTPUT PLATE ====================== -->
   <g>
@@ -742,7 +742,7 @@
     <clipPath id="outPlateClip"><rect x="16" y="1138" width="188" height="58" rx="6"/></clipPath>
     <rect x="16" y="1138" width="188" height="58" rx="6" fill="url(#plateBrass)" stroke="#190d01" stroke-width="1.2"/>
     <g clip-path="url(#outPlateClip)">
-      <image href="wood-theme/plate-bronze.jpg" x="16" y="1138" width="188" height="126" preserveAspectRatio="xMidYMin slice"/>
+      <image href="wood-theme/plate-bronze.webp" x="16" y="1138" width="188" height="126" preserveAspectRatio="xMidYMin slice"/>
     </g>
     <rect x="16" y="1138" width="188" height="58" rx="6" fill="url(#plateSheen)"/>
     <rect x="16" y="1138" width="188" height="58" rx="6" fill="url(#plateAge)"/>

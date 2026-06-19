@@ -523,6 +523,13 @@ export class VideoSyncWarmupCoordinator {
 
       if (!video.src && !video.currentSrc) continue;
 
+      if (isInteractivePreview) {
+        if (video.readyState >= 2 && !video.seeking) {
+          this.positionWarmedUpcomingVideo(ctx, clip, video, clipTime);
+        }
+        continue;
+      }
+
       const warmupCooldown = this.deps.warmups.getRetryCooldown(video);
       if (warmupCooldown && performance.now() - warmupCooldown < 2000) continue;
 
@@ -546,6 +553,10 @@ export class VideoSyncWarmupCoordinator {
       const targetTime = getClipSampleTimeNearPlayhead({ ...ctx, isDraggingPlayhead: true }, clip);
       if (this.deps.isVideoGpuReady(video)) {
         this.positionWarmedUpcomingVideo(ctx, clip, video, targetTime);
+        continue;
+      }
+
+      if (isInteractivePreview) {
         continue;
       }
 

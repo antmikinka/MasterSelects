@@ -3,8 +3,11 @@ import { useTimelineStore } from '../../../stores/timeline';
 import { useMediaStore } from '../../../stores/mediaStore';
 import { Logger } from '../../logger';
 import { redactSecrets, redactObject } from '../../security/redact';
-import { getPlaybackDebugStats } from '../../playbackDebugSnapshot';
-import { buildPlaybackDebugStats } from '../../playbackDebugStats';
+import {
+  buildPlaybackDebugStats,
+  summarizeWorkerGpuOnlyPlaybackPaths,
+  type PlaybackDebugStats,
+} from '../../playbackDebugStats';
 import { playbackHealthMonitor } from '../../playbackHealthMonitor';
 import { vfPipelineMonitor } from '../../vfPipelineMonitor';
 import { wcPipelineMonitor } from '../../wcPipelineMonitor';
@@ -24,9 +27,14 @@ import { buildWorkerFirstProviderRuntimeSnapshot } from '../../timeline/provider
 import { captureRenderTargetSnapshot } from '../../render/renderTargetSnapshotFactory';
 import { renderHostPort } from '../../render/renderHostPort';
 import { renderScheduler } from '../../renderScheduler';
+import { getReverseWorkerWebCodecsRuntimeDebugSnapshot } from '../../layerBuilder/reverseWorkerWebCodecsRuntime';
 import { createWorkerFirstProofSnapshot } from '../workerFirstProofHarness';
 import { getWorkerFirstProofCaptures } from '../workerFirstProofCaptures';
-import { getWorkerFirstCounterSources } from '../workerFirstCounterSources';
+import {
+  getWorkerFirstCounterSources,
+  getWorkerFirstPresentedFrameEvents,
+  type WorkerFirstPresentedFrameEvent,
+} from '../workerFirstCounterSources';
 import {
   buildWorkerFirstRuntimeCounterSources,
   mergeWorkerFirstCounterSources,
@@ -34,6 +42,7 @@ import {
 import {
   getLastRenderCapabilityProbe,
 } from '../../render/renderCapabilityProbe';
+import { derivePlaybackStatus } from '../../playbackDebug/status';
 import type { ToolResult } from '../types';
 import type { TimelineRuntimeCoordinatorBridgeStats } from '../../timeline/runtimeCoordinatorTypes';
 import type { IndependentRenderSchedulerRuntimeSnapshot } from '../../renderScheduler';
@@ -65,7 +74,101 @@ function cloneCounts(counts: Record<string, number> | undefined): Record<string,
   return counts ? { ...counts } : undefined;
 }
 
-function serializePlayback(playback: ReturnType<typeof getPlaybackDebugStats>): Record<string, unknown> {
+function summarizePreviewCadence(events: readonly WorkerFirstPresentedFrameEvent[]): {
+  readonly fps: number;
+  readonly avgGapMs: number;
+  readonly p95GapMs: number;
+  readonly maxGapMs: number;
+} {
+  const gaps: number[] = [];
+  for (let index = 1; index < events.length; index++) {
+    const gap = events[index].t - events[index - 1].t;
+    if (gap > 0) gaps.push(gap);
+  }
+  if (gaps.length === 0) {
+    return { fps: 0, avgGapMs: 0, p95GapMs: 0, maxGapMs: 0 };
+  }
+  const sorted = gaps.toSorted((a, b) => a - b);
+  const avgGapMs = gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length;
+  const percentileIndex = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95));
+  const p95GapMs = sorted[percentileIndex] ?? 0;
+  const maxGapMs = sorted.at(-1) ?? 0;
+  return {
+    fps: avgGapMs > 0 ? round(1000 / avgGapMs) : 0,
+    avgGapMs: round(avgGapMs),
+    p95GapMs: round(p95GapMs),
+    maxGapMs: round(maxGapMs),
+  };
+}
+
+function resolveVisualTargetFps(renderTargetFps: number, compositionFrameRate: number | undefined): number {
+  const safeRenderTarget = Number.isFinite(renderTargetFps) && renderTargetFps > 0
+    ? Math.round(renderTargetFps)
+    : 60;
+  const safeCompositionFps = typeof compositionFrameRate === 'number'
+    && Number.isFinite(compositionFrameRate)
+    && compositionFrameRate > 0
+    ? Math.round(compositionFrameRate)
+    : null;
+  return safeCompositionFps === null
+    ? safeRenderTarget
+    : Math.max(1, Math.min(safeRenderTarget, safeCompositionFps));
+}
+
+function mergeWorkerPreviewTelemetry(
+  playback: PlaybackDebugStats,
+  workerPreviewEvents: readonly WorkerFirstPresentedFrameEvent[],
+): PlaybackDebugStats {
+  if (workerPreviewEvents.length === 0) return playback;
+  const previewPathCounts = { ...(playback.previewPathCounts ?? {}) };
+  const workerPreviewSources = new Set(
+    workerPreviewEvents.map((event) => event.source || 'worker-presenting')
+  );
+  const alreadyCounted = [...workerPreviewSources].reduce((sum, source) => {
+    return sum + (previewPathCounts[source] ?? 0);
+  }, 0);
+  const missingEvents = workerPreviewEvents.slice(alreadyCounted);
+  if (missingEvents.length === 0) return playback;
+
+  const cadence = summarizePreviewCadence(missingEvents);
+  const missingUpdates = missingEvents.filter((event) => event.changed !== false).length;
+  for (const event of missingEvents) {
+    const source = event.source || 'worker-presenting';
+    previewPathCounts[source] = (previewPathCounts[source] ?? 0) + 1;
+  }
+
+  const nextWithoutStatus: Omit<PlaybackDebugStats, 'status'> = {
+    ...playback,
+    previewFrames: playback.previewFrames + missingEvents.length,
+    previewUpdates: playback.previewUpdates + missingUpdates,
+    previewRenderFps: playback.previewFrames > 0 ? playback.previewRenderFps : cadence.fps,
+    previewUpdateFps: playback.previewUpdates > 0 ? playback.previewUpdateFps : cadence.fps,
+    avgPreviewRenderGapMs: playback.previewFrames > 0 ? playback.avgPreviewRenderGapMs : cadence.avgGapMs,
+    p95PreviewRenderGapMs: playback.previewFrames > 0 ? playback.p95PreviewRenderGapMs : cadence.p95GapMs,
+    maxPreviewRenderGapMs: Math.max(playback.maxPreviewRenderGapMs, cadence.maxGapMs),
+    avgPreviewUpdateGapMs: playback.previewUpdates > 0 ? playback.avgPreviewUpdateGapMs : cadence.avgGapMs,
+    p95PreviewUpdateGapMs: playback.previewUpdates > 0 ? playback.p95PreviewUpdateGapMs : cadence.p95GapMs,
+    maxPreviewUpdateGapMs: Math.max(playback.maxPreviewUpdateGapMs, cadence.maxGapMs),
+    previewPathCounts,
+  };
+  return {
+    ...nextWithoutStatus,
+    status: derivePlaybackStatus(nextWithoutStatus),
+    workerGpuOnly: summarizeWorkerGpuOnlyPlaybackPaths(previewPathCounts),
+  };
+}
+
+function serializeWorkerGpuOnlyPlayback(
+  playback: PlaybackDebugStats,
+): Record<string, unknown> | undefined {
+  if (!playback.workerGpuOnly) return undefined;
+  return {
+    ...playback.workerGpuOnly,
+    pathCounts: { ...playback.workerGpuOnly.pathCounts },
+  };
+}
+
+function serializePlayback(playback: PlaybackDebugStats): Record<string, unknown> {
   return {
     status: playback.status,
     windowMs: playback.windowMs,
@@ -96,6 +199,7 @@ function serializePlayback(playback: ReturnType<typeof getPlaybackDebugStats>): 
     lastPreviewFreezeDurationMs: roundOptional(playback.lastPreviewFreezeDurationMs),
     previewPathCounts: cloneCounts(playback.previewPathCounts),
     scrubPathCounts: cloneCounts(playback.scrubPathCounts),
+    workerGpuOnly: serializeWorkerGpuOnlyPlayback(playback),
     avgPreviewDriftMs: round(playback.avgPreviewDriftMs),
     maxPreviewDriftMs: round(playback.maxPreviewDriftMs),
     stalls: playback.stalls,
@@ -155,6 +259,7 @@ function collectWorkerFirstRendererSnapshot(input: {
     capabilityProbe: getLastRenderCapabilityProbe(),
     proofCaptures: getWorkerFirstProofCaptures(),
     counterSources: mergeWorkerFirstCounterSources(recordedSources, runtimeSources),
+    renderHostTelemetry: renderHostPort.getTelemetry(),
   }) as unknown as Record<string, unknown>;
 }
 
@@ -163,7 +268,22 @@ function collectSnapshot(playbackWindowMs = DEFAULT_PLAYBACK_WINDOW_MS) {
   const timelineState = useTimelineStore.getState();
   const mediaState = useMediaStore.getState();
   const s = engineStats;
-  const playback = getPlaybackDebugStats(s.decoder, playbackWindowMs);
+  const activeComposition = mediaState.compositions.find(
+    (composition) => composition.id === mediaState.activeCompositionId
+  );
+  const visualTargetFps = resolveVisualTargetFps(s.targetFps, activeComposition?.frameRate);
+  const playbackNow = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const workerPreviewEvents = getWorkerFirstPresentedFrameEvents(playbackWindowMs, playbackNow);
+  const playback = mergeWorkerPreviewTelemetry(buildPlaybackDebugStats({
+    decoder: s.decoder,
+    now: playbackNow,
+    windowMs: playbackWindowMs,
+    wcTimeline: wcPipelineMonitor.timeline(playbackWindowMs),
+    vfTimeline: vfPipelineMonitor.timeline(playbackWindowMs),
+    workerPreviewEvents,
+    healthVideos: playbackHealthMonitor.videos(),
+    healthAnomalies: playbackHealthMonitor.anomalies(),
+  }), workerPreviewEvents);
   const cacheStats = collectCacheSnapshot();
   const cacheRuntime = renderHostPort.getWorkerFirstCacheRuntimeSnapshot();
   const timelineRuntimeCoordinatorStats = timelineRuntimeCoordinator.getBridgeStats();
@@ -189,6 +309,12 @@ function collectSnapshot(playbackWindowMs = DEFAULT_PLAYBACK_WINDOW_MS) {
     },
     fps: s.fps,
     targetFps: s.targetFps,
+    visualTargetFps,
+    activeComposition: activeComposition ? {
+      id: activeComposition.id,
+      name: activeComposition.name,
+      frameRate: activeComposition.frameRate,
+    } : null,
     isIdle: s.isIdle,
     timing: {
       rafGap: round(s.timing.rafGap),
@@ -244,6 +370,7 @@ function collectSnapshot(playbackWindowMs = DEFAULT_PLAYBACK_WINDOW_MS) {
       watchdogActive: renderLoop.watchdogTimer != null,
     } : null,
     renderDispatcher: renderHostPort.getRenderDispatcherDebugSnapshot(),
+    reverseWorkerWebCodecs: getReverseWorkerWebCodecsRuntimeDebugSnapshot(),
     export: exportDiagnostics.snapshot(),
   };
 
@@ -410,22 +537,24 @@ export async function handleGetPlaybackTrace(
   const limit = Math.min(Math.max(Number(args.limit) || 200, 1), MAX_TRACE_EVENTS);
   const { engineStats, isEngineReady, gpuInfo } = useEngineStore.getState();
 
+  const now = performance.now();
   const wcTimeline = wcPipelineMonitor.timeline(windowMs);
   const vfTimeline = vfPipelineMonitor.timeline(windowMs);
+  const workerPreviewEvents = getWorkerFirstPresentedFrameEvents(windowMs, now);
   const healthVideos = playbackHealthMonitor.videos();
-  const now = performance.now();
   const healthAnomalies = playbackHealthMonitor
     .anomalies()
     .filter((anomaly) => anomaly.timestamp >= now - windowMs);
-  const playback = buildPlaybackDebugStats({
+  const playback = mergeWorkerPreviewTelemetry(buildPlaybackDebugStats({
     decoder: engineStats.decoder,
     now,
     windowMs,
     wcTimeline,
     vfTimeline,
+    workerPreviewEvents,
     healthVideos,
     healthAnomalies,
-  });
+  }), workerPreviewEvents);
   const cacheStats = collectCacheSnapshot();
   const cacheRuntime = renderHostPort.getWorkerFirstCacheRuntimeSnapshot();
   const timelineRuntimeCoordinatorStats = timelineRuntimeCoordinator.getBridgeStats();
@@ -461,6 +590,7 @@ export async function handleGetPlaybackTrace(
       vfStats: vfPipelineMonitor.stats(),
       wcEvents: wcTimeline.slice(-limit),
       vfEvents: vfTimeline.slice(-limit),
+      workerPreviewEvents: workerPreviewEvents.slice(-limit),
       healthVideos,
       healthAnomalies,
     },

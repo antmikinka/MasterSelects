@@ -10,6 +10,9 @@ import {
   handleGetStatsHistory,
   handleGetPlaybackTrace,
 } from '../../src/services/aiTools/handlers/stats';
+import { summarizeWorkerGpuOnlyPlaybackPaths } from '../../src/services/playbackDebugStats';
+import { useMediaStore } from '../../src/stores/mediaStore';
+import { DEFAULT_COMPOSITION } from '../../src/stores/mediaStore/constants';
 import type { FrameFingerprint } from '../../src/services/aiTools/frameFingerprint';
 import {
   clearWorkerFirstProofCapturesForTests,
@@ -19,6 +22,7 @@ import {
 import {
   clearWorkerFirstCounterSourcesForTests,
   recordWorkerFirstCacheSnapshot,
+  recordWorkerFirstPresentedFrame,
   recordWorkerFirstProviderStatuses,
   recordWorkerFirstSchedulerSnapshot,
 } from '../../src/services/aiTools/workerFirstCounterSources';
@@ -223,6 +227,40 @@ describe('AI stats timeline runtime coordinator bridge field', () => {
     }
   });
 
+  it('reports the active composition frame rate as dynamic visual target fps', async () => {
+    const activeComposition = { ...DEFAULT_COMPOSITION, id: 'stats-comp-30', frameRate: 30 };
+    vi.mocked(useMediaStore.getState).mockReturnValue({
+      files: [],
+      activeCompositionId: activeComposition.id,
+      compositions: [activeComposition],
+      projectLoadProgress: {
+        active: false,
+        phase: 'idle',
+        percent: 0,
+        message: '',
+        blocking: false,
+      },
+    } as ReturnType<typeof useMediaStore.getState>);
+    useEngineStore.getState().setEngineStats({
+      ...useEngineStore.getState().engineStats,
+      fps: 60,
+      targetFps: 60,
+    });
+
+    const statsResult = await handleGetStats();
+
+    expect(statsResult.success).toBe(true);
+    expect(statsResult.data).toMatchObject({
+      fps: 60,
+      targetFps: 60,
+      visualTargetFps: 30,
+      activeComposition: {
+        id: activeComposition.id,
+        frameRate: 30,
+      },
+    });
+  });
+
   it('includes plain coordinator stats in getStats and getStatsHistory', async () => {
     timelineRuntimeCoordinator.retainResource(htmlMediaResource);
     useEngineStore.getState().setEngineStats({
@@ -277,6 +315,12 @@ describe('AI stats timeline runtime coordinator bridge field', () => {
     recordWorkerFirstSchedulerSnapshot(schedulerSnapshot, 30);
     recordWorkerFirstCacheSnapshot(cacheSnapshot, 40);
     recordWorkerFirstProviderStatuses([providerStatus], 50);
+    recordWorkerFirstPresentedFrame({
+      frameId: 'preview:stats-worker:1',
+      targetId: 'preview',
+      source: 'worker-presenting',
+      t: performance.now(),
+    }, 60);
 
     const statsResult = await handleGetStats();
     expect(statsResult.success).toBe(true);
@@ -294,7 +338,17 @@ describe('AI stats timeline runtime coordinator bridge field', () => {
     const workerFirst = readWorkerFirstRendererStats(statsResult.data);
     expect(workerFirst).toMatchObject({
       mode: 'main',
-      selectedStrategy: 'main-host-dev',
+      selectedStrategy: 'main-host-fallback',
+      renderHost: {
+        mode: 'main',
+        presentationStrategy: 'main-host-fallback',
+        fallbackActive: true,
+        activation: {
+          requestedMode: 'main',
+          workerHostAllowed: false,
+          workerHostActive: false,
+        },
+      },
       capabilityProbeStatus: 'missing',
       capabilityProbe: null,
       w5GateEvidenceMode: 'stats-observation',
@@ -348,14 +402,70 @@ describe('AI stats timeline runtime coordinator bridge field', () => {
     expect(historyWorkerFirst.mode).toBe('main');
     expect(isPlainTimelineRuntimeBridgeStats(historyStats)).toBe(true);
 
-    const traceResult = await handleGetPlaybackTrace({ windowMs: 100, limit: 1 });
+    const traceResult = await handleGetPlaybackTrace({ windowMs: 5000, limit: 1 });
     expect(traceResult.success).toBe(true);
+    expect(traceResult.data).toMatchObject({
+      playback: {
+        previewFrames: 1,
+        previewUpdates: 1,
+        previewPathCounts: {
+          'worker-presenting': 1,
+        },
+      },
+    });
     const traceWorkerFirst = readWorkerFirstRendererStats(traceResult.data);
     expect(traceWorkerFirst).toMatchObject({
       mode: 'main',
       counters: {
         queueDepth: 3,
       },
+    });
+  });
+
+  it('preserves worker-gpu-only source labels in playback trace diagnostics', async () => {
+    const now = performance.now();
+    recordWorkerFirstPresentedFrame({
+      frameId: 'preview:gpu-test-pattern:1',
+      targetId: 'preview',
+      source: 'worker-gpu-only:gpu-test-pattern',
+      t: now - 20,
+    }, 10);
+    recordWorkerFirstPresentedFrame({
+      frameId: 'preview:video-frame:2',
+      targetId: 'preview',
+      source: 'worker-gpu-only:VideoFrame',
+      t: now - 10,
+    }, 20);
+
+    const traceResult = await handleGetPlaybackTrace({ windowMs: 5000, limit: 5 });
+
+    expect(traceResult.success).toBe(true);
+    const playback = (traceResult.data as {
+      playback: { previewPathCounts?: Record<string, number> };
+    }).playback;
+    expect(playback.previewPathCounts).toMatchObject({
+      'worker-gpu-only:gpu-test-pattern': 1,
+      'worker-gpu-only:VideoFrame': 1,
+    });
+    expect(playback).toMatchObject({
+      workerGpuOnly: {
+        frameState: 'real-gpu-source',
+        previewFrames: 2,
+        testPatternFrames: 1,
+        realSourceFrames: 1,
+        unknownSourceFrames: 0,
+        pathCounts: {
+          'worker-gpu-only:gpu-test-pattern': 1,
+          'worker-gpu-only:VideoFrame': 1,
+        },
+      },
+    });
+    expect(summarizeWorkerGpuOnlyPlaybackPaths(playback.previewPathCounts)).toMatchObject({
+      frameState: 'real-gpu-source',
+      previewFrames: 2,
+      testPatternFrames: 1,
+      realSourceFrames: 1,
+      unknownSourceFrames: 0,
     });
   });
 

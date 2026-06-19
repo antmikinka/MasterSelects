@@ -16,7 +16,7 @@ export function isWorkerFirstPresentationStrategy(value: unknown): value is Rend
   return value === 'worker-webgpu-present'
     || value === 'worker-webgpu-main-present'
     || value === 'worker-cpu-present'
-    || value === 'main-host-dev';
+    || value === 'main-host-fallback';
 }
 
 function adapterLooksMesa(adapter: RenderCapabilityProbeResult['gpuAdapter']): boolean {

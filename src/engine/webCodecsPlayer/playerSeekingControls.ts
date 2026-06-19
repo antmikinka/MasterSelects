@@ -1,8 +1,9 @@
 import { webCodecsTelemetry } from '../webcodecs/webCodecsTelemetry';
-import { WebCodecsPlayerAdvancePlayback } from './playerAdvancePlayback';
+import { WEB_CODECS_PLAYER_LIMITS } from './playerConstants';
+import { WebCodecsPlayerStreamPlayback } from './playerStreamPlayback';
 import type { SeekPreviewMode } from './playerTypes';
 
-export abstract class WebCodecsPlayerSeekingControls extends WebCodecsPlayerAdvancePlayback {
+export abstract class WebCodecsPlayerSeekingControls extends WebCodecsPlayerStreamPlayback {
   seek(timeSeconds: number, options?: { previewMode?: SeekPreviewMode }): void {
     // Simple mode: direct seek on video element
     if (this.useSimpleMode && this.simpleSource.hasVideoElement()) {
@@ -14,17 +15,19 @@ export abstract class WebCodecsPlayerSeekingControls extends WebCodecsPlayerAdva
     if (!this.videoTrack || this.samples.length === 0 || !this.decoder) return;
 
     const seekStart = performance.now();
-    const targetTime = timeSeconds * this.videoTrack.timescale;
+    const targetTime = this.getTargetCtsForTimeSeconds(timeSeconds);
 
     // Binary search for closest CTS match (O(log n) instead of O(n))
     const targetIndex = this.findSampleNearCts(targetTime);
     const keyframeIndex = this.findKeyframeBefore(targetIndex);
     const framesDecoded = targetIndex - keyframeIndex + 1;
+    const targetSampleTimeUs = this.getSampleTimestampUs(targetIndex);
+    const resolvedTargetUs = targetSampleTimeUs ?? timeSeconds * 1_000_000;
+    const keyframeTimeUs = this.getSampleTimestampUs(keyframeIndex);
 
     // Set seek target. Intermediate GOP traversal frames are dropped in output callback
     // so the renderer keeps showing the last stable frame until the target arrives.
-    const targetSample = this.samples[targetIndex];
-    this.seekTargetUs = (targetSample.cts * 1_000_000) / targetSample.timescale;
+    this.seekTargetUs = resolvedTargetUs;
     this.seekTargetToleranceUs = this.computeSeekToleranceUs(targetIndex);
     this.clearAdvanceSeekState('replaced');
     this.clearPausedPreroll();
@@ -32,6 +35,14 @@ export abstract class WebCodecsPlayerSeekingControls extends WebCodecsPlayerAdva
     const canExtendPendingSeek = this.canExtendPendingPausedSeek(targetIndex, previewMode);
     const canReusePipeline = canExtendPendingSeek || this.canReusePausedSeekPipeline(targetIndex, previewMode);
     const feedEndIndex = this.getPausedSeekFeedEndIndex(targetIndex, previewMode);
+    this.lastSeekPlanDebug = {
+      targetIndex,
+      keyframeIndex,
+      feedEndIndex,
+      targetTimeSeconds: timeSeconds,
+      targetSampleTimeSeconds: targetSampleTimeUs === null ? null : targetSampleTimeUs / 1_000_000,
+      keyframeTimeSeconds: keyframeTimeUs === null ? null : keyframeTimeUs / 1_000_000,
+    };
     this.invalidateStrictPausedSeekFlush();
     if (!canReusePipeline) {
       this.clearPendingSeekFeed();
@@ -40,6 +51,21 @@ export abstract class WebCodecsPlayerSeekingControls extends WebCodecsPlayerAdva
     this.pendingSeekPreviewMode = previewMode;
 
     webCodecsTelemetry.seekStart(timeSeconds, framesDecoded);
+    this.sampleIndex = targetIndex;
+    if (this.resolvePendingSeekWithDisplayedFrame(this.seekTargetUs, {
+      resetQueuedDecode: this.getEffectiveDecodeQueueSize() >= WEB_CODECS_PLAYER_LIMITS.ADVANCE_SEEK_QUEUE_TARGET ||
+        this.pendingSeekFeedEndIndex !== null,
+    })) {
+      webCodecsTelemetry.seekEnd(timeSeconds, framesDecoded, performance.now() - seekStart);
+      return;
+    }
+
+    if (canReusePipeline) {
+      if (this.promoteBufferedFrameForPausedSeekTarget(this.seekTargetUs, this.seekTargetToleranceUs)) {
+        webCodecsTelemetry.seekEnd(timeSeconds, framesDecoded, performance.now() - seekStart);
+        return;
+      }
+    }
 
     if (canReusePipeline) {
       webCodecsTelemetry.seekSkipReuse(
@@ -93,7 +119,7 @@ export abstract class WebCodecsPlayerSeekingControls extends WebCodecsPlayerAdva
 
     if (!this.videoTrack || this.samples.length === 0 || !this.decoder) return;
 
-    const targetTime = timeSeconds * this.videoTrack.timescale;
+    const targetTime = this.getTargetCtsForTimeSeconds(timeSeconds);
 
     // Find nearest keyframe: check before AND after target for closest match
     const targetIdx = this.findSampleNearCts(targetTime);
@@ -128,7 +154,7 @@ export abstract class WebCodecsPlayerSeekingControls extends WebCodecsPlayerAdva
     const sample = this.samples[bestKeyframe];
     const chunk = new EncodedVideoChunk({
       type: 'key',
-      timestamp: (sample.cts * 1_000_000) / sample.timescale,
+      timestamp: this.getSamplePresentationTimestampUs(sample),
       duration: (sample.duration * 1_000_000) / sample.timescale,
       data: sample.data,
     });
@@ -136,8 +162,8 @@ export abstract class WebCodecsPlayerSeekingControls extends WebCodecsPlayerAdva
     try {
       this.decoder.decode(chunk);
       this.noteDecodeQueued();
-    } catch {
-      // Skip decode errors
+    } catch (error) {
+      this.recordDecodeError(error, 'fastSeek.decode');
     }
 
     this.sampleIndex = bestKeyframe;
@@ -167,7 +193,7 @@ export abstract class WebCodecsPlayerSeekingControls extends WebCodecsPlayerAdva
     this.clearPendingSeekFeed();
     this.clearAdvanceSeekState();
 
-    const targetTime = timeSeconds * this.videoTrack.timescale;
+    const targetTime = this.getTargetCtsForTimeSeconds(timeSeconds);
 
     // Binary search for closest CTS match
     const targetIndex = this.findSampleNearCts(targetTime);
@@ -183,16 +209,15 @@ export abstract class WebCodecsPlayerSeekingControls extends WebCodecsPlayerAdva
       const sample = this.samples[i];
       const chunk = new EncodedVideoChunk({
         type: sample.is_sync ? 'key' : 'delta',
-        timestamp: (sample.cts * 1_000_000) / sample.timescale,
+        timestamp: this.getSamplePresentationTimestampUs(sample),
         duration: (sample.duration * 1_000_000) / sample.timescale,
         data: sample.data,
       });
       try {
         this.decoder.decode(chunk);
         this.noteDecodeQueued();
-        void this.decoder.flush().catch(() => {});
-      } catch {
-        // Skip decode errors
+      } catch (error) {
+        this.recordDecodeError(error, 'seekAsync.decode');
       }
     }
 

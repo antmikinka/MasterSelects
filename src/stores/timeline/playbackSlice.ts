@@ -23,12 +23,17 @@ import {
 import { stopTimelineAudioPlayback } from '../../services/audio/timelineAudioPlaybackStopper';
 import { getTimelinePlaybackWarmupVideo } from '../../services/timeline/timelinePlaybackWarmupRuntime';
 import {
+  hasWorkerGpuPlaybackStartVideoSource,
+  shouldWarmWorkerGpuForwardPlaybackStart,
+  waitForWorkerGpuPlaybackStartFrame,
+} from '../../services/timeline/workerGpuPlaybackStartWarmup';
+import {
   createTransitionSourceClip,
   DEFAULT_TRANSITION_PLACEMENT,
   planTransition,
 } from './editOperations/transitionPlanner';
 import { createTimelineTransitionMediaDurationResolver } from '../../services/timeline/timelineTransitionMediaDurations';
-import type { TimelineClip } from '../../types';
+import type { TimelineClip, TimelineTrack } from '../../types';
 
 function createPlaybackWarmupRequestId(): string {
   return `playback-warmup-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -36,6 +41,23 @@ function createPlaybackWarmupRequestId(): string {
 
 function getWarmupTimestamp(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
+
+function waitForPlaybackWarmupFrame(): Promise<void> {
+  if (typeof requestAnimationFrame === 'function') {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        resolve();
+      };
+      const timeoutId = setTimeout(finish, 16);
+      requestAnimationFrame(finish);
+    });
+  }
+  return new Promise((resolve) => setTimeout(resolve, 16));
 }
 
 function getTransitionWarmupClipsAtTime(
@@ -73,6 +95,104 @@ function getTransitionWarmupClipsAtTime(
   }
 
   return [...clipsById.values()];
+}
+
+function getVisibleVideoTrackIds(tracks: readonly TimelineTrack[]): Set<string> {
+  return new Set(
+    tracks
+      .filter((track) => track.type === 'video' && track.visible !== false)
+      .map((track) => track.id)
+  );
+}
+
+function getReversePrimeClipsAtTime(
+  clips: readonly TimelineClip[],
+  visibleVideoTrackIds: ReadonlySet<string>,
+  time: number,
+): TimelineClip[] {
+  const clipsAtPlayhead = clips.filter(clip => {
+    if (!visibleVideoTrackIds.has(clip.trackId)) return false;
+    const isAtPlayhead = time >= clip.startTime &&
+                         time < clip.startTime + clip.duration;
+    const hasVideo = getTimelinePlaybackWarmupVideo(clip.source) !== null;
+    return isAtPlayhead && hasVideo;
+  });
+  const transitionClipsAtPlayhead = getTransitionWarmupClipsAtTime(
+    clips,
+    visibleVideoTrackIds,
+    time,
+  ).filter(clip => getTimelinePlaybackWarmupVideo(clip.source) !== null);
+  return [...clipsAtPlayhead, ...transitionClipsAtPlayhead];
+}
+
+type ReverseWorkerRuntimeModule = typeof import('../../services/layerBuilder/reverseWorkerWebCodecsRuntime');
+
+let reverseWorkerRuntimeModulePromise: Promise<ReverseWorkerRuntimeModule> | null = null;
+
+function loadReverseWorkerRuntimeModule(): Promise<ReverseWorkerRuntimeModule> {
+  reverseWorkerRuntimeModulePromise ??= import('../../services/layerBuilder/reverseWorkerWebCodecsRuntime');
+  return reverseWorkerRuntimeModulePromise;
+}
+
+if (typeof window !== 'undefined' && import.meta.env?.MODE !== 'test') {
+  void loadReverseWorkerRuntimeModule().catch(() => {
+    reverseWorkerRuntimeModulePromise = null;
+  });
+}
+
+function primeReverseWorkerWebCodecsPlayback(input: {
+  readonly clips: readonly TimelineClip[];
+  readonly playbackSpeed: number;
+  readonly playheadPosition: number;
+  readonly getSourceTimeForClip: (clipId: string, clipLocalTime: number) => number;
+  readonly getInterpolatedSpeed: (clipId: string, clipLocalTime: number) => number;
+}): Promise<number> {
+  if (input.playbackSpeed >= 0 && !input.clips.some((clip) => clip.reversed === true)) {
+    return Promise.resolve(0);
+  }
+  const mediaFiles = useMediaStore.getState().files;
+  return loadReverseWorkerRuntimeModule()
+    .then(({ primeReverseWorkerRuntimeSourcesForPlayback }) => {
+      return primeReverseWorkerRuntimeSourcesForPlayback({
+        clips: input.clips,
+        mediaFiles,
+        playheadPosition: input.playheadPosition,
+        playbackSpeed: input.playbackSpeed,
+        getSourceTimeForClip: input.getSourceTimeForClip,
+        getInterpolatedSpeed: input.getInterpolatedSpeed,
+      });
+    })
+    .catch(() => {
+      reverseWorkerRuntimeModulePromise = null;
+      return 0;
+    });
+}
+
+function primeReverseWorkerWebCodecsPlaybackForState(input: {
+  readonly clips: readonly TimelineClip[];
+  readonly tracks: readonly TimelineTrack[];
+  readonly playbackSpeed: number;
+  readonly playheadPosition: number;
+  readonly getSourceTimeForClip: (clipId: string, clipLocalTime: number) => number;
+  readonly getInterpolatedSpeed: (clipId: string, clipLocalTime: number) => number;
+}): Promise<number> {
+  const visibleVideoTrackIds = getVisibleVideoTrackIds(input.tracks);
+  const primeTimes = input.playbackSpeed < 0
+    ? [input.playheadPosition, input.playheadPosition - 0.35, input.playheadPosition - 0.75]
+    : [input.playheadPosition];
+  const clipsById = new Map<string, TimelineClip>();
+  for (const time of primeTimes) {
+    for (const clip of getReversePrimeClipsAtTime(input.clips, visibleVideoTrackIds, time)) {
+      clipsById.set(clip.id, clip);
+    }
+  }
+  return primeReverseWorkerWebCodecsPlayback({
+    clips: [...clipsById.values()],
+    playbackSpeed: input.playbackSpeed,
+    playheadPosition: input.playheadPosition,
+    getSourceTimeForClip: input.getSourceTimeForClip,
+    getInterpolatedSpeed: input.getInterpolatedSpeed,
+  });
 }
 
 // Playback actions only (RAM preview and proxy cache in separate slices)
@@ -115,7 +235,17 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
   },
 
   play: async () => {
-    const { clips, tracks, inPoint, outPoint, duration, playbackSpeed } = get();
+    const {
+      clips,
+      tracks,
+      inPoint,
+      outPoint,
+      duration,
+      playbackSpeed,
+      isPlaying: wasPlaying,
+      getSourceTimeForClip,
+      getInterpolatedSpeed,
+    } = get();
     set({ playbackWarmup: null });
 
     const playheadPosition = sanitizePlayheadPosition(
@@ -134,27 +264,43 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
       set({ playheadPosition: playbackStartPosition });
       playheadState.position = playbackStartPosition;
     }
+    if (!wasPlaying) {
+      playheadState.position = playbackStartPosition;
+    }
 
-    const visibleVideoTrackIds = new Set(
-      tracks
-        .filter((track) => track.type === 'video' && track.visible !== false)
-        .map((track) => track.id)
-    );
+    const visibleVideoTrackIds = getVisibleVideoTrackIds(tracks);
 
     // Find visible video clips at current playhead position that need to be ready.
     // Audio-only / hidden-video playback must not wake video decoders.
-    const clipsAtPlayhead = clips.filter(clip => {
+    const visibleClipsAtPlaybackStart = clips.filter(clip => {
       if (!visibleVideoTrackIds.has(clip.trackId)) return false;
       const isAtPlayhead = playbackStartPosition >= clip.startTime &&
                            playbackStartPosition < clip.startTime + clip.duration;
-      const hasVideo = getTimelinePlaybackWarmupVideo(clip.source) !== null;
-      return isAtPlayhead && hasVideo;
+      return isAtPlayhead;
     });
-    const transitionClipsAtPlayhead = getTransitionWarmupClipsAtTime(
+    const clipsAtPlayhead = visibleClipsAtPlaybackStart.filter(
+      clip => getTimelinePlaybackWarmupVideo(clip.source) !== null,
+    );
+    const transitionWarmupClipsAtPlayhead = getTransitionWarmupClipsAtTime(
       clips,
       visibleVideoTrackIds,
       playbackStartPosition,
-    ).filter(clip => getTimelinePlaybackWarmupVideo(clip.source) !== null);
+    );
+    const transitionClipsAtPlayhead = transitionWarmupClipsAtPlayhead.filter(
+      clip => getTimelinePlaybackWarmupVideo(clip.source) !== null,
+    );
+    const hasTopLevelWorkerGpuStartVideo = [
+      ...visibleClipsAtPlaybackStart,
+      ...transitionWarmupClipsAtPlayhead,
+    ].some(hasWorkerGpuPlaybackStartVideoSource);
+
+    const reverseWorkerPrimeReady = primeReverseWorkerWebCodecsPlayback({
+      clips: [...clipsAtPlayhead, ...transitionClipsAtPlayhead],
+      playbackSpeed,
+      playheadPosition: playbackStartPosition,
+      getSourceTimeForClip,
+      getInterpolatedSpeed,
+    });
 
     // Also check nested composition clips
     const nestedVideos: HTMLVideoElement[] = [];
@@ -177,6 +323,7 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
         }
       }
     }
+    const hasWorkerGpuStartVideo = hasTopLevelWorkerGpuStartVideo || nestedVideos.length > 0;
 
     // Collect all videos that need to be ready
     const videosToCheck = Array.from(new Set([
@@ -247,8 +394,42 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
       }
     }
 
+    const reverseWorkerPrimeCount = await reverseWorkerPrimeReady;
+    if (reverseWorkerPrimeCount > 0) {
+      renderHostPort.requestNewFrameRender();
+      await waitForPlaybackWarmupFrame();
+    }
+
+    if (!wasPlaying && shouldWarmWorkerGpuForwardPlaybackStart({
+      hasVideoAtPlaybackStart: hasWorkerGpuStartVideo,
+      playbackSpeed,
+    })) {
+      const warmupRequestId = createPlaybackWarmupRequestId();
+      set({
+        playbackWarmup: {
+          requestId: warmupRequestId,
+          startedAt: getWarmupTimestamp(),
+          targetTime: playbackStartPosition,
+          pendingVideoCount: 1,
+          totalVideoCount: 1,
+        },
+      });
+      renderHostPort.requestNewFrameRender();
+      await waitForWorkerGpuPlaybackStartFrame({
+        targetTime: playbackStartPosition,
+        playbackSpeed,
+      });
+      if (get().playbackWarmup?.requestId !== warmupRequestId) {
+        return;
+      }
+    }
+
     startInternalPosition(playbackStartPosition, playbackSpeed);
     set({ playbackWarmup: null, isPlaying: true });
+    if (!wasPlaying) {
+      renderHostPort.setIsPlaying(true);
+      renderHostPort.requestNewFrameRender();
+    }
   },
 
   pause: () => {
@@ -259,6 +440,8 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
     // Reset playback speed to normal when pausing
     // So that Space (play/pause toggle) plays forward again
     set({ isPlaying: false, playbackSpeed: 1, playheadPosition: currentPosition, playbackWarmup: null });
+    renderHostPort.setIsPlaying(false);
+    renderHostPort.requestNewFrameRender();
   },
 
   stop: () => {
@@ -352,6 +535,17 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
     if (get().isPlaying && playheadState.isUsingInternalPosition) {
       updateInternalPlaybackSpeed(speed);
     }
+    if (speed < 0) {
+      const state = get();
+      void primeReverseWorkerWebCodecsPlaybackForState({
+        clips: state.clips,
+        tracks: state.tracks,
+        playbackSpeed: speed,
+        playheadPosition: getPlayheadPosition(state.playheadPosition),
+        getSourceTimeForClip: state.getSourceTimeForClip,
+        getInterpolatedSpeed: state.getInterpolatedSpeed,
+      });
+    }
     set({ playbackSpeed: speed });
   },
 
@@ -377,10 +571,28 @@ export const createPlaybackSlice: SliceCreator<PlaybackActions> = (set, get) => 
     const { isPlaying, playbackSpeed, play } = get();
     if (!isPlaying) {
       // Start playing reverse at normal speed
+      const state = get();
+      void primeReverseWorkerWebCodecsPlaybackForState({
+        clips: state.clips,
+        tracks: state.tracks,
+        playbackSpeed: -1,
+        playheadPosition: getPlayheadPosition(state.playheadPosition),
+        getSourceTimeForClip: state.getSourceTimeForClip,
+        getInterpolatedSpeed: state.getInterpolatedSpeed,
+      });
       set({ playbackSpeed: -1 });
       play();
     } else if (playbackSpeed > 0) {
       // Was playing forward, switch to reverse
+      const state = get();
+      void primeReverseWorkerWebCodecsPlaybackForState({
+        clips: state.clips,
+        tracks: state.tracks,
+        playbackSpeed: -1,
+        playheadPosition: getPlayheadPosition(state.playheadPosition),
+        getSourceTimeForClip: state.getSourceTimeForClip,
+        getInterpolatedSpeed: state.getInterpolatedSpeed,
+      });
       set({ playbackSpeed: -1 });
     } else {
       // Already playing reverse, increase reverse speed (-1 -> -2 -> -4 -> -8)

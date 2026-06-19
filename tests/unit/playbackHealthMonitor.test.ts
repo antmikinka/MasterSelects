@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { engine } from '../../src/engine/WebGPUEngine';
 import { layerBuilder } from '../../src/services/layerBuilder';
 import { PlaybackHealthMonitor } from '../../src/services/playbackHealthMonitor';
+import {
+  configureRenderHostSelection,
+  renderHostPort,
+} from '../../src/services/render/renderHostPort';
 import type { TimelineClip, TimelineTrack } from '../../src/types';
 
 const hoisted = vi.hoisted(() => ({
@@ -67,6 +71,36 @@ type PlaybackHealthMonitorTestAccess = PlaybackHealthMonitor & {
 
 const testEngine = engine as EngineHealthTestAccess;
 const testLayerBuilder = layerBuilder as LayerBuilderHealthTestAccess;
+let restoreRenderHostTelemetry: (() => void) | null = null;
+
+function mockRenderHostMode(
+  mode: ReturnType<typeof renderHostPort.getTelemetry>['mode'],
+  testEngine: EngineHealthTestAccess
+): void {
+  configureRenderHostSelection({
+    workerPrimary: {
+      getLayerCollector: () => testEngine.getLayerCollector(),
+      getRenderLoop: () => testEngine.getRenderLoop(),
+      getStats: () => testEngine.getStats(),
+      getTelemetry: () => ({
+        mode,
+      }) as ReturnType<typeof renderHostPort.getTelemetry>,
+      requestRender: (...args: Parameters<EngineHealthTestAccess['requestRender']>) =>
+        testEngine.requestRender(...args),
+    } as unknown as typeof renderHostPort,
+    preferWorkerPrimary: true,
+    workerPrimaryAvailable: true,
+    workerPrimaryBlockers: [],
+  });
+  restoreRenderHostTelemetry = () => {
+    configureRenderHostSelection({
+      preferWorkerPrimary: false,
+      workerPrimaryAvailable: false,
+      workerPrimaryBlockers: [],
+    });
+    restoreRenderHostTelemetry = null;
+  };
+}
 
 function createClip(video: HTMLVideoElement, webCodecsPlayer?: { isFullMode?: () => boolean }): TimelineClip {
   return {
@@ -140,6 +174,7 @@ describe('PlaybackHealthMonitor', () => {
   });
 
   afterEach(() => {
+    restoreRenderHostTelemetry?.();
     vi.restoreAllMocks();
   });
 
@@ -188,6 +223,32 @@ describe('PlaybackHealthMonitor', () => {
     expect(testEngine.requestRender).not.toHaveBeenCalled();
   });
 
+  it('skips HTML-video frame stall recovery in worker GPU-only mode', () => {
+    mockRenderHostMode('worker-gpu-only', testEngine);
+    const video = createVideo({
+      currentTime: 21.713,
+      paused: true,
+      readyState: 4,
+    });
+
+    hoisted.timelineState.isPlaying = true;
+    hoisted.timelineState.playheadPosition = 1;
+    hoisted.timelineState.clips = [createClip(video)];
+
+    const monitor = new PlaybackHealthMonitor() as PlaybackHealthMonitorTestAccess;
+    monitor.checkHealth();
+    now += 500;
+    monitor.checkHealth();
+    now += 500;
+    monitor.checkHealth();
+    now += 500;
+    monitor.checkHealth();
+
+    expect(monitor.anomalies('FRAME_STALL')).toHaveLength(0);
+    expect(video.play).not.toHaveBeenCalled();
+    expect(testEngine.requestRender).not.toHaveBeenCalled();
+  });
+
   it('records high drop rate with the anomaly cooldown applied', () => {
     testEngine.getStats = vi.fn(() => ({
       drops: {
@@ -195,6 +256,7 @@ describe('PlaybackHealthMonitor', () => {
       },
     }));
     hoisted.timelineState.playheadPosition = 1;
+    hoisted.timelineState.isPlaying = true;
     hoisted.timelineState.clips = [createClip(createVideo())];
     hoisted.timelineState.tracks = [{ id: 'video-1', type: 'video', visible: true } as TimelineTrack];
 
@@ -208,5 +270,26 @@ describe('PlaybackHealthMonitor', () => {
 
     expect(monitor.anomalies('HIGH_DROP_RATE')).toHaveLength(2);
     expect(hoisted.logWarn).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not record high drop rate for paused preview settle renders', () => {
+    testEngine.getStats = vi.fn(() => ({
+      drops: {
+        lastSecond: 25,
+      },
+    }));
+    hoisted.timelineState.isPlaying = false;
+    hoisted.timelineState.isDraggingPlayhead = false;
+    hoisted.timelineState.clipDragPreview = null;
+    hoisted.timelineState.playheadPosition = 1;
+    hoisted.timelineState.clips = [createClip(createVideo())];
+    hoisted.timelineState.tracks = [{ id: 'video-1', type: 'video', visible: true } as TimelineTrack];
+
+    const monitor = new PlaybackHealthMonitor() as PlaybackHealthMonitorTestAccess;
+
+    monitor.checkHealth();
+
+    expect(monitor.anomalies('HIGH_DROP_RATE')).toHaveLength(0);
+    expect(hoisted.logWarn).not.toHaveBeenCalled();
   });
 });

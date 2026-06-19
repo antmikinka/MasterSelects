@@ -3,7 +3,7 @@
 
 import type { TimelineClip, Layer, VideoBakeRegion } from '../../types';
 import type { FrameContext } from './types';
-import { createFrameContext, isVideoTrackVisible } from './FrameContext';
+import { createFrameContext, getMediaFileForClip, isVideoTrackVisible } from './FrameContext';
 import { LayerCache } from './LayerCache';
 import { TransformCache } from './TransformCache';
 import { VideoSyncManager } from './VideoSyncManager';
@@ -72,8 +72,16 @@ export class LayerBuilderService {
     void this.getPausedVisualProvider;
   }
 
-  private hasRenderableVideoSource(source: TimelineClip['source'] | undefined, clip?: TimelineClip): boolean {
-    return hasLayerBuilderRenderableVideoSource(source, clip);
+  private hasRenderableVideoSource(
+    source: TimelineClip['source'] | undefined,
+    clip?: TimelineClip,
+    ctx?: FrameContext,
+  ): boolean {
+    return hasLayerBuilderRenderableVideoSource(
+      source,
+      clip,
+      clip && ctx ? getMediaFileForClip(ctx, clip) : undefined,
+    );
   }
 
   private getPausedVisualProvider(
@@ -373,7 +381,7 @@ export class LayerBuilderService {
       });
     }
     // Video clip
-    else if (this.hasRenderableVideoSource(clip.source, clip)) {
+    else if (this.hasRenderableVideoSource(clip.source, clip, ctx)) {
       layer = buildLayerBuilderVideoLayer({
         clip,
         layerIndex,

@@ -35,8 +35,15 @@ export type VideoSyncHtmlSeekCoordinatorDeps = {
 export class VideoSyncHtmlSeekCoordinator {
   private static readonly SCRUB_SETTLE_TIMEOUT_MS = 220;
   private static readonly SCRUB_SETTLE_RVFC_DEFER_MS = 90;
-  private static readonly SCRUB_DRAG_RVFC_FOLLOW_THRESHOLD = 0.16;
-  private static readonly SCRUB_DRAG_RVFC_FORCE_PRECISE_THRESHOLD = 0.7;
+  private static readonly SCRUB_DRAG_RVFC_FOLLOW_THRESHOLD = 0.08;
+  private static readonly SCRUB_DRAG_RVFC_PRECISE_CATCHUP_THRESHOLD = 0.1;
+  private static readonly SCRUB_DRAG_RVFC_FORCE_PRECISE_THRESHOLD = 1.8;
+  private static readonly SCRUB_DRAG_PRECISE_SEEK_FAR_MS = 32;
+  private static readonly SCRUB_DRAG_PRECISE_SEEK_MID_MS = 45;
+  private static readonly SCRUB_DRAG_PRECISE_SEEK_NEAR_MS = 65;
+  private static readonly SCRUB_DRAG_PENDING_RETARGET_FAR_MS = 55;
+  private static readonly SCRUB_DRAG_PENDING_RETARGET_MID_MS = 75;
+  private static readonly SCRUB_DRAG_PENDING_RETARGET_NEAR_MS = 100;
 
   private readonly deps: VideoSyncHtmlSeekCoordinatorDeps;
 
@@ -120,9 +127,9 @@ export class VideoSyncHtmlSeekCoordinator {
             ? Math.abs(pendingTarget - time)
             : 0;
         if (
-          displayedDriftSeconds >= 1 &&
-          pendingAge >= 45 &&
-          pendingTargetDrift >= 0.35
+          displayedDriftSeconds >= 1.4 &&
+          pendingAge >= VideoSyncHtmlSeekCoordinator.SCRUB_DRAG_PENDING_RETARGET_FAR_MS &&
+          pendingTargetDrift >= 0.65
         ) {
           this.deps.htmlSeeks.setPendingTarget(clipId, time, ctx.now);
           this.deps.htmlSeeks.setLatestTarget(clipId, time);
@@ -219,10 +226,10 @@ export class VideoSyncHtmlSeekCoordinator {
             ? 28
             : 50
         : dragDrift >= 1
-          ? 60
+          ? VideoSyncHtmlSeekCoordinator.SCRUB_DRAG_PRECISE_SEEK_FAR_MS
           : dragDrift >= 0.35
-            ? 85
-            : 110
+            ? VideoSyncHtmlSeekCoordinator.SCRUB_DRAG_PRECISE_SEEK_MID_MS
+            : VideoSyncHtmlSeekCoordinator.SCRUB_DRAG_PRECISE_SEEK_NEAR_MS
       : 33;
     if (ctx.now - lastSeek > threshold) {
       if (isInteractivePreview && supportsFastSeek) {
@@ -302,12 +309,15 @@ export class VideoSyncHtmlSeekCoordinator {
     const targetDrift = Math.abs(pendingTarget - nextTargetTime);
     if (isDragging && !allowInFlightRetarget) {
       if (displayedDriftSeconds >= 1.2) {
-        return pendingAge >= 65 && targetDrift >= 0.12;
+        return pendingAge >= VideoSyncHtmlSeekCoordinator.SCRUB_DRAG_PENDING_RETARGET_FAR_MS &&
+          targetDrift >= 0.25;
       }
       if (displayedDriftSeconds >= 0.5) {
-        return pendingAge >= 95 && targetDrift >= 0.16;
+        return pendingAge >= VideoSyncHtmlSeekCoordinator.SCRUB_DRAG_PENDING_RETARGET_MID_MS &&
+          targetDrift >= 0.25;
       }
-      return pendingAge >= 170 && targetDrift >= 0.28;
+      return pendingAge >= VideoSyncHtmlSeekCoordinator.SCRUB_DRAG_PENDING_RETARGET_NEAR_MS &&
+        targetDrift >= 0.35;
     }
 
     return pendingAge >= (isDragging ? 90 : 120) && targetDrift >= (isDragging ? 0.12 : 0.2);
@@ -348,6 +358,7 @@ export class VideoSyncHtmlSeekCoordinator {
 
       if (
         targetDrift <= VideoSyncHtmlSeekCoordinator.SCRUB_DRAG_RVFC_FOLLOW_THRESHOLD ||
+        targetDrift >= VideoSyncHtmlSeekCoordinator.SCRUB_DRAG_RVFC_PRECISE_CATCHUP_THRESHOLD ||
         targetDrift >= VideoSyncHtmlSeekCoordinator.SCRUB_DRAG_RVFC_FORCE_PRECISE_THRESHOLD
       ) {
         this.deps.htmlSeeks.setPendingTarget(clipId, queuedTarget, performance.now());
@@ -360,6 +371,8 @@ export class VideoSyncHtmlSeekCoordinator {
           followup:
             targetDrift >= VideoSyncHtmlSeekCoordinator.SCRUB_DRAG_RVFC_FORCE_PRECISE_THRESHOLD
               ? 'drag-rvfc-force'
+              : targetDrift >= VideoSyncHtmlSeekCoordinator.SCRUB_DRAG_RVFC_PRECISE_CATCHUP_THRESHOLD
+                ? 'drag-rvfc-catchup'
               : 'drag-rvfc',
         });
         this.registerRVFC(clipId, video);
@@ -460,7 +473,7 @@ export class VideoSyncHtmlSeekCoordinator {
       const presentedTime = video.currentTime;
       renderHostPort.markVideoFramePresented(video, presentedTime, clipId);
       renderHostPort.captureVideoFrameAtTime(video, presentedTime, clipId);
-      renderHostPort.cacheFrameAtTime(video, presentedTime);
+      renderHostPort.cacheFrameAtTime(video, presentedTime, clipId);
       renderHostPort.requestNewFrameRender();
 
       const timelineState = useTimelineStore.getState();
@@ -495,7 +508,7 @@ export class VideoSyncHtmlSeekCoordinator {
         this.deps.htmlSeeks.clearPendingTarget(clipId);
         renderHostPort.markVideoFramePresented(video, presentedTime, clipId);
         renderHostPort.captureVideoFrameAtTime(video, presentedTime, clipId);
-        renderHostPort.cacheFrameAtTime(video, presentedTime);
+        renderHostPort.cacheFrameAtTime(video, presentedTime, clipId);
         scrubSettleState.resolve(clipId);
         vfPipelineMonitor.record('vf_seek_done', { clipId });
         this.flushQueuedSeekTarget(clipId, video, 'rvfc');

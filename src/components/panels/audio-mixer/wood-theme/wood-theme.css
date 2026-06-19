@@ -3,20 +3,23 @@
    Assets live in this folder; dynamic parts (meter, fader, values) keep their
    existing DOM and behaviour. */
 
+.dock-tab-pane.audio-mixer-wood-pane,
 .dock-tab-pane:has(.audio-mixer-panel.wood) {
   background:
     linear-gradient(180deg, rgba(255, 232, 180, 0.06), rgba(18, 9, 2, 0.20) 34%, rgba(8, 4, 1, 0.32)),
     linear-gradient(90deg, rgba(0, 0, 0, 0.20), transparent 4%, transparent 96%, rgba(0, 0, 0, 0.22)),
-    url('./wood-panel-dark.png');
+    url('./wood-panel-dark.webp');
   background-size: 100% 100%, 100% 100%, cover;
   background-position: 0 0, 0 0, 0 0;
   background-repeat: no-repeat;
 }
 
+.dock-tab-pane.audio-mixer-wood-pane.is-maximized-pane,
 .dock-tab-pane:has(.audio-mixer-panel.wood).is-maximized-pane {
   box-shadow: inset 0 0 0 1px rgba(117, 75, 31, 0.38);
 }
 
+.dock-tab-pane.audio-mixer-wood-pane .dock-tab-bar,
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab-bar {
   position: relative;
   min-height: 28px;
@@ -26,6 +29,8 @@
     inset 0 1px 0 rgba(255, 235, 185, 0.10);
 }
 
+.dock-tab-pane.audio-mixer-wood-pane .dock-tab-bar::before,
+.dock-tab-pane.audio-mixer-wood-pane .dock-tab-bar::after,
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab-bar::before,
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab-bar::after {
   content: '';
@@ -34,20 +39,23 @@
   z-index: 4;
   width: 20px;
   height: 20px;
-  background: url('./corner-screw-brass.png') center / 20px 20px no-repeat;
+  background: url('./corner-screw-brass.webp') center / 20px 20px no-repeat;
   filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.62));
   opacity: 0.86;
   pointer-events: none;
 }
 
+.dock-tab-pane.audio-mixer-wood-pane .dock-tab-bar::before,
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab-bar::before {
   left: 8px;
 }
 
+.dock-tab-pane.audio-mixer-wood-pane .dock-tab-bar::after,
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab-bar::after {
   right: 8px;
 }
 
+.dock-tab-pane.audio-mixer-wood-pane .dock-tab-handle,
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab-handle {
   height: 28px;
   border-right: 1px solid rgba(19, 10, 2, 0.32);
@@ -55,6 +63,7 @@
   color: #b99e71;
 }
 
+.dock-tab-pane.audio-mixer-wood-pane .dock-tab,
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab {
   height: 28px;
   border-right: 1px solid rgba(19, 10, 2, 0.32);
@@ -63,11 +72,13 @@
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.72);
 }
 
+.dock-tab-pane.audio-mixer-wood-pane .dock-tab:hover,
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab:hover {
   color: #f0d8a9;
   background: rgba(112, 76, 34, 0.25);
 }
 
+.dock-tab-pane.audio-mixer-wood-pane .dock-tab.active,
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab.active {
   color: #fff0c8;
   border-right-color: rgba(18, 8, 1, 0.42);
@@ -77,6 +88,7 @@
     inset 0 1px 0 rgba(255, 248, 220, 0.14);
 }
 
+.dock-tab-pane.audio-mixer-wood-pane .dock-tab-add,
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab-add {
   height: 28px;
   background: transparent;
@@ -84,12 +96,16 @@
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.72);
 }
 
+.dock-tab-pane.audio-mixer-wood-pane .dock-tab-add:hover,
+.dock-tab-pane.audio-mixer-wood-pane .dock-tab-add.is-open,
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab-add:hover,
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-tab-add.is-open {
   color: #ffe6b6;
   background: rgba(112, 76, 34, 0.25);
 }
 
+.dock-tab-pane.audio-mixer-wood-pane .dock-panel-content,
+.dock-tab-pane.audio-mixer-wood-pane .dock-panel-content-inner,
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-panel-content,
 .dock-tab-pane:has(.audio-mixer-panel.wood) .dock-panel-content-inner {
   background: transparent;
@@ -109,7 +125,7 @@
   border-radius: 999px;
   background:
     linear-gradient(180deg, rgba(0, 0, 0, 0.72), rgba(48, 27, 9, 0.38)),
-    url('./dark-leather.png');
+    url('./dark-leather.webp');
   background-size: 100% 100%, cover;
   background-repeat: no-repeat;
   box-shadow:
@@ -123,7 +139,7 @@
   border-radius: 999px;
   background:
     linear-gradient(180deg, rgba(255, 238, 194, 0.34), rgba(116, 75, 29, 0.20) 48%, rgba(39, 22, 7, 0.50)),
-    url('./plate-bronze.jpg');
+    url('./plate-bronze.webp');
   background-size: 100% 100%, 180% auto;
   box-shadow:
     inset 0 1px 0 rgba(255, 248, 220, 0.28),
@@ -133,7 +149,7 @@
 .audio-mixer-panel.wood .audio-mixer-track-scroll::-webkit-scrollbar-thumb:hover {
   background:
     linear-gradient(180deg, rgba(255, 246, 210, 0.42), rgba(155, 105, 42, 0.26) 48%, rgba(55, 31, 10, 0.50)),
-    url('./plate-bronze.jpg');
+    url('./plate-bronze.webp');
   background-size: 100% 100%, 180% auto;
 }
 
@@ -205,7 +221,7 @@
   border-radius: 6px;
   background:
     linear-gradient(rgba(14, 8, 3, 0.42), rgba(14, 8, 3, 0.42)),
-    url('./dark-leather.png');
+    url('./dark-leather.webp');
   background-size: 100% 100%, auto 100%;
   background-position: center, calc(var(--strip-leather-x, 0px) - 16px) center;
   background-repeat: no-repeat, repeat-x;
@@ -269,7 +285,7 @@
   background:
     linear-gradient(90deg, rgba(255, 234, 178, 0.12), transparent 18%, rgba(0, 0, 0, 0.30) 50%, transparent 82%, rgba(255, 234, 178, 0.08)),
     linear-gradient(180deg, rgba(16, 8, 3, 0.22), rgba(0, 0, 0, 0.46)),
-    url('./dark-leather.png');
+    url('./dark-leather.webp');
   background-size: 100% 100%, 100% 100%, 960px auto;
   background-position: center, center, calc(var(--strip-leather-x, 0px) - 16px) 6%;
   background-repeat: no-repeat, no-repeat, repeat-x;
@@ -304,7 +320,7 @@
   border-radius: 5px;
   background:
     linear-gradient(180deg, rgba(255, 238, 194, 0.30) 0%, rgba(130, 95, 40, 0.18) 50%, rgba(60, 40, 12, 0.38) 100%),
-    url('./plate-bronze.jpg');
+    url('./plate-bronze.webp');
   background-size: 100% 100%, 130% auto;
   box-shadow:
     inset 0 1px 0 rgba(255, 238, 194, 0.5),
@@ -670,7 +686,7 @@
   margin-top: -8.5px;
   border: 0;
   border-radius: 50%;
-  background: url('./pan-knob.png') center / 22px 22px no-repeat;
+  background: url('./pan-knob.webp') center / 22px 22px no-repeat;
   box-shadow: none;
   filter: drop-shadow(3px 4px 4px rgba(0, 0, 0, 0.5));
   -webkit-appearance: none;
@@ -696,7 +712,7 @@
   height: 22px;
   border: 0;
   border-radius: 50%;
-  background: url('./pan-knob.png') center / 22px 22px no-repeat;
+  background: url('./pan-knob.webp') center / 22px 22px no-repeat;
   box-shadow: none;
   filter: drop-shadow(3px 4px 4px rgba(0, 0, 0, 0.5));
 }
@@ -707,7 +723,7 @@
   border-radius: 5px;
   background:
     linear-gradient(180deg, rgba(255, 238, 194, 0.30) 0%, rgba(130, 95, 40, 0.18) 50%, rgba(60, 40, 12, 0.38) 100%),
-    url('./plate-bronze.jpg');
+    url('./plate-bronze.webp');
   background-size: 100% 100%, 130% auto;
   box-shadow:
     inset 0 1px 0 rgba(255, 238, 194, 0.5),
@@ -772,7 +788,7 @@
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: url('./rail-screw-phillips-brass.png') center / 10px 10px no-repeat;
+  background: url('./rail-screw-phillips-brass.webp') center / 10px 10px no-repeat;
   filter:
     drop-shadow(0 1px 1px rgba(0, 0, 0, 0.82))
     drop-shadow(0 0 2px rgba(255, 224, 116, 0.36));
@@ -794,7 +810,7 @@
   width: var(--audio-mixer-fader-thumb-width);
   height: var(--audio-mixer-fader-thumb-height);
   background:
-    url('./fadercap-steel.png') center / 100% 100% no-repeat,
+    url('./fadercap-steel.webp') center / 100% 100% no-repeat,
     radial-gradient(ellipse 38px 56px at 50% 54%, rgba(0, 0, 0, 0.42) 34%, rgba(0, 0, 0, 0.2) 64%, transparent 100%);
   transform: translate3d(-50%, var(--audio-mixer-fader-thumb-y, 0px), 0);
   border-radius: 4px;
@@ -889,7 +905,7 @@
 }
 
 .audio-mixer-panel.wood .audio-mixer-fader-meter.master .audio-mixer-strip-fader-thumb {
-  background: url('./master-fadercap-bronze.png') center / 100% 100% no-repeat;
+  background: url('./master-fadercap-bronze.webp') center / 100% 100% no-repeat;
   border-radius: 7px;
   box-shadow: 12px 14px 18px rgba(0, 0, 0, 0.44);
   filter: drop-shadow(7px 9px 12px rgba(0, 0, 0, 0.36));

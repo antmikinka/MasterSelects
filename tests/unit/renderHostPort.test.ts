@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 import { engine } from '../../src/engine/WebGPUEngine';
-import { renderHostPort } from '../../src/services/render/renderHostPort';
+import {
+  configureRenderHostSelection,
+  getRenderHostDevMode,
+  getRenderHostSelectionTelemetry,
+  renderHostPort,
+  setRenderHostDevMode,
+  type RenderHostPort,
+} from '../../src/services/render/renderHostPort';
 import { playheadState } from '../../src/services/layerBuilder/PlayheadState';
 import { playbackHealthMonitor } from '../../src/services/playbackHealthMonitor';
 import { useEngineStore } from '../../src/stores/engineStore';
@@ -9,13 +17,36 @@ import { useRenderTargetStore } from '../../src/stores/renderTargetStore';
 import type { RenderTarget } from '../../src/types/renderTarget';
 
 describe('renderHostPort', () => {
+  it('persists the render host runtime bundle across HMR', () => {
+    const source = readFileSync(
+      'src/services/render/renderHostPort.ts',
+      'utf8',
+    );
+
+    expect(source).toContain('renderHostRuntimeState');
+    expect(source).toContain('data.renderHostRuntimeState = runtimeState');
+    expect(source).toContain('runtimeState.workerPresentingRenderHostPort');
+    expect(source).toContain('runtimeState.workerOnlyRenderHostPort');
+    expect(source).toContain('state.workerOnlyRenderHostPort = state.workerPresentingRenderHostPort');
+    expect(source).toContain('strictWorkerOnly: () => state.workerPrimaryStrictWorkerOnly');
+  });
+
   it('reports the current main-thread renderer ownership mode', () => {
     expect(renderHostPort.getTelemetry()).toEqual({
       mode: 'main',
-      presentationStrategy: 'main-host-dev',
+      presentationStrategy: 'main-host-fallback',
       lifecycleOwner: 'renderHostPort',
       statsOwner: 'renderHostPort',
       watchdogOwner: 'renderHostPort',
+      selection: {
+        selectedId: 'main-fallback',
+        selectedRole: 'fallback',
+        workerPrimaryRequested: false,
+        workerPrimaryRegistered: true,
+        workerPrimaryAvailable: false,
+        blockers: ['worker render host flag disabled'],
+        reason: 'using main fallback: worker render host flag disabled',
+      },
     });
   });
 
@@ -344,6 +375,109 @@ describe('renderHostPort', () => {
       playheadState.isUsingInternalPosition = false;
       warnSpy.mockRestore();
       vi.useRealTimers();
+    }
+  });
+
+  it('can mount a worker primary host behind the stable render host port proxy', () => {
+    const requestRender = vi.fn();
+    const workerHost = {
+      getTelemetry: () => ({
+        mode: 'worker-presenting',
+        presentationStrategy: 'worker-webgpu-main-present',
+        lifecycleOwner: 'renderHostPort',
+        statsOwner: 'renderHostPort',
+        watchdogOwner: 'renderHostPort',
+        selection: getRenderHostSelectionTelemetry(),
+      }),
+      requestRender,
+    } as unknown as RenderHostPort;
+
+    try {
+      configureRenderHostSelection({
+        workerPrimary: workerHost,
+        preferWorkerPrimary: true,
+        workerPrimaryAvailable: true,
+      });
+
+      expect(renderHostPort.getTelemetry()).toMatchObject({
+        mode: 'worker-presenting',
+        presentationStrategy: 'worker-webgpu-main-present',
+        selection: {
+          selectedId: 'worker-primary',
+          selectedRole: 'primary',
+          workerPrimaryRequested: true,
+          workerPrimaryRegistered: true,
+          workerPrimaryAvailable: true,
+          blockers: [],
+        },
+      });
+
+      renderHostPort.requestRender();
+      expect(requestRender).toHaveBeenCalledTimes(1);
+    } finally {
+      configureRenderHostSelection({
+        workerPrimary: null,
+        preferWorkerPrimary: false,
+        workerPrimaryAvailable: false,
+      });
+    }
+  });
+
+  it('applies and clears persisted dev render host modes', () => {
+    const originalTransfer = HTMLCanvasElement.prototype.transferControlToOffscreen;
+    Object.defineProperty(HTMLCanvasElement.prototype, 'transferControlToOffscreen', {
+      configurable: true,
+      value: vi.fn(),
+    });
+
+    try {
+      const workerTelemetry = setRenderHostDevMode('worker-presenting');
+      expect(getRenderHostDevMode()).toBe('worker-presenting');
+      expect(workerTelemetry).toMatchObject({
+        selection: {
+          workerPrimaryRequested: true,
+        },
+      });
+
+      const workerOnlyTelemetry = setRenderHostDevMode('worker-only');
+      expect(getRenderHostDevMode()).toBe('worker-only');
+      expect(workerOnlyTelemetry).toMatchObject({
+        selection: {
+          workerPrimaryRequested: true,
+        },
+      });
+
+      const mainTelemetry = setRenderHostDevMode('main');
+      expect(getRenderHostDevMode()).toBe('main');
+      expect(mainTelemetry).toMatchObject({
+        mode: 'main',
+        selection: {
+          selectedId: 'main-fallback',
+          selectedRole: 'fallback',
+          workerPrimaryRequested: false,
+        },
+      });
+
+      const defaultTelemetry = setRenderHostDevMode(null);
+      expect(getRenderHostDevMode()).toBeNull();
+      expect(defaultTelemetry).toMatchObject({
+        mode: 'main',
+        selection: {
+          selectedId: 'main-fallback',
+          selectedRole: 'fallback',
+          workerPrimaryRequested: false,
+        },
+      });
+    } finally {
+      if (originalTransfer) {
+        Object.defineProperty(HTMLCanvasElement.prototype, 'transferControlToOffscreen', {
+          configurable: true,
+          value: originalTransfer,
+        });
+      } else {
+        Reflect.deleteProperty(HTMLCanvasElement.prototype, 'transferControlToOffscreen');
+      }
+      setRenderHostDevMode(null);
     }
   });
 });

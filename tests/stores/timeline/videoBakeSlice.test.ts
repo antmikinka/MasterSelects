@@ -21,8 +21,9 @@ describe('timeline video bake regions', () => {
     expect(store.getState().videoBakeRegionSelection).toBeNull();
   });
 
-  it('bakes and unbakes clip video bake regions through the RAM preview range path', async () => {
+  it('bakes and unbakes clip video bake regions through the clip bake render range path', async () => {
     const startRamPreviewForRange = vi.fn(async () => true);
+    const startClipVideoBakeRenderRange = vi.fn(async () => true);
     const clearRamPreview = vi.fn();
     const clip = createMockClip({
       id: 'clip-v',
@@ -41,6 +42,7 @@ describe('timeline video bake regions', () => {
       clips: [clip],
       tracks: [createMockTrack({ id: 'video-1', type: 'video', locked: false })],
       startRamPreviewForRange,
+      startClipVideoBakeRenderRange,
       clearRamPreview,
     });
 
@@ -54,10 +56,11 @@ describe('timeline video bake regions', () => {
 
     expect(regionId).toBeTruthy();
     await expect(store.getState().bakeClipVideoBakeRegion('clip-v', regionId as string)).resolves.toBe(true);
-    expect(startRamPreviewForRange).toHaveBeenCalledWith(11, 13, expect.objectContaining({
+    expect(startClipVideoBakeRenderRange).toHaveBeenCalledWith(11, 13, expect.objectContaining({
       centerTime: 12,
       label: 'Bake clip video region',
     }));
+    expect(startRamPreviewForRange).not.toHaveBeenCalled();
 
     const bakedClip = store.getState().clips.find(candidate => candidate.id === 'clip-v');
     expect(bakedClip?.videoState?.bakeRegions?.[0]).toEqual(expect.objectContaining({

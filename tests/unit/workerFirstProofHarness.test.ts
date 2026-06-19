@@ -100,7 +100,7 @@ function visibleProofs(): WorkerVisiblePresentationProof[] {
       fingerprint,
       errors: [],
     },
-    capabilityProbe: null,
+    capabilityProbe,
     stress: {
       playbackDurationMs: 5000,
       frameCount: 150,
@@ -135,6 +135,22 @@ describe('worker-first proof harness', () => {
     const snapshot = createWorkerFirstProofSnapshot({ targetSnapshot, capabilityProbe });
 
     expect(snapshot.mode).toBe('main');
+    expect(snapshot.renderHost).toMatchObject({
+      mode: 'main',
+      presentationStrategy: 'main-host-fallback',
+      lifecycleOwner: 'renderHostPort',
+      statsOwner: 'renderHostPort',
+      watchdogOwner: 'renderHostPort',
+      fallbackActive: true,
+      activation: {
+        requestedMode: 'main',
+        requestedStrategy: 'worker-webgpu-present',
+        workerHostAllowed: false,
+        workerHostActive: false,
+      },
+    });
+    expect(snapshot.renderHost.activation.blockers).toContain('W5_WORKER_SHADOW_PARITY:blocked');
+    expect(snapshot.renderHost.activation.blockers).toContain('W5_VISIBLE_PRESENTATION_PROVEN:blocked');
     expect(snapshot.selectedStrategy).toBe('worker-webgpu-present');
     expect(snapshot.w5GateEvidenceMode).toBe('stats-observation');
     expect(snapshot.capabilityProbeStatus).toBe('captured');
@@ -163,13 +179,16 @@ describe('worker-first proof harness', () => {
   it('keeps missing capability probes explicit instead of manufacturing platform facts', () => {
     const snapshot = createWorkerFirstProofSnapshot({ targetSnapshot });
 
-    expect(snapshot.selectedStrategy).toBe('main-host-dev');
+    expect(snapshot.selectedStrategy).toBe('main-host-fallback');
+    expect(snapshot.renderHost.activation.blockers).toContain('capability probe missing');
+    expect(snapshot.renderHost.activation.blockers).toContain('selected strategy is main-host-fallback');
     expect(snapshot.capabilityProbeStatus).toBe('missing');
     expect(snapshot.capabilityProbe).toBeNull();
   });
 
   it('feeds recorded proof captures into W5 prerequisites without enabling cutover from static state', () => {
     const snapshot = createWorkerFirstProofSnapshot({
+      capabilityProbe,
       goldenManifests: [capturedManifest],
       allowW5StartFromCapturedEvidence: true,
       proofCaptures: {
@@ -197,6 +216,13 @@ describe('worker-first proof harness', () => {
     expect(snapshot.w5Prerequisites.workerShadowParity.status).toBe('passed');
     expect(snapshot.w5Prerequisites.visiblePresentation.status).toBe('passed');
     expect(snapshot.w5Prerequisites.canStartWorkerWebGpu).toBe(true);
+    expect(snapshot.renderHost.activation).toEqual({
+      requestedMode: 'worker-presenting',
+      requestedStrategy: 'worker-webgpu-present',
+      workerHostAllowed: true,
+      workerHostActive: false,
+      blockers: ['worker render host is not mounted behind renderHostPort'],
+    });
   });
 
   it('names executable focused checks for the first worker-first packets', () => {

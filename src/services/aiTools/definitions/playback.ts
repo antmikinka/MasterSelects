@@ -84,6 +84,69 @@ export const playbackToolDefinitions: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'simulateFrameKeypresses',
+      description: 'Dispatch real ArrowLeft/ArrowRight KeyboardEvent keydown events in the browser so timeline frame stepping goes through the same global shortcut handler as physical keyboard input.',
+      parameters: {
+        type: 'object',
+        properties: {
+          direction: {
+            type: 'string',
+            enum: ['left', 'right', 'both'],
+            description: 'Direction preset. Defaults to "both", which sends leftCount ArrowLeft events then rightCount ArrowRight events.',
+          },
+          count: {
+            type: 'number',
+            description: 'Number of events when direction is "left" or "right". Defaults to 1.',
+          },
+          leftCount: {
+            type: 'number',
+            description: 'Number of ArrowLeft events for direction="both". Defaults to 6.',
+          },
+          rightCount: {
+            type: 'number',
+            description: 'Number of ArrowRight events for direction="both". Defaults to 6.',
+          },
+          sequence: {
+            type: 'array',
+            items: {
+              type: 'string',
+              enum: ['ArrowLeft', 'ArrowRight', 'left', 'right'],
+            },
+            description: 'Optional explicit key sequence. Overrides direction/count parameters.',
+          },
+          startTime: {
+            type: 'number',
+            description: 'Optional timeline start time in seconds before dispatching key events.',
+          },
+          delayMs: {
+            type: 'number',
+            description: 'Wait time after each dispatched keydown before sampling playhead/render diagnostics. Defaults to 120ms.',
+          },
+          settleMs: {
+            type: 'number',
+            description: 'Final wait time before returning diagnostics. Defaults to 150ms.',
+          },
+          pauseBefore: {
+            type: 'boolean',
+            description: 'Pause playback before dispatching frame-step keys. Defaults to true.',
+          },
+          target: {
+            type: 'string',
+            enum: ['activeElement', 'body', 'window'],
+            description: 'DOM target to dispatch the keydown events on. Defaults to activeElement, matching physical key target routing most closely.',
+          },
+          resetDiagnostics: {
+            type: 'boolean',
+            description: 'Reset WebCodecs/VF/health diagnostics before dispatching key events. Defaults to true.',
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'simulatePlayback',
       description: 'Run real timeline playback in the browser for a fixed duration, then pause and report how the playhead actually progressed. Useful for reproducing longer playback freezes and checking playback at different speeds.',
       parameters: {
@@ -112,6 +175,51 @@ export const playbackToolDefinitions: ToolDefinition[] = [
           restorePlaybackState: {
             type: 'boolean',
             description: 'Restore playback if it was already running before the simulation. Defaults to false so diagnostics runs leave playback paused.',
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'simulatePlaybackPulses',
+      description: 'Run repeated play/pause pulses fully inside the browser and report start latency, RAF cadence, playhead movement, and worker GPU video timestamp drift.',
+      parameters: {
+        type: 'object',
+        properties: {
+          startTime: {
+            type: 'number',
+            description: 'Optional playback start time in timeline seconds.',
+          },
+          cycles: {
+            type: 'number',
+            description: 'Number of play/pause cycles. Defaults to 10.',
+          },
+          firstPlayMs: {
+            type: 'number',
+            description: 'Play duration for the first cycle in milliseconds. Defaults to 1000.',
+          },
+          playMs: {
+            type: 'number',
+            description: 'Play duration for subsequent cycles in milliseconds. Defaults to 500.',
+          },
+          pauseMs: {
+            type: 'number',
+            description: 'Pause duration between cycles in milliseconds. Defaults to 500.',
+          },
+          initialPauseMs: {
+            type: 'number',
+            description: 'Settled pause duration after optional startTime before the first play. Defaults to 500.',
+          },
+          playbackSpeed: {
+            type: 'number',
+            description: 'Playback speed for all play pulses. Defaults to 1.',
+          },
+          resetDiagnostics: {
+            type: 'boolean',
+            description: 'Whether to reset WebCodecs/VF/health diagnostics before the pulse run. Defaults to true.',
           },
         },
         required: [],

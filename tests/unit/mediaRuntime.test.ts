@@ -1,4 +1,57 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mediaRuntimeMocks = vi.hoisted(() => ({
+  renderHostMode: 'main',
+  createWorkerWebCodecsFrameProvider: vi.fn(),
+  requestRender: vi.fn(),
+  requestNewFrameRender: vi.fn(),
+}));
+
+vi.mock('../../src/services/render/renderHostPort', () => ({
+  renderHostPort: {
+    getTelemetry: () => ({
+      mode: mediaRuntimeMocks.renderHostMode,
+      presentationStrategy: 'main-webgpu',
+      lifecycleOwner: 'renderHostPort',
+      statsOwner: 'renderHostPort',
+      watchdogOwner: 'renderHostPort',
+      selection: {
+        selectedId: 'main-fallback',
+        selectedRole: 'fallback',
+        workerPrimaryRequested: false,
+        workerPrimaryRegistered: false,
+        workerPrimaryAvailable: false,
+        blockers: [],
+        reason: 'test render host',
+      },
+    }),
+    requestRender: mediaRuntimeMocks.requestRender,
+    requestNewFrameRender: mediaRuntimeMocks.requestNewFrameRender,
+  },
+}));
+
+vi.mock('../../src/services/mediaRuntime/workerWebCodecsFrameProvider', () => {
+  class WorkerWebCodecsFrameProvider {
+    currentTime = 0;
+    isPlaying = false;
+    advanceToTime = vi.fn((time: number) => {
+      this.currentTime = time;
+    });
+    seek = vi.fn((time: number) => {
+      this.currentTime = time;
+    });
+    destroy = vi.fn();
+    isFullMode = vi.fn(() => true);
+    isSimpleMode = vi.fn(() => false);
+    getCurrentFrame = vi.fn(() => null);
+  }
+
+  return {
+    createWorkerWebCodecsFrameProvider: mediaRuntimeMocks.createWorkerWebCodecsFrameProvider,
+    WorkerWebCodecsFrameProvider,
+  };
+});
+
 import { useMediaStore } from '../../src/stores/mediaStore';
 import {
   bindSourceRuntimeToClip,
@@ -21,6 +74,10 @@ import { WebCodecsPlayer } from '../../src/engine/WebCodecsPlayer';
 import { timelineRuntimeCoordinator } from '../../src/services/timeline/timelineRuntimeCoordinator';
 import type { TimelineClip } from '../../src/types';
 import type { RuntimeFrameProvider } from '../../src/services/mediaRuntime/types';
+import {
+  createWorkerWebCodecsFrameProvider,
+  WorkerWebCodecsFrameProvider,
+} from '../../src/services/mediaRuntime/workerWebCodecsFrameProvider';
 
 type WebCodecsPlayerSlot = NonNullable<TimelineClip['source']>['webCodecsPlayer'];
 const asWebCodecsPlayer = (player: unknown): WebCodecsPlayerSlot => player as WebCodecsPlayerSlot;
@@ -83,6 +140,34 @@ function setMediaFiles(files: unknown[]): void {
   });
 }
 
+function restoreGlobalProperty(name: string, descriptor: PropertyDescriptor | undefined): void {
+  if (descriptor) {
+    Object.defineProperty(globalThis, name, descriptor);
+    return;
+  }
+  Reflect.deleteProperty(globalThis, name);
+}
+
+function enableWorkerWebCodecsTestCapability(): () => void {
+  const workerDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Worker');
+  const createImageBitmapDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'createImageBitmap');
+  Object.defineProperty(globalThis, 'Worker', {
+    configurable: true,
+    value: vi.fn(),
+  });
+  Object.defineProperty(globalThis, 'createImageBitmap', {
+    configurable: true,
+    value: vi.fn(),
+  });
+  mediaRuntimeMocks.renderHostMode = 'worker-only';
+
+  return () => {
+    mediaRuntimeMocks.renderHostMode = 'main';
+    restoreGlobalProperty('createImageBitmap', createImageBitmapDescriptor);
+    restoreGlobalProperty('Worker', workerDescriptor);
+  };
+}
+
 function makeCloneableVideoFrame(
   timestamp: number,
   cloneCloseSpies?: Array<ReturnType<typeof vi.fn>>
@@ -115,6 +200,10 @@ describe('media runtime bindings', () => {
     timelineRuntimeCoordinator.clearResources();
     setMediaFiles([]);
     vi.mocked(WebCodecsPlayer).mockReset();
+    mediaRuntimeMocks.renderHostMode = 'main';
+    mediaRuntimeMocks.createWorkerWebCodecsFrameProvider.mockReset();
+    mediaRuntimeMocks.requestRender.mockReset();
+    mediaRuntimeMocks.requestNewFrameRender.mockReset();
   });
 
   it('uses mediaFileId as the canonical runtime identity', () => {
@@ -803,6 +892,253 @@ describe('media runtime bindings', () => {
     ).toBeNull();
   });
 
+  it('keeps worker WebCodecs out of dedicated scrub providers even in worker render mode', async () => {
+    const restoreCapability = enableWorkerWebCodecsTestCapability();
+    try {
+      const file = new File(['video'], 'scrub-main-provider.mp4', {
+        type: 'video/mp4',
+        lastModified: 83,
+      });
+      setMediaFiles([
+        {
+          id: 'media-scrub-main-provider',
+          file,
+          name: 'scrub-main-provider.mp4',
+          duration: 9,
+        },
+      ]);
+
+      const previewPlayer = {
+        currentTime: 0,
+        isPlaying: false,
+        isFullMode: () => true,
+        isSimpleMode: () => false,
+        getCurrentFrame: () => null,
+        seek: vi.fn(),
+        pause: vi.fn(),
+        getDebugInfo: vi.fn().mockReturnValue(null),
+      };
+
+      const scrubPlayer = {
+        currentTime: 0,
+        isPlaying: false,
+        isFullMode: () => true,
+        isSimpleMode: () => false,
+        getCurrentFrame: () => null,
+        seek: vi.fn(),
+        pause: vi.fn(),
+        destroy: vi.fn(),
+        loadFile: vi.fn().mockResolvedValue(undefined),
+        getDebugInfo: vi.fn().mockReturnValue(null),
+      };
+
+      vi.mocked(WebCodecsPlayer).mockImplementation(function MockWebCodecsPlayer() {
+        return scrubPlayer as unknown as WebCodecsPlayer;
+      });
+
+      const source = bindSourceRuntimeToClip({
+        clipId: 'clip-scrub-main-provider',
+        source: {
+          type: 'video',
+          naturalDuration: 9,
+          mediaFileId: 'media-scrub-main-provider',
+          webCodecsPlayer: asWebCodecsPlayer(previewPlayer),
+        },
+        file,
+        mediaFileId: 'media-scrub-main-provider',
+      });
+      const scrubSource = getScrubRuntimeSource(source, 'track-1', true);
+
+      const provider = await ensureRuntimeFrameProvider(scrubSource, 'interactive', 4.25);
+
+      expect(provider).toBe(scrubPlayer);
+      expect(createWorkerWebCodecsFrameProvider).not.toHaveBeenCalled();
+      expect(WebCodecsPlayer).toHaveBeenCalledTimes(1);
+      expect(scrubPlayer.loadFile).toHaveBeenCalledWith(file);
+      expect(scrubPlayer.seek).toHaveBeenCalledWith(4.25);
+    } finally {
+      restoreCapability();
+    }
+  });
+
+  it('uses worker WebCodecs only when the caller explicitly requests it', async () => {
+    const restoreCapability = enableWorkerWebCodecsTestCapability();
+    try {
+      const file = new File(['video'], 'reverse-worker-provider.mp4', {
+        type: 'video/mp4',
+        lastModified: 84,
+      });
+      setMediaFiles([
+        {
+          id: 'media-reverse-worker-provider',
+          file,
+          name: 'reverse-worker-provider.mp4',
+          duration: 12,
+        },
+      ]);
+
+      const previewPlayer = {
+        currentTime: 0,
+        isPlaying: false,
+        isFullMode: () => true,
+        isSimpleMode: () => false,
+        getCurrentFrame: () => null,
+        seek: vi.fn(),
+        pause: vi.fn(),
+        getDebugInfo: vi.fn().mockReturnValue(null),
+      };
+      const workerProvider = new WorkerWebCodecsFrameProvider({
+        sourceId: 'worker-provider',
+        file,
+      });
+      vi.mocked(createWorkerWebCodecsFrameProvider).mockResolvedValue(workerProvider);
+
+      const source = bindSourceRuntimeToClip({
+        clipId: 'clip-reverse-worker-provider',
+        source: {
+          type: 'video',
+          naturalDuration: 12,
+          mediaFileId: 'media-reverse-worker-provider',
+          webCodecsPlayer: asWebCodecsPlayer(previewPlayer),
+        },
+        file,
+        mediaFileId: 'media-reverse-worker-provider',
+      });
+
+      const provider = await ensureRuntimeFrameProvider(source, 'interactive', 6.5, {
+        preferWorkerWebCodecs: true,
+      });
+
+      expect(provider).toBe(workerProvider);
+      expect(createWorkerWebCodecsFrameProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          file,
+          sourceId: 'media:media-reverse-worker-provider:interactive:clip-reverse-worker-provider',
+        })
+      );
+      expect(workerProvider.seek).toHaveBeenCalledWith(6.5);
+      expect(workerProvider.advanceToTime).not.toHaveBeenCalled();
+      expect(WebCodecsPlayer).not.toHaveBeenCalled();
+      expect(getRuntimeFrameProvider(source)).toBe(workerProvider);
+    } finally {
+      restoreCapability();
+    }
+  });
+
+  it('clears completed worker WebCodecs provider loads so released sessions can rebuild', async () => {
+    const restoreCapability = enableWorkerWebCodecsTestCapability();
+    try {
+      const file = new File(['video'], 'reverse-worker-rebuild-provider.mp4', {
+        type: 'video/mp4',
+        lastModified: 84_1,
+      });
+      setMediaFiles([
+        {
+          id: 'media-reverse-worker-rebuild-provider',
+          file,
+          name: 'reverse-worker-rebuild-provider.mp4',
+          duration: 12,
+        },
+      ]);
+
+      const firstProvider = new WorkerWebCodecsFrameProvider({
+        sourceId: 'worker-provider-first',
+        file,
+      });
+      const secondProvider = new WorkerWebCodecsFrameProvider({
+        sourceId: 'worker-provider-second',
+        file,
+      });
+      vi.mocked(createWorkerWebCodecsFrameProvider)
+        .mockResolvedValueOnce(firstProvider)
+        .mockResolvedValueOnce(secondProvider);
+
+      const source = bindSourceRuntimeToClip({
+        clipId: 'clip-reverse-worker-rebuild-provider',
+        source: {
+          type: 'video',
+          naturalDuration: 12,
+          mediaFileId: 'media-reverse-worker-rebuild-provider',
+        },
+        file,
+        mediaFileId: 'media-reverse-worker-rebuild-provider',
+      });
+
+      const first = await ensureRuntimeFrameProvider(source, 'interactive', 6.5, {
+        preferWorkerWebCodecs: true,
+      });
+      expect(first).toBe(firstProvider);
+      expect(getRuntimeFrameProvider(source)).toBe(firstProvider);
+
+      releaseRuntimePlaybackSession(source);
+      expect(firstProvider.destroy).toHaveBeenCalledOnce();
+
+      const second = await ensureRuntimeFrameProvider(source, 'interactive', 5.75, {
+        preferWorkerWebCodecs: true,
+      });
+
+      expect(second).toBe(secondProvider);
+      expect(createWorkerWebCodecsFrameProvider).toHaveBeenCalledTimes(2);
+      expect(secondProvider.seek).toHaveBeenCalledWith(5.75);
+      expect(getRuntimeFrameProvider(source)).toBe(secondProvider);
+    } finally {
+      restoreCapability();
+    }
+  });
+
+  it('can build an explicitly requested worker WebCodecs provider without a main-thread WebCodecs player', async () => {
+    const restoreCapability = enableWorkerWebCodecsTestCapability();
+    try {
+      const file = new File(['video'], 'reverse-worker-no-main-provider.mp4', {
+        type: 'video/mp4',
+        lastModified: 85,
+      });
+      setMediaFiles([
+        {
+          id: 'media-reverse-worker-no-main-provider',
+          file,
+          name: 'reverse-worker-no-main-provider.mp4',
+          duration: 12,
+        },
+      ]);
+
+      const workerProvider = new WorkerWebCodecsFrameProvider({
+        sourceId: 'worker-provider-no-main',
+        file,
+      });
+      vi.mocked(createWorkerWebCodecsFrameProvider).mockResolvedValue(workerProvider);
+
+      const source = bindSourceRuntimeToClip({
+        clipId: 'clip-reverse-worker-no-main-provider',
+        source: {
+          type: 'video',
+          naturalDuration: 12,
+          mediaFileId: 'media-reverse-worker-no-main-provider',
+        },
+        file,
+        mediaFileId: 'media-reverse-worker-no-main-provider',
+      });
+
+      const provider = await ensureRuntimeFrameProvider(source, 'interactive', 6.5, {
+        preferWorkerWebCodecs: true,
+      });
+
+      expect(provider).toBe(workerProvider);
+      expect(createWorkerWebCodecsFrameProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          file,
+          sourceId: 'media:media-reverse-worker-no-main-provider:interactive:clip-reverse-worker-no-main-provider',
+        })
+      );
+      expect(workerProvider.seek).toHaveBeenCalledWith(6.5);
+      expect(workerProvider.advanceToTime).not.toHaveBeenCalled();
+      expect(WebCodecsPlayer).not.toHaveBeenCalled();
+      expect(getRuntimeFrameProvider(source)).toBe(workerProvider);
+    } finally {
+      restoreCapability();
+    }
+  });
+
   it('does not construct an interactive runtime provider when frame-provider admission is denied', async () => {
     for (let index = 0; index < 8; index += 1) {
       timelineRuntimeCoordinator.retainResource({
@@ -1096,6 +1432,63 @@ describe('media runtime bindings', () => {
 
     expect(runtimeFrame?.frameHandle).toBeNull();
     expect(mediaRuntimeRegistry.getRuntime('media:media-stale-provider')?.frameCache.size).toBe(0);
+  });
+
+  it('uses provider debug time to reject stale ImageBitmap provider frames', () => {
+    const file = new File(['video'], 'stale-bitmap-provider.mp4', { type: 'video/mp4', lastModified: 12_1 });
+    setMediaFiles([
+      {
+        id: 'media-stale-bitmap-provider',
+        file,
+        name: 'stale-bitmap-provider.mp4',
+        duration: 120,
+        fps: 30,
+      },
+    ]);
+
+    const staleBitmap = {
+      width: 1920,
+      height: 1080,
+      close: vi.fn(),
+    } as unknown as VideoFrame;
+    const player = {
+      currentTime: 7.623,
+      isPlaying: true,
+      isFullMode: () => true,
+      isSimpleMode: () => false,
+      getCurrentFrame: () => staleBitmap,
+      seek: vi.fn(),
+      pause: vi.fn(),
+      getDebugInfo: vi.fn().mockReturnValue({
+        codec: 'vp9',
+        hwAccel: 'unknown',
+        decodeQueueSize: 0,
+        samplesLoaded: 1,
+        sampleIndex: 0,
+        currentFrameTimestampSeconds: 72.506,
+      }),
+      getFrameRate: () => 30,
+    };
+
+    const source = bindSourceRuntimeToClip({
+      clipId: 'clip-stale-bitmap-provider',
+      source: {
+        type: 'video',
+        naturalDuration: 120,
+        mediaFileId: 'media-stale-bitmap-provider',
+        webCodecsPlayer: asWebCodecsPlayer(player),
+      },
+      file,
+      mediaFileId: 'media-stale-bitmap-provider',
+    });
+
+    const previewSource = getPreviewRuntimeSource(source, 'track-1', true);
+    updateRuntimePlaybackTime(previewSource, 7.623);
+
+    const runtimeFrame = readRuntimeFrameForSource(previewSource);
+
+    expect(runtimeFrame?.frameHandle).toBeNull();
+    expect(mediaRuntimeRegistry.getRuntime('media:media-stale-bitmap-provider')?.frameCache.size).toBe(0);
   });
 
   it('ignores a stale cached frame that was previously bound to the wrong requested time', () => {

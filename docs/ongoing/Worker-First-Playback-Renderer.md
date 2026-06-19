@@ -1,8 +1,99 @@
 # Worker-First Playback Renderer Plan
 
-Status: draft plan, revised after 3 Codex + 2 Claude + 2 Claude Opus 4.8 + 5 focused Codex read-only reviews  
+Status: active architecture plan. Foundations, render-host routing, shadow
+parity, runtime smokes with worker-readback-only export evidence including local
+WebCodecs video fixture export/readback and aggressive DOM playhead scrub proof,
+platform evidence tooling, local worker-presenting
+preview/playback, bridge-controlled render-host mode switching, worker software
+paint-order parity for top tracks, worker-aware AI preview capture, scrub
+empty-frame suppression plus settled video snapshots,
+cached HTML snapshot holding, empty `VideoFrame` placeholder fallthrough,
+transient scrub retries with drawable transient video snapshots, stale
+worker-packet dropping, worker-presenting scrub backpressure/coalescing,
+scrub-time live video snapshot downscaling plus multi-entry worker-resident
+cached-bitmap reuse, scrub-cadence FPS/drop accounting, hidden-tab scrub throttling diagnostics,
+worker-presenting playback trace/run counters, and normal
+FAST video export through worker software readback without requiring the preview
+worker-presenting dev mode or eager main-fallback
+initialization are in place. A real multi-video worker-only runtime smoke now
+exists and verifies normal playback, 2x/3x playback, reverse playback, scrub,
+and export readback in one bridge tool; the latest local Windows/Chromium run
+passes all smoke checks with worker-software export readback and zero retained
+main fallback frames. Scrub now holds worker presentation during transient
+video-layer drops while timeline visual demand is active, so one missing video
+layer no longer replaces a complete frame with an incomplete one during or just
+after scrub. Worker-only scrub also preserves clip-owned HTML-video snapshot
+cache keys during seek/RVFC flushes, keeps a larger per-video snapshot LRU, and
+allows wider drift only for cached scrub snapshots, avoids ownerless duplicate
+snapshots, and skips redundant proactive warm HTML-video pre-cache work during
+active drag so the worker presentation path is not competing with duplicate
+`createImageBitmap` snapshots. Reverse Worker WebCodecs runtime loading is now
+prewarmed from playback state, reverse start primes nearby look-behind targets,
+reverse `play()` awaits a short first-frame prime before starting the internal
+playback clock, reverse playback keeps the primed clip runtime session instead
+of switching to a cold shared preview session, and reverse Worker seeks are
+rate-limited to real source-frame changes. Playback diagnostics now report
+visible but slow worker preview as `warn` instead of falsely `bad`, and
+responsive worker-only preview no longer fails solely because HTML video
+readiness dipped; real long freezes, under-budget update cadence, drops, and
+uncovered health issues still fail. The full after-reverse heavy-scrub
+worker-only smoke is now green locally with scrub `27.5` update FPS, p95 update
+gap `109.5ms`, and worker-software export readback fallback delta `0`;
+remaining local tuning before cutover is reducing duplicate/stale-frame
+telemetry and short freezes, not restoring fallback correctness. Export sessions
+revalidate the active export host once before frame rendering and report
+worker/main host mode on unrecoverable failures. Worker software presentation
+applies supported
+blend modes, supported Canvas-filter effects including canvas-compatible
+blur, additive brightness, shader-equivalent worker pixel effects,
+neighborhood effects through glow, deterministic scanlines/grain, standalone
+acuarela/rom1 worker feedback effects, single source-resampling effects through
+radial/zoom blur, runtime primary
+color-correction nodes, simple wipe transitions,
+compositor shape/center/clock transition masks, and pattern/procedural
+transition masks in the worker, while unsupported feature classes are blocked
+for export/parity paths and live preview is allowed to present a partial frame
+when that avoids an otherwise black hold. Real Mac
+Safari/Firefox platform packages, full render graph/dispatcher parity,
+unsupported/complex export fallback removal, and final legacy removal remain
+open.
+
 Created: 2026-06-14
-Updated: 2026-06-15 - added Linux, macOS Safari, Firefox platform gates, Codex-only multi-agent execution model, and Complete Refactor execution discipline
+Updated: 2026-06-18 - added strict reverse playback presentation truth: Worker
+WebCodecs is labeled only when a fresh Worker WebCodecs frame is actually used
+by the worker software preview, stale/pending Worker WebCodecs frames fall back
+to truthful `worker-only:HTMLVideo`, and faster reverse playback reports
+degraded/bad when drift exceeds the diagnostics budget. Smooth full reverse
+Worker WebCodecs remains open; the current real multi-video fixture still has
+one MP4 Worker WebCodecs-eligible layer and two WebM HTML-video snapshot input
+layers.
+
+Previous 2026-06-17 update added local worker-presenting preview/export
+readback smoke status, bridge-controlled render-host mode switching, export
+worker-first decoupling from preview dev mode, worker-readback-only runtime
+smoke evidence with per-run counter deltas, WebCodecs video fixture
+export/readback proof, aggressive DOM playhead scrub proof,
+worker-presenting trace/run preview counters, export-host revalidation, scrub
+snapshot/cache/retry/stale-packet handling including transient drawable video
+snapshots, coalesced worker software presentation backpressure, scrub-time live
+video snapshot downscaling with scaled-canvas fallback, nearby cached-snapshot
+reuse, multi-entry worker-resident cached-bitmap scrub reuse, owner-specific
+HTML-video snapshot cache-key preservation during scrub, active-drag
+HTML-video pre-cache suppression for heavy scrub, reverse Worker WebCodecs
+module prewarm plus look-behind priming, worker-presenting partial live-preview
+presentation, worker software paint-order parity for top tracks,
+worker-aware AI preview capture, scrub-cadence FPS/drop accounting, hidden-tab
+throttling diagnostics, real multi-video worker-only runtime smoke tooling,
+green worker-only real-video smoke evidence, scrub incomplete-frame hold
+protection, truthful actual-versus-attempted software-frame diagnostics,
+additive worker brightness plus exposure/temperature/vibrance/levels/
+threshold/posterize/vignette/chroma-key/mirror/pixelate/rgb-split, Sobel
+edge-detect plus unsharp-mask sharpen and glow, deterministic timeline-time
+scanlines/grain, worker wave/kaleidoscope/twirl/bulge/motion-blur/radial-blur/
+zoom-blur source-resampling with stacked-resampler blocking, canvas-compatible
+blur, primary color-correction worker pixel support, simple wipe plus
+shape/center/clock and pattern/procedural transition worker masks, and
+remaining cutover gates.
 
 ## Goal
 
@@ -11,9 +102,46 @@ the main thread owns UI and editing, while render workers own frame evaluation,
 WebGPU compositing, preview presentation, RAM preview, bake, thumbnails, and
 export frame rendering.
 
-This plan assumes the long-term target does not need a runtime fallback to the
-current main-thread renderer. During migration, the current path can stay as
-temporary scaffolding until each phase has parity.
+The retained target keeps the current main-thread renderer as an isolated
+legacy fallback layer for now. Product playback, preview, RAM preview, bake,
+thumbnail, and export calls still move to the worker renderer after W5 gates,
+but the fallback must stay distant: no product code may import or call
+`WebGPUEngine` directly, and the old renderer is reachable only through
+`renderHostPort` / `exportRenderHostPort` for explicit fallback, diagnostics,
+or staged rollback.
+
+Current local validation is stricter than the eventual staged rollout:
+normal developer and bridge repros should use `worker-only` whenever the
+question is "does the new worker path work?" In that mode the retained
+main-host fallback must not rescue preview/playback/export frames. Unsupported
+worker frame types should block with structured telemetry
+(`unsupported-*`, `fallbackFrameCount=0`, strict blocked counters) so missing
+worker coverage is visible. DOM-owned HTML video snapshots are still allowed as
+source/input bitmaps for worker software rendering; they are not considered a
+renderer fallback because compositing, presentation/readback, and export frame
+assembly remain worker-owned. `main`/`main-host-fallback` stays available only
+as an explicit legacy rollback or comparison mode until W5 evidence allows the
+product default to move.
+
+Frame-rate correctness is part of the worker-first goal, not a cosmetic HUD
+detail. The active composition frame rate is the visual cadence source of truth
+for playback health, preview effective FPS, frame stepping, and local smoke
+expectations. Export may use an explicit export FPS, but diagnostics must label
+the distinction clearly (`render target FPS` versus `active composition FPS`
+versus `export FPS`) and must not report healthy 30 FPS composition playback as
+a 60 FPS failure or hide a real under-target worker preview. Changing a
+composition's settings must update the active composition frame rate used by
+the timeline, HUD, `getStats`, `getPlaybackTrace`, smoke assertions, and export
+defaults where applicable.
+
+The Solid/Text/Image runtime smoke is only a low-level worker render/readback
+fixture. It is useful for proving that static layers, text/image packets, and
+worker export readback can run without the retained main fallback, but it is
+not sufficient proof for playback cutover. Worker-first validation must also
+include real media projects, especially the multi-video fixture with actual
+video files and overlapping layers. Those real-video smokes must cover normal
+playback, scrubbing, reverse playback, 2x/3x forward playback, visible preview
+cadence, frame updates, and export readback in `worker-only`.
 
 ## Multi-Agent Review Consensus
 
@@ -210,6 +338,8 @@ Audio timing path
   payload descriptor, or an asset id it can resolve through a worker-owned cache.
 - The main thread never calls WebGPU render methods directly after cutover. It
   requests renders and receives status, metrics, and presented-frame events.
+  Legacy main-thread rendering is allowed only as an explicit fallback behind
+  the render host adapter boundary.
 - Render jobs are cancellable and priority-aware: live preview beats RAM preview,
   RAM preview beats thumbnails, export/bake has explicit exclusive or background
   scheduling policy.
@@ -261,14 +391,41 @@ The renderer chooses a strategy from probed facts:
   presentable frame to a main-thread canvas presenter.
 - `worker-cpu-present`: worker owns graph/caches and produces
   `ImageBitmap`/pixel payloads for a software or 2D presenter.
-- `main-host-dev`: temporary migration path only, used before worker parity or
-  for diagnostics.
+- `worker-presenting`: selected render-host mode where the worker owns a
+  transferred preview `OffscreenCanvas` and reports `frame-presented` events.
+  Current implementation presents an initial software preview packet for simple
+  Solid/Image/Text/VideoFrame/HTML-video snapshots through the runtime command
+  channel, including opacity, source-rect cropping, normalized position,
+  local scale, and Z rotation. It is still not full RenderDispatcher/WebGPU
+  graph parity.
+- `worker-shadow`: product calls still present through the main fallback, while
+  render wake/target commands are mirrored through the runtime worker command
+  channel. This is a cutover scaffold, not proof of worker presentation.
+- `worker-only`: strict validation mode for current local work. It selects the
+  worker host and disables retained main fallback rescue for normal
+  preview/playback/export validation. Valid HTML-video snapshots may still
+  enter as worker input bitmaps, but unsupported renderer features must block
+  and report diagnostics instead of calling the main renderer.
+- `main-host-fallback`: retained legacy fallback path, reachable only through
+  render host adapters for diagnostics, explicit rollback, or platforms whose
+  worker strategy is not allowed by W5 gates. The direct `WebGPUEngine`
+  coupling lives in `mainFallbackRenderHostPort.ts`, not in product callers.
+- `renderHostSelection`: explicit selection boundary for a future worker
+  primary host versus the retained main fallback. Product callers still use
+  `renderHostPort`; the selector owns flag, registration, availability, and
+  blocker telemetry for the cutover.
+- `renderHostPort`: stable product-facing proxy over the selected render host.
+  `configureRenderHostSelection()` can mount a worker-primary candidate behind
+  the proxy while main fallback remains the default until W5/host readiness
+  allows cutover. The public port owns selection/proxy only; it does not import
+  `WebGPUEngine` directly.
 
-Long-term "no fallback" means no dependency on the current main-thread
-`WebGPUEngine` preview renderer. It does not mean every browser must use the
-same low-level presentation mechanism. Safari and Firefox may need a different
-presenter while still using the same render graph, frame providers, scheduler,
-cache registry, and job model.
+Long-term "worker-first" means product paths depend on the worker graph rather
+than the current main-thread `WebGPUEngine` preview renderer. It does not mean
+the legacy renderer must be deleted immediately, and it does not mean every
+browser must use the same low-level presentation mechanism. Safari and Firefox
+may need a different presenter while still using the same render graph, frame
+providers, scheduler, cache registry, and job model.
 
 ## Phase -1 - Fix Known Correctness Issues
 
@@ -283,8 +440,10 @@ Tasks:
   target updates must not clear playback, scrubbing, and composite caches.
 - Add observability to `renderScheduler` independent preview cache behavior
   before moving or deleting it.
-- Document that user-facing RAM preview is currently disabled, while clip video
-  bake still reaches `startRamPreviewForRange()`.
+- Document that user-facing RAM preview is currently disabled. Clip video bake
+  no longer calls the user-facing `startRamPreviewForRange()` action, but it
+  still shares the RAM-preview render/cache infrastructure until that bake
+  range path is migrated to the worker graph.
 
 Acceptance:
 
@@ -1129,8 +1288,11 @@ Final readiness:
   get a separate worker/device when running in parallel?
 - Should worker caches be per composition, per project, or global runtime
   resources?
-- Should worker-only mode still keep a hidden emergency renderer implementation
-  for developer diagnostics, or delete the main-thread renderer entirely?
+- The main-thread renderer stays as a hidden emergency/fallback implementation
+  for now. It must remain isolated behind render host adapters and must not
+  regain direct product call sites. During normal local worker validation,
+  use `worker-only`; use `main`/`main-host-fallback` only for explicit
+  rollback/comparison.
 - Which presentation strategies are supported per browser after worker-only
   cutover: direct worker WebGPU, worker render plus main-thread presenter, or
   worker CPU/ImageBitmap presenter?

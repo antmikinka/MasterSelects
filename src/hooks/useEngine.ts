@@ -5,7 +5,7 @@ import { useEngineStore } from '../stores/engineStore';
 import { useTimelineStore } from '../stores/timeline';
 import { applyClipDragPreview } from '../stores/timeline/clipDragPreview';
 import { useMediaStore } from '../stores/mediaStore';
-import { layerBuilder, playheadState } from '../services/layerBuilder';
+import { getPlayheadPosition, layerBuilder } from '../services/layerBuilder';
 import { layerPlaybackManager } from '../services/layerPlaybackManager';
 import { renderScheduler } from '../services/renderScheduler';
 import { framePhaseMonitor } from '../services/framePhaseMonitor';
@@ -88,12 +88,14 @@ export function useEngine() {
 
       try {
 
-        // Use high-frequency playhead position during playback
-        const currentPlayhead = playheadState.isUsingInternalPosition
-          ? playheadState.position
-          : useTimelineStore.getState().playheadPosition;
         const timelineState = useTimelineStore.getState();
+        // Use the wall-clock interpolated playback position instead of the
+        // last committed internal value, so preview rendering stays current
+        // through occasional rAF/store update gaps.
+        const currentPlayhead = getPlayheadPosition(timelineState.playheadPosition);
         const hasClipDragPreview = timelineState.clipDragPreview != null;
+        const isInteractiveScrub = timelineState.isDraggingPlayhead || hasClipDragPreview;
+        const hasPlaybackWarmup = timelineState.playbackWarmup !== null;
         const timelineClips = hasClipDragPreview
           ? applyClipDragPreview(timelineState.clips, timelineState.clipDragPreview)
           : timelineState.clips;
@@ -113,14 +115,15 @@ export function useEngine() {
           hasActiveTemporalClip ||
           hasActiveBackgroundLayer;
         renderHostPort.setTimelineVisualDemand(hasVisualRenderDemand);
-        renderHostPort.setContinuousRender(hasActiveTemporalClip);
+        renderHostPort.setIsScrubbing(isInteractiveScrub);
+        renderHostPort.setContinuousRender(hasActiveTemporalClip || hasPlaybackWarmup);
 
         // Track playhead changes for idle detection
         // During playback, playhead constantly changes -> keeps engine active
         // When stopped/scrubbing, only renders when playhead actually moves
         if (currentPlayhead !== lastPlayhead) {
           lastPlayhead = currentPlayhead;
-          if (hasVisualRenderDemand) {
+          if (hasVisualRenderDemand && (!timelineState.isPlaying || isInteractiveScrub)) {
             renderHostPort.requestRender();
           }
         }
@@ -180,7 +183,10 @@ export function useEngine() {
         const buildStart = performance.now();
         const layers = layerBuilder.buildLayersFromStore();
         buildMs += performance.now() - buildStart;
-        const needsContinuousRender = hasActiveTemporalClip || hasContinuousRenderLayers(layers);
+        const needsContinuousRender =
+          hasPlaybackWarmup ||
+          hasActiveTemporalClip ||
+          hasContinuousRenderLayers(layers);
         renderHostPort.setContinuousRender(needsContinuousRender);
 
         // During playback: sync video elements FIRST so advanceToTime() prepares the
@@ -214,8 +220,7 @@ export function useEngine() {
         // scrubbing or dedicated RAM preview generation pass via isRamPreviewing).
         const cacheStart = performance.now();
         const { ramPreviewEnabled, addCachedFrame } = useTimelineStore.getState();
-        const { isDraggingPlayhead } = useTimelineStore.getState();
-        if (ramPreviewEnabled && !timelineState.isPlaying && !isDraggingPlayhead && !needsContinuousRender && !hasClipDragPreview) {
+        if (ramPreviewEnabled && !timelineState.isPlaying && !isInteractiveScrub && !needsContinuousRender) {
           renderHostPort.cacheCompositeFrame(currentPlayhead).then(() => {
             addCachedFrame(currentPlayhead);
           });
@@ -224,7 +229,7 @@ export function useEngine() {
         // Cache active comp output for parent preview texture sharing
         // This allows parent compositions to show the active comp without video conflicts
         const activeCompId = useMediaStore.getState().activeCompositionId;
-        if (activeCompId && !timelineState.isPlaying && !isDraggingPlayhead && !needsContinuousRender && !hasClipDragPreview) {
+        if (activeCompId && !timelineState.isPlaying && !isInteractiveScrub && !needsContinuousRender) {
           renderHostPort.cacheActiveCompOutput(activeCompId);
         }
         cacheMs += performance.now() - cacheStart;

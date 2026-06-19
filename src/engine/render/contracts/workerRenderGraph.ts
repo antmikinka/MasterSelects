@@ -253,6 +253,12 @@ export type RenderCommand =
 
 export type WorkerRenderStatusEvent =
   | { readonly type: 'initialized'; readonly rendererId: string }
+  | {
+      readonly type: 'command-accepted';
+      readonly commandType: string;
+      readonly requestId: string | null;
+      readonly presentation: 'not-presenting' | RenderCommandTarget['presentation'];
+    }
   | { readonly type: 'frame-presented'; readonly requestId: string; readonly targetId: RenderGraphId; readonly timelineTime: number }
   | { readonly type: 'frame-dropped'; readonly requestId: string; readonly reason: string }
   | { readonly type: 'cache-updated'; readonly cacheId: string; readonly ownerId: string; readonly bytes: number }

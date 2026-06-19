@@ -6,6 +6,7 @@ import type {
   WorkerFirstGoldenProjectManifest,
   WorkerFirstProofCounters,
 } from '../../src/services/aiTools/workerFirstProofHarness';
+import type { RenderCapabilityProbeResult } from '../../src/services/render/renderCapabilityProbe';
 import {
   createWorkerFirstW5PrerequisiteReport,
   WORKER_FIRST_REQUIRED_PRESENTATION_PLATFORMS,
@@ -91,6 +92,28 @@ const fixtureRequiredManifest: WorkerFirstGoldenProjectManifest = {
   status: 'fixture-required',
 };
 
+const capabilityProbe: RenderCapabilityProbeResult = {
+  timestamp: 1,
+  browserEngine: 'chromium',
+  os: 'windows',
+  gpuAdapter: null,
+  facts: {
+    workerNavigatorGpu: true,
+    workerWebGpuDevice: true,
+    offscreenCanvasTransfer: true,
+    offscreenCanvasWebGpuContext: true,
+    workerCanvasPresentation: false,
+    videoFrameTransfer: true,
+    imageBitmapTransfer: true,
+    webCodecs: true,
+    webCodecsWorker: true,
+    copyExternalImageToTexture: true,
+    audioContext: true,
+  },
+  selectedStrategy: 'worker-webgpu-main-present',
+  selectionReason: 'test probe',
+};
+
 function visibleProof(overrides: Partial<DomVisibleCanvasProof> = {}): DomVisibleCanvasProof {
   return {
     attached: true,
@@ -109,7 +132,7 @@ function platformProofs(): WorkerVisiblePresentationProof[] {
     platform,
     strategy: platform === 'linux-firefox-mesa' ? 'worker-cpu-present' : 'worker-webgpu-main-present',
     proof: visibleProof(),
-    capabilityProbe: null,
+    capabilityProbe,
     stress: {
       playbackDurationMs: 5000,
       frameCount: 150,
@@ -178,6 +201,41 @@ describe('worker-first W5 prerequisite gates', () => {
     expect(report.visiblePresentation.checks.find((check) => check.id === 'no-stale-visible-frames-under-stress'))
       .toMatchObject({ status: 'passed' });
     expect(report.visiblePresentation.status).toBe('passed');
+  });
+
+  it('blocks W5 when platform proofs do not prove worker-runtime WebCodecs support', () => {
+    const [windowsProof, ...otherProofs] = platformProofs();
+    const report = createWorkerFirstW5PrerequisiteReport({
+      manifests: [capturedManifest],
+      counters: cleanCounters,
+      shadowSamples: [{
+        projectId: 'solid-text-image',
+        sampleTimeSeconds: 0,
+        mainFingerprint: fingerprint,
+        workerFingerprint: fingerprint,
+      }],
+      visibleProofs: [
+        {
+          ...windowsProof,
+          capabilityProbe: {
+            ...capabilityProbe,
+            facts: {
+              ...capabilityProbe.facts,
+              webCodecsWorker: false,
+            },
+          },
+        },
+        ...otherProofs,
+      ],
+    });
+
+    expect(report.visiblePresentation.status).toBe('blocked');
+    expect(report.canStartRenderDispatcherCutover).toBe(false);
+    expect(report.visiblePresentation.checks.find((check) => check.id === 'worker-runtime-webcodecs-proven'))
+      .toMatchObject({
+        status: 'blocked',
+        blockers: ['windows-chromium:webCodecsWorker:false'],
+      });
   });
 
   it('fails W5 prerequisites when parity, queue, lifetime, or visible pixels regress', () => {

@@ -64,6 +64,8 @@ export interface TimelineState {
   ramPreviewProgress: number | null;
   ramPreviewRange: { start: number; end: number } | null;
   isRamPreviewing: boolean;
+  clipVideoBakeProgress: number | null;
+  isClipVideoBakeRendering: boolean;
   cachedFrameTimes: Set<number>;
   isProxyCaching: boolean;
   proxyCacheProgress: number | null;

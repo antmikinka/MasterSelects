@@ -1,24 +1,23 @@
 // Preview & Frame Capture Tool Handlers
 
 import { useTimelineStore } from '../../../stores/timeline';
-import { renderHostPort } from '../../render/renderHostPort';
 import type { ToolResult } from '../types';
 import { captureFrameGrid } from '../utils';
 import { flashPreviewCanvas } from '../aiFeedback';
 import { ensureRenderForDiagnostics } from './renderOnce';
+import {
+  captureRenderHostFrame,
+  type PreviewCaptureMode,
+} from '../previewCapture';
 
 type TimelineStore = ReturnType<typeof useTimelineStore.getState>;
-
-function getCaptureCanvas(): { canvas: HTMLCanvasElement; source: string } | null {
-  return renderHostPort.getCaptureCanvas();
-}
 
 export async function handleCaptureFrame(
   args: Record<string, unknown>,
   timelineStore: TimelineStore
 ): Promise<ToolResult> {
   const time = args.time as number | undefined;
-  const mode = (args.mode as 'gpu' | 'dom' | undefined) ?? 'gpu';
+  const mode = (args.mode as PreviewCaptureMode | undefined) ?? 'auto';
 
   // If time specified, move playhead there first
   if (time !== undefined) {
@@ -32,53 +31,29 @@ export async function handleCaptureFrame(
   // Visual feedback: shutter flash on preview
   flashPreviewCanvas('shutter');
 
-  let width: number;
-  let height: number;
-  let dataUrl: string;
-  let canvasSource: string | undefined;
-
-  if (mode === 'dom') {
-    const captureCanvas = getCaptureCanvas();
-    if (!captureCanvas) {
-      return { success: false, error: 'Failed to capture frame - preview canvas not available' };
-    }
-    const previewCanvas = captureCanvas.canvas;
-    width = previewCanvas.width;
-    height = previewCanvas.height;
-    dataUrl = previewCanvas.toDataURL('image/png');
-    canvasSource = captureCanvas.source;
-  } else {
-    const pixels = await renderHostPort.readPixels();
-    if (!pixels) {
-      return { success: false, error: 'Failed to capture frame - engine not ready' };
-    }
-
-    ({ width, height } = renderHostPort.getOutputDimensions());
-
-    // Convert to PNG using canvas
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      return { success: false, error: 'Failed to create canvas context' };
-    }
-
-    const imageData = new ImageData(new Uint8ClampedArray(pixels), width, height);
-    ctx.putImageData(imageData, 0, 0);
-    dataUrl = canvas.toDataURL('image/png');
+  const capture = await captureRenderHostFrame(mode);
+  if (!capture.success) {
+    return {
+      success: false,
+      error: capture.error,
+      data: {
+        requestedMode: mode,
+        renderDiagnostics,
+      },
+    };
   }
 
   return {
     success: true,
     data: {
       capturedAt: time ?? timelineStore.playheadPosition,
-      width,
-      height,
-      mode,
-      ...(canvasSource ? { canvasSource } : {}),
+      width: capture.width,
+      height: capture.height,
+      mode: capture.mode,
+      requestedMode: mode,
+      ...(capture.canvasSource ? { canvasSource: capture.canvasSource } : {}),
       renderDiagnostics,
-      dataUrl,
+      dataUrl: capture.dataUrl,
     },
   };
 }
@@ -89,6 +64,9 @@ export async function handleGetCutPreviewQuad(
 ): Promise<ToolResult> {
   const cutTime = args.cutTime as number;
   const frameSpacing = (args.frameSpacing as number) || 0.1;
+  const mode = args.mode === 'dom' || args.mode === 'gpu' || args.mode === 'auto'
+    ? args.mode
+    : 'auto';
 
   // Generate 8 timestamps: 4 before cut, 4 after cut
   const times: number[] = [];
@@ -102,7 +80,7 @@ export async function handleGetCutPreviewQuad(
   }
 
   // Capture frames and create grid
-  const gridResult = await captureFrameGrid(times, 4, timelineStore);
+  const gridResult = await captureFrameGrid(times, 4, timelineStore, { mode });
   if (!gridResult.success) {
     return gridResult;
   }
@@ -113,6 +91,7 @@ export async function handleGetCutPreviewQuad(
       cutTime,
       frameSpacing,
       frameTimes: times,
+      mode,
       description: 'Top row: 4 frames BEFORE cut. Bottom row: 4 frames AFTER cut (starting at cut point).',
       ...(gridResult.data ?? {}),
     },
@@ -126,7 +105,9 @@ export async function handleGetFramesAtTimes(
   const times = (args.times as number[]).slice(0, 8); // Max 8 frames
   const columns = (args.columns as number) || 4;
   const settleMs = typeof args.settleMs === 'number' ? args.settleMs : undefined;
-  const mode = args.mode === 'dom' ? 'dom' : 'gpu';
+  const mode = args.mode === 'dom' || args.mode === 'gpu' || args.mode === 'auto'
+    ? args.mode
+    : 'auto';
 
   const gridResult = await captureFrameGrid(times, columns, timelineStore, { settleMs, mode });
   if (!gridResult.success) {

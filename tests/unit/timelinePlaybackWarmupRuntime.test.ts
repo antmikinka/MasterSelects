@@ -3,8 +3,16 @@ import { getRuntimeFrameProvider } from '../../src/services/mediaRuntime/runtime
 import { getTimelinePlaybackWarmupVideo } from '../../src/services/timeline/timelinePlaybackWarmupRuntime';
 import type { TimelineClip } from '../../src/types';
 
+const renderHostMock = vi.hoisted(() => ({
+  getTelemetry: vi.fn(() => ({ mode: 'main' })),
+}));
+
 vi.mock('../../src/services/mediaRuntime/runtimePlayback', () => ({
   getRuntimeFrameProvider: vi.fn(),
+}));
+
+vi.mock('../../src/services/render/renderHostPort', () => ({
+  renderHostPort: renderHostMock,
 }));
 
 const getRuntimeFrameProviderMock = vi.mocked(getRuntimeFrameProvider);
@@ -26,6 +34,7 @@ function createFrameProvider(fullMode: boolean) {
 describe('timeline playback warmup runtime', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    renderHostMock.getTelemetry.mockReturnValue({ mode: 'main' });
     getRuntimeFrameProviderMock.mockReturnValue(null);
   });
 
@@ -46,6 +55,13 @@ describe('timeline playback warmup runtime', () => {
     const source = createVideoSource({
       webCodecsPlayer: createFrameProvider(true) as never,
     });
+
+    expect(getTimelinePlaybackWarmupVideo(source)).toBeNull();
+  });
+
+  it('skips html warmup in worker GPU only playback', () => {
+    const source = createVideoSource();
+    renderHostMock.getTelemetry.mockReturnValue({ mode: 'worker-gpu-only' });
 
     expect(getTimelinePlaybackWarmupVideo(source)).toBeNull();
   });

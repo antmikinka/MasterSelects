@@ -120,6 +120,9 @@ export interface LayerSource {
   // Shared media runtime binding
   runtimeSourceId?: string;
   runtimeSessionKey?: string;
+  // Runtime-only hint for preview paths that must present the runtime frame
+  // instead of preferring the attached HTML element.
+  forceRuntimeFramePreview?: boolean;
   // Gaussian avatar support
   gaussianAvatarUrl?: string;
   gaussianBlendshapes?: Record<string, number>;

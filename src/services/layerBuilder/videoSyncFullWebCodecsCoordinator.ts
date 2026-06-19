@@ -67,6 +67,8 @@ export type VideoSyncFullWebCodecsCoordinatorDeps = {
 
 export class VideoSyncFullWebCodecsCoordinator {
   private static readonly MANUAL_TELEPORT_FAST_SEEK_THRESHOLD = 0.35;
+  private static readonly DEFAULT_REVERSE_PLAYBACK_FRAME_RATE = 30;
+  private static readonly REVERSE_PLAYBACK_SEEK_FRAME_FRACTION = 0.45;
   private readonly deps: VideoSyncFullWebCodecsCoordinatorDeps;
 
   constructor(deps: VideoSyncFullWebCodecsCoordinatorDeps) {
@@ -139,6 +141,45 @@ export class VideoSyncFullWebCodecsCoordinator {
     targetTime: number
   ): boolean {
     return shouldHoldScrubReleaseIntoPlaybackPolicy(clipId, provider, targetTime);
+  }
+
+  shouldSeekReversePlaybackProvider(
+    provider: RuntimeFrameProvider | null | undefined,
+    targetTime: number
+  ): boolean {
+    if (!provider) return false;
+
+    const frameRate = provider.getFrameRate?.() ??
+      VideoSyncFullWebCodecsCoordinator.DEFAULT_REVERSE_PLAYBACK_FRAME_RATE;
+    const frameInterval = frameRate > 0
+      ? 1 / frameRate
+      : 1 / VideoSyncFullWebCodecsCoordinator.DEFAULT_REVERSE_PLAYBACK_FRAME_RATE;
+    const seekThreshold =
+      frameInterval * VideoSyncFullWebCodecsCoordinator.REVERSE_PLAYBACK_SEEK_FRAME_FRACTION;
+    const pendingTarget = provider.getPendingSeekTime?.();
+    if (
+      typeof pendingTarget === 'number' &&
+      Number.isFinite(pendingTarget) &&
+      Math.abs(pendingTarget - targetTime) < seekThreshold
+    ) {
+      return false;
+    }
+
+    const debugFrameTime = provider.getDebugInfo?.()?.currentFrameTimestampSeconds;
+    const displayedFrameTime =
+      typeof debugFrameTime === 'number' && Number.isFinite(debugFrameTime)
+        ? debugFrameTime
+        : provider.hasFrame?.() === true
+          ? provider.currentTime
+          : null;
+    if (
+      typeof displayedFrameTime === 'number' &&
+      Math.abs(displayedFrameTime - targetTime) < frameInterval * 0.5
+    ) {
+      return false;
+    }
+
+    return true;
   }
 
   syncPausedWebCodecsProvider(
@@ -227,15 +268,25 @@ export class VideoSyncFullWebCodecsCoordinator {
   syncFullWebCodecs(clip: TimelineClip, ctx: FrameContext): void {
     const video = this.deps.getClipHtmlVideoElement(clip);
     const timeInfo = getClipTimeInfo(ctx, clip);
+    const isReversePlayback =
+      ctx.playbackSpeed < 0 ||
+      clip.reversed ||
+      timeInfo.speed < 0;
+    const allowSharedPreviewRuntimeSession = canUseSharedPreviewRuntimeSession(
+      clip,
+      ctx.clipsAtTime
+    );
+    const allowSharedPlaybackRuntimeSession =
+      !isReversePlayback && allowSharedPreviewRuntimeSession;
     const playbackRuntimeSource = getPreviewRuntimeSource(
       clip.source,
       clip.trackId,
-      canUseSharedPreviewRuntimeSession(clip, ctx.clipsAtTime)
+      allowSharedPlaybackRuntimeSession
     );
     const scrubRuntimeSource = getScrubRuntimeSource(
       clip.source,
       clip.trackId,
-      canUseSharedPreviewRuntimeSession(clip, ctx.clipsAtTime)
+      allowSharedPreviewRuntimeSession
     );
     const clipRuntimeProvider = this.deps.getClipRuntimeProvider(clip);
     const isInteractivePreview = ctx.isDraggingPlayhead || ctx.hasClipDragPreview;
@@ -243,6 +294,8 @@ export class VideoSyncFullWebCodecsCoordinator {
     const handoffVideo = this.deps.handoffs.getHandoffVideoElement(clip.id);
     const audioVideo = handoffVideo ?? video;
     this.deps.muteLinkedVideoSourceAudio(ctx, clip, audioVideo);
+    const suppressHtmlVideoPlayback =
+      renderHostPort.getTelemetry().mode === 'worker-gpu-only';
 
     if (clip.transitionSourceHold === true) {
       syncTransitionSourceHold({
@@ -277,6 +330,11 @@ export class VideoSyncFullWebCodecsCoordinator {
         holdPlaybackTarget !== null ? holdPlaybackTarget : timeInfo.clipTime;
 
       updateRuntimePlaybackTime(preferredRuntimeSource, preferredTargetTime);
+      if (isReversePlayback && !useScrubRuntimeForHold) {
+        void ensureRuntimeFrameProvider(playbackRuntimeSource, 'interactive', timeInfo.clipTime, {
+          preferWorkerWebCodecs: true,
+        });
+      }
       if (useScrubRuntimeForHold) {
         void ensureRuntimeFrameProvider(scrubRuntimeSource, 'interactive', holdPlaybackTarget!);
       }
@@ -311,13 +369,29 @@ export class VideoSyncFullWebCodecsCoordinator {
           getRuntimeFrameProvider(playbackRuntimeSource) ??
           clipRuntimeProvider;
       }
+      if (suppressHtmlVideoPlayback && audioVideo && !audioVideo.paused) {
+        audioVideo.pause();
+      }
+
       if (!playbackProvider?.isFullMode()) {
         return;
       }
 
-      playbackProvider.advanceToTime?.(playbackTargetTime);
+      if (isReversePlayback && this.shouldSeekReversePlaybackProvider(playbackProvider, playbackTargetTime)) {
+        const seekReversePreviewFrame =
+          typeof playbackProvider.advanceReverseToTime === 'function'
+            ? playbackProvider.advanceReverseToTime.bind(playbackProvider)
+            : typeof playbackProvider.scrubSeek === 'function'
+            ? playbackProvider.scrubSeek.bind(playbackProvider)
+            : typeof playbackProvider.seek === 'function'
+            ? playbackProvider.seek.bind(playbackProvider)
+            : playbackProvider.advanceToTime?.bind(playbackProvider);
+        seekReversePreviewFrame?.(playbackTargetTime);
+      } else if (!isReversePlayback) {
+        playbackProvider.advanceToTime?.(playbackTargetTime);
+      }
 
-      if (audioVideo) {
+      if (audioVideo && !suppressHtmlVideoPlayback) {
         const playbackReadyForAudio = this.isPlaybackProviderReadyForAudioStart(
           playbackProvider,
           playbackTargetTime

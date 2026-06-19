@@ -13,7 +13,7 @@ const workerFirstStrategyEnum = [
   'worker-webgpu-present',
   'worker-webgpu-main-present',
   'worker-cpu-present',
-  'main-host-dev',
+  'main-host-fallback',
 ] as const;
 
 const goldenProjectEnum = [
@@ -89,10 +89,14 @@ export const workerFirstRuntimeToolDefinitions: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'runWorkerFirstRuntimeExportPlaybackSmoke',
-      description: 'Materialize a controlled worker-first runtime fixture, run real playback simulation, run the browser debug export path, then collect getStats/getPlaybackTrace runtime diagnostics for scheduler/cache/provider feeds. This records observation data only; it does not enable worker WebGPU, worker presentation, or RenderDispatcher cutover.',
+      description: 'Materialize a controlled worker-first runtime fixture, force the dev render host to worker-only by default, run real playback simulation, run the browser debug export path, then collect getStats/getPlaybackTrace runtime diagnostics for scheduler/cache/provider feeds. This records observation data only; it does not enable worker WebGPU, worker presentation, or RenderDispatcher cutover.',
       parameters: {
         type: 'object',
         properties: {
+          renderHostMode: enumProperty(
+            ['worker-only', 'worker-gpu-only', 'worker-presenting', 'worker-shadow', 'main', 'current'],
+            'Render host override for the smoke. Defaults to worker-only so main-thread fallback cannot rescue playback/export validation. Use current only for an explicit comparison run.',
+          ),
           width: numberProperty('Fixture composition width. Defaults to 1280.'),
           height: numberProperty('Fixture composition height. Defaults to 720.'),
           durationSeconds: numberProperty('Fixture timeline duration. Defaults to 2.25 seconds.'),
@@ -102,6 +106,41 @@ export const workerFirstRuntimeToolDefinitions: ToolDefinition[] = [
           exportHeight: numberProperty('Debug export height. Defaults to 180.'),
           exportFps: numberProperty('Debug export frame rate. Defaults to 8.'),
           maxRuntimeMs: numberProperty('Debug export timeout budget. Defaults to 45000ms.'),
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'runWorkerFirstRealVideoRuntimeSmoke',
+      description: 'Materialize the real multi-video Worker-First fixture, force worker-only by default, wait for media readiness, then validate normal playback, 2x/3x forward playback, reverse playback, scrub preview cadence, and worker export readback with zero main fallback frames. This records observation data only; it does not enable worker WebGPU, worker presentation, or RenderDispatcher cutover.',
+      parameters: {
+        type: 'object',
+        properties: {
+          renderHostMode: enumProperty(
+            ['worker-only', 'worker-gpu-only', 'worker-presenting', 'worker-shadow', 'main', 'current'],
+            'Render host override for the smoke. Defaults to worker-only so main-thread fallback cannot rescue playback/export validation. Use current only for an explicit comparison run.',
+          ),
+          width: numberProperty('Fixture composition width. Defaults to 1280.'),
+          height: numberProperty('Fixture composition height. Defaults to 720.'),
+          durationSeconds: numberProperty('Fixture timeline duration. Defaults to 6 seconds.'),
+          mediaSettleMs: numberProperty('Delay after materializing the real-video fixture before playback probes start. Defaults to 1800ms.'),
+          playbackDurationMs: numberProperty('Normal playback simulation duration. Defaults to 1000ms.'),
+          fastPlaybackDurationMs: numberProperty('2x/3x playback simulation duration. Defaults to 900ms.'),
+          reversePlaybackDurationMs: numberProperty('Reverse playback simulation duration. Defaults to 900ms.'),
+          scrubDurationMs: numberProperty('Custom scrub simulation duration. Defaults to 1800ms.'),
+          normalStartTime: numberProperty('Normal playback start time in seconds. Defaults to 0.25.'),
+          fastStartTime: numberProperty('2x/3x playback start time in seconds. Defaults to 0.25.'),
+          reverseStartTime: numberProperty('Reverse playback start time in seconds. Defaults to 4.75.'),
+          scrubMinTime: numberProperty('Lower bound for the custom scrub route. Defaults to 0.25.'),
+          scrubMaxTime: numberProperty('Upper bound for the custom scrub route. Defaults to 5.25.'),
+          exportDurationSeconds: numberProperty('Debug export duration from timeline start. Defaults to 0.75 seconds.'),
+          exportWidth: numberProperty('Debug export width. Defaults to 320.'),
+          exportHeight: numberProperty('Debug export height. Defaults to 180.'),
+          exportFps: numberProperty('Debug export frame rate. Defaults to 8.'),
+          maxRuntimeMs: numberProperty('Debug export timeout budget. Defaults to 60000ms.'),
         },
         required: [],
       },

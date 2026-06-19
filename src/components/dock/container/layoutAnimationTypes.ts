@@ -14,7 +14,7 @@ export interface DockLayoutAnimationItem {
   id: string;
   title: string;
   rect: DockLayoutAnimationRect;
-  clone: HTMLElement;
+  clone?: HTMLElement;
   liveElement?: HTMLElement;
   childItems: Map<string, DockLayoutChildAnimationItem>;
 }

@@ -33,6 +33,10 @@ import { getVisibleVideoTrackPlaybackClipsAtTime } from './videoSyncTransitionQu
 import { VideoSyncWarmupState } from './videoSyncWarmupState';
 import { VideoSyncWarmupCoordinator } from './videoSyncWarmupCoordinator';
 import { VideoSyncWebCodecsSeekState } from './videoSyncWebCodecsSeekState';
+import {
+  getReverseWorkerRuntimeSource,
+  releaseReverseWorkerRuntimeSources,
+} from './reverseWorkerWebCodecsRuntime';
 
 export class VideoSyncManager {
   // Video sync throttling
@@ -163,6 +167,7 @@ export class VideoSyncManager {
    * stale references to destroyed video elements / WebCodecsPlayers.
    */
   reset(): void {
+    releaseReverseWorkerRuntimeSources();
     this.handoffs.reset();
     this.warmups.reset();
     this.htmlSeeks.reset();
@@ -329,6 +334,13 @@ export class VideoSyncManager {
     providerKey?: string
   ): boolean {
     return this.fullWebCodecs.shouldSeekPausedWebCodecsProvider(provider, targetTime, providerKey);
+  }
+
+  shouldSeekReversePlaybackProvider(
+    provider: Parameters<VideoSyncFullWebCodecsCoordinator['shouldSeekReversePlaybackProvider']>[0],
+    targetTime: number
+  ): boolean {
+    return this.fullWebCodecs.shouldSeekReversePlaybackProvider(provider, targetTime);
   }
 
   shouldFastSeekPausedWebCodecsProvider(
@@ -532,6 +544,7 @@ export class VideoSyncManager {
    */
   private syncClipVideo(clip: TimelineClip, ctx: FrameContext): void {
     const syncMedia = resolveVideoSyncMedia(clip);
+    const clipVideoElement = syncMedia.htmlVideoElement;
 
     // Handle native decoder
     if (syncMedia.nativeDecoder) {
@@ -541,16 +554,26 @@ export class VideoSyncManager {
 
     // Full-mode WebCodecs owns preview sync whenever it's enabled.
     // Drag scrubbing uses the dedicated scrub session inside syncFullWebCodecs.
+    const reverseWorkerRuntimeSource = getReverseWorkerRuntimeSource(clip, ctx);
+    const webCodecsClip =
+      reverseWorkerRuntimeSource && reverseWorkerRuntimeSource !== clip.source
+        ? { ...clip, source: reverseWorkerRuntimeSource }
+        : clip;
     const useFullWebCodecsPreview =
-      flags.useFullWebCodecsPlayback &&
-      this.getClipRuntimeProvider(clip)?.isFullMode();
+      (
+        flags.useFullWebCodecsPlayback &&
+        this.getClipRuntimeProvider(clip)?.isFullMode()
+      ) ||
+      Boolean(reverseWorkerRuntimeSource);
 
     if (useFullWebCodecsPreview) {
-      this.syncFullWebCodecs(clip, ctx);
+      this.syncFullWebCodecs(webCodecsClip, ctx);
+      if (reverseWorkerRuntimeSource && clipVideoElement) {
+        this.htmlClipCoordinator.syncHtmlClipVideo(clip, ctx, clipVideoElement);
+      }
       return;
     }
 
-    const clipVideoElement = syncMedia.htmlVideoElement;
     if (!clipVideoElement) return;
 
     this.htmlClipCoordinator.syncHtmlClipVideo(clip, ctx, clipVideoElement);

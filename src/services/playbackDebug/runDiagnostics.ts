@@ -88,6 +88,11 @@ export function buildPlaybackRunDiagnostics(
     params.startMs,
     params.endMs
   );
+  const workerPreviewEvents = filterEventsInRange(
+    [...(params.workerPreviewEvents ?? [])],
+    params.startMs,
+    params.endMs
+  );
 
   return {
     windowMs: round(windowMs, 1),
@@ -97,6 +102,7 @@ export function buildPlaybackRunDiagnostics(
       windowMs,
       wcTimeline: wcEvents,
       vfTimeline: vfEvents,
+      workerPreviewEvents,
       healthVideos: params.healthVideos,
       healthAnomalies: params.healthAnomalies,
     }),

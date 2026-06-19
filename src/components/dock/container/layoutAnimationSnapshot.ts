@@ -45,13 +45,16 @@ export function captureDockLayoutAnimationSnapshot(
     const rect = element.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
 
+    const animateLiveElement = shouldAnimateLiveLayoutElement(id);
     items.set(id, {
       id,
       title: element.dataset.dockLayoutAnimTitle ?? '',
       rect: toAnimationRect(rect),
-      clone: cloneElementForLayoutTransition(element, 'dock-layout-transition-clone'),
-      liveElement: shouldAnimateLiveLayoutElement(id) ? element : undefined,
-      childItems: captureDockLayoutChildAnimationItems(element),
+      clone: animateLiveElement
+        ? undefined
+        : cloneElementForLayoutTransition(element, 'dock-layout-transition-clone'),
+      liveElement: animateLiveElement ? element : undefined,
+      childItems: animateLiveElement ? new Map() : captureDockLayoutChildAnimationItems(element),
     });
   });
 

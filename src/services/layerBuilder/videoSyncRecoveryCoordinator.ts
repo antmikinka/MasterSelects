@@ -139,7 +139,7 @@ export class VideoSyncRecoveryCoordinator {
       recovery: 'displayed-drift',
       driftMs: Math.round(presentedDrift * 1000),
     });
-    this.deps.recoverClipPlaybackState(clipId, video, targetTime);
+    this.refreshDraggingPreviewFrame(clipId, video, targetTime);
   }
 
   maybeRecoverDraggingPendingSeek(
@@ -180,7 +180,39 @@ export class VideoSyncRecoveryCoordinator {
       pendingMs: Math.round(pendingAge),
       driftMs: Math.round(currentTimeDrift * 1000),
     });
-    this.deps.recoverClipPlaybackState(clipId, video, targetTime);
+    this.refreshDraggingPreviewFrame(clipId, video, targetTime);
     return true;
+  }
+
+  private refreshDraggingPreviewFrame(
+    clipId: string,
+    video: HTMLVideoElement,
+    targetTime: number
+  ): void {
+    const safeTarget = this.safeVideoTime(video, targetTime);
+    try {
+      if (Math.abs(video.currentTime - safeTarget) > 0.001) {
+        video.currentTime = safeTarget;
+      }
+    } catch {
+      // Ignore unavailable seeks; the next drag tick will retry through normal seek coalescing.
+    }
+
+    if (!video.seeking && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      renderHostPort.markVideoFramePresented(video, video.currentTime, clipId);
+      if (!renderHostPort.captureVideoFrameAtTime(video, video.currentTime, clipId)) {
+        renderHostPort.ensureVideoFrameCached(video, clipId);
+      }
+      renderHostPort.cacheFrameAtTime(video, video.currentTime);
+    }
+    renderHostPort.requestNewFrameRender();
+  }
+
+  private safeVideoTime(video: HTMLVideoElement, targetTime: number): number {
+    const duration = video.duration;
+    if (!Number.isFinite(duration) || duration <= 0) {
+      return Math.max(0, targetTime);
+    }
+    return Math.max(0, Math.min(targetTime, Math.max(0, duration - 0.001)));
   }
 }

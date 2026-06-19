@@ -56,6 +56,7 @@ export interface Mp4TrackLoadResult {
 
 export interface Mp4DemuxLoaderCallbacks {
   log: LoaderLog;
+  hardwareAcceleration?: VideoDecoderConfig['hardwareAcceleration'];
   onMp4FileCreated: (mp4File: MP4File) => void;
   onTrackReady: (result: Mp4TrackLoadResult) => void;
   onSamples: (samples: Sample[]) => void;
@@ -108,7 +109,7 @@ export function loadMp4ForWebCodecs(
         codec,
         codedWidth: videoTrack.video.width,
         codedHeight: videoTrack.video.height,
-        hardwareAcceleration: 'prefer-hardware',
+        hardwareAcceleration: callbacks.hardwareAcceleration ?? 'prefer-hardware',
         optimizeForLatency: true,
         description,
       };

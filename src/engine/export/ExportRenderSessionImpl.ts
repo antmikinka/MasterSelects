@@ -40,6 +40,16 @@ export class ExportFrameCaptureUnavailableError extends Error {
   }
 }
 
+function createInvalidExportHostError(
+  telemetry: ReturnType<ExportRenderHostPort['getTelemetry']>,
+  phase: string,
+): Error {
+  const hostDescription = `${telemetry.mode}/${telemetry.presentationStrategy}`;
+  return new Error(
+    `Export render host is unavailable during ${phase} (${hostDescription}). Try keeping the browser tab in focus.`,
+  );
+}
+
 export class ExportRenderSessionImpl implements ExportRenderSession {
   readonly runId: string;
   readonly signal: AbortSignal;
@@ -68,7 +78,12 @@ export class ExportRenderSessionImpl implements ExportRenderSession {
     return this.useZeroCopy;
   }
 
-  begin(): void {
+  async begin(): Promise<void> {
+    const ready = await this.host.ensureReady();
+    if (!ready) {
+      throw new Error('Export render host failed to initialize');
+    }
+
     this.originalDimensions = this.host.getOutputDimensions();
     this.host.setResolution(this.width, this.height);
     this.host.setExporting(true);
@@ -82,10 +97,7 @@ export class ExportRenderSessionImpl implements ExportRenderSession {
   async renderFrame(input: ExportRenderFrameInput): Promise<ExportRenderSessionFrameCapture> {
     const layers = input.layers as Layer[];
 
-    // Check GPU device validity
-    if (!this.host.isDeviceValid()) {
-      throw new Error('WebGPU device lost during export. Try keeping the browser tab in focus.');
-    }
+    await this.ensureHostAvailable('frame render');
 
     this.host.setRenderTimeOverride(input.time);
     const maskSyncStart = performance.now();
@@ -111,7 +123,7 @@ export class ExportRenderSessionImpl implements ExportRenderSession {
       const captureMs = performance.now() - captureStart;
       if (!videoFrame) {
         if (!this.host.isDeviceValid()) {
-          throw new Error('WebGPU device lost during export. Try keeping the browser tab in focus.');
+          throw createInvalidExportHostError(this.host.getTelemetry(), 'zero-copy capture');
         }
         const readbackCapture = await this.capturePixels(input, {
           maskSyncMs,
@@ -156,7 +168,7 @@ export class ExportRenderSessionImpl implements ExportRenderSession {
     const captureMs = performance.now() - captureStart;
     if (!pixels) {
       if (!this.host.isDeviceValid()) {
-        throw new Error('WebGPU device lost during export. Try keeping the browser tab in focus.');
+        throw createInvalidExportHostError(this.host.getTelemetry(), 'readback capture');
       }
       return null;
     }
@@ -170,6 +182,15 @@ export class ExportRenderSessionImpl implements ExportRenderSession {
       durationMicros: input.durationMicros,
       metrics: { ...metrics, captureMs },
     };
+  }
+
+  private async ensureHostAvailable(phase: string): Promise<void> {
+    if (this.host.isDeviceValid()) return;
+
+    const recovered = await this.host.ensureReady();
+    if (recovered && this.host.isDeviceValid()) return;
+
+    throw createInvalidExportHostError(this.host.getTelemetry(), phase);
   }
 
   cancel(reason?: string): void {

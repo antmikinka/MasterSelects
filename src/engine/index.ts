@@ -1,7 +1,8 @@
 // Main engine module exports
 
-// Main engine class and singleton
-export { WebGPUEngine, engine } from './WebGPUEngine';
+// The WebGPU engine singleton is intentionally not re-exported here. Product
+// callers must reach legacy main-renderer fallback behavior through
+// renderHostPort/exportRenderHostPort only.
 
 // Core types and context
 export * from './core';

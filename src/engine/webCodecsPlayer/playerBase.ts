@@ -25,6 +25,7 @@ export abstract class WebCodecsPlayerBase implements ExportModePlayer {
   protected videoTrack: MP4VideoTrack | null = null;
   protected codecConfig: VideoDecoderConfig | null = null;
   protected currentFrameTimestampUs: number | null = null;
+  protected presentationOffsetUs = 0;
 
   // Frame buffer: decoder outputs go here, display picks from here
   protected frameBuffer: VideoFrame[] = [];
@@ -37,9 +38,11 @@ export abstract class WebCodecsPlayerBase implements ExportModePlayer {
   public height = 0;
   public ready = false;
 
+  protected onDecodedFrame?: (frame: VideoFrame) => void;
   protected onFrame?: (frame: VideoFrame) => void;
   protected onReady?: (width: number, height: number) => void;
   protected onError?: (error: Error) => void;
+  protected hardwareAcceleration?: VideoDecoderConfig['hardwareAcceleration'];
 
   // Export mode (delegated to WebCodecsExportMode)
   protected exportMode: WebCodecsExportMode;
@@ -59,6 +62,8 @@ export abstract class WebCodecsPlayerBase implements ExportModePlayer {
   protected pendingSeekFeedEndIndex: number | null = null;
   protected pausedPrerollEndIndex: number | null = null;
   protected trackedDecodeQueueSize = 0;
+  protected decodeErrorCount = 0;
+  protected lastDecodeError: string | null = null;
   protected pendingSeekStartedAtMs: number | null = null;
   protected pendingSeekKind: 'seek' | 'advance' | null = null;
   protected pendingSeekTargetDebugUs: number | null = null;
@@ -69,6 +74,14 @@ export abstract class WebCodecsPlayerBase implements ExportModePlayer {
   protected lastInteractivePreviewPublishAtMs = Number.NEGATIVE_INFINITY;
   protected playbackStartupWarmupStartedAtMs: number | null = null;
   protected lastRAFTime = 0;
+  protected lastSeekPlanDebug: {
+    targetIndex: number;
+    keyframeIndex: number;
+    feedEndIndex: number;
+    targetTimeSeconds: number;
+    targetSampleTimeSeconds: number | null;
+    keyframeTimeSeconds: number | null;
+  } | null = null;
 
   protected abstract initDecoder(): void;
   public abstract loadArrayBuffer(buffer: ArrayBuffer): Promise<void>;
@@ -81,9 +94,11 @@ export abstract class WebCodecsPlayerBase implements ExportModePlayer {
   constructor(options: WebCodecsPlayerOptions = {}) {
     this.exportMode = new WebCodecsExportMode(this);
     this.loop = options.loop ?? true;
+    this.onDecodedFrame = options.onDecodedFrame;
     this.onFrame = options.onFrame;
     this.onReady = options.onReady;
     this.onError = options.onError;
+    this.hardwareAcceleration = options.hardwareAcceleration;
     this.useSimpleMode = options.useSimpleMode ?? false;
     this.simpleSource = new HtmlVideoFrameSource({
       closeCurrentFrame: () => {
@@ -113,6 +128,33 @@ export abstract class WebCodecsPlayerBase implements ExportModePlayer {
         this.ready = ready;
       },
     });
+  }
+
+  protected recordDecodeError(error: unknown, context: string): void {
+    this.decodeErrorCount += 1;
+    const message = error instanceof Error ? error.message : String(error);
+    this.lastDecodeError = `${context}: ${message}`;
+  }
+
+  protected refreshPresentationOffset(): void {
+    let firstPresentationUs = Number.POSITIVE_INFINITY;
+    for (const sample of this.samples) {
+      if (!Number.isFinite(sample.cts) || !Number.isFinite(sample.timescale) || sample.timescale <= 0) {
+        continue;
+      }
+      firstPresentationUs = Math.min(firstPresentationUs, (sample.cts * 1_000_000) / sample.timescale);
+    }
+    this.presentationOffsetUs = Number.isFinite(firstPresentationUs) ? firstPresentationUs : 0;
+  }
+
+  protected getSamplePresentationTimestampUs(sample: Sample): number {
+    return Math.max(0, (sample.cts * 1_000_000) / sample.timescale - this.presentationOffsetUs);
+  }
+
+  protected getTargetCtsForTimeSeconds(timeSeconds: number): number {
+    if (!this.videoTrack) return timeSeconds;
+    const offsetSeconds = this.presentationOffsetUs / 1_000_000;
+    return (timeSeconds + offsetSeconds) * this.videoTrack.timescale;
   }
 
   // ExportModePlayer interface implementation
@@ -156,7 +198,7 @@ export abstract class WebCodecsPlayerBase implements ExportModePlayer {
     }
     if (this.pendingAdvanceSeekTargetIdx !== null && this.samples.length > 0) {
       const sample = this.samples[Math.min(this.pendingAdvanceSeekTargetIdx, this.samples.length - 1)];
-      return sample.cts / sample.timescale;
+      return this.getSamplePresentationTimestampUs(sample) / 1_000_000;
     }
     return null;
   }

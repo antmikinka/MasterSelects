@@ -48,6 +48,39 @@ describe('FrameContext clipsAtTime', () => {
     playheadState.isUsingInternalPosition = false;
     playheadState.position = 0;
     hoisted.timelineState = createTimelineState();
+    hoisted.mediaState = {
+      files: [],
+      compositions: [],
+      activeCompositionId: null,
+      proxyEnabled: false,
+    };
+  });
+
+  it('derives frameNumber from the active composition frame rate', () => {
+    hoisted.mediaState = {
+      files: [],
+      compositions: [{
+        id: 'comp-60',
+        name: 'Comp 60',
+        type: 'composition',
+        width: 1920,
+        height: 1080,
+        duration: 30,
+        frameRate: 60,
+        backgroundColor: '#000000',
+      }],
+      activeCompositionId: 'comp-60',
+      proxyEnabled: false,
+    };
+
+    hoisted.timelineState = createTimelineState({ playheadPosition: 1 });
+    const frameAtOneSecond = createFrameContext().frameNumber;
+
+    hoisted.timelineState = createTimelineState({ playheadPosition: 1 + 1 / 60 });
+    const frameAtNextSixtyFpsStep = createFrameContext().frameNumber;
+
+    expect(frameAtOneSecond).toBe(60);
+    expect(frameAtNextSixtyFpsStep).toBe(61);
   });
 
   it('prefers the incoming clip at an exact cut boundary', () => {

@@ -15,6 +15,11 @@ export const previewToolDefinitions: ToolDefinition[] = [
             type: 'number',
             description: 'Time in seconds to capture (optional, uses current playhead if not specified)',
           },
+          mode: {
+            type: 'string',
+            enum: ['auto', 'gpu', 'dom'],
+            description: 'Capture mode. auto tries GPU readback first and falls back to the visible preview canvas (default: auto).',
+          },
         },
         required: [],
       },
@@ -35,6 +40,11 @@ export const previewToolDefinitions: ToolDefinition[] = [
           frameSpacing: {
             type: 'number',
             description: 'Seconds between each frame (default: 0.1 = 100ms). Smaller = closer to cut point.',
+          },
+          mode: {
+            type: 'string',
+            enum: ['auto', 'gpu', 'dom'],
+            description: 'Capture mode. auto tries GPU readback first and falls back to the visible preview canvas (default: auto).',
           },
         },
         required: ['cutTime'],
@@ -64,8 +74,8 @@ export const previewToolDefinitions: ToolDefinition[] = [
           },
           mode: {
             type: 'string',
-            enum: ['gpu', 'dom'],
-            description: 'Capture from GPU readback or from the visible DOM preview canvas (default: gpu)',
+            enum: ['auto', 'gpu', 'dom'],
+            description: 'Capture mode. auto tries GPU readback first and falls back to the visible preview canvas (default: auto).',
           },
         },
         required: ['times'],

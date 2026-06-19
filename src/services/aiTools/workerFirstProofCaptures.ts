@@ -187,7 +187,7 @@ export function captureWorkerFirstVisiblePresentationProof(
 ): WorkerVisiblePresentationProof {
   const proof: WorkerVisiblePresentationProof = {
     platform: input.platform,
-    strategy: input.strategy ?? input.capabilityProbe?.selectedStrategy ?? 'main-host-dev',
+    strategy: input.strategy ?? input.capabilityProbe?.selectedStrategy ?? 'main-host-fallback',
     proof: captureDomVisibleCanvasProof(input.canvas, input.proofOptions),
     capabilityProbe: input.capabilityProbe ?? null,
     stress: input.stress ?? null,

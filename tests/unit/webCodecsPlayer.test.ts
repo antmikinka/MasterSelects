@@ -28,11 +28,16 @@ type WebCodecsPlayerTestAccess = WebCodecsPlayer & {
   pendingSeekKind: 'seek' | 'advance' | null;
   pendingSeekStartedAtMs: number | null;
   pendingSeekTargetDebugUs: number | null;
+  pendingSeekPreviewMode: 'strict' | 'interactive' | 'interactive-preroll';
+  seekTargetUs: number | null;
+  seekTargetToleranceUs: number;
   trackedDecodeQueueSize: number;
   ctsSortedSampleCount: number;
   ctsSorted: Array<{ idx: number; cts: number }>;
   _isPlaying: boolean;
   onFrame?: (frame: TestVideoFrame) => void;
+  handleDecodedFrame: (frame: TestVideoFrame) => void;
+  promoteBufferedFrameNearTime: (timeSeconds: number, maxFrameDelta?: number) => TestVideoFrame | null;
 };
 
 class MockEncodedVideoChunk {
@@ -208,6 +213,196 @@ describe('WebCodecsPlayer advance playback', () => {
     expect(onFrame).toHaveBeenCalledWith(recoveredFrame);
   });
 
+  it('clears a stale advance target once decode coverage reaches the current stream target', async () => {
+    const { player, decoder } = await makePlayerHarness();
+    const staleFrame = { timestamp: 10_933_333, close: vi.fn() };
+    const recoveredFrame = { timestamp: 11_200_000, close: vi.fn() };
+    const onFrame = vi.fn();
+
+    player.samples = makeSamples(800);
+    player.onFrame = onFrame;
+    player.currentFrame = staleFrame;
+    player.currentFrameTimestampUs = 10_933_333;
+    player._isPlaying = true;
+    player.sampleIndex = 336;
+    player.feedIndex = 346;
+    player.frameBuffer = [recoveredFrame];
+    player.pendingAdvanceSeekTargetIdx = 329;
+    player.pendingSeekKind = 'advance';
+    player.pendingSeekStartedAtMs = performance.now() - 500;
+    player.pendingSeekTargetDebugUs = 10_966_667;
+    player.trackedDecodeQueueSize = 0;
+    decoder.decodeQueueSize = 0;
+
+    player.advanceToTime(11.2);
+
+    expect(player.pendingAdvanceSeekTargetIdx).toBeNull();
+    expect(player.pendingSeekKind).toBeNull();
+    expect(player.currentFrame).toBe(recoveredFrame);
+    expect(onFrame).toHaveBeenCalledWith(recoveredFrame);
+  });
+
+  it('continues feeding a pending worker stream startup without another advance seek', async () => {
+    const { player, decoder } = await makePlayerHarness();
+
+    player.pendingAdvanceSeekTargetIdx = 60;
+    player.pendingSeekKind = 'advance';
+    player.pendingSeekStartedAtMs = performance.now();
+    player.pendingSeekTargetDebugUs = 2_000_000;
+    player.feedIndex = 24;
+    player.trackedDecodeQueueSize = 0;
+    decoder.decodeQueueSize = 0;
+
+    player.pumpWorkerStreamPlayback();
+
+    expect(decoder.reset).not.toHaveBeenCalled();
+    expect(decoder.decode).toHaveBeenCalledTimes(24);
+    expect(player.feedIndex).toBe(48);
+  });
+
+  it('takes the next worker stream frame from the queue without calling advanceToTime', async () => {
+    const { player, decoder } = await makePlayerHarness();
+    const currentFrame = { timestamp: 2_000_000, close: vi.fn() };
+    const queuedFrame = { timestamp: 2_033_333, close: vi.fn() };
+    const onFrame = vi.fn();
+
+    player.onFrame = onFrame;
+    player._isPlaying = true;
+    player.sampleIndex = 60;
+    player.feedIndex = 70;
+    player.currentFrame = currentFrame;
+    player.currentFrameTimestampUs = currentFrame.timestamp;
+    player.frameBuffer = [queuedFrame];
+    player.trackedDecodeQueueSize = 0;
+    decoder.decodeQueueSize = 0;
+
+    const frame = player.takeWorkerStreamPlaybackFrame(2 + 1 / 30, 2);
+
+    expect(decoder.reset).not.toHaveBeenCalled();
+    expect(frame).toBe(queuedFrame);
+    expect(player.currentFrame).toBe(queuedFrame);
+    expect(currentFrame.close).toHaveBeenCalledTimes(1);
+    expect(onFrame).toHaveBeenCalledWith(queuedFrame);
+  });
+
+  it('holds a future 30fps worker stream frame until a 60fps target reaches its timestamp', async () => {
+    const { player, decoder } = await makePlayerHarness();
+    const currentFrame = { timestamp: 2_000_000, close: vi.fn() };
+    const futureThirtyFpsFrame = { timestamp: 2_033_333, close: vi.fn() };
+
+    player.onFrame = vi.fn();
+    player._isPlaying = true;
+    player.sampleIndex = 60;
+    player.feedIndex = 70;
+    player.currentFrame = currentFrame;
+    player.currentFrameTimestampUs = currentFrame.timestamp;
+    player.frameBuffer = [futureThirtyFpsFrame];
+    player.trackedDecodeQueueSize = 0;
+    decoder.decodeQueueSize = 0;
+
+    const heldFrame = player.takeWorkerStreamPlaybackFrame(2 + 1 / 60, 2);
+
+    expect(decoder.reset).not.toHaveBeenCalled();
+    expect(heldFrame).toBeNull();
+    expect(player.currentFrame).toBe(currentFrame);
+    expect(futureThirtyFpsFrame.close).not.toHaveBeenCalled();
+    expect(player.onFrame).not.toHaveBeenCalled();
+
+    const advancedFrame = player.takeWorkerStreamPlaybackFrame(2 + 1 / 30, 2);
+
+    expect(advancedFrame).toBe(futureThirtyFpsFrame);
+    expect(player.currentFrame).toBe(futureThirtyFpsFrame);
+    expect(currentFrame.close).toHaveBeenCalledTimes(1);
+    expect(player.onFrame).toHaveBeenCalledWith(futureThirtyFpsFrame);
+  });
+
+  it('unsticks a stale worker stream startup target by presenting the latest queued frame not ahead of target', async () => {
+    const { player, decoder } = await makePlayerHarness();
+    const currentFrame = { timestamp: 2_000_000, close: vi.fn() };
+    const olderQueuedFrame = { timestamp: 2_300_000, close: vi.fn() };
+    const newestQueuedFrame = { timestamp: 2_500_000, close: vi.fn() };
+
+    player._isPlaying = true;
+    player.sampleIndex = 60;
+    player.feedIndex = 90;
+    player.currentFrame = currentFrame;
+    player.currentFrameTimestampUs = currentFrame.timestamp;
+    player.frameBuffer = [olderQueuedFrame, newestQueuedFrame];
+    player.pendingAdvanceSeekTargetIdx = 60;
+    player.pendingSeekKind = 'advance';
+    player.pendingSeekStartedAtMs = performance.now();
+    player.pendingSeekTargetDebugUs = 2_000_000;
+    player.trackedDecodeQueueSize = 0;
+    decoder.decodeQueueSize = 0;
+
+    const frame = player.takeWorkerStreamPlaybackFrame(3, 2);
+
+    expect(frame).toBe(newestQueuedFrame);
+    expect(player.pendingAdvanceSeekTargetIdx).toBeNull();
+    expect(player.pendingSeekKind).toBeNull();
+    expect(olderQueuedFrame.close).toHaveBeenCalledTimes(1);
+    expect(newestQueuedFrame.close).not.toHaveBeenCalled();
+  });
+
+  it('starts a hot worker stream resume without resetting the decoder', async () => {
+    const { player, decoder } = await makePlayerHarness();
+    const currentFrame = { timestamp: 2_000_000, close: vi.fn() };
+    const queuedFrame = { timestamp: 2_033_333, close: vi.fn() };
+
+    player.sampleIndex = 60;
+    player.feedIndex = 61;
+    player.currentFrame = currentFrame;
+    player.currentFrameTimestampUs = currentFrame.timestamp;
+    player.frameBuffer = [queuedFrame];
+    player.trackedDecodeQueueSize = 0;
+    decoder.decodeQueueSize = 0;
+
+    player.startWorkerStreamPlayback(2);
+
+    expect(player._isPlaying).toBe(true);
+    expect(decoder.reset).not.toHaveBeenCalled();
+  });
+
+  it('replaces a pending paused seek when a worker stream force-rebases', async () => {
+    const { player } = await makePlayerHarness();
+    const currentFrame = { timestamp: 2_000_000, close: vi.fn() };
+
+    player.sampleIndex = 60;
+    player.feedIndex = 60;
+    player.currentFrame = currentFrame;
+    player.currentFrameTimestampUs = currentFrame.timestamp;
+    player.seekTargetUs = 2_000_000;
+    player.seekTargetToleranceUs = 1_000;
+    player.pendingSeekKind = 'seek';
+    player.pendingSeekStartedAtMs = performance.now();
+    player.pendingSeekTargetDebugUs = 2_000_000;
+    player.pendingSeekFeedEndIndex = 72;
+
+    player.startWorkerStreamPlayback(2, { forceRebase: true });
+
+    expect(player._isPlaying).toBe(true);
+    expect(player.pendingSeekKind).toBeNull();
+    expect(player.seekTargetUs).toBeNull();
+  });
+
+  it('clears a stale displayed frame when force-rebasing a still-marked-playing worker stream', async () => {
+    const { player } = await makePlayerHarness();
+    const staleFrame = { timestamp: 5_000_000, close: vi.fn() };
+
+    player._isPlaying = true;
+    player.sampleIndex = 150;
+    player.feedIndex = 160;
+    player.currentFrame = staleFrame;
+    player.currentFrameTimestampUs = staleFrame.timestamp;
+
+    player.startWorkerStreamPlayback(0, { forceRebase: true });
+
+    expect(staleFrame.close).toHaveBeenCalledTimes(1);
+    expect(player.currentFrame).toBeNull();
+    expect(player.currentFrameTimestampUs).toBeNull();
+    expect(player._isPlaying).toBe(true);
+  });
+
   it('restarts a timed-out advance seek with a fresh pending timer', async () => {
     const { player, decoder } = await makePlayerHarness();
     const staleStartedAt = performance.now() - 3_000;
@@ -257,6 +452,17 @@ describe('WebCodecsPlayer advance playback', () => {
     expect(player.pendingSeekFeedEndIndex).toBe(71);
   });
 
+  it('snaps paused seek resolution to the nearest sample timestamp', async () => {
+    const { player } = await makePlayerHarness();
+
+    player.seek(2.02);
+
+    const expectedTargetUs = (61 * 1_000_000) / 30;
+    expect(player.sampleIndex).toBe(61);
+    expect(player.seekTargetUs).toBeCloseTo(expectedTargetUs, 3);
+    expect(player.getPendingSeekTime()).toBeCloseTo(61 / 30, 6);
+  });
+
   it('reuses the paused seek pipeline for nearby forward scrubs', async () => {
     const { player, decoder } = await makePlayerHarness();
 
@@ -277,6 +483,58 @@ describe('WebCodecsPlayer advance playback', () => {
     expect(player.pendingSeekFeedEndIndex).toBeNull();
   });
 
+  it('promotes a buffered paused target frame instead of waiting for new decoder output', async () => {
+    const { player, decoder } = await makePlayerHarness();
+    const onFrame = vi.fn();
+    const currentFrame = { timestamp: 2_000_000, close: vi.fn() };
+    const targetFrame = { timestamp: 2_033_333, close: vi.fn() };
+    const laterFrame = { timestamp: 2_066_667, close: vi.fn() };
+
+    player.sampleIndex = 60;
+    player.feedIndex = 64;
+    player.currentFrame = currentFrame;
+    player.currentFrameTimestampUs = currentFrame.timestamp;
+    player.frameBuffer = [targetFrame, laterFrame];
+    player.trackedDecodeQueueSize = 0;
+    player.decoder.decodeQueueSize = 0;
+    player.onFrame = onFrame;
+
+    player.seek(2 + 1 / 30, { previewMode: 'interactive-preroll' });
+
+    expect(decoder.reset).not.toHaveBeenCalled();
+    expect(player.currentFrame).toBe(targetFrame);
+    expect(player.currentFrameTimestampUs).toBe(targetFrame.timestamp);
+    expect(player.frameBuffer).toContain(laterFrame);
+    expect(currentFrame.close).toHaveBeenCalledTimes(1);
+    expect(targetFrame.close).not.toHaveBeenCalled();
+    expect(laterFrame.close).not.toHaveBeenCalled();
+    expect(player.pendingSeekKind).toBeNull();
+    expect(onFrame).toHaveBeenCalledWith(targetFrame);
+  });
+
+  it('promotes buffered frames for paused worker seek reads', async () => {
+    const { player } = await makePlayerHarness();
+    const onFrame = vi.fn();
+    const currentFrame = { timestamp: 4_933_333, close: vi.fn() };
+    const nearFrame = { timestamp: 4_966_667, close: vi.fn() };
+    const targetFrame = { timestamp: 5_000_000, close: vi.fn() };
+
+    player.currentFrame = currentFrame;
+    player.currentFrameTimestampUs = currentFrame.timestamp;
+    player.frameBuffer = [nearFrame, targetFrame];
+    player.onFrame = onFrame;
+
+    const promoted = player.promoteBufferedFrameNearTime(5);
+
+    expect(promoted).toBe(targetFrame);
+    expect(player.currentFrame).toBe(targetFrame);
+    expect(player.currentFrameTimestampUs).toBe(5_000_000);
+    expect(currentFrame.close).toHaveBeenCalledTimes(1);
+    expect(nearFrame.close).toHaveBeenCalledTimes(1);
+    expect(targetFrame.close).not.toHaveBeenCalled();
+    expect(onFrame).toHaveBeenCalledWith(targetFrame);
+  });
+
   it('reuses the paused seek pipeline for larger interactive forward scrubs without resetting', async () => {
     const { player, decoder } = await makePlayerHarness();
 
@@ -294,6 +552,45 @@ describe('WebCodecsPlayer advance playback', () => {
     expect(player.sampleIndex).toBe(84);
     expect(player.feedIndex).toBe(85);
     expect(player.pendingSeekFeedEndIndex).toBeNull();
+  });
+
+  it('feeds reorder lookahead for interactive preroll seeks without strict flush', async () => {
+    const { player, decoder } = await makePlayerHarness();
+
+    player.seek(2, { previewMode: 'interactive-preroll' });
+
+    expect(decoder.reset).toHaveBeenCalledTimes(1);
+    expect(decoder.flush).not.toHaveBeenCalled();
+    expect(decoder.decode).toHaveBeenCalledTimes(24);
+    expect(player.sampleIndex).toBe(60);
+    expect(player.feedIndex).toBe(24);
+    expect(player.pendingSeekPreviewMode).toBe('interactive-preroll');
+    expect(player.pendingSeekFeedEndIndex).toBe(71);
+  });
+
+  it('resolves an interactive paused seek when its frames arrive after playback starts', async () => {
+    const { player } = await makePlayerHarness();
+    const onFrame = vi.fn();
+    const frame = { timestamp: 2_016_667, close: vi.fn() };
+
+    player._isPlaying = true;
+    player.currentFrame = { timestamp: 2_000_000, close: vi.fn() };
+    player.currentFrameTimestampUs = 2_000_000;
+    player.seekTargetUs = 2_020_000;
+    player.seekTargetToleranceUs = 2_000;
+    player.pendingSeekKind = 'seek';
+    player.pendingSeekStartedAtMs = performance.now();
+    player.pendingSeekTargetDebugUs = 2_020_000;
+    player.pendingSeekPreviewMode = 'interactive-preroll';
+    player.onFrame = onFrame;
+
+    player.handleDecodedFrame(frame);
+
+    expect(player.currentFrame).toBe(frame);
+    expect(player.seekTargetUs).toBeNull();
+    expect(player.pendingSeekKind).toBeNull();
+    expect(player.frameBuffer).toHaveLength(0);
+    expect(onFrame).toHaveBeenCalledWith(frame);
   });
 
   it('extends an in-flight paused seek forward without resetting the decoder', async () => {
@@ -317,6 +614,82 @@ describe('WebCodecsPlayer advance playback', () => {
     expect(player.sampleIndex).toBe(96);
     expect(player.feedIndex).toBe(108);
     expect(player.pendingSeekFeedEndIndex).toBeNull();
+  });
+
+  it('resets an in-flight paused seek instead of extending when the decode queue is full', async () => {
+    const { player, decoder } = await makePlayerHarness();
+
+    player.sampleIndex = 90;
+    player.feedIndex = 84;
+    player.currentFrame = { timestamp: 2_000_000, close: vi.fn() };
+    player.currentFrameTimestampUs = 2_000_000;
+    player.seekTargetUs = 3_000_000;
+    player.pendingSeekKind = 'seek';
+    player.pendingSeekFeedEndIndex = 90;
+    player.pendingSeekPreviewMode = 'interactive-preroll';
+    player.trackedDecodeQueueSize = 24;
+    decoder.decodeQueueSize = 24;
+
+    player.seek(3.2, { previewMode: 'interactive-preroll' });
+
+    expect(decoder.reset).toHaveBeenCalledTimes(1);
+    expect(decoder.configure).toHaveBeenCalledTimes(1);
+    expect(decoder.decode).toHaveBeenCalledTimes(24);
+    expect(player.sampleIndex).toBe(96);
+    expect(player.feedIndex).toBe(24);
+    expect(player.pendingSeekFeedEndIndex).toBe(107);
+  });
+
+  it('resolves a paused seek immediately when the displayed frame already matches the target', async () => {
+    const { player, decoder } = await makePlayerHarness();
+    const currentFrame = { timestamp: 3_000_000, close: vi.fn() };
+    const onFrame = vi.fn();
+
+    player.sampleIndex = 90;
+    player.feedIndex = 84;
+    player.currentFrame = currentFrame;
+    player.currentFrameTimestampUs = 3_000_000;
+    player.seekTargetUs = 2_800_000;
+    player.pendingSeekKind = 'seek';
+    player.pendingSeekStartedAtMs = performance.now();
+    player.pendingSeekTargetDebugUs = 2_800_000;
+    player.pendingSeekFeedEndIndex = 90;
+    player.pendingSeekPreviewMode = 'interactive-preroll';
+    player.trackedDecodeQueueSize = 24;
+    decoder.decodeQueueSize = 24;
+    player.onFrame = onFrame;
+
+    player.seek(3, { previewMode: 'interactive-preroll' });
+
+    expect(player.pendingSeekKind).toBeNull();
+    expect(player.pendingSeekFeedEndIndex).toBeNull();
+    expect(player.getPendingSeekTime()).toBe(3);
+    expect(decoder.reset).toHaveBeenCalledTimes(1);
+    expect(decoder.configure).toHaveBeenCalledTimes(1);
+    expect(decoder.decode).toHaveBeenCalledTimes(5);
+    expect(player.trackedDecodeQueueSize).toBe(5);
+    expect(player.currentFrame).toBe(currentFrame);
+    expect(currentFrame.close).not.toHaveBeenCalled();
+    expect(onFrame).toHaveBeenCalledWith(currentFrame);
+  });
+
+  it('does not resolve a one-frame paused seek from the previous displayed frame', async () => {
+    const { player, decoder } = await makePlayerHarness();
+    const currentFrame = { timestamp: 3_000_000, close: vi.fn() };
+
+    player.sampleIndex = 90;
+    player.feedIndex = 91;
+    player.currentFrame = currentFrame;
+    player.currentFrameTimestampUs = 3_000_000;
+    player.trackedDecodeQueueSize = 0;
+    decoder.decodeQueueSize = 0;
+
+    player.seek(3 + 1 / 30, { previewMode: 'interactive-preroll' });
+
+    expect(player.pendingSeekKind).toBe('seek');
+    expect(player.currentFrame).toBe(currentFrame);
+    expect(decoder.reset).not.toHaveBeenCalled();
+    expect(decoder.decode).toHaveBeenCalled();
   });
 
   it('extends an in-flight interactive scrub seek further forward without resetting the decoder', async () => {
@@ -721,6 +1094,17 @@ describe('WebCodecsPlayer advance playback', () => {
     expect(player.seekTargetUs).toBe(2_966_667);
     expect(player.pendingSeekKind).toBeNull();
     expect(onFrame).toHaveBeenCalledWith(fallbackFrame);
+  });
+
+  it('flushes seekAsync only after the target GOP has been decoded', async () => {
+    const { player, decoder } = await makePlayerHarness();
+
+    await player.seekAsync(3);
+
+    expect(decoder.decode).toHaveBeenCalledTimes(91);
+    expect(decoder.flush).toHaveBeenCalledTimes(1);
+    expect(player.sampleIndex).toBe(90);
+    expect(player.feedIndex).toBe(91);
   });
 
   it('does not flush every interactive scrub seek during drag updates', async () => {

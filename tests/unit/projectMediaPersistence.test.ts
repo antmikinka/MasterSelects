@@ -358,7 +358,7 @@ describe('project media persistence', () => {
     expect(mocks.youtubeState.getState).not.toHaveBeenCalled();
   });
 
-  it('restores existing WAV audio proxies from disk even when the project manifest was not resaved yet', async () => {
+  it('does not block project load on legacy WAV audio proxy disk checks', async () => {
     const sourceFile = new File(['clip'], 'clip.mp4', { type: 'video/mp4' });
     mocks.getFileFromRaw.mockResolvedValue({ file: sourceFile });
     mocks.hasProxyAudio.mockImplementation(async (storageKey: string) => storageKey === 'hash-clip-1');
@@ -392,16 +392,13 @@ describe('project media persistence', () => {
     const { loadProjectToStores } = await import('../../src/services/project/projectLoad');
     await loadProjectToStores();
 
-    for (let attempt = 0; attempt < 10 && mocks.mediaState.files[0]?.audioProxyStatus !== 'ready'; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-
-    expect(mocks.hasProxyAudio).toHaveBeenCalledWith('hash-clip-1');
+    expect(mocks.hasProxyAudio).not.toHaveBeenCalled();
     expect(mocks.mediaState.files[0]).toEqual(expect.objectContaining({
       id: 'media-1',
-      hasProxyAudio: true,
-      audioProxyStatus: 'ready',
-      audioProxyProgress: 100,
+      file: sourceFile,
+      hasProxyAudio: false,
+      audioProxyStatus: 'none',
+      audioProxyProgress: 0,
       audioProxyStorageKey: 'hash-clip-1',
     }));
   }, 10_000);
@@ -1461,6 +1458,59 @@ describe('project media persistence', () => {
         }),
       ],
     }));
+  });
+
+  it('returns late primary IndexedDB file-handle restores in the loaded media store', async () => {
+    const restoredFile = new File(['restored-bytes'], 'restored.mp4', { type: 'video/mp4' });
+    const restoredHandle = {
+      name: 'restored.mp4',
+      kind: 'file',
+      getFile: vi.fn(async () => restoredFile),
+      queryPermission: vi.fn(async () => 'granted'),
+    } as unknown as FileSystemFileHandle;
+
+    mocks.getProjectData.mockReturnValue({
+      media: [{
+        id: 'media-handle',
+        name: 'restored.mp4',
+        type: 'video',
+        sourcePath: 'D:/captures/restored.mp4',
+        duration: 12,
+        width: 1920,
+        height: 1080,
+        frameRate: 30,
+        hasProxy: false,
+        folderId: null,
+        importedAt: new Date(1).toISOString(),
+      }],
+      compositions: [],
+      folders: [],
+      settings: { width: 1920, height: 1080, frameRate: 30 },
+      activeCompositionId: null,
+      openCompositionIds: [],
+      expandedFolderIds: [],
+      slotAssignments: {},
+      uiState: {},
+    });
+    mocks.getStoredHandle.mockImplementation(async (key: string) => (
+      key === 'media_media-handle' ? restoredHandle : null
+    ));
+
+    const { loadProjectToStores } = await import('../../src/services/project/projectLoad');
+    await loadProjectToStores();
+
+    expect(restoredHandle.getFile).toHaveBeenCalledTimes(1);
+    expect(mocks.mediaSetState).toHaveBeenCalledWith(expect.objectContaining({
+      files: [
+        expect.objectContaining({
+          id: 'media-handle',
+          file: restoredFile,
+          url: 'blob:project-media',
+          hasFileHandle: true,
+        }),
+      ],
+    }));
+    expect(mocks.scanRawFolder).not.toHaveBeenCalled();
   });
 
   it('rebuilds post-relink nested video and audio clips as data-only sources', async () => {

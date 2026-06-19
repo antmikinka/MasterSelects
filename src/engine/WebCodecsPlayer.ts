@@ -137,7 +137,7 @@ export class WebCodecsPlayer extends WebCodecsPlayerExportLifecycle {
       const sample = this.samples[this.feedIndex];
       const chunk = new EncodedVideoChunk({
         type: sample.is_sync ? 'key' : 'delta',
-        timestamp: (sample.cts * 1_000_000) / sample.timescale,
+        timestamp: this.getSamplePresentationTimestampUs(sample),
         duration: (sample.duration * 1_000_000) / sample.timescale,
         data: sample.data,
       });
@@ -192,7 +192,7 @@ export class WebCodecsPlayer extends WebCodecsPlayerExportLifecycle {
       return;
     }
 
-    const targetCts = (this.currentFrameTimestampUs * this.videoTrack.timescale) / 1_000_000;
+    const targetCts = this.getTargetCtsForTimeSeconds(this.currentFrameTimestampUs / 1_000_000);
     const targetIdx = this.findSampleNearCts(targetCts);
     this.seekTargetUs = this.currentFrameTimestampUs;
     this.seekTargetToleranceUs = this.computeSeekToleranceUs(targetIdx);

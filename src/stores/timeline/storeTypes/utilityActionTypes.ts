@@ -33,6 +33,11 @@ export interface RamPreviewActions {
     end: number,
     options?: { centerTime?: number; label?: string },
   ) => Promise<boolean>;
+  startClipVideoBakeRenderRange: (
+    start: number,
+    end: number,
+    options?: { centerTime?: number; label?: string },
+  ) => Promise<boolean>;
   cancelRamPreview: () => void;
   clearRamPreview: () => void;
   addCachedFrame: (time: number) => void;

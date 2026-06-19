@@ -54,7 +54,7 @@ export async function runStillImageExport(
       preferZeroCopy: false,
     });
     attachRenderSession(input.renderSessionRef, renderSession);
-    renderSession.begin();
+    await renderSession.begin();
 
     const layers = await frameRenderer.buildLayersAtTime(input.exportTime);
     let pixels: Uint8ClampedArray;

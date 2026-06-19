@@ -63,13 +63,13 @@ describe('render capability strategy selection', () => {
     })).strategy).toBe('worker-cpu-present');
   });
 
-  it('keeps the temporary main host path when transfer and presentation facts are missing', () => {
+  it('keeps the legacy main host fallback when transfer and presentation facts are missing', () => {
     expect(selectRenderPresentationStrategy(facts({
       workerNavigatorGpu: true,
       workerWebGpuDevice: false,
       offscreenCanvasTransfer: false,
       imageBitmapTransfer: false,
-    })).strategy).toBe('main-host-dev');
+    })).strategy).toBe('main-host-fallback');
   });
 
   it('does not consume a main-thread GPU device while probing capabilities', async () => {

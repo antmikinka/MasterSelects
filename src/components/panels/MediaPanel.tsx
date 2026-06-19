@@ -646,6 +646,7 @@ export function MediaPanel() {
           onStartRename: startRename,
           onMoveToFolder: mediaContextLocalHandlers.onMoveToFolder,
           onOpenCompositionSettings: openCompositionSettings,
+          onOpenImageCrop: mediaContextLocalHandlers.onOpenImageCrop,
           onOpenSolidSettings: mediaContextLocalHandlers.onOpenSolidSettings,
           onCancelProxyGeneration: cancelProxyGeneration,
           onGenerateProxy: generateProxy,

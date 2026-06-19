@@ -94,6 +94,20 @@ export class VideoSyncHtmlClipCoordinator {
     const timeInfo = getClipTimeInfo(ctx, clip);
     const isInteractivePreview = ctx.isDraggingPlayhead || ctx.hasClipDragPreview;
     const mediaFile = getMediaFileForClip(ctx, clip);
+    const suppressLiveHtmlVideoPlayback =
+      ctx.isPlaying && renderHostPort.getTelemetry().mode === 'worker-gpu-only';
+
+    if (suppressLiveHtmlVideoPlayback) {
+      if (!video.paused) {
+        video.pause();
+        vfPipelineMonitor.record('vf_pause', { clipId: clip.id, workerGpuOnly: 'true' });
+      }
+      if (clipVideoElement !== video && !clipVideoElement.paused) {
+        clipVideoElement.pause();
+      }
+      this.deps.clipWasPlaying.delete(clip.id);
+      return;
+    }
 
     const useProxy = ctx.proxyEnabled && mediaFile?.proxyFps &&
       !ctx.isPlaying &&
@@ -144,7 +158,7 @@ export class VideoSyncHtmlClipCoordinator {
 
     const timeDiff = Math.abs(video.currentTime - timeInfo.clipTime);
 
-    if (!video.seeking && video.readyState >= 2) {
+    if (!ctx.isPlaying && !isInteractivePreview && !video.seeking && video.readyState >= 2) {
       renderHostPort.ensureVideoFrameCached(video, clip.id);
     }
 
@@ -154,7 +168,9 @@ export class VideoSyncHtmlClipCoordinator {
 
     const isReversePlayback = clip.reversed || ctx.playbackSpeed < 0 || timeInfo.speed < 0;
     const clipAbsSpeed = timeInfo.absSpeed;
-    const needsClipSpeedAdjust = clipAbsSpeed > 0.01 && Math.abs(clipAbsSpeed - 1) > 0.01;
+    const timelineAbsSpeed = ctx.isPlaying ? Math.max(0.01, Math.abs(ctx.playbackSpeed || 1)) : 1;
+    const effectiveAbsSpeed = clipAbsSpeed * timelineAbsSpeed;
+    const needsClipSpeedAdjust = effectiveAbsSpeed > 0.01 && Math.abs(effectiveAbsSpeed - 1) > 0.01;
     const hasSpeedKeyframes = ctx.hasKeyframes(clip.id, 'speed');
 
     if (clip.transitionSourceHold === true) {
@@ -183,21 +199,6 @@ export class VideoSyncHtmlClipCoordinator {
       return;
     }
 
-    if (ctx.playbackSpeed !== 1) {
-      syncReverseOrNonstandardPlayback({
-        clip,
-        ctx,
-        video,
-        clipTime: timeInfo.clipTime,
-        timeDiff,
-        isInteractivePreview,
-        seekThreshold: isInteractivePreview ? 0.04 : 0.03,
-        clearPlayingState: true,
-        deps: this.deps,
-      });
-      return;
-    }
-
     this.syncNormalForwardPlayback({
       clip,
       ctx,
@@ -207,7 +208,7 @@ export class VideoSyncHtmlClipCoordinator {
       timeDiff,
       needsClipSpeedAdjust,
       hasSpeedKeyframes,
-      clipAbsSpeed,
+      clipAbsSpeed: effectiveAbsSpeed,
       isInteractivePreview,
       handoffVideo,
     });
@@ -384,7 +385,7 @@ export class VideoSyncHtmlClipCoordinator {
       }, { once: true });
     } else {
       const seekThreshold = isInteractivePreview
-        ? 0.04
+        ? 0.08
         : VideoSyncHtmlClipCoordinator.PAUSED_PRECISE_SEEK_THRESHOLD;
       if (timeDiff > seekThreshold) {
         this.deps.throttledSeek(clip.id, video, timeInfo.clipTime, ctx);
@@ -417,7 +418,11 @@ export class VideoSyncHtmlClipCoordinator {
         clipId: clip.id,
         readyState: video.readyState,
       });
-      this.deps.forceVideoFrameDecode(clip.id, video);
+      if (isInteractivePreview) {
+        this.deps.forceColdScrubFrame(clip.id, video);
+      } else {
+        this.deps.forceVideoFrameDecode(clip.id, video);
+      }
     }
     if (!isInteractivePreview) {
       this.deps.maybeRecoverScrubSettle(clip.id, video, timeInfo.clipTime);

@@ -1,12 +1,14 @@
-> Status: Extra follow-up plan for the Transition Suite. This is planning context,
-> not completed archive.
+> Status: Transition Suite follow-up log with deferred candidates. The current
+> shipped suite is implemented, but deliberately planned items such as Datamosh,
+> Smooth Cut/Flow, AI/neural transitions, Liquid Melt, and true panel/mesh
+> effects remain unimplemented.
 
 # Transition Suite EXTRA Plan
 
-**Issue:** Follow-up to #196, Transition Suite  
-**Branch:** `issue-196-transition-suite`  
-**Base:** first-pass Transition Suite in `docs/ongoing/Transition-suite-plan.md`  
-**Date:** 2026-06-15
+- **Issue:** Follow-up to #196, Transition Suite
+- **Original branch:** `issue-196-transition-suite` (merged and deleted)
+- **Base:** first-pass Transition Suite in `docs/completed/plans/Transition-suite-plan.md`
+- **Date:** 2026-06-15
 
 ---
 

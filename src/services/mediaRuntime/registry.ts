@@ -310,6 +310,11 @@ class BasicMediaSourceRuntime implements MediaSourceRuntime {
       }
     }
 
+    const providerFrameTime = session.frameProvider?.getDebugInfo?.()?.currentFrameTimestampSeconds;
+    if (typeof providerFrameTime === 'number' && Number.isFinite(providerFrameTime)) {
+      return providerFrameTime * 1_000_000;
+    }
+
     if (
       typeof session.currentFrameTimestamp === 'number' &&
       Number.isFinite(session.currentFrameTimestamp)

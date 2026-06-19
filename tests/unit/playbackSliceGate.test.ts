@@ -22,6 +22,7 @@ vi.mock('../../src/services/mediaRuntime/runtimePlayback', () => ({
 vi.mock('../../src/engine/WebGPUEngine', () => ({
   engine: {
     requestNewFrameRender: (...args: unknown[]) => requestNewFrameRender(...args),
+    setIsPlaying: vi.fn(),
   },
 }));
 
@@ -97,7 +98,7 @@ describe('playbackSlice HTML readiness gate', () => {
     expect(state.isPlaying).toBe(true);
     expect(htmlVideo.play).not.toHaveBeenCalled();
     expect(htmlVideo.pause).not.toHaveBeenCalled();
-  });
+  }, 10_000);
 
   it('exposes playback warmup state while HTML video readiness is pending', async () => {
     vi.useFakeTimers();

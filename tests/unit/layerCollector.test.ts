@@ -992,6 +992,85 @@ describe('LayerCollector', () => {
     expect(collector.getDecoder()).toBe('HTMLVideo');
   });
 
+  it('uses forced runtime frame preview when full WebCodecs playback is disabled', () => {
+    flags.useFullWebCodecsPlayback = false;
+
+    const video = {
+      src: 'blob:test-video',
+      currentTime: 1.25,
+      readyState: 4,
+      seeking: false,
+      paused: false,
+      videoWidth: 1920,
+      videoHeight: 1080,
+    } as unknown as HTMLVideoElement;
+
+    const runtimeProvider = {
+      currentTime: 1.25,
+      isFullMode: () => true,
+      isSimpleMode: () => false,
+      hasFrame: vi.fn(() => true),
+      getCurrentFrame: vi.fn(() => null),
+      getPendingSeekTime: vi.fn(() => null),
+      getDebugInfo: vi.fn(() => null),
+    };
+    const runtimeFrame = {
+      timestamp: 1_250_000,
+      displayWidth: 1920,
+      displayHeight: 1080,
+    };
+
+    hoisted.getRuntimeFrameProvider.mockReturnValue(runtimeProvider);
+    hoisted.readRuntimeFrameForSource.mockReturnValue({
+      frameHandle: {
+        frame: runtimeFrame,
+        timestamp: runtimeFrame.timestamp,
+      },
+      binding: {
+        session: {
+          currentTime: 1.25,
+        },
+      },
+    });
+
+    const textureManager = {
+      importVideoTexture: vi.fn(() => ({ label: 'runtime-frame-texture' })),
+    };
+
+    const collector = new LayerCollector();
+    const result = collector.collect([{
+      id: 'layer-forced-runtime',
+      name: 'Video',
+      visible: true,
+      opacity: 1,
+      blendMode: 'normal',
+      effects: [],
+      position: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1 },
+      rotation: 0,
+      source: {
+        type: 'video',
+        videoElement: video,
+        mediaTime: 1.25,
+        runtimeSourceId: 'media:test',
+        runtimeSessionKey: 'interactive:clip-test',
+        forceRuntimeFramePreview: true,
+      },
+    } as unknown as Layer], {
+      textureManager: textureManager as unknown as TextureManager,
+      scrubbingCache: null,
+      getLastVideoTime: () => undefined,
+      setLastVideoTime: () => {},
+      isExporting: false,
+      isPlaying: true,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(textureManager.importVideoTexture).toHaveBeenCalledWith(runtimeFrame);
+    expect(textureManager.importVideoTexture).not.toHaveBeenCalledWith(video);
+    expect(collector.getDecoder()).toBe('WebCodecs');
+  });
+
   it('falls back to live HTML video during playback when full WebCodecs has no frame', () => {
     const video = {
       src: 'blob:test-video',

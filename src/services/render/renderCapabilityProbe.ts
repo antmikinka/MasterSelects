@@ -1,8 +1,10 @@
+import { createBrowserWorkerRenderHostRuntimeBridge } from './workerRenderHostRuntimeBridge';
+
 export type RenderPresentationStrategy =
   | 'worker-webgpu-present'
   | 'worker-webgpu-main-present'
   | 'worker-cpu-present'
-  | 'main-host-dev';
+  | 'main-host-fallback';
 
 export interface RenderCapabilityFacts {
   readonly workerNavigatorGpu: boolean;
@@ -130,8 +132,8 @@ export function selectRenderPresentationStrategy(facts: RenderCapabilityFacts): 
   }
 
   return {
-    strategy: 'main-host-dev',
-    reason: 'worker renderer capabilities are incomplete; keep the temporary main host path during migration',
+    strategy: 'main-host-fallback',
+    reason: 'worker renderer capabilities are incomplete; use the isolated legacy main-host fallback',
   };
 }
 
@@ -286,7 +288,67 @@ async function canTransferImageBitmap(): Promise<boolean> {
   }
 }
 
+function timeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(null);
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
+}
+
+async function probeRuntimeWorkerCapabilities(timeoutMs: number): Promise<typeof WORKER_PROBE_FALLBACK | null> {
+  if (typeof Worker === 'undefined') {
+    return null;
+  }
+
+  let bridge: ReturnType<typeof createBrowserWorkerRenderHostRuntimeBridge> | null = null;
+  try {
+    bridge = createBrowserWorkerRenderHostRuntimeBridge();
+    const output = await timeout(
+      bridge.probeCapabilities('render-capability-probe'),
+      timeoutMs,
+    );
+    const capabilities = output?.capabilities;
+    if (!output?.accepted || !capabilities) {
+      return null;
+    }
+    return {
+      workerNavigatorGpu: capabilities.workerNavigatorGpu,
+      workerWebGpuDevice: capabilities.workerWebGpuDevice,
+      offscreenCanvasWebGpuContext: capabilities.offscreenCanvasWebGpuContext,
+      workerCanvasPresentation: false,
+      webCodecsWorker: capabilities.canDecodeVideoInWorker,
+    };
+  } catch {
+    return null;
+  } finally {
+    bridge?.dispose();
+  }
+}
+
 async function probeWorkerCapabilities(timeoutMs = 1000): Promise<typeof WORKER_PROBE_FALLBACK> {
+  const runtimeWorkerFacts = await probeRuntimeWorkerCapabilities(timeoutMs);
+  if (runtimeWorkerFacts) {
+    return runtimeWorkerFacts;
+  }
+
   if (
     typeof Worker === 'undefined' ||
     typeof Blob === 'undefined' ||

@@ -691,14 +691,17 @@ export function hydrateTimelineMediaWindow(ctx: FrameContext): void {
 
   const now = ctx.now;
   const desired = new Set<string>();
+  const hydrateVideo = renderHostPort.getTelemetry().mode !== 'worker-gpu-only';
   const videoStart = ctx.playheadPosition - VIDEO_LOOKBEHIND_SECONDS;
   const videoEnd = ctx.playheadPosition + (ctx.isPlaying ? VIDEO_LOOKAHEAD_SECONDS : 0.8);
   const audioStart = ctx.playheadPosition - AUDIO_LOOKBEHIND_SECONDS;
   const audioEnd = ctx.playheadPosition + (ctx.isPlaying ? AUDIO_LOOKAHEAD_SECONDS : 0.4);
 
-  for (const clip of collectDesiredClips(ctx, 'video', ctx.visibleVideoTrackIds, videoStart, videoEnd)) {
-    markDesired(desired, 'video', clip, now);
-    attachVideoElement(ctx, clip, now);
+  if (hydrateVideo) {
+    for (const clip of collectDesiredClips(ctx, 'video', ctx.visibleVideoTrackIds, videoStart, videoEnd)) {
+      markDesired(desired, 'video', clip, now);
+      attachVideoElement(ctx, clip, now);
+    }
   }
 
   for (const clip of collectDesiredClips(ctx, 'audio', ctx.unmutedAudioTrackIds, audioStart, audioEnd)) {

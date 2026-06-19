@@ -249,6 +249,10 @@ Edit via right-click -> Composition Settings:
 - Duration
 - Resizing adjusts clip transforms to maintain pixel positions
 
+The active composition's `frameRate` is the playback/timeline source of truth:
+timeline ruler labels, dynamic preview target FPS diagnostics, and the Media
+Panel FPS column read this value. Export-panel FPS overrides are export-only.
+
 ### Composition Operations
 ```typescript
 createComposition(name, settings?)   // Create with optional overrides
@@ -277,6 +281,7 @@ getOpenCompositions()                // List open tabs
 
 ### Source Monitor
 - Double-click a video or image file to open it in the source monitor
+- Image source monitor sessions include a `CROP` button. Applying a crop imports a new image beside the source, prefixed as `CROP <original name>`.
 - Sets `sourceMonitorFileId` in the store
 
 ---
@@ -368,6 +373,7 @@ Right-click on items or empty space for context options.
 - **Reference in AI Prompt** / **Unreference from AI Prompt** for selected image, video, and audio files
 - **Rename** (single selection only)
 - **Download** (single file selection, saves through the browser from the retained file/blob URL)
+- **Crop** (single image selection, opens the source monitor directly in crop mode)
 - **Move to Folder** submenu (shows available folders + "Root")
 - **Delete** (shows count for multi-selection)
 
@@ -543,6 +549,7 @@ On project load:
 - Existing transcripts and analysis data loaded from the project folder
 - Dead blob/object URLs are regenerated for available files
 - If a retained `File` object is still present, image/video thumbnails are rebuilt when needed after refresh
+- Project load is marked ready after relink and UI hydration; thumbnail, metadata, proxy, transcript, and analysis cache checks continue later in an idle window so preview playback after refresh is not blocked by media-panel cache work.
 - Folder structure, expansion state, dock layout, and per-composition view state restored
 
 ### Media File IDs

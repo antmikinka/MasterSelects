@@ -132,4 +132,41 @@ export const statsToolDefinitions: ToolDefinition[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'samplePlaybackFramePacing',
+      description: 'Measure high-resolution browser frame pacing during playback/debug runs. Samples requestAnimationFrame gaps, timeline store playhead deltas, live timeline playhead DOM motion, render-loop count changes, and long tasks.',
+      parameters: {
+        type: 'object',
+        properties: {
+          durationMs: { type: 'number', description: 'Sampling duration in milliseconds (default: 10000, min: 500, max: 30000)' },
+          startPlayback: { type: 'boolean', description: 'Start playback for the sample if it is not already playing. Defaults to false.' },
+          startTime: { type: 'number', description: 'Optional playhead time in seconds to seek to before sampling.' },
+          leavePlaying: { type: 'boolean', description: 'Keep playback running after sampling when this tool started it. Defaults to false.' },
+          includeSamples: { type: 'boolean', description: 'Include raw trailing frame samples in the result. Defaults to false.' },
+          sampleLimit: { type: 'number', description: 'Maximum trailing samples to include when includeSamples is true (default: 240, max: 2000).' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'setRenderHostMode',
+      description: 'Set the dev/test render host mode for worker-first playback validation. Use worker-presenting for the worker preview path, worker-only to disable the normal main-thread fallback, worker-gpu-only to force strict Worker WebGPU presentation, worker-shadow for shadow-only checks, main for the explicit legacy fallback, and default to clear the persisted override.',
+      parameters: {
+        type: 'object',
+        properties: {
+          mode: {
+            type: 'string',
+            enum: ['main', 'worker-shadow', 'worker-presenting', 'worker-only', 'worker-gpu-only', 'default'],
+            description: 'Render host mode to persist and apply immediately.',
+          },
+        },
+        required: ['mode'],
+      },
+    },
+  },
 ];

@@ -93,7 +93,7 @@ export async function runImageSequenceExport(
       preferZeroCopy: false,
     });
     attachRenderSession(input.renderSessionRef, renderSession);
-    renderSession.begin();
+    await renderSession.begin();
 
     for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
       if (frameRenderer.isCancelled()) {

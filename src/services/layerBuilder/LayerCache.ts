@@ -28,6 +28,7 @@ export class LayerCache {
   private lastTracksRef: TimelineTrack[] | null = null;
   private lastActiveCompId: string | null = null;
   private lastIsPlaying = false;
+  private lastPlaybackSpeed = 1;
   private lastProxyEnabled = false;
 
   // Stats for debugging
@@ -53,6 +54,7 @@ export class LayerCache {
     const frameChanged = ctx.frameNumber !== this.lastPlayheadFrame;
     const compChanged = ctx.activeCompId !== this.lastActiveCompId;
     const playingChanged = ctx.isPlaying !== this.lastIsPlaying;
+    const playbackSpeedChanged = ctx.playbackSpeed !== this.lastPlaybackSpeed;
     const proxyChanged = ctx.proxyEnabled !== this.lastProxyEnabled;
 
     const needsRebuild = !this.cacheValid ||
@@ -60,6 +62,7 @@ export class LayerCache {
       tracksChanged ||
       compChanged ||
       playingChanged ||
+      playbackSpeedChanged ||
       proxyChanged ||
       frameChanged;
 
@@ -80,6 +83,7 @@ export class LayerCache {
     this.lastTracksRef = ctx.tracks;
     this.lastActiveCompId = ctx.activeCompId;
     this.lastIsPlaying = ctx.isPlaying;
+    this.lastPlaybackSpeed = ctx.playbackSpeed;
     this.lastProxyEnabled = ctx.proxyEnabled;
 
     return { useCache: false, layers: [] };

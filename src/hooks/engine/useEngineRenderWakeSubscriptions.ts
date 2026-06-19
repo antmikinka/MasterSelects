@@ -20,7 +20,9 @@ export function useEngineRenderWakeSubscriptions(isEngineReady: boolean): void {
           playheadPosition,
           clipDragPreview: timelineState.clipDragPreview,
         });
-        renderHostPort.requestRender();
+        if (!timelineState.isPlaying || timelineState.isDraggingPlayhead) {
+          renderHostPort.requestRender();
+        }
         if (!hasVisualDemand && timelineState.isDraggingPlayhead) {
           layerBuilder.syncAudioElements();
         }

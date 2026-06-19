@@ -27,13 +27,23 @@ export class WebCodecsSampleTimeline {
     return sorted[lo].idx;
   }
 
-  /** Find nearest keyframe at or before the given sample index (DTS order) */
+  /** Find nearest keyframe at or before the target sample's presentation time. */
   findKeyframeBefore(sampleIndex: number): number {
     const samples = this.getSamples();
-    for (let i = Math.min(sampleIndex, samples.length - 1); i >= 0; i--) {
-      if (samples[i].is_sync) return i;
+    const target = samples[Math.min(sampleIndex, samples.length - 1)];
+    if (!target) return 0;
+
+    let bestIndex = -1;
+    let bestCts = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < samples.length; i += 1) {
+      const sample = samples[i];
+      if (!sample.is_sync || sample.cts > target.cts) continue;
+      if (sample.cts > bestCts) {
+        bestCts = sample.cts;
+        bestIndex = i;
+      }
     }
-    return 0;
+    return bestIndex >= 0 ? bestIndex : 0;
   }
 
   getSampleTimestampUs(index: number): number | null {

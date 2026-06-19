@@ -155,7 +155,16 @@ The pipeline creates one GPU render pipeline per registered effect and filters o
 Effects with `uniformSize` 0 use no uniform buffer.
 Most effects use a 16-byte-aligned uniform block; a few multi-parameter effects use larger blocks.
 
-Effects can opt into temporal feedback through `usesFeedback`. Feedback effects sample their own previous output frame on binding 3 and the pipeline maintains a per-effect-instance feedback texture. Acuarela and the frozen Rom1 snapshot use this path to build a watery smoke trail from animated fractal UV offsets. Voxel Relief uses the same binding to smooth a raymarched block-heightfield between video frames.
+Effects can opt into temporal feedback through `usesFeedback`. Feedback effects
+sample their own previous output frame on binding 3 and the pipeline maintains
+a per-effect-instance feedback texture. Acuarela and the frozen Rom1 snapshot
+use this path to build a watery smoke trail from animated fractal UV offsets.
+The worker software renderer mirrors standalone Acuarela/Rom1 feedback with a
+per-target/effect software feedback cache for preview and export readback;
+stacked feedback with other visual effects still waits for the worker
+multi-pass effect pipeline. Voxel Relief uses the same binding to smooth a
+raymarched block-heightfield between video frames and remains a complex
+raymarch/feedback effect.
 
 Voxel Relief raymarches a perspective camera pointed at the source plane. The source image is sampled as a grid of rectangular prisms, with luminance driving each prism height and dark gaps between cells instead of a second flat video layer behind the relief.
 

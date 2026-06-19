@@ -18,6 +18,8 @@ interface UseTimelinePlayheadDisplayReturn {
   showPlayhead: boolean;
 }
 
+const PLAYHEAD_CENTER_OFFSET_PX = -1;
+
 export function useTimelinePlayheadDisplay({
   playheadRef,
   isPlaying,
@@ -58,14 +60,16 @@ export function useTimelinePlayheadDisplay({
       playhead.classList.remove('playhead-live-transform');
       playhead.style.transform = '';
       playhead.style.willChange = '';
+      playhead.style.removeProperty('--timeline-switch-base-x');
       delete playhead.dataset.liveLeft;
+      delete playhead.dataset.liveBaseLeft;
       return;
     }
 
     let rafId = 0;
     playhead.classList.add('playhead-live-transform');
     playhead.style.transform = '';
-    playhead.style.willChange = 'left';
+    playhead.style.willChange = 'transform';
 
     const updateLivePlayhead = () => {
       const timelineState = useTimelineStore.getState();
@@ -83,7 +87,16 @@ export function useTimelinePlayheadDisplay({
         ? previousLeft
         : nextLeft;
       playhead.dataset.liveLeft = String(left);
-      playhead.style.left = `${left}px`;
+      const baseLeft = metrics.trackHeaderWidth;
+      const previousBaseLeft = Number.parseFloat(playhead.dataset.liveBaseLeft ?? '');
+      if (!Number.isFinite(previousBaseLeft) || Math.abs(previousBaseLeft - baseLeft) > 0.01) {
+        playhead.dataset.liveBaseLeft = String(baseLeft);
+        playhead.style.left = `${baseLeft}px`;
+      }
+      playhead.style.setProperty(
+        '--timeline-switch-base-x',
+        `${left - baseLeft + PLAYHEAD_CENTER_OFFSET_PX}px`
+      );
       rafId = requestAnimationFrame(updateLivePlayhead);
     };
 
@@ -92,9 +105,11 @@ export function useTimelinePlayheadDisplay({
     return () => {
       cancelAnimationFrame(rafId);
       delete playhead.dataset.liveLeft;
+      delete playhead.dataset.liveBaseLeft;
       playhead.classList.remove('playhead-live-transform');
       playhead.style.transform = '';
       playhead.style.willChange = '';
+      playhead.style.removeProperty('--timeline-switch-base-x');
     };
   }, [isPlaying, isDraggingPlayhead, playheadRef]);
 

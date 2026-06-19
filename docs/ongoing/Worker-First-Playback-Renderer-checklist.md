@@ -1,8 +1,8 @@
 # Worker-First Playback Renderer Checklist
 
-Status: DRAFT - active companion checklist for
+Status: active companion checklist for
 `Worker-First-Playback-Renderer.md`
-Updated: 2026-06-16
+Updated: 2026-06-18
 
 This checklist is the user-visible progress and gate surface for the worker-first
 playback renderer plan. The canonical architecture plan remains
@@ -24,6 +24,458 @@ playback renderer plan. The canonical architecture plan remains
 - [x] Gate matrix converted into exact test/static-check command names.
 - [x] First implementation packet assigned.
 - [x] Source implementation started.
+- [x] Local worker-presenting preview/playback path is testable on
+      Windows/Chromium with the preview canvas owned by the worker runtime.
+- [x] AI bridge `setRenderHostMode` can switch `main`, `worker-shadow`,
+      `worker-presenting`, `worker-only`, and `default` render host modes for
+      reproducible worker/main smoke tests without DevTools console setup.
+- [x] Strict `worker-only` mode blocks retained main RenderHost fallback for
+      preview/export testing while still allowing HTML-video snapshots as
+      worker input bitmaps. A live black-preview checkpoint that previously
+      reported `scrub-hold=1`, `presentableLayerCount=0`, and an increasing
+      `heldEmptySoftwareFrameCount` now reports `presentableLayerCount=1`,
+      `scrub-hold=0`, and `holdingLastSoftwareFrame=false` on the same
+      worker-only project.
+- [x] Plan scope sharpened: `worker-only` is the normal local/bridge
+      validation mode for worker-path debugging. It must expose unsupported
+      worker features through blocking diagnostics and zero fallback counters,
+      while `main`/`main-host-fallback` remains explicit rollback/comparison.
+- [x] Strict `worker-gpu-only` now has a visible worker-owned WebGPU surface
+      presentation proof. After reload plus the required 5s wait, Comp 2
+      played for 20s from playhead 0 with `mode=worker-gpu-only`,
+      `selectedStrategy=worker-webgpu-present`, `fallbackActive=false`,
+      `previewPathCounts.worker-gpu-only:gpu-test-pattern=295`,
+      `gpuOnlyTestPatternFrameCount=1164`, `presentationFailures=0`,
+      `lastSoftwareFrame=null`, and a 1920x1080 non-black capture at
+      `E:\MasterSelectsDebugTemp\masterselects-comp2-worker-gpu-only-gpu-pattern-attach-gated-capture.png`.
+      This proves the worker WebGPU target surface, not real video texture
+      playback yet.
+- [x] Clip video bake no longer calls the user-facing
+      `startRamPreviewForRange` action. It uses an explicit
+      `startClipVideoBakeRenderRange` action and does not publish
+      `ramPreviewRange`, while the shared RAM-preview cache renderer remains
+      tracked as worker-graph migration debt.
+- [x] RenderHost HMR persists the full main/worker host runtime bundle, so
+      dev-mode switches after HMR do not silently switch to freshly created
+      worker hosts without registered Preview targets.
+- [x] `worker-presenting` and `worker-only` now share the same worker-primary
+      host instance. Switching into strict `worker-only` no longer attempts a
+      second `transferControlToOffscreen()` on the already-owned Preview
+      canvas; only the fallback policy changes. Browser bridge verification
+      kept `targetIds=['preview']`, reported `mode=worker-only`,
+      `strictWorkerOnly=true`, and observed worker preview frames after the
+      switch.
+- [x] Worker-presenting live preview presents partial software frames when at
+      least one source layer is presentable. Unsupported sibling layers remain
+      visible in diagnostics, but they no longer force the whole preview into a
+      black hold frame.
+- [x] Worker software preview paints top timeline tracks last, matching the
+      main LayerCollector order. The live two-video checkpoint captured
+      Clip C/Clippy above the lower video instead of letting the lower layer
+      overpaint it.
+- [x] AI preview capture defaults to worker-aware `auto` mode, falling back
+      from GPU readback to the visible worker preview canvas for `captureFrame`
+      and frame-grid bridge diagnostics.
+- [x] Worker-presenting scrub suppresses empty software frames for non-empty
+      source layers and reports `heldEmptySoftwareFrameCount` telemetry.
+- [x] Worker-presenting scrub can present settled HTML-video snapshots while
+      dragging and drops stale async software packets instead of letting older
+      worker responses overwrite newer frames.
+- [x] Worker-presenting scrub retries transient video-readiness skips briefly
+      before holding the last worker frame.
+- [x] Worker-presenting preview caches successful HTML-video snapshots into a
+      worker-taggable hold source and lets empty `VideoFrame` placeholders fall
+      through to runtime, HTML, or cached snapshots before blocking.
+- [x] Worker-presenting scrub now uses a renderable transient HTML-video
+      snapshot after short retries, so a seeking/drifted but drawable video
+      frame prevents visible black/empty holds during fast scrubs.
+- [x] Worker-presenting scrub coalesces software presentation work per target:
+      while one video snapshot/build/present job is in flight, only the newest
+      pending scrub frame is kept. This prevents unbounded `createImageBitmap`
+      work from piling up behind fast playhead drags.
+- [x] Worker-presenting scrub caps live video snapshot resolution before
+      transfer to the worker. Active drag snapshots now use a 192px max edge,
+      and browsers without `createImageBitmap` resize-option support fall back
+      to a scaled canvas snapshot instead of transferring full-size bitmaps.
+      Nearby cached HTML-video snapshots are reused during active scrub before
+      requesting a fresh video bitmap, reducing duplicate `createImageBitmap`
+      work while the playhead is moving.
+      Normal preview/export paths keep their separate target/output sizing.
+- [x] Worker-presenting scrub reuses worker-resident retained bitmap snapshots
+      by `cached-bitmap` key for nearby active-scrub frames, avoiding repeated
+      bitmap transfer/creation after the first successful scrub snapshot.
+- [x] Worker-presenting scrub keeps a small per-video LRU of successful
+      HTML-video snapshots instead of only the latest frame, so back-and-forth
+      scrubs can reuse older nearby worker-resident `cached-bitmap` frames
+      instead of immediately falling back to fresh `createImageBitmap` work or
+      transient drawable frames.
+- [x] Worker-presenting scrub now mirrors seek-confirmed HTML-video frames from
+      `captureVideoFrameAtTime` into the worker software snapshot cache and
+      uses a 0.75s drag drift tolerance for live/cached scrub
+      snapshots, reducing black/empty holds during fast playhead drags.
+- [x] Worker-presenting FPS/drop accounting now uses the same 30 FPS scrub
+      cadence as the existing engine stats while dragging, resets the FPS
+      window when scrubbing starts/stops, and keeps normal playback on the
+      60 FPS target. This prevents healthy worker scrub runs from being
+      mislabeled as `HIGH_DROP_RATE`.
+- [x] Worker-presenting diagnostics now surface foreground/hidden-tab state and
+      flag `rafThrottledByHiddenDocument`, so browser background throttling does
+      not look like a worker renderer FPS collapse.
+- [x] Worker-presenting frame-presented outputs feed `getStats` and
+      `getPlaybackTrace` playback preview counters, including
+      `previewPathCounts.worker-presenting:*`, instead of leaving worker
+      preview activity invisible to W5 diagnostics. Play-session starts clear
+      only the presented-frame event history, so immediate pause/play cycles no
+      longer make the next run inherit the previous pause as a huge frame gap.
+- [x] Preview FPS diagnostics distinguish render cadence from active
+      composition visual cadence. The HUD and bridge expose a dynamic
+      `visualTargetFps` derived from the active composition frame rate, so a
+      30 FPS composition can correctly show `R 60` and healthy `Eff 30`
+      instead of treating composition-rate video updates as a 60 FPS failure.
+- [x] Bridge `addEffect`/`removeEffect` argument flow is live-verified; the
+      earlier `Clip not found: undefined` smoke failure came from a PowerShell
+      `$args` helper collision, not from the dev bridge or effect handler.
+- [x] Local Windows/Chromium worker-presenting runtime smoke passed with real
+      playback motion and worker-software export readback only:
+      latest rerun reported `movingFrames=45`, `stalledFrames=0`,
+      `workerReadbackFrameDelta=4`, `workerFallbackFrameDelta=0`, and no
+      export errors; W5 start permissions stayed false/guarded.
+- [x] Local WebCodecs video fixture passed worker-first export smoke:
+      `webCodecsReady=true`, capture failures `0`, `debugExport` blob
+      `87601` bytes, `workerReadbackFrameCount=10`, and
+      `workerFallbackFrameCount=0`.
+- [x] Local WebCodecs video fixture passed 1080p worker-first export smoke:
+      1920x1080 0.5s/30fps produced a 998,630 byte blob with worker readback
+      delta 15 and fallback 0; 1920x1080 1s/60fps produced a 2,067,573 byte
+      blob with worker readback delta 60 and fallback 0. Neither run reproduced
+      the earlier WebGPU device-lost export error.
+- [x] Local aggressive DOM playhead scrub on the WebCodecs fixture is healthy
+      in bridge automation: 177 drag frames, 563 worker-presenting preview
+      frames, about 56 FPS, no stale preview frames, and no preview freezes.
+- [x] Run-scoped `simulateScrub`/`simulatePlayback` diagnostics now include
+      worker-presenting preview events, and responsive worker-presenting scrub
+      frames prevent transient cold/seeking HTML-video state from incorrectly
+      marking the run as `bad`.
+- [x] Local Windows/Chromium bridge smoke against the
+      `html-provider-fallback` video fixture now passes worker-presenting
+      scrub with `status=ok`, `previewPathCounts.worker-presenting > 0`,
+      zero stale frames, zero preview freezes, and zero health anomalies.
+      Latest focused 3.2s custom scrub: 222 worker-presenting preview frames,
+      68.3 preview FPS, p95 preview gap 26.3ms, max gap 37.7ms, zero stale
+      frames/freezes/health anomalies, and zero last-second drops.
+- [x] Latest non-invasive Windows/Chromium W5 visible-presentation sanity kept
+      the current project/timeline intact: the capability probe resolved
+      `windows-chromium` with `worker-cpu-present` on AMD ANGLE D3D11, and a
+      3.36s foreground visible stress proof observed 391 worker-presenting
+      preview frames, zero stale/freeze frames, attached/intersecting/
+      non-occluded DOM proof, `nonBlankRatio=0.2852`, and no proof errors.
+      This is current-project sanity evidence; W5 start permissions deliberately
+      remain false until the accepted platform matrix, including macOS, is
+      complete.
+- [x] Retained main export fallback lazily initializes its WebGPU device for
+      debug export while worker-presenting preview is active; local video-only
+      and audio-enabled `debugExport` smokes passed.
+- [x] Normal FAST video export can render through worker software readback under
+      worker-presenting; local 1s VP9/WebM smokes passed with worker readbacks,
+      zero main fallback frames, and no `video-time-drift` skips.
+- [x] Local Windows/Chromium bridge export smoke against the
+      `html-provider-fallback` video fixture passed: 0.75s VP9/WebM,
+      non-empty blob, worker-software readback delta 6, fallback delta 0,
+      and no export errors. Latest focused run produced a 51,123 byte WebM in
+      1.15s with `worker-software-readback`, zero skipped layers, and zero
+      unsupported effects.
+- [x] FAST export preparation falls back to PRECISE HTMLVideo preparation when
+      WebCodecs/MP4Box parsing or file reads hit a strict FAST-path limit,
+      preventing browser-native WebM/unsupported containers from aborting
+      before the worker software export/readback path can render.
+- [x] Worker software export no longer depends on the preview
+      `worker-presenting` dev mode; it starts worker-first whenever Worker
+      runtime plus `OffscreenCanvas` are available, while explicit
+      `renderHostMode=main` keeps the main export fallback.
+- [x] Runtime export/playback smoke now requires worker readback telemetry
+      (`worker-software-readback`, readbacks > 0, zero fallback frames, zero
+      export errors) instead of accepting any non-empty export blob.
+- [x] Runtime export/playback smoke now evaluates worker readback/fallback
+      counter deltas per run, so old fallback history in a long-lived browser
+      session does not fail a clean worker-readback export.
+- [x] Runtime export/playback smoke now defaults to `worker-only`, restores the
+      previous render-host mode afterwards, and passes locally after the shared
+      host fix: playback motion observed, `runtimeFeedsPresent=true`,
+      `workerReadbackFrameDelta=4`, `workerFallbackFrameDelta=0`, no export
+      errors, and W5 start permissions remained stats-guarded.
+- [x] Real-video worker-only runtime smoke passes locally:
+      `runWorkerFirstRealVideoRuntimeSmoke` materializes the `multi-video`
+      fixture, waits for media readiness, validates normal playback, 2x/3x
+      forward playback, reverse playback, custom scrub, worker-only preview
+      event attribution, and worker export readback. Latest local
+      Windows/Chromium bridge run with `renderHostMode=worker-only`,
+      `mediaSettleMs=12000`, normal/2x/3x/reverse/scrub checks, and
+      0.75s 320x180/8fps export returned all smoke checks true. Export
+      stayed `worker-software-readback` with a 78,040 byte blob,
+      readback delta `6`, fallback delta `0`, and no export errors.
+      Latest measured presentation after the scrub hold/cache/diagnostic
+      follow-up still returns all checks true. Export stays
+      `worker-software-readback` with blob size `78,040`, readback delta `6`,
+      fallback delta `0`, and no export errors. Normal, 2x, and 3x playback
+      present through `worker-only:HTMLVideo` and report `ok`. Reverse
+      playback presents `worker-only:WebCodecs+HTMLVideo` frames and passes the
+      worker-only preview health gate: latest run had `29.2` update FPS, p95
+      update gap `39.9ms`, and `worker-only:WebCodecs+HTMLVideo` frames.
+      Scrub now passes the full after-reverse smoke gate: latest run applied
+      `108` scrub frames and reported `111/51` frames/updates, `59.0` render
+      FPS, `27.5` update FPS, p95 update gap `109.5ms`, longest preview
+      freeze `86.3ms`, `52` moving-target stale frames, and zero health
+      anomalies. The smoke returned `success=true` with all checks true.
+- [x] Worker-only scrub no longer replaces a complete presented frame with an
+      incomplete transient one when one video layer is briefly not drawable.
+- [x] Worker-only playback diagnostics now report actual presented decoder
+      truth for reverse playback. Worker WebCodecs frames are counted only when
+      a fresh runtime frame is actually visible in the worker software preview;
+      stale/pending Worker WebCodecs frames are hidden and the path falls back
+      to `worker-only:HTMLVideo` instead of showing a false `WC` label.
+- [x] Reverse Worker WebCodecs preview reads use the interactive paused seek
+      path and a tighter freshness window. Local bridge repro on the real
+      multi-video fixture at `playbackSpeed=-1`, `startTime=4.2`,
+      `durationMs=1000` reported correct timeline motion
+      (`delta=-1.0024s`, expected `-1.0s`), `57.7` preview FPS, and truthful
+      mixed attribution: `worker-only:HTMLVideo=37` and
+      `worker-only:WebCodecs+HTMLVideo=20`. Max measured preview drift was
+      `111ms`; faster reverse (`-2x`) still reports degraded/bad when drift
+      exceeds the diagnostics budget.
+- [ ] Reverse Worker WebCodecs is not yet a complete smooth-WC path. The
+      current multi-video fixture has one MP4 layer that can use worker
+      WebCodecs and two WebM layers that still render through HTML-video
+      snapshots; the MP4 Worker WebCodecs layer is still intermittent during
+      reverse and should either gain a real reverse frame window/cache or stay
+      hidden behind truthful HTML fallback when it misses freshness.
+      `lastSoftwareFrame` now describes the actual last worker-presented
+      software frame, `lastAttemptedSoftwareFrame` describes the newest
+      attempted/held frame, and `holdingLastSoftwareFrame` is derived from the
+      attempted frame. The HUD/trace decoder label stays truthful: it only
+      shows WebCodecs when WebCodecs actually contributed to the last presented
+      preview frame.
+- [x] Worker-only scrub keeps owner-specific HTML-video snapshot cache keys
+      during seek/RVFC flushes. `cacheFrameAtTime` now carries an optional
+      owner id through the worker render host, and the HTML-video snapshot
+      cache prefers exact owner matches over newer ownerless snapshots. This
+      prevents a clip-owned `cached-bitmap` key from being displaced by a
+      duplicate ownerless cache entry, avoiding repeated bitmap transfers
+      during active scrubs.
+- [x] Worker-only scrub now keeps transient video-layer drops from replacing
+      the last complete worker-presented frame while timeline visual demand is
+      active, including the short post-scrub settle path. The per-video
+      HTML-video snapshot LRU is now larger (`16` entries), cached scrub
+      snapshots can be reused with a wider `1.25s` drift tolerance while live
+      scrub snapshots keep the stricter `0.75s` tolerance, and the real-video
+      smoke exposes avg/p95/max preview gap telemetry plus `readyStateDrops`.
+      `handleSimulateScrub` now pauses once before the measurement window so
+      lingering HTML media playback state from a prior playback smoke does not
+      contaminate scrub diagnostics.
+- [x] Heavy scrub update cadence now passes the real-video worker-only smoke.
+      Reverse Worker WebCodecs runtime loading is prewarmed from the playback
+      slice, reverse `play()` awaits a short first-frame prime before starting
+      the internal playback clock, reverse start primes the playhead plus
+      nearby look-behind targets, reverse playback stays on the primed clip
+      runtime session instead of switching to a cold shared preview session,
+      and reverse Worker seeks are rate-limited to real source-frame changes.
+      Worker-only scrub also stops doing redundant proactive
+      `ensureVideoFrameCached` work for every warm HTML video during active
+      drag; seek/RVFC and settle paths still cache confirmed frames. Latest
+      full after-reverse smoke returned `success=true`: scrub applied `108`
+      frames, presented `111` worker-only preview frames with `51` content
+      updates, reached `27.5` update FPS, p95 update gap `109.5ms`, longest
+      preview freeze `86.3ms`, and kept export on worker readback with fallback
+      delta `0`.
+- [x] Playback status diagnostics now distinguish broken preview from slow but
+      visible worker preview. Responsive proxy/scrub-cache paths still suppress
+      false cold-video failures, responsive worker-only preview suppresses sparse
+      cross-segment WebCodecs cadence and transient HTML `readyStateDrops` from
+      becoming false `bad`, and slow stable worker preview is reported as
+      `warn`. Latest focused scrub runs report `ok` when p95 update cadence is
+      responsive, and the full after-reverse real-video smoke now passes the
+      worker-only health gate while still surfacing duplicate/stale-frame
+      telemetry for further polish.
+- [x] Successful worker software export initializes the worker host first and
+      keeps the retained main export fallback cold until an unsupported frame
+      explicitly needs `renderMainFallbackFrame()`.
+- [x] Export render sessions revalidate the active export host once before
+      frame rendering and report the active host mode/strategy on unrecoverable
+      failures instead of assuming a main-thread WebGPU device loss.
+- [x] Worker software export retries transient video-readiness skips briefly
+      before falling back, covering export attempts directly after scrubbing.
+- [x] Strict `worker-only` export blocks unsupported worker-software frames
+      instead of touching the retained main fallback: unit coverage verifies
+      null readback, `strictBlockedFrameCount > 0`, the blocking skip reason,
+      `fallbackFrameCount=0`, and zero main-engine render/readback calls.
+- [x] Worker software presentation applies supported blend modes in the worker,
+      recursively rasterizes worker-presentable nested compositions into
+      worker bitmap layers, and treats unsupported blend/effect/color variants,
+      masks, transitions, and unsupported nested child layers as blocking
+      instead of silently presenting/exporting partial pixels.
+- [x] Worker software presentation keeps supported Canvas-filter effects
+      (`blur`, `gaussian-blur`, `box-blur`, `contrast`, `saturation`,
+      `hue-shift`, `invert`) in the worker and applies additive `brightness`,
+      shader-equivalent `exposure`, `temperature`, `vibrance`, `levels`,
+      `threshold`, `posterize`, `vignette`, `chroma-key`, `mirror`,
+      `pixelate`, and `rgb-split` as worker pixel effects; Sobel
+      `edge-detect`, unsharp-mask `sharpen`, and multi-ring `glow` now run as
+      worker neighborhood pixel passes. Timeline-time based `scanlines` and
+      `grain` run as deterministic worker pixel effects instead of depending on
+      wall-clock `performance.now()`. Standalone `acuarela` and `rom1` now run
+      as worker feedback pixel passes backed by a per-target/effect software
+      feedback cache. `wave` and `kaleidoscope` distortion plus `twirl`,
+      `bulge`, `motion-blur`, `radial-blur`, and `zoom-blur` now run as worker
+      source-resampling pixel passes. Stacked source-resampling and stacked
+      feedback effects stay blocking until worker multi-pass effects exist.
+      Remaining visually non-equivalent effects stay on the blocking/fallback
+      path.
+- [x] Worker software export keeps supported `rgb-split` on the worker readback
+      path and verifies that the retained main fallback is not invoked for that
+      effect.
+- [x] Worker software export keeps supported `exposure` on the worker readback
+      path and applies EV, offset, and gamma in the worker pixel pass instead
+      of invoking the retained main fallback.
+- [x] Worker software export keeps supported `temperature` and `vibrance` on
+      the worker readback path and applies their shader-equivalent color math
+      in the worker pixel pass instead of invoking the retained main fallback.
+      Browser bridge smoke with temporary `exposure + temperature + vibrance`
+      on the video fixture produced a 52,489 byte WebM through
+      `worker-software-readback` with readback delta 6, fallback delta 0,
+      zero skipped layers, and zero unsupported effects; the temporary effects
+      were removed afterwards (`effectCount=0`).
+- [x] Worker software export keeps supported `levels`, `threshold`,
+      `posterize`, and `vignette` on the worker readback path and applies their
+      shader-equivalent pixel/UV math in the worker pixel pass instead of
+      invoking the retained main fallback. Browser bridge smoke with temporary
+      `levels + threshold + posterize + vignette` on the video fixture produced
+      a 38,613 byte WebM through `worker-software-readback` with readback delta
+      6, fallback delta 0, zero skipped layers, and zero unsupported effects;
+      the temporary effects were removed afterwards (`effectCount=0`).
+- [x] Worker software export keeps supported `chroma-key` on the worker
+      readback path and applies YCbCr chroma distance, smooth alpha, and
+      green/blue spill suppression in the worker pixel pass instead of invoking
+      the retained main fallback. Browser bridge smoke with temporary
+      `chroma-key` on the video fixture produced a 44,287 byte WebM through
+      `worker-software-readback` with readback delta 6, fallback delta 0,
+      zero skipped layers, and zero unsupported effects; the temporary effect
+      was removed afterwards (`effectCount=0`).
+- [x] Worker software export keeps supported `edge-detect` on the worker
+      readback path and applies Sobel neighborhood sampling in the worker pixel
+      pass instead of invoking the retained main fallback. Browser bridge smoke
+      with temporary `edge-detect` on the video fixture produced a 65,601 byte
+      WebM through `worker-software-readback` with readback delta 6, fallback
+      delta 0, zero skipped layers, and zero unsupported effects; the
+      temporary effect was removed afterwards (`effectCount=0`).
+- [x] Worker software export keeps supported `sharpen` on the worker readback
+      path and applies the WGSL-equivalent 7x7 weighted unsharp-mask
+      neighborhood pass in the worker pixel pipeline instead of invoking the
+      retained main fallback. Unit coverage verifies the worker preview packet,
+      export-host readback path, and pixel math.
+- [x] Worker software export keeps supported `glow` on the worker readback path
+      and applies the WGSL-equivalent thresholded multi-ring neighborhood pass
+      in the worker pixel pipeline instead of invoking the retained main
+      fallback. Unit coverage verifies worker preview packet mapping,
+      export-host readback routing, and painter pixel math. Browser bridge
+      smoke with temporary `glow` on the video fixture produced a 4,429 byte
+      WebM through `worker-software-readback` with readback delta 1, fallback
+      delta 0, zero skipped layers, zero unsupported effects, and zero runtime
+      diagnostics; the temporary effect was removed afterwards
+      (`effectCount=0`).
+- [x] Worker software export keeps standalone `acuarela` and `rom1` on the
+      worker readback path and applies their WGSL-equivalent feedback math in
+      the worker pixel pipeline with a per-target/effect software feedback
+      cache. Unit coverage verifies worker preview packet mapping, export-host
+      readback routing, painter feedback persistence, and that stacked feedback
+      plus other visual effects still block until worker multi-pass feedback
+      exists.
+- [x] Worker software export keeps supported `scanlines` and `grain` on the
+      worker readback path and applies them with the frame `timelineTime` from
+      `presentSoftwareFrame`, giving preview/export a deterministic worker-side
+      time basis instead of wall-clock sampling. Browser bridge smoke with
+      temporary `scanlines + grain` on the video fixture produced a 68,149 byte
+      WebM through `worker-software-readback` with readback delta 6, fallback
+      delta 0, zero skipped layers, and zero unsupported effects; the temporary
+      effects were removed afterwards (`effectCount=0`).
+- [x] Worker software export keeps supported `wave` distortion on the worker
+      readback path and applies shader-equivalent UV source resampling in the
+      worker pixel pass instead of invoking the retained main fallback. Browser
+      bridge smoke with temporary `wave` on the video fixture produced a
+      49,948 byte WebM through `worker-software-readback` with readback delta
+      6, fallback delta 0, zero skipped layers, and zero unsupported effects;
+      the temporary effect was removed afterwards (`effectCount=0`).
+- [x] Worker software export keeps supported `kaleidoscope` distortion on the
+      worker readback path and applies the WGSL-equivalent polar segment fold in
+      the source-resampling worker module instead of invoking the retained main
+      fallback. Unit coverage verifies the worker preview packet, export-host
+      readback path, and pixel math. Source-resampling effects now live in a
+      dedicated module so the pixel-effect pipeline can keep growing under the
+      700 LOC source ceiling.
+- [x] Worker software export keeps supported single `twirl` and single `bulge`
+      distortions on the worker readback path and applies their UV
+      source-resampling math in the worker pixel pass. Stacked UV-resampling
+      effects deliberately remain `unsupported-effects` so the worker does not
+      silently present a non-equivalent single-pass result. Browser bridge
+      smokes with temporary `twirl` and temporary `bulge` on the video fixture
+      produced 49,904 byte and 47,735 byte WebMs through
+      `worker-software-readback`, each with readback delta 6, fallback delta 0,
+      zero skipped layers, and zero unsupported effects; both temporary effects
+      were removed afterwards (`effectCount=0`).
+- [x] Worker software export keeps supported single `motion-blur` on the worker
+      readback path and applies weighted mirror-edge UV sampling in the worker
+      pixel pass instead of invoking the retained main fallback. Browser bridge
+      smoke with temporary `motion-blur` on the video fixture produced a 27,360
+      byte WebM through worker software readback with readback delta 6,
+      fallback delta 0, zero skipped layers, zero unsupported effects, and no
+      export errors; the temporary effect was removed afterwards
+      (`effectCount=0`).
+- [x] Worker software export keeps supported single `radial-blur` and
+      `zoom-blur` on the worker readback path and applies their WGSL-equivalent
+      center-based source-resampling passes in the worker module. Unit coverage
+      verifies worker preview packet mapping, export-host readback routing, and
+      painter pixel math without invoking the retained main fallback. Browser
+      bridge smokes with temporary `radial-blur` and temporary `zoom-blur` on
+      the video fixture produced 31,528 byte and 23,656 byte WebMs through
+      `worker-software-readback`, each with readback delta 6, fallback delta 0,
+      zero skipped layers, zero unsupported effects, and zero runtime
+      diagnostics; both temporary effects were removed afterwards
+      (`effectCount=0`).
+- [x] Runtime primary color-correction nodes now stay on the worker software
+      preview/export path and are applied in the worker pixel pass instead of
+      forcing the isolated main fallback.
+- [x] Simple compositor wipe transitions (`wipe-left/right/up/down`) now stay
+      on the worker software preview/export path and are applied as worker
+      layer alpha masks matching the WGSL transition progress semantics;
+      complex transition masks/distortions remain blocking until their pixels
+      are matched.
+- [x] Compositor `shape-mask`, `center-mask`, and `clock-mask` transitions now
+      also stay on the worker software preview/export path. Shape and center
+      masks use worker-side hard alpha masks matching the compositor formulas.
+- [x] Compositor `pattern-mask` and `procedural-mask` transitions now stay on
+      the worker software preview/export path too. Checker, venetian,
+      random-block, zig-zag, polka-dot, doom-bar, paint-splatter, noise, and
+      block masks are applied in the worker alpha-mask pass; transition
+      distortions remain blocking.
+- [ ] Export frame rendering/readback is fully worker-owned rather than using
+      the retained `main-host-fallback` for unsupported/complex frame types.
+- [ ] Normal local playback/preview/export repros should be run in
+      `worker-only`; any fallback rescue in that mode is a bug unless the test
+      explicitly selected `main`/`main-host-fallback`.
+- [ ] Frame-rate correctness must be a first-class gate. The active
+      composition FPS must be the visual cadence source of truth for playback
+      health, preview effective FPS, frame stepping, HUD labels,
+      `getStats`/`getPlaybackTrace`, and smoke assertions. Export FPS may
+      differ, but diagnostics must label it separately and composition settings
+      changes must actually update the active composition FPS.
+- [x] Add a real-video worker-only runtime smoke in addition to the
+      Solid/Text/Image smoke. The Solid/Text/Image fixture proves static
+      worker render/readback basics only; it does not prove video playback.
+      The real-video smoke materializes the multi-video fixture with
+      actual clips, wait for media readiness, then validate normal playback,
+      scrubbing, reverse playback, 2x/3x forward playback, visible preview
+      frame updates/cadence, and worker export readback with zero main fallback
+      frames. Current remaining work is not smoke existence or heavy-scrub
+      routing, but final platform/cutover evidence and removal of unsupported
+      worker export fallbacks.
 
 ## How To Read Gates
 
@@ -459,6 +911,44 @@ Exit:
 
 - [ ] Worker-presenting mode is allowed only for platforms whose strategy gates
       are green.
+- [ ] Main-thread renderer fallback remains isolated to `renderHostPort` and
+      `exportRenderHostPort`; no product caller imports `WebGPUEngine`
+      directly.
+  - [x] `workerFirstRenderer.renderHost` mirrors `renderHostPort.getTelemetry()`
+        in stats/trace snapshots.
+  - [x] `exportRenderHostPort.getTelemetry()` exposes the export fallback host
+        as `main-host-fallback`.
+  - [x] `workerFirstRenderer.renderHost.activation` distinguishes blocked W5/
+        capability state from the final missing `renderHostPort` worker-host
+        mount.
+  - [x] `renderHostSelection` selects between a future worker primary host and
+        the retained main fallback, with telemetry for flag, registration,
+        availability, and blockers.
+  - [x] `renderHostPort` is a stable proxy over the selected host, so a worker
+        primary candidate can mount behind the same product-facing API.
+  - [x] Direct `WebGPUEngine` delegation is isolated in
+        `src/services/render/mainFallbackRenderHostPort.ts`; public
+        `renderHostPort.ts` owns selection/proxy wiring only.
+  - [x] `worker-shadow` render host candidate is registered behind the same
+        selection/proxy boundary, with runtime-worker command mirroring and
+        fallback presentation.
+  - [x] Worker-shadow command outputs feed scheduler/cache/timing snapshots
+        into `workerFirstRenderer.counters` for dev-server stats inspection.
+  - [x] Worker-presenting host can own a transferred preview `OffscreenCanvas`,
+        paint a visible worker-side presentation frame, and report
+        `frame-presented`/`presentedFrameId` instead of
+        `presentation: not-presenting`.
+  - [x] Worker-presenting `render(layers)` can send an initial software preview
+        frame packet for simple Solid/Image/Text/VideoFrame/HTML-video snapshot
+        layers to the runtime worker.
+  - [x] Worker-presenting software preview packet carries opacity, source-rect
+        cropping, normalized position, local scale, and Z rotation, and the
+        runtime worker applies those values before drawing.
+  - [ ] Worker-presenting host renders the real retained graph/
+        RenderDispatcher output with preview parity, not only the presentation
+        canary/software snapshot path.
+  - [ ] Worker-presenting cutover is accepted by W5 platform evidence,
+        including real macOS Safari and macOS Firefox packages.
 
 Current W5 prerequisite gate owners:
 
@@ -874,7 +1364,7 @@ Focused checks:
         solid/text/image content fixture, marks and bakes a composition video
         region through the existing `FrameExporter`/`videoBakeProxyCache`
         product path, then marks and bakes a clip video region through the
-        existing `startRamPreviewForRange` product path.
+        explicit `startClipVideoBakeRenderRange` product path.
       - The golden bridge now derives `clip-bake` and `composition-bake` only
         from serializable video bake regions with `status: baked`. The runner
         rejects caller-supplied project ids, source/fingerprint/sample-time/
@@ -928,7 +1418,9 @@ Focused checks:
 
 None - first packet set A-I and follow-up Packets J-CP integrated locally.
 
-- `src/services/render/renderHostPort.ts` adds a main-thread host facade.
+- `src/services/render/renderHostPort.ts` owns the selection/proxy boundary.
+- `src/services/render/mainFallbackRenderHostPort.ts` owns the retained
+  main-thread host facade.
 - Preview target registration, `MultiPreviewSlot`, `TargetPreview`, and
   `TargetList` route their target/output commands through the facade.
 - The host now owns initialization, render-loop start, stats polling, and
@@ -1091,6 +1583,55 @@ None - first packet set A-I and follow-up Packets J-CP integrated locally.
 
 Latest focused checks:
 
+- Worker-presenting software preview geometry:
+  `npx vitest run tests/unit/workerRenderHostRuntime.test.ts tests/unit/workerPresentingRenderHostPort.test.ts tests/unit/workerShadowRenderHostPort.test.ts`
+  - Passed: 3 files, 9 tests.
+- `npx tsc -b --pretty false`
+  - Passed.
+- Worker-presenting software preview packet:
+  `npx vitest run tests/unit/workerRenderHostRuntime.test.ts tests/unit/workerPresentingRenderHostPort.test.ts tests/unit/workerShadowRenderHostPort.test.ts tests/unit/renderHostPort.test.ts tests/unit/renderHostSelection.test.ts tests/unit/runtime/worker/runtimeJobClient.test.ts tests/unit/runtime/worker/runtimeWorkerHost.test.ts`
+  - Passed: 7 files, 30 tests.
+- `npx tsc -b --pretty false`
+  - Passed.
+- Worker-presenting render-host path:
+  `npx vitest run tests/unit/renderHostPort.test.ts tests/unit/workerPresentingRenderHostPort.test.ts tests/unit/workerRenderHostRuntime.test.ts`
+  - Passed: 3 files, 15 tests.
+- Worker-presenting/shadow render-host focus:
+  `npx vitest run tests/unit/workerRenderHostRuntime.test.ts tests/unit/workerPresentingRenderHostPort.test.ts tests/unit/workerShadowRenderHostPort.test.ts tests/unit/renderHostPort.test.ts tests/unit/renderHostSelection.test.ts`
+  - Passed: 5 files, 22 tests.
+- `npx tsc -b --pretty false`
+  - Passed.
+- Worker-shadow runtime counter feed:
+  `npx vitest run tests/unit/workerShadowRenderHostPort.test.ts tests/unit/workerRenderHostRuntime.test.ts tests/unit/aiToolStats.test.ts`
+  - Passed: 3 files, 7 tests.
+- `npx tsc -b --pretty false`
+  - Passed.
+- Worker render-host runtime/shadow refresh:
+  `npx vitest run tests/unit/workerRenderHostRuntime.test.ts tests/unit/workerShadowRenderHostPort.test.ts tests/unit/renderHostPort.test.ts tests/unit/renderHostSelection.test.ts tests/unit/renderHostServiceCallers.test.ts tests/unit/runtime/worker/runtimeWorkerHost.test.ts tests/unit/runtime/worker/runtimeJobClient.test.ts`
+  - Passed: 7 files, 28 tests.
+- `npx tsc -b --pretty false`
+  - Passed.
+- `rg -n "from .*WebGPUEngine|import\(.*WebGPUEngine" src/services src/stores src/hooks src/components src/engine/export`
+  - Passed: only `src/services/render/mainFallbackRenderHostPort.ts` and
+    `src/engine/export/exportRenderHostPort.ts` import the engine singleton.
+- `git diff --check`
+  - Passed with LF-to-CRLF working-copy warnings only.
+- LOC check: `renderHostPort.ts` 107, `mainFallbackRenderHostPort.ts` 497,
+  `renderHostTypes.ts` 111, `workerShadowRenderHostPort.ts` 146,
+  `workerRenderHostRuntimeHandlers.ts` 279,
+  `workerRenderHostRuntimeBridge.ts` 98, `workerRenderGraph.ts` 268.
+- Render-host fallback isolation refresh:
+  `npx vitest run tests/unit/renderHostSelection.test.ts tests/unit/renderHostPort.test.ts tests/unit/exportRenderHostPortBoundary.test.ts tests/unit/exportRenderSession.test.ts tests/unit/workerFirstProofHarness.test.ts tests/unit/workerFirstProofCaptures.test.ts tests/unit/workerFirstW5Gates.test.ts tests/unit/aiToolStats.test.ts tests/unit/aiToolDefinitions.test.ts tests/unit/renderHostServiceCallers.test.ts tests/unit/renderCapabilityProbe.test.ts`
+  - Passed: 11 files, 195 tests.
+- `npx tsc -b --pretty false`
+  - Passed.
+- `rg -n "from .*WebGPUEngine|import\(.*WebGPUEngine" src/services src/stores src/hooks src/components src/engine/export`
+  - Passed: only `src/services/render/mainFallbackRenderHostPort.ts` and
+    `src/engine/export/exportRenderHostPort.ts` import the engine singleton.
+- `git diff --check`
+  - Passed with LF-to-CRLF working-copy warnings only.
+- LOC check: `renderHostPort.ts` 87, `mainFallbackRenderHostPort.ts` 497,
+  `renderHostTypes.ts` 111, `workerFirstProofHarness.ts` 427.
 - Post-CD fresh Windows/Chromium platform package:
   `npm run worker-first:platform:collect -- --expect-platform windows-chromium --wait-ms 15000 --timeout-ms 300000 --duration-ms 5000 --min-preview-frames 3`
   returned `success`, selected tab `0695dc78-30f4-488b-b71d-56630bf88a2f`,
@@ -2532,20 +3073,138 @@ Latest focused checks:
 - `rg -n "WebGPUEngine|RenderDispatcher|GPUDevice|GPUTexture|HTMLVideoElement|HTMLImageElement|File|Blob|Map<|Set<" src\\services\\aiTools\\workerFirstCounterSources.ts src\\services\\aiTools\\workerFirstProofCaptures.ts src\\services\\aiTools\\workerFirstProofHarness.ts src\\services\\aiTools\\workerFirstGateInputs.ts src\\services\\aiTools\\workerFirstW5Gates.ts`
   - Passed: no durable runtime handle matches; only
     start-permission property names matched.
+- [x] Packet CW: supported nested-composition worker software export path.
+      - `workerSoftwarePreviewFrame` now recursively rasterizes
+        worker-presentable nested compositions into a local canvas, snapshots
+        that canvas as a worker bitmap layer, and keeps unsupported nested
+        child layers blocking instead of exporting partial pixels.
+      - Worker software export now keeps a simple nested composition on
+        `worker-software-readback` without touching the retained main export
+        fallback.
+- `npx vitest run tests/unit/workerSoftwarePreviewFrame.test.ts tests/unit/exportRenderHostPortWorker.test.ts`
+  - Passed: 2 files, 74 tests.
+- `npx tsc -b --pretty false`
+  - Passed.
+- [x] Packet CX: worker runtime payload boundary guard.
+      - `tests/unit/workerRenderHostRuntimeBoundary.test.ts` now forbids
+        `RenderFrameSnapshot`, `RenderTimelineClipSnapshot`, and legacy `Layer`
+        payloads from worker runtime commands, handlers, bridge code, and the
+        browser worker entry.
+      - The test requires `presentSoftwareFrame` to carry
+        `WorkerRenderSoftwareFrame` and keeps current `Layer` ->
+        worker-frame conversion isolated to explicit main-side adapters
+        (`workerSoftwarePreviewFrame` and `workerSoftwareNestedComposition`).
+- `npx vitest run tests/unit/workerRenderHostRuntimeBoundary.test.ts tests/unit/workerRenderHostRuntime.test.ts tests/unit/renderGraphContracts.test.ts tests/unit/renderHostServiceCallers.test.ts`
+  - Passed: 4 files, 20 tests.
+- [x] Packet CY: dormant All-Intra MP4 proxy VideoFrame path removed.
+      - `ProxyGeneratorWebCodecs` no longer exposes `generateAllIntraVideo`;
+        `proxyGenerator.ts` no longer imports `VideoEncoderWrapper`, carries an
+        `all-intra-mp4` output mode, or constructs `new VideoFrame(slot.canvas)`
+        for proxy generation.
+      - Active proxy generation remains the JPEG-sequence path used by the
+        media-store proxy slice. Existing `mp4-all-intra` media records remain
+        handled as non-JPEG proxy records by playback/proxy selection code.
+- `npx vitest run tests/unit/proxyGenerator.test.ts tests/unit/proxyCompleteness.test.ts tests/unit/proxyFrameCache.test.ts tests/unit/proxyFramePrewarm.test.ts tests/unit/timelineProxyCacheRuntime.test.ts tests/unit/workerFirstJpegProxyGoldenFixture.test.ts tests/unit/workerFirstJpegProxyShadowParity.test.ts`
+  - Passed: 7 files, 39 tests.
+- [x] Packet CZ: clip video bake range decoupled from user RAM-preview action.
+      - `bakeClipVideoBakeRegion` now calls
+        `startClipVideoBakeRenderRange` instead of
+        `startRamPreviewForRange`.
+      - `startClipVideoBakeRenderRange` reuses the existing range renderer but
+        does not publish a user-facing `ramPreviewRange` after completion.
+      - Store coverage asserts clip bake calls the explicit bake-range action
+        and does not call the old public RAM-preview range action.
+- `npx vitest run tests/stores/timeline/videoBakeSlice.test.ts tests/stores/timeline/playbackSlice.test.ts`
+  - Passed: 2 files, 98 tests.
+- `npx tsc -b --pretty false`
+  - Passed.
+- [x] Packet DA: RenderHost HMR runtime bundle persistence.
+      - `renderHostPort` now stores a `renderHostRuntimeState` object in Vite
+        HMR data, preserving the retained main fallback host, worker-shadow
+        host, worker-presenting host, worker-only host, selection telemetry,
+        and active instance together.
+      - Dev-mode toggles (`worker-presenting`, `worker-only`, `main`, and
+        default) resolve through the preserved runtime state after HMR instead
+        of closing over newly constructed worker hosts that have no registered
+        Preview targets.
+      - The old `activeRenderHostPort` HMR payload remains accepted for one
+        transition so existing hot sessions keep their active host instance.
+- `npx vitest run tests/unit/renderHostPort.test.ts tests/unit/renderHostSelection.test.ts tests/unit/workerPresentingRenderHostPort.test.ts`
+  - Passed: 3 files, 35 tests.
+- `npx tsc -b --pretty false`
+  - Passed.
+- [x] Packet DB: worker-presenting partial preview presentation and RAM cache
+      guard.
+      - Worker-presenting no longer holds the whole live preview frame when at
+        least one source layer is presentable and another sibling layer is
+        unsupported; this prevents transition/effect-heavy timelines from
+        going black while preserving skipped-layer diagnostics.
+      - Worker-presenting RAM/composite cache stores raw readback pixels,
+        avoids `ImageData` dependency while caching, exposes a worker-owned
+        RAM-preview render engine, and only reports a cached-frame hit when a
+        target, bridge, and bitmap presentation path are available.
+      - Live Windows/Chromium bridge checkpoint after reload reported
+        `lastPresentedFrameId` advancing, `presentableLayerCount=2`,
+        `skippedLayerCount=0`, and `holdingLastSoftwareFrame=false`.
+- `npx vitest run tests/unit/workerPresentingRenderHostPort.test.ts`
+  - Passed: 1 file, 21 tests.
+- `npx tsc -b --pretty false`
+  - Passed.
+- [x] Packet DC: worker preview paint order and worker-aware bridge capture.
+      - Worker software preview paints LayerBuilder's top-to-bottom layer list
+        in bottom-first canvas order, matching the main LayerCollector path so
+        upper video tracks remain visible instead of being overpainted by
+        lower tracks.
+      - `captureFrame`, `getFramesAtTimes`, and `getCutPreviewQuad` now use
+        `auto` capture mode by default: GPU readback is tried first, then the
+        visible worker preview canvas is used when worker-presenting has no
+        main-thread readback.
+      - Live Windows/Chromium bridge checkpoint at 2.0s captured
+        `wfg-clippy-intro.webm` visibly above the lower video from
+        `workerRenderHost:preview`; stats reported `mode=worker-presenting`,
+        `layerCount=2`, `queueDepth=0`, and zero black/freeze/stale-visible
+        counters.
+- `npx vitest run tests/unit/previewCapture.test.ts tests/unit/workerRenderHostRuntime.test.ts tests/unit/workerPresentingRenderHostPort.test.ts tests/unit/workerSoftwarePreviewFrame.test.ts tests/unit/aiToolDefinitions.test.ts`
+  - Passed: 5 files, 232 tests.
+- `npx tsc -b --pretty false`
+  - Passed.
+- `git diff --check`
+  - Passed with CRLF normalization warnings only.
+- [x] Packet DD: clip video bake render state split from user RAM-preview
+      state, and active composition FPS wired through Output Settings.
+      - `startClipVideoBakeRenderRange` still reuses the existing range
+        renderer, but it now drives `isClipVideoBakeRendering` and
+        `clipVideoBakeProgress` instead of `isRamPreviewing` and
+        `ramPreviewProgress`.
+      - Clip bake range completion keeps `ramPreviewRange` unpublished, and
+        RAM-preview cancel/clear paths no longer stop an active clip-bake range
+        render by flipping the shared render flag.
+      - Output Settings now changes the active composition's `frameRate`
+        directly, so Media Panel, timeline ruler, and `getStats.visualTargetFps`
+        share the same composition source of truth.
+- `npx vitest run tests/stores/timeline/ramPreviewSlice.test.ts tests/stores/timeline/videoBakeSlice.test.ts tests/unit/OutputSettings.test.tsx`
+  - Passed: 3 files, 8 tests.
+- `npx tsc -b --pretty false`
+  - Passed.
 
 ## Debt Ledgers
 
 Adapter debt:
 
-- [ ] Legacy `Layer[]` adapter must remain isolated until graph descriptor parity
+- [x] Legacy `Layer[]` adapter must remain isolated until graph descriptor parity
       exists.
-- [ ] `RenderFrameSnapshot` must not become the worker payload.
+- [x] `RenderFrameSnapshot` must not become the worker payload.
 
 Retired paths:
 
-- [ ] User-facing RAM preview appears disabled; clip bake still reaches RAM
-      preview internals.
-- [ ] Dormant MP4 proxy `VideoFrame` path must be deleted or rebuilt as a real
+- [x] Clip bake no longer calls user-facing `startRamPreviewForRange` or
+      publishes `ramPreviewRange`.
+- [x] Clip bake no longer drives the user RAM-preview UI/run state while its
+      explicit range render is active.
+- [ ] Clip bake still shares the RAM-preview render/cache infrastructure; move
+      that range renderer, runtime policy reporting, and cache ownership behind
+      the worker graph before final render-path cleanup.
+- [x] Dormant MP4 proxy `VideoFrame` path must be deleted or rebuilt as a real
       provider.
 
 Platform gaps:

@@ -6,6 +6,10 @@ import { NativeHelperClient } from '../nativeHelper';
 import { renderHostPort } from '../render/renderHostPort';
 import type { TimelineClip, TimelineTrack } from '../../stores/timeline/types';
 import type { ToolResult } from './types';
+import {
+  captureRenderHostFrame,
+  type PreviewCaptureMode,
+} from './previewCapture';
 
 function waitForTimeout(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -21,8 +25,21 @@ function waitForAnimationFrame(): Promise<number> {
   });
 }
 
-function getCaptureCanvas(): { canvas: HTMLCanvasElement; source: string } | null {
-  return renderHostPort.getCaptureCanvas();
+async function drawDataUrlToCanvas(
+  ctx: CanvasRenderingContext2D,
+  dataUrl: string,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number
+): Promise<void> {
+  const image = new Image();
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error('Failed to decode captured preview frame'));
+    image.src = dataUrl;
+  });
+  ctx.drawImage(image, dx, dy, dw, dh);
 }
 
 // Helper to capture frames at multiple times and combine into a grid image
@@ -30,13 +47,13 @@ export async function captureFrameGrid(
   times: number[],
   columns: number,
   timelineStore: ReturnType<typeof useTimelineStore.getState>,
-  options: { settleMs?: number; mode?: 'gpu' | 'dom' } = {}
+  options: { settleMs?: number; mode?: PreviewCaptureMode } = {}
 ): Promise<ToolResult> {
   const frameWidth = 320; // Thumbnail size
   const frameHeight = 180;
   const rows = Math.ceil(times.length / columns);
   const settleMs = Math.max(50, Math.min(1500, Math.round(options.settleMs ?? 140)));
-  const mode = options.mode ?? 'gpu';
+  const mode = options.mode ?? 'auto';
 
   // Create canvas for the grid
   const gridCanvas = document.createElement('canvas');
@@ -52,7 +69,6 @@ export async function captureFrameGrid(
   gridCtx.fillStyle = '#1a1a1a';
   gridCtx.fillRect(0, 0, gridCanvas.width, gridCanvas.height);
 
-  const { width: outputWidth, height: outputHeight } = renderHostPort.getOutputDimensions();
   const originalPosition = timelineStore.playheadPosition;
 
   // Capture each frame
@@ -69,42 +85,26 @@ export async function captureFrameGrid(
     renderHostPort.requestRender();
     await waitForAnimationFrame();
 
-    if (mode === 'dom') {
-      const captureCanvas = getCaptureCanvas();
-      if (captureCanvas) {
-        gridCtx.drawImage(
-          captureCanvas.canvas,
-          col * frameWidth,
-          row * frameHeight,
-          frameWidth,
-          frameHeight
-        );
-      }
-    } else {
-      // Capture frame from engine
-      const pixels = await renderHostPort.readPixels();
-      if (pixels) {
-        // Create temp canvas for the frame
-        const frameCanvas = document.createElement('canvas');
-        frameCanvas.width = outputWidth;
-        frameCanvas.height = outputHeight;
-        const frameCtx = frameCanvas.getContext('2d');
-
-        if (frameCtx) {
-          const imageData = new ImageData(new Uint8ClampedArray(pixels), outputWidth, outputHeight);
-          frameCtx.putImageData(imageData, 0, 0);
-
-          // Draw scaled frame onto grid
-          gridCtx.drawImage(
-            frameCanvas,
-            col * frameWidth,
-            row * frameHeight,
-            frameWidth,
-            frameHeight
-          );
-        }
-      }
+    const capture = await captureRenderHostFrame(mode);
+    if (!capture.success) {
+      timelineStore.setPlayheadPosition(originalPosition);
+      return {
+        success: false,
+        error: capture.error,
+        data: {
+          frameTime: time,
+          requestedMode: mode,
+        },
+      };
     }
+    await drawDataUrlToCanvas(
+      gridCtx,
+      capture.dataUrl,
+      col * frameWidth,
+      row * frameHeight,
+      frameWidth,
+      frameHeight
+    );
 
     // Draw time label
     gridCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
@@ -141,7 +141,7 @@ export async function captureFrameGrid(
       height: gridCanvas.height,
       frameCount: times.length,
       gridSize: `${columns}x${rows}`,
-      mode,
+      requestedMode: mode,
       dataUrl,
     },
   };

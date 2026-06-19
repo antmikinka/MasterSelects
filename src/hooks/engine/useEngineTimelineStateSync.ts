@@ -17,8 +17,20 @@ export function useEngineTimelineStateSync(
       playheadPosition: timelineState.playheadPosition,
       clipDragPreview: timelineState.clipDragPreview,
     }));
+    renderHostPort.setPlaybackSpeed(timelineState.playbackSpeed);
     renderHostPort.setIsPlaying(isPlaying);
   }, [isEngineReady, isPlaying]);
+
+  useEffect(() => {
+    if (!isEngineReady) return;
+    const unsub = useTimelineStore.subscribe(
+      (state) => state.playbackSpeed,
+      (playbackSpeed) => {
+        renderHostPort.setPlaybackSpeed(playbackSpeed);
+      }
+    );
+    return unsub;
+  }, [isEngineReady]);
 
   useEffect(() => {
     if (!isEngineReady) return;

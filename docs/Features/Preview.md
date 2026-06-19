@@ -78,9 +78,18 @@ The engine render loop is RAF-based and has three important behaviors:
 ### Playback Limits
 
 - Playback is rate-limited to about 60 fps.
+- Dynamic preview target FPS is derived from the active composition's
+  `frameRate`; renderer RAF may still report a 60 fps loop while the visual
+  target is 24/25/30/etc.
 - Scrubbing is rate-limited to about 30 fps unless a fresh frame arrives via `requestVideoFrameCallback`.
 - The loop does not render while export is active.
-- During normal playback, video clips stay on the live HTMLVideo/WebGPU import path even when JPEG proxy frames are available. Proxy image frames are used for paused preview, scrub fallback, and timeline thumbnails, but not as the primary playback surface because dense cut sequences need the browser video decoder and cut warmup path to remain active.
+- During normal playback outside strict worker GPU mode, video clips stay on the live HTMLVideo/WebGPU import path even when JPEG proxy frames are available. Proxy image frames are used for paused preview, scrub fallback, and timeline thumbnails, but not as the primary playback surface because dense cut sequences need the browser video decoder and cut warmup path to remain active.
+- In strict `worker-gpu-only` mode, normal playback resolves video from `mediaFileId`/runtime source metadata and the media `File`, hydrates audio separately, and presents Worker WebCodecs `VideoFrame` output through Worker WebGPU without a timeline `HTMLVideoElement` playback or seeking dependency.
+- Strict `worker-gpu-only` normal 1x forward playback uses a Worker WebCodecs stream session feeding Worker WebGPU presentation. Reverse playback uses the worker reverse-read/cache mode, and non-1x forward playback uses the worker fast-read mode instead of reusing the 1x stream.
+- Strict `worker-gpu-only` playback keeps simultaneous visible video clips as separate Worker WebCodecs sources keyed by media plus clip/layer identity, so overlapping uses of the same file can decode different media times in the same frame.
+- Strict `worker-gpu-only` playback composites visible video layers in Worker WebGPU. The path carries opacity, blend mode, inline color effects (`brightness`, `contrast`, `saturation`, `invert`), and worker GPU shader-compatible color/distort/stylize/keying effects (`hue-shift`, `exposure`, `temperature`, `vibrance`, `levels`, `threshold`, `posterize`, `vignette`, `pixelate`, `kaleidoscope`, `mirror`, `rgb-split`, `wave`, `twirl`, `bulge`, `scanlines`, `grain`, `sharpen`, `edge-detect`, `glow`, `chroma-key`) into the worker-side layer shader. Heavy multi-pass effects still need dedicated worker GPU passes.
+- In strict `worker-gpu-only` stream playback, secondary video layers may reuse their last nearby Worker WebCodecs frame for a tick while the primary layer drives presentation cadence. This keeps mixed-FPS composites from dropping a whole frame when a lower-FPS layer has no new frame due on that tick.
+- In strict `worker-gpu-only` mode, active scrubbing keeps small moves on the precise Worker WebCodecs scrub path and uses fast Worker WebCodecs keyframe seeks for large jumps so stale drag reads do not block later frame stepping.
 
 ### Browser Fallbacks
 

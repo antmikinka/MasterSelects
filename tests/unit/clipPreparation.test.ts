@@ -12,6 +12,7 @@ import type { TimelineClip, TimelineTrack } from '../../src/stores/timeline/type
 import { DEFAULT_TRANSFORM } from '../../src/stores/timeline/constants';
 import { reportExportPreviewFrame } from '../../src/services/timeline/exportRuntimeReporting';
 import { timelineRuntimeCoordinator } from '../../src/services/timeline/timelineRuntimeCoordinator';
+import { WebCodecsPlayer } from '../../src/engine/WebCodecsPlayer';
 
 const initialMediaState = useMediaStore.getState();
 const initialTimelineState = useTimelineStore.getState();
@@ -259,6 +260,109 @@ describe('ClipPreparation image export state', () => {
 
     expect(arrayBuffer).not.toHaveBeenCalled();
     expect(timelineRuntimeCoordinator.getBridgeStats().policies.export.budgetReport.usage.resources).toBe(128);
+  });
+
+  it('falls back from FAST WebCodecs parse errors to PRECISE export preparation', async () => {
+    const createdImages: HTMLImageElement[] = [];
+    installAutoLoadingImageMock(createdImages);
+    const originalCreateElement = document.createElement.bind(document);
+    const createObjectUrl = vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => (
+      blob instanceof File && blob.name === 'Still.png'
+        ? 'blob:export-image'
+        : 'blob:precise-video'
+    ));
+    const revokeObjectUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const fastPlayer = {
+      loadArrayBuffer: vi.fn(async () => {
+        throw new Error('MP4 parsing error: ISOFile');
+      }),
+      destroy: vi.fn(),
+    };
+    vi.mocked(WebCodecsPlayer).mockImplementation(function WebCodecsPlayerMock() {
+      return fastPlayer as unknown as WebCodecsPlayer;
+    });
+    vi.spyOn(document, 'createElement').mockImplementation(((tagName: string, options?: ElementCreationOptions) => {
+      const element = originalCreateElement(tagName, options);
+      if (tagName.toLowerCase() === 'video') {
+        Object.defineProperties(element, {
+          readyState: { configurable: true, value: HTMLMediaElement.HAVE_CURRENT_DATA },
+          duration: { configurable: true, value: 5 },
+          seeking: { configurable: true, value: false },
+          currentTime: { configurable: true, writable: true, value: 0 },
+          load: { configurable: true, value: vi.fn() },
+          pause: { configurable: true, value: vi.fn() },
+        });
+      }
+      return element;
+    }) as typeof document.createElement);
+    const file = new File(['not mp4'], 'Video.webm', { type: 'video/webm' });
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(16));
+    Object.defineProperty(file, 'arrayBuffer', {
+      configurable: true,
+      value: arrayBuffer,
+    });
+    const mediaFile = {
+      id: 'media-video',
+      name: 'Video.webm',
+      type: 'video',
+      file,
+      fileSize: file.size,
+      width: 1920,
+      height: 1080,
+      duration: 5,
+    } as MediaFile;
+    const imageFile = new File(['image'], 'Still.png', { type: 'image/png' });
+    const imageMediaFile = {
+      id: 'media-image',
+      name: 'Still.png',
+      type: 'image',
+      file: imageFile,
+      duration: 5,
+    } as MediaFile;
+    const imageClip = makeImageClip({
+      type: 'image',
+      mediaFileId: imageMediaFile.id,
+      naturalDuration: 5,
+    });
+    const clip = makeVideoClip({
+      type: 'video',
+      mediaFileId: mediaFile.id,
+      naturalDuration: 5,
+    }, file);
+    useTimelineStore.setState({
+      tracks: [makeTrack()],
+      clips: [imageClip, clip],
+    });
+    vi.mocked(useMediaStore.getState).mockReturnValue({
+      ...initialMediaState,
+      files: [imageMediaFile, mediaFile],
+    });
+
+    const result = await prepareClipsForExport(exportSettings, 'fast', 'fallback-fast-run');
+
+    expect(result.exportMode).toBe('precise');
+    expect(result.useParallelDecode).toBe(false);
+    expect(result.parallelDecoder).toBeNull();
+    expect(result.clipStates.get(clip.id)).toMatchObject({
+      clipId: clip.id,
+      webCodecsPlayer: null,
+      isSequential: false,
+      preciseVideoObjectUrl: 'blob:precise-video',
+      hasDedicatedPreciseVideoElement: true,
+    });
+    expect(result.clipStates.get(imageClip.id)).toMatchObject({
+      exportImageObjectUrl: 'blob:export-image',
+    });
+    expect(createdImages.length).toBeGreaterThanOrEqual(2);
+    expect(arrayBuffer).toHaveBeenCalledTimes(1);
+    expect(fastPlayer.loadArrayBuffer).toHaveBeenCalledTimes(1);
+    expect(fastPlayer.destroy).toHaveBeenCalledTimes(1);
+    expect(createObjectUrl).toHaveBeenCalledWith(file);
+    expect(createObjectUrl).toHaveBeenCalledWith(imageFile);
+    expect(revokeObjectUrl).toHaveBeenCalledWith('blob:export-image');
+
+    cleanupExportMode(result.clipStates, result.parallelDecoder);
+    expect(revokeObjectUrl).toHaveBeenCalledWith('blob:precise-video');
   });
 
   it('routes large FAST WebCodecs source sets to PRECISE preparation', () => {

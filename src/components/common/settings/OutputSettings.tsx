@@ -1,11 +1,36 @@
 import { useSettingsStore } from '../../../stores/settingsStore';
+import { useMediaStore } from '../../../stores/mediaStore';
 
 interface OutputSettingsProps {
   embedded?: boolean;
 }
 
+const FRAME_RATE_OPTIONS = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60];
+
+function formatFrameRate(frameRate: number): string {
+  return Number.isInteger(frameRate)
+    ? String(frameRate)
+    : frameRate.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+}
+
 export function OutputSettings({ embedded }: OutputSettingsProps) {
-  const { outputResolution, fps, setResolution } = useSettingsStore();
+  const { outputResolution, fps: legacyFps, setResolution } = useSettingsStore();
+  const { activeCompositionId, compositions, updateComposition } = useMediaStore();
+  const activeComposition = compositions?.find((composition) => composition.id === activeCompositionId);
+  const currentFrameRate = activeComposition?.frameRate ?? legacyFps;
+  const currentFrameRateLabel = Number.isFinite(currentFrameRate)
+    ? formatFrameRate(currentFrameRate)
+    : 'n/a';
+  const frameRateOptions = FRAME_RATE_OPTIONS.includes(currentFrameRate)
+    ? FRAME_RATE_OPTIONS
+    : [...FRAME_RATE_OPTIONS, currentFrameRate].toSorted((a, b) => a - b);
+
+  const handleFrameRateChange = (value: string) => {
+    if (!activeComposition) return;
+    const frameRate = Number(value);
+    if (!Number.isFinite(frameRate) || frameRate <= 0) return;
+    updateComposition(activeComposition.id, { frameRate });
+  };
 
   const content = (
     <>
@@ -50,8 +75,23 @@ export function OutputSettings({ embedded }: OutputSettingsProps) {
       <div className="settings-group">
         <div className="settings-group-title">Frame Rate</div>
         <p className="settings-hint">
-          Current: {fps} FPS (configured per composition)
+          Current: {currentFrameRateLabel} FPS (active composition)
         </p>
+        <label className="settings-row">
+          <span className="settings-label">Active Composition FPS</span>
+          <select
+            value={currentFrameRate}
+            onChange={(e) => handleFrameRateChange(e.target.value)}
+            className="settings-input"
+            disabled={!activeComposition}
+          >
+            {frameRateOptions.map((frameRate) => (
+              <option key={frameRate} value={frameRate}>
+                {formatFrameRate(frameRate)} fps
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
     </>
   );

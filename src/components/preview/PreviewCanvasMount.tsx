@@ -1,12 +1,11 @@
 import type React from 'react';
 import type { createTextBoundsNumericProperty } from '../../types/animationProperties';
-import type { EngineStats } from '../../types/engineStats';
 import type { Layer } from '../../types/layers';
 import type { MaskVertex, TextBoundsPath } from '../../types/masks';
 import type { TextClipProperties } from '../../types/text';
 import type { TimelineClip, TimelineTrack } from '../../types/timeline';
 import type { ClipTransform } from '../../types/timelineCore';
-import type { GaussianSplatLoadProgressEntry } from '../../stores/engineStore';
+import { useEngineStore, type GaussianSplatLoadProgressEntry } from '../../stores/engineStore';
 import type { MediaFile } from '../../stores/mediaStore';
 import type { PreviewQuality } from '../../stores/settingsStore';
 import type { SceneCameraConfig, SceneViewport } from '../../engine/scene/types';
@@ -45,7 +44,6 @@ interface PreviewCanvasMountProps {
   effectiveSceneNavFpsMode: boolean;
   engineInitError: string | null;
   engineInitFailed: boolean;
-  engineStats: EngineStats;
   exportPreviewCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   exportPreviewDisplaySize: { width: number; height: number };
   exportPreviewFrame: ImageBitmap | null;
@@ -104,6 +102,26 @@ interface PreviewCanvasMountProps {
   onToggleStats: () => void;
 }
 
+function PreviewStatsOverlay({
+  expanded,
+  onToggle,
+  resolution,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  resolution: SceneViewport;
+}) {
+  const engineStats = useEngineStore((state) => state.engineStats);
+  return (
+    <StatsOverlay
+      stats={engineStats}
+      resolution={resolution}
+      expanded={expanded}
+      onToggle={onToggle}
+    />
+  );
+}
+
 export function PreviewCanvasMount({
   activeSharedSceneOverlayContent,
   activeSplatLoadProgress,
@@ -126,7 +144,6 @@ export function PreviewCanvasMount({
   effectiveSceneNavFpsMode,
   engineInitError,
   engineInitFailed,
-  engineStats,
   exportPreviewCanvasRef,
   exportPreviewDisplaySize,
   exportPreviewFrame,
@@ -200,8 +217,7 @@ export function PreviewCanvasMount({
             ref={setSceneGizmoToolbarTarget}
             className="preview-scene-gizmo-toolbar-slot"
           />
-          <StatsOverlay
-            stats={engineStats}
+          <PreviewStatsOverlay
             resolution={effectiveResolution}
             expanded={statsExpanded}
             onToggle={onToggleStats}

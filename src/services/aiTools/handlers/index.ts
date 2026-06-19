@@ -95,8 +95,10 @@ import {
 import {
   handlePlay,
   handlePause,
+  handleSimulateFrameKeypresses,
   handleSimulateScrub,
   handleSimulatePlayback,
+  handleSimulatePlaybackPulses,
   handleSimulatePlaybackPath,
   handleSetClipSpeed,
   handleUndo,
@@ -134,6 +136,8 @@ import {
   handleClearRuntimeDiagnostics,
   handlePurgePlaybackPath,
 } from './stats';
+import { handleSamplePlaybackFramePacing } from './framePacing';
+import { handleSetRenderHostMode } from './renderHost';
 import { handleRunWorkerFirstRenderCapabilityProbe } from '../workerFirstCapabilityProbeBridge';
 import { handleRunWorkerFirstBakeGoldenFixture } from '../workerFirstBakeGoldenFixture';
 import { handleRunWorkerFirstBakeShadowParity } from '../workerFirstBakeShadowParity';
@@ -154,7 +158,10 @@ import { handleRunWorkerFirstNestedCompsGoldenFixture } from '../workerFirstNest
 import { handleRunWorkerFirstNestedCompsShadowParity } from '../workerFirstNestedCompsShadowParity';
 import { handleRunWorkerFirstRamCacheGoldenFixture } from '../workerFirstRamCacheGoldenFixture';
 import { handleRunWorkerFirstRamCacheShadowParity } from '../workerFirstRamCacheShadowParity';
-import { handleRunWorkerFirstRuntimeExportPlaybackSmoke } from '../workerFirstRuntimeExportPlaybackSmoke';
+import {
+  handleRunWorkerFirstRealVideoRuntimeSmoke,
+  handleRunWorkerFirstRuntimeExportPlaybackSmoke,
+} from '../workerFirstRuntimeExportPlaybackSmoke';
 import { handleRunWorkerFirstPlatformEvidencePackage } from '../workerFirstPlatformEvidencePackage';
 import { handleVerifyWorkerFirstPlatformEvidenceMatrix } from '../workerFirstPlatformEvidenceMatrix';
 import { handleRunWorkerFirstSolidTextImageGoldenFixture } from '../workerFirstSolidTextImageGoldenFixture';
@@ -226,8 +233,10 @@ const timelineHandlers: Record<string, (args: Record<string, unknown>, store: Re
   // Playback & Control
   play: handlePlay,
   pause: handlePause,
+  simulateFrameKeypresses: handleSimulateFrameKeypresses,
   simulateScrub: handleSimulateScrub,
   simulatePlayback: handleSimulatePlayback,
+  simulatePlaybackPulses: handleSimulatePlaybackPulses,
   simulatePlaybackPath: handleSimulatePlaybackPath,
   setClipSpeed: handleSetClipSpeed,
   // Markers
@@ -291,6 +300,7 @@ const selfContainedHandlers: Record<string, (args: Record<string, unknown>, call
   getRuntimeDiagnostics: handleGetRuntimeDiagnostics,
   clearRuntimeDiagnostics: handleClearRuntimeDiagnostics,
   getPlaybackTrace: handleGetPlaybackTrace,
+  samplePlaybackFramePacing: handleSamplePlaybackFramePacing,
   purgePlaybackPath: handlePurgePlaybackPath,
   runWorkerFirstRenderCapabilityProbe: async (args: Record<string, unknown>) =>
     handleRunWorkerFirstRenderCapabilityProbe(args),
@@ -340,6 +350,8 @@ const selfContainedHandlers: Record<string, (args: Record<string, unknown>, call
     handleVerifyWorkerFirstPlatformEvidenceMatrix(args),
   runWorkerFirstRuntimeExportPlaybackSmoke: async (args: Record<string, unknown>) =>
     handleRunWorkerFirstRuntimeExportPlaybackSmoke(args),
+  runWorkerFirstRealVideoRuntimeSmoke: async (args: Record<string, unknown>) =>
+    handleRunWorkerFirstRealVideoRuntimeSmoke(args),
   runWorkerFirstEffectsMasksTransitionsGoldenFixture: async (args: Record<string, unknown>) =>
     handleRunWorkerFirstEffectsMasksTransitionsGoldenFixture(args),
   runWorkerFirstEffectsMasksTransitionsShadowParity: async (args: Record<string, unknown>) =>
@@ -366,6 +378,7 @@ const selfContainedHandlers: Record<string, (args: Record<string, unknown>, call
   runTimelineCanvasThumbnailReloadSmoke: handleRunTimelineCanvasThumbnailReloadSmoke,
   runTimelineCanvasRamPreviewSmoke: handleRunTimelineCanvasRamPreviewSmoke,
   runTimelineCanvasSpectralPlaybackSmoke: handleRunTimelineCanvasSpectralPlaybackSmoke,
+  setRenderHostMode: handleSetRenderHostMode,
   getNodeWorkspaceDebugState: handleGetNodeWorkspaceDebugState,
   sendAINodePrompt: handleSendAINodePrompt,
   getDockLayoutDebugState: handleGetDockLayoutDebugState,
@@ -627,8 +640,10 @@ export {
   // Playback & Control
   handlePlay,
   handlePause,
+  handleSimulateFrameKeypresses,
   handleSimulateScrub,
   handleSimulatePlayback,
+  handleSimulatePlaybackPulses,
   handleSimulatePlaybackPath,
   handleSetClipSpeed,
   handleUndo,
@@ -656,6 +671,7 @@ export {
   handleGetRuntimeDiagnostics,
   handleGetPlaybackTrace,
   handleGetStatsHistory,
+  handleSamplePlaybackFramePacing,
   handleRunWorkerFirstPlatformEvidencePackage,
   handleRunWorkerFirstEffectsMasksTransitionsShadowParity,
   handleCaptureWorkerFirstVisiblePresentationProof,

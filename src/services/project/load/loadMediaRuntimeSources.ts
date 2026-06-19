@@ -242,19 +242,6 @@ export async function hydrateProjectMediaRuntimeSources(
     }
   }
 
-  const representativeFile = file ?? modelSequence?.frames[0]?.file ?? gaussianSplatSequence?.frames[0]?.file;
-  const representativeProjectPath =
-    resolvedProjectPath ?? modelSequence?.frames[0]?.projectPath ?? gaussianSplatSequence?.frames[0]?.projectPath;
-  const nativeRepresentativeUrl =
-    !hydrateFiles && representativeProjectPath ? resolveProjectRawFileUrl(representativeProjectPath) ?? '' : '';
-  const representativeUrl =
-    url || modelSequence?.frames[0]?.modelUrl || gaussianSplatSequence?.frames[0]?.splatUrl || nativeRepresentativeUrl || '';
-  const representativeAbsolutePath =
-    resolveProjectRawFilePath(representativeProjectPath) ??
-    (isAbsoluteFilePath(pm.sourcePath) ? pm.sourcePath : undefined) ??
-    modelSequence?.frames[0]?.absolutePath ??
-    gaussianSplatSequence?.frames[0]?.absolutePath;
-
   if (hydrateFiles && !file) {
     handle = fileSystemService.getFileHandle(pm.id);
 
@@ -287,8 +274,18 @@ export async function hydrateProjectMediaRuntimeSources(
     }
   }
 
-  void file;
-  void url;
+  const representativeFile = file ?? modelSequence?.frames[0]?.file ?? gaussianSplatSequence?.frames[0]?.file;
+  const representativeProjectPath =
+    resolvedProjectPath ?? modelSequence?.frames[0]?.projectPath ?? gaussianSplatSequence?.frames[0]?.projectPath;
+  const nativeRepresentativeUrl =
+    !hydrateFiles && representativeProjectPath ? resolveProjectRawFileUrl(representativeProjectPath) ?? '' : '';
+  const representativeUrl =
+    url || modelSequence?.frames[0]?.modelUrl || gaussianSplatSequence?.frames[0]?.splatUrl || nativeRepresentativeUrl || '';
+  const representativeAbsolutePath =
+    resolveProjectRawFilePath(representativeProjectPath) ??
+    (isAbsoluteFilePath(pm.sourcePath) ? pm.sourcePath : undefined) ??
+    modelSequence?.frames[0]?.absolutePath ??
+    gaussianSplatSequence?.frames[0]?.absolutePath;
 
   return {
     representativeFile,

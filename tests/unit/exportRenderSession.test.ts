@@ -32,6 +32,10 @@ const mockFactory = vi.hoisted(() => {
       calls.push('isDeviceValid');
       return true;
     }),
+    initialize: vi.fn(async () => {
+      calls.push('initialize');
+      return true;
+    }),
     setRenderTimeOverride: vi.fn((time: number | null) => {
       calls.push(`setRenderTimeOverride:${time}`);
     }),
@@ -95,6 +99,12 @@ function createSession(preferZeroCopy = true): ExportRenderSessionImpl {
 
 function createInjectedHost(): ExportRenderHostPort {
   return {
+    getTelemetry: vi.fn(() => ({
+      mode: 'main',
+      presentationStrategy: 'main-host-fallback',
+      lifecycleOwner: 'exportRenderHostPort',
+    })),
+    ensureReady: vi.fn(async () => true),
     getOutputDimensions: vi.fn(() => ({ width: 640, height: 360 })),
     setResolution: vi.fn(),
     setExporting: vi.fn(),
@@ -121,13 +131,14 @@ beforeEach(() => {
 });
 
 describe('ExportRenderSessionImpl', () => {
-  it('begins with the original export setup order', () => {
+  it('begins with the original export setup order', async () => {
     const session = createSession();
 
-    session.begin();
+    await session.begin();
 
     expect(session.usesZeroCopy).toBe(true);
     expect(mockFactory.calls).toEqual([
+      'isDeviceValid',
       'getOutputDimensions',
       'setResolution:1920x1080',
       'setExporting:true',
@@ -137,7 +148,7 @@ describe('ExportRenderSessionImpl', () => {
 
   it('renders and captures a zero-copy frame in the original order', async () => {
     const session = createSession();
-    session.begin();
+    await session.begin();
     mockFactory.calls.length = 0;
 
     const capture = await session.renderFrame({
@@ -171,7 +182,7 @@ describe('ExportRenderSessionImpl', () => {
 
   it('renders and captures a readback frame in the original order', async () => {
     const session = createSession(false);
-    session.begin();
+    await session.begin();
     mockFactory.calls.length = 0;
 
     const capture = await session.renderFrame({
@@ -204,7 +215,7 @@ describe('ExportRenderSessionImpl', () => {
       preferZeroCopy: false,
       host,
     });
-    session.begin();
+    await session.begin();
 
     await session.renderFrame({
       time: 5,
@@ -216,9 +227,71 @@ describe('ExportRenderSessionImpl', () => {
     expect(mockFactory.syncExportMaskTextures).toHaveBeenCalledWith(layers, 320, 180, 5, host);
   });
 
+  it('revalidates the export host once before rendering a frame', async () => {
+    let valid = false;
+    const host = createInjectedHost();
+    vi.mocked(host.isDeviceValid).mockImplementation(() => valid);
+    vi.mocked(host.ensureReady).mockImplementation(async () => {
+      valid = true;
+      return true;
+    });
+    const session = new ExportRenderSessionImpl({
+      runId: 'export-run-recover',
+      width: 320,
+      height: 180,
+      stackedAlpha: false,
+      preferZeroCopy: false,
+      host,
+    });
+    await session.begin();
+    valid = false;
+    vi.mocked(host.ensureReady).mockClear();
+
+    const capture = await session.renderFrame({
+      time: 2,
+      layers,
+      timestampMicros: 200000,
+      durationMicros: 33333,
+    });
+
+    expect(capture.kind).toBe('rgba-pixels');
+    expect(host.ensureReady).toHaveBeenCalledTimes(1);
+    expect(host.render).toHaveBeenCalledWith(layers);
+  });
+
+  it('reports the active export host when frame render cannot recover', async () => {
+    const host = createInjectedHost();
+    vi.mocked(host.getTelemetry).mockReturnValue({
+      mode: 'worker-software',
+      presentationStrategy: 'worker-software-readback',
+      lifecycleOwner: 'exportRenderHostPort',
+    });
+    vi.mocked(host.isDeviceValid).mockReturnValue(false);
+    vi.mocked(host.ensureReady).mockResolvedValueOnce(true);
+    const session = new ExportRenderSessionImpl({
+      runId: 'export-run-invalid',
+      width: 320,
+      height: 180,
+      stackedAlpha: false,
+      preferZeroCopy: false,
+      host,
+    });
+    await session.begin();
+    vi.mocked(host.ensureReady).mockReset();
+    vi.mocked(host.ensureReady).mockResolvedValue(false);
+
+    await expect(session.renderFrame({
+      time: 2,
+      layers,
+      timestampMicros: 200000,
+      durationMicros: 33333,
+    })).rejects.toThrow('worker-software/worker-software-readback');
+    expect(host.render).not.toHaveBeenCalled();
+  });
+
   it('falls back to readback when zero-copy VideoFrame capture is unavailable', async () => {
     const session = createSession();
-    session.begin();
+    await session.begin();
     mockFactory.calls.length = 0;
     mockFactory.engine.createVideoFrameFromExport.mockImplementationOnce(async (timestamp: number, duration: number) => {
       mockFactory.calls.push(`createVideoFrameFromExport:${timestamp}:${duration}`);
@@ -249,7 +322,7 @@ describe('ExportRenderSessionImpl', () => {
 
   it('throws when both zero-copy and readback capture are unavailable', async () => {
     const session = createSession();
-    session.begin();
+    await session.begin();
     mockFactory.calls.length = 0;
     mockFactory.engine.createVideoFrameFromExport.mockResolvedValueOnce(null);
     mockFactory.engine.readPixels.mockResolvedValueOnce(null);
@@ -262,9 +335,9 @@ describe('ExportRenderSessionImpl', () => {
     })).rejects.toBeInstanceOf(ExportFrameCaptureUnavailableError);
   });
 
-  it('disposes with the original restore order and is idempotent', () => {
+  it('disposes with the original restore order and is idempotent', async () => {
     const session = createSession();
-    session.begin();
+    await session.begin();
     mockFactory.calls.length = 0;
 
     session.dispose();
@@ -278,9 +351,9 @@ describe('ExportRenderSessionImpl', () => {
     ]);
   });
 
-  it('cancels by aborting the signal and restoring the engine state', () => {
+  it('cancels by aborting the signal and restoring the engine state', async () => {
     const session = createSession();
-    session.begin();
+    await session.begin();
     mockFactory.calls.length = 0;
 
     session.cancel('stop-export');

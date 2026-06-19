@@ -60,7 +60,6 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
   const { addKeyframe, hasKeyframes, isRecording } = useTimelineStore.getState();
   const engineInitFailed = useEngineStore((s) => s.engineInitFailed);
   const engineInitError = useEngineStore((s) => s.engineInitError);
-  const engineStats = useEngineStore(s => s.engineStats);
   const sceneNavClipId = useEngineStore(selectSceneNavClipId);
   const sceneNavFpsMode = useEngineStore(selectSceneNavFpsMode);
   const sceneNavFpsMoveSpeed = useEngineStore(selectSceneNavFpsMoveSpeed);
@@ -606,7 +605,7 @@ export function Preview({ panelId, source, showTransparencyGrid }: PreviewProps)
     canvasSize, canvasWrapperRef, clips, closeSourceMonitor, containerSize, displayedCompId,
     dragHandle, dragMode, editCameraGizmoTransform, editCameraModeActive, editCameraOrthoHint,
     editMode, effectiveResolution, effectiveSceneNavFpsMode, engineInitError, engineInitFailed,
-    engineStats, exportPreviewCanvasRef, exportPreviewDisplaySize, exportPreviewFrame,
+    exportPreviewCanvasRef, exportPreviewDisplaySize, exportPreviewFrame,
     focusEditCameraOnSceneObject, getCursorForHandle, handleOverlayMouseDown,
     handleOverlayMouseMove, handleOverlayMouseUp, hoverHandle, isDragging, isEditableSource,
     isEngineReady, isExporting, layerTransformMode, maskEditMode, maskNavigationMode,

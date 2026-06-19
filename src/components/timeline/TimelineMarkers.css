@@ -95,6 +95,8 @@
 .playhead.playhead-live-transform {
   contain: layout paint style;
   isolation: isolate;
+  transform: translate3d(var(--timeline-switch-base-x, -1px), 0, 0);
+  will-change: transform;
 }
 
 .playhead.playhead-live-transform .playhead-head {

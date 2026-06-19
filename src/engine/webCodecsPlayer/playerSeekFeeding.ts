@@ -61,7 +61,7 @@ export abstract class WebCodecsPlayerSeekFeeding extends WebCodecsPlayerFrameOut
 
       const chunk = new EncodedVideoChunk({
         type: sample.is_sync ? 'key' : 'delta',
-        timestamp: (sample.cts * 1_000_000) / sample.timescale,
+        timestamp: this.getSamplePresentationTimestampUs(sample),
         duration: (sample.duration * 1_000_000) / sample.timescale,
         data: sample.data,
       });
@@ -75,8 +75,8 @@ export abstract class WebCodecsPlayerSeekFeeding extends WebCodecsPlayerFrameOut
           queueSize,
           mode
         );
-      } catch {
-        // Skip decode errors
+      } catch (error) {
+        this.recordDecodeError(error, `${mode}.decode`);
       }
 
       this.feedIndex++;
@@ -113,7 +113,7 @@ export abstract class WebCodecsPlayerSeekFeeding extends WebCodecsPlayerFrameOut
 
       const chunk = new EncodedVideoChunk({
         type: sample.is_sync ? 'key' : 'delta',
-        timestamp: (sample.cts * 1_000_000) / sample.timescale,
+        timestamp: this.getSamplePresentationTimestampUs(sample),
         duration: (sample.duration * 1_000_000) / sample.timescale,
         data: sample.data,
       });
@@ -127,8 +127,8 @@ export abstract class WebCodecsPlayerSeekFeeding extends WebCodecsPlayerFrameOut
           queueSize,
           'pause_preroll'
         );
-      } catch {
-        // Skip decode errors
+      } catch (error) {
+        this.recordDecodeError(error, 'pause_preroll.decode');
       }
 
       this.feedIndex++;
@@ -177,7 +177,7 @@ export abstract class WebCodecsPlayerSeekFeeding extends WebCodecsPlayerFrameOut
       return false;
     }
 
-    const maxForwardFrames = previewMode === 'interactive'
+    const maxForwardFrames = previewMode !== 'strict'
       ? Math.max(90, Math.ceil(this.frameRate * 3))
       : Math.max(
           12,
@@ -215,11 +215,15 @@ export abstract class WebCodecsPlayerSeekFeeding extends WebCodecsPlayerFrameOut
       return false;
     }
 
+    if (this.getEffectiveDecodeQueueSize() >= WEB_CODECS_PLAYER_LIMITS.ADVANCE_SEEK_QUEUE_TARGET) {
+      return false;
+    }
+
     const currentPendingEnd = Math.max(
       this.pendingSeekFeedEndIndex ?? this.feedIndex - 1,
       this.sampleIndex
     );
-    const maxExtensionFrames = previewMode === 'interactive'
+    const maxExtensionFrames = previewMode !== 'strict'
       ? Math.max(180, Math.ceil(this.frameRate * 6))
       : Math.max(
           24,
@@ -237,12 +241,13 @@ export abstract class WebCodecsPlayerSeekFeeding extends WebCodecsPlayerFrameOut
       return targetIndex;
     }
 
-    if (previewMode !== 'strict') {
+    if (previewMode === 'interactive') {
       return targetIndex;
     }
 
-    // Strict paused seeks need a small decode lookahead past the target so
-    // reordered B-frames can actually be emitted before we flush.
+    // Strict and startup-preroll paused seeks need decode lookahead past the
+    // target so reordered B-frames can actually be emitted. Preroll keeps the
+    // interactive preview behavior but avoids the strict decoder flush.
     const reorderLookaheadFrames = Math.max(
       WEB_CODECS_PLAYER_LIMITS.FEED_LOOKAHEAD,
       Math.ceil(this.frameRate * 0.35)
@@ -278,6 +283,17 @@ export abstract class WebCodecsPlayerSeekFeeding extends WebCodecsPlayerFrameOut
         pendingTargetIdx,
         performance.now() - this.pendingSeekStartedAtMs
       );
+      return false;
+    }
+
+    const staleResolveFrameLimit = Math.max(
+      WEB_CODECS_PLAYER_LIMITS.ADVANCE_SEEK_MAX_STALE_RESOLVE_FRAMES,
+      Math.ceil(this.frameRate * 0.1)
+    );
+    if (
+      targetIdx > pendingTargetIdx + staleResolveFrameLimit &&
+      decodeCoverageEnd >= targetIdx
+    ) {
       return false;
     }
 

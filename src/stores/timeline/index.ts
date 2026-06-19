@@ -209,6 +209,8 @@ export const useTimelineStore = create<TimelineStore>()(
       ramPreviewProgress: null as number | null,
       ramPreviewRange: null as { start: number; end: number } | null,
       isRamPreviewing: false,
+      clipVideoBakeProgress: null as number | null,
+      isClipVideoBakeRendering: false,
       cachedFrameTimes: new Set<number>(),
 
       // Proxy cache preloading state

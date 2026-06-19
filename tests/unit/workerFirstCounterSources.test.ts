@@ -11,9 +11,13 @@ import {
   getWorkerFirstCounterSourceSnapshot,
   getWorkerFirstCounterSources,
   recordWorkerFirstCacheSnapshot,
+  clearWorkerFirstPresentedFrameEvents,
+  recordWorkerFirstPresentedFrame,
   recordWorkerFirstProviderStatuses,
   recordWorkerFirstSchedulerSnapshot,
   recordWorkerFirstTimingCounters,
+  getWorkerFirstPresentedFrameEvents,
+  getWorkerFirstGpuOnlyPresentedFrameSummary,
   recordWorkerFirstVisiblePixelCounters,
 } from '../../src/services/aiTools/workerFirstCounterSources';
 import { createWorkerFirstProofSnapshot } from '../../src/services/aiTools/workerFirstProofHarness';
@@ -123,6 +127,12 @@ describe('worker-first runtime counter sources', () => {
       providerWaitMs: 9,
       presentedFrameId: 'frame-99',
     }, 40);
+    recordWorkerFirstPresentedFrame({
+      frameId: 'preview:frame-99',
+      targetId: 'preview',
+      source: 'worker-presenting',
+      t: 42,
+    }, 45);
     recordWorkerFirstVisiblePixelCounters({
       nonBlankRatio: 0.8,
       blackFrameCount: 0,
@@ -138,7 +148,21 @@ describe('worker-first runtime counter sources', () => {
     expect(snapshot.providers).toHaveLength(1);
     expect(snapshot.transferLatencyMs).toBe(5);
     expect(snapshot.providerWaitMs).toBe(9);
-    expect(snapshot.presentedFrameId).toBe('frame-99');
+    expect(snapshot.presentedFrameId).toBe('preview:frame-99');
+    expect(snapshot.presentedFrames).toEqual([{
+      t: 42,
+      frameId: 'preview:frame-99',
+      targetId: 'preview',
+      source: 'worker-presenting',
+      changed: true,
+      targetMoved: true,
+    }]);
+    expect(snapshot.workerGpuOnly).toMatchObject({
+      frameState: 'no-gpu-frame',
+      previewFrames: 0,
+    });
+    expect(getWorkerFirstPresentedFrameEvents(10, 50)).toEqual(snapshot.presentedFrames);
+    expect(getWorkerFirstPresentedFrameEvents(5, 50)).toEqual([]);
     expect(snapshot.visiblePixels).toEqual({
       nonBlankRatio: 0.8,
       blackFrameCount: 0,
@@ -226,5 +250,89 @@ describe('worker-first runtime counter sources', () => {
       freezeCount: 0,
       staleVisibleFrameCount: 0,
     });
+  });
+
+  it('can clear presented frame events without resetting other counter sources', () => {
+    recordWorkerFirstSchedulerSnapshot(scheduler, 10);
+    recordWorkerFirstCacheSnapshot(cache, 20);
+    recordWorkerFirstTimingCounters({
+      transferLatencyMs: 5,
+      providerWaitMs: 9,
+      presentedFrameId: 'preview:frame-1',
+    }, 30);
+    recordWorkerFirstPresentedFrame({
+      frameId: 'preview:frame-1',
+      targetId: 'preview',
+      t: 35,
+    }, 35);
+
+    clearWorkerFirstPresentedFrameEvents();
+
+    const snapshot = getWorkerFirstCounterSourceSnapshot();
+    expect(snapshot.scheduler?.queueDepth).toBe(4);
+    expect(snapshot.cache?.bytes).toBe(8192);
+    expect(snapshot.transferLatencyMs).toBe(5);
+    expect(snapshot.providerWaitMs).toBe(9);
+    expect(snapshot.presentedFrameId).toBe('preview:frame-1');
+    expect(snapshot.presentedFrames).toEqual([]);
+  });
+
+  it('summarizes strict worker GPU-only presented-frame labels', () => {
+    expect(getWorkerFirstGpuOnlyPresentedFrameSummary()).toMatchObject({
+      frameState: 'no-gpu-frame',
+      previewFrames: 0,
+      testPatternFrames: 0,
+      realSourceFrames: 0,
+      unknownSourceFrames: 0,
+    });
+
+    recordWorkerFirstPresentedFrame({
+      frameId: 'preview:gpu-test-pattern:1',
+      targetId: 'preview',
+      source: 'worker-gpu-only:gpu-test-pattern',
+      t: 10,
+    }, 10);
+
+    expect(getWorkerFirstGpuOnlyPresentedFrameSummary()).toMatchObject({
+      frameState: 'gpu-test-pattern',
+      previewFrames: 1,
+      testPatternFrames: 1,
+      realSourceFrames: 0,
+      pathCounts: {
+        'worker-gpu-only:gpu-test-pattern': 1,
+        'worker-gpu-only:VideoFrame': 0,
+      },
+    });
+
+    recordWorkerFirstPresentedFrame({
+      frameId: 'preview:video-frame:2',
+      targetId: 'preview',
+      source: 'worker-gpu-only:VideoFrame',
+      t: 20,
+    }, 20);
+    recordWorkerFirstPresentedFrame({
+      frameId: 'preview:readback:3',
+      targetId: 'preview',
+      source: 'worker-gpu-only:readback',
+      t: 30,
+    }, 30);
+
+    const snapshot = getWorkerFirstCounterSourceSnapshot();
+    expect(snapshot.workerGpuOnly).toMatchObject({
+      frameState: 'real-gpu-source',
+      previewFrames: 3,
+      testPatternFrames: 1,
+      realSourceFrames: 2,
+      pathCounts: {
+        'worker-gpu-only:gpu-test-pattern': 1,
+        'worker-gpu-only:VideoFrame': 1,
+        'worker-gpu-only:solid': 0,
+        'worker-gpu-only:image': 0,
+        'worker-gpu-only:text': 0,
+        'worker-gpu-only:nested': 0,
+        'worker-gpu-only:readback': 1,
+      },
+    });
+    expect(JSON.parse(JSON.stringify(snapshot.workerGpuOnly))).toEqual(snapshot.workerGpuOnly);
   });
 });

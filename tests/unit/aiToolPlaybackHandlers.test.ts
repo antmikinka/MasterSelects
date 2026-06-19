@@ -3,6 +3,7 @@ import { engine } from '../../src/engine/WebGPUEngine';
 import { useTimelineStore } from '../../src/stores/timeline';
 import {
   buildPlaybackPathPreset,
+  handleSimulateFrameKeypresses,
   handleSimulatePlayback,
 } from '../../src/services/aiTools/handlers/playback';
 
@@ -53,6 +54,7 @@ describe('AI simulatePlayback handler', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     const debugEngine = engine as unknown as {
       getLayerCollector?: unknown;
@@ -127,6 +129,106 @@ describe('AI simulatePlayback handler', () => {
 
     expect(store.pause).toHaveBeenCalled();
     expect(useTimelineStore.getState().isPlaying).toBe(false);
+  });
+
+  it('samples playback with timers instead of depending on debug-handler RAF cadence', async () => {
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1));
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    const store = makePlaybackStore();
+
+    const result = await handleSimulatePlayback({
+      durationMs: 100,
+      settleMs: 0,
+      resetDiagnostics: false,
+    }, store as unknown as ReturnType<typeof useTimelineStore.getState>);
+
+    expect(result.success).toBe(true);
+    const data = result.data as {
+      framesObserved: number;
+      observedSampleFps: number;
+    };
+    expect(data.framesObserved).toBeGreaterThan(2);
+    expect(data.observedSampleFps).toBeGreaterThan(10);
+  });
+});
+
+describe('AI simulateFrameKeypresses handler', () => {
+  beforeEach(() => {
+    const debugEngine = engine as unknown as {
+      getLayerCollector?: () => { isVideoGpuReady: () => boolean };
+    };
+    debugEngine.getLayerCollector = () => ({
+      isVideoGpuReady: () => false,
+    });
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      callback(performance.now());
+      return 1;
+    });
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    const debugEngine = engine as unknown as {
+      getLayerCollector?: unknown;
+    };
+    delete debugEngine.getLayerCollector;
+    useTimelineStore.setState({
+      duration: 60,
+      isDraggingPlayhead: false,
+      isPlaying: false,
+      playbackSpeed: 1,
+      playheadPosition: 0,
+      playbackWarmup: null,
+    });
+  });
+
+  it('dispatches real ArrowLeft/ArrowRight keydown events through window listeners', async () => {
+    const frameDuration = 1 / 60;
+    let currentPosition = 6;
+    useTimelineStore.setState({
+      duration: 60,
+      isPlaying: false,
+      playheadPosition: currentPosition,
+    });
+    const listener = vi.fn((event: KeyboardEvent) => {
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        currentPosition -= frameDuration;
+        useTimelineStore.setState({ playheadPosition: currentPosition });
+      }
+      if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        currentPosition += frameDuration;
+        useTimelineStore.setState({ playheadPosition: currentPosition });
+      }
+    });
+    window.addEventListener('keydown', listener);
+    const store = makePlaybackStore();
+
+    try {
+      const result = await handleSimulateFrameKeypresses({
+        sequence: ['ArrowLeft', 'ArrowLeft', 'ArrowRight'],
+        delayMs: 0,
+        settleMs: 0,
+        resetDiagnostics: false,
+      }, store as unknown as ReturnType<typeof useTimelineStore.getState>);
+
+      expect(result.success).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(3);
+      expect(store.pause).toHaveBeenCalled();
+      expect(result.data).toMatchObject({
+        keyCount: 3,
+        sequence: ['ArrowLeft', 'ArrowLeft', 'ArrowRight'],
+      });
+      const data = result.data as { samples: Array<Record<string, unknown>>; finalPosition: number };
+      expect(data.samples.map((sample) => sample.key)).toEqual(['ArrowLeft', 'ArrowLeft', 'ArrowRight']);
+      expect(data.samples.every((sample) => sample.defaultPrevented === true)).toBe(true);
+      expect(data.finalPosition).toBeCloseTo(6 - frameDuration, 8);
+    } finally {
+      window.removeEventListener('keydown', listener);
+    }
   });
 });
 

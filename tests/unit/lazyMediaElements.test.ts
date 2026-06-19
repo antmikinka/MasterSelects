@@ -20,6 +20,10 @@ import {
   revokeAllMediaObjectUrls,
 } from '../../src/services/project/mediaObjectUrlManager';
 import { timelineRuntimeCoordinator } from '../../src/services/timeline/timelineRuntimeCoordinator';
+import {
+  configureRenderHostSelection,
+  renderHostPort,
+} from '../../src/services/render/renderHostPort';
 
 const noop = () => undefined;
 
@@ -206,6 +210,17 @@ function makeNestedVideoCompositionContext() {
   return { ctx, nestedVideo, parentComp };
 }
 
+function mockRenderHostMode(mode: ReturnType<typeof renderHostPort.getTelemetry>['mode']): void {
+  configureRenderHostSelection({
+    workerPrimary: {
+      getTelemetry: () => ({ mode }) as ReturnType<typeof renderHostPort.getTelemetry>,
+    } as unknown as typeof renderHostPort,
+    preferWorkerPrimary: true,
+    workerPrimaryAvailable: true,
+    workerPrimaryBlockers: [],
+  });
+}
+
 describe('lazy timeline media elements', () => {
   beforeEach(() => {
     vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(noop);
@@ -219,6 +234,11 @@ describe('lazy timeline media elements', () => {
     releaseAllLazyTimelineImageElements();
     revokeAllMediaObjectUrls();
     timelineRuntimeCoordinator.clearResources();
+    configureRenderHostSelection({
+      preferWorkerPrimary: false,
+      workerPrimaryAvailable: false,
+      workerPrimaryBlockers: [],
+    });
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -257,6 +277,29 @@ describe('lazy timeline media elements', () => {
     expect(stats.policies.interactive.resources[0].tags).toContain('runtime-provider-demand');
     expect(stats.policies.interactive.resources[0].tags).toContain('lease-visible');
     expect(stats.policies.interactive.resources[0].tags).toContain('primary-lazy-media');
+  });
+
+  it('keeps video hydration disabled in worker GPU-only mode while preserving audio hydration', () => {
+    mockRenderHostMode('worker-gpu-only');
+    const videoTrack = makeTrack('video', 'track-v1');
+    const audioTrack = makeTrack('audio', 'track-a1');
+    const videoClip = makeClip('clip-v1', videoTrack, 'video', 'media-v1');
+    const audioClip = makeClip('clip-a1', audioTrack, 'audio', 'media-a1', new File(['audio'], 'clip-a1.mp3', { type: 'audio/mpeg' }));
+    const ctx = makeContext({
+      clips: [videoClip, audioClip],
+      tracks: [videoTrack, audioTrack],
+      mediaFiles: [
+        { id: 'media-v1', name: videoClip.name, type: 'video', file: videoClip.file, duration: 4 },
+        { id: 'media-a1', name: audioClip.name, type: 'audio', file: audioClip.file, duration: 4 },
+      ],
+    });
+
+    hydrateTimelineMediaWindow(ctx);
+
+    expect(getLazyTimelineVideoElementForClip(videoClip)).toBeNull();
+    expect(videoClip.source?.videoElement).toBeUndefined();
+    expect(getLazyTimelineAudioElementForClip(audioClip)).toBe(audioClip.source?.audioElement);
+    expect(audioClip.source?.audioElement).toBeInstanceOf(HTMLAudioElement);
   });
 
   it('skips file-backed lazy video allocation when interactive html-media admission is over budget', () => {

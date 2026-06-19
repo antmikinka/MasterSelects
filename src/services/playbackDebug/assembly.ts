@@ -1,6 +1,7 @@
 import type {
   PlaybackDebugBuildParams,
   PlaybackDebugStats,
+  PlaybackPreviewFrameEvent,
   PlaybackPipeline,
 } from '../playbackDebugStats';
 import { summarizeVfTimeline, summarizeWcTimeline } from './collectors';
@@ -11,7 +12,7 @@ const DEFAULT_WINDOW_MS = 5000;
 export function mapDecoderToPlaybackPipeline(
   decoder: PlaybackDebugBuildParams['decoder']
 ): PlaybackPipeline {
-  if (decoder === 'WebCodecs') {
+  if (decoder === 'WebCodecs' || decoder === 'WebCodecs+HTMLVideo') {
     return 'webcodecs';
   }
   if (decoder === 'HTMLVideo(VF)') {
@@ -29,6 +30,23 @@ export function mapDecoderToPlaybackPipeline(
   return 'none';
 }
 
+function workerPreviewEventToVfEvent(event: PlaybackPreviewFrameEvent) {
+  const detail: Record<string, string | number> = {
+    changed: event.changed === false ? 'false' : 'true',
+    targetMoved: event.targetMoved === false ? 'false' : 'true',
+    previewPath: event.source || 'worker-presenting',
+    clipId: event.targetId,
+  };
+  if (typeof event.driftMs === 'number' && Number.isFinite(event.driftMs)) {
+    detail.driftMs = event.driftMs;
+  }
+  return {
+    type: 'vf_preview_frame' as const,
+    t: event.t,
+    detail,
+  };
+}
+
 export function buildPlaybackDebugStats(
   params: PlaybackDebugBuildParams
 ): PlaybackDebugStats {
@@ -41,7 +59,11 @@ export function buildPlaybackDebugStats(
   );
 
   const wcSummary = summarizeWcTimeline(params.wcTimeline ?? []);
-  const vfSummary = summarizeVfTimeline(params.vfTimeline ?? []);
+  const vfTimeline = [
+    ...(params.vfTimeline ?? []),
+    ...(params.workerPreviewEvents ?? []).map(workerPreviewEventToVfEvent),
+  ].toSorted((a, b) => a.t - b.t);
+  const vfSummary = summarizeVfTimeline(vfTimeline);
   const activeVideos = healthVideos.length;
   const worstReadyState = activeVideos > 0
     ? Math.min(...healthVideos.map((video) => video.readyState))

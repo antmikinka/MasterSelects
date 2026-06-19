@@ -1,575 +1,378 @@
-import { engine } from '../../engine/WebGPUEngine';
-import { useEngineStore } from '../../stores/engineStore';
-import { useRenderTargetStore } from '../../stores/renderTargetStore';
-import type { EngineStats, Layer } from '../../types';
-import type { WorkerFirstCacheRuntimeSnapshot } from '../../engine/texture/ScrubbingCache';
-import { framePhaseMonitor } from '../framePhaseMonitor';
-import { playheadState } from '../layerBuilder/PlayheadState';
-import { Logger } from '../logger';
-import type { RamPreviewRenderEngine } from '../ramPreviewEngine';
+import { flags } from '../../engine/featureFlags';
+import { MainFallbackRenderHostPort } from './mainFallbackRenderHostPort';
+import { prefersSoftwareTimelineCanvas } from '../../utils/canvasPlatform';
+import {
+  selectRenderHost,
+  type RenderHostSelection,
+  type RenderHostSelectionTelemetry,
+} from './renderHostSelection';
+import type {
+  ConfigureRenderHostSelectionOptions,
+  RenderHostPort,
+  RenderHostTelemetry,
+} from './renderHostTypes';
+import { isBrowserWorkerRenderHostRuntimeSupported } from './workerRenderHostRuntimeBridge';
+import {
+  createWorkerPresentingRenderHostPort,
+  isWorkerPresentingCanvasSupported,
+  type WorkerPresentingPresentationStrategy,
+} from './workerPresentingRenderHostPort';
+import { createWorkerShadowRenderHostPort } from './workerShadowRenderHostPort';
 
-export type RendererMode = 'main';
-export type RenderFrameCallback = () => void;
+export type {
+  ConfigureRenderHostSelectionOptions,
+  RenderCaptureCanvas,
+  RenderFrameCallback,
+  RenderHostLayerCollector,
+  RenderHostPort,
+  RenderHostRenderLoop,
+  RenderHostTelemetry,
+  RendererMode,
+} from './renderHostTypes';
 
-export interface RenderCaptureCanvas {
-  canvas: HTMLCanvasElement;
-  source: string;
+export type RenderHostDevMode = 'main' | 'worker-shadow' | 'worker-presenting' | 'worker-only' | 'worker-gpu-only';
+
+const RENDER_HOST_DEV_MODE_STORAGE_KEY = 'masterselects.renderHostMode';
+
+const INITIAL_RENDER_HOST_SELECTION_TELEMETRY: RenderHostSelectionTelemetry = {
+  selectedId: 'main-fallback',
+  selectedRole: 'fallback',
+  workerPrimaryRequested: false,
+  workerPrimaryRegistered: false,
+  workerPrimaryAvailable: false,
+  blockers: ['render host selector not initialized'],
+  reason: 'using main fallback: render host selector not initialized',
+};
+
+interface RenderHostRuntimeState {
+  selectionTelemetry: RenderHostSelectionTelemetry;
+  mainFallbackRenderHostPort: RenderHostPort;
+  workerShadowRenderHostPort: RenderHostPort;
+  workerPresentingRenderHostPort: RenderHostPort;
+  workerOnlyRenderHostPort: RenderHostPort;
+  workerPrimaryStrictWorkerOnly: boolean;
+  workerPrimaryPresentationStrategy: WorkerPresentingPresentationStrategy;
+  instance: RenderHostPort | null;
 }
 
-export interface RenderHostTelemetry {
-  readonly mode: RendererMode;
-  readonly presentationStrategy: 'main-host-dev';
-  readonly lifecycleOwner: 'renderHostPort';
-  readonly statsOwner: 'renderHostPort';
-  readonly watchdogOwner: 'renderHostPort';
+function createRenderHostRuntimeState(): RenderHostRuntimeState {
+  const state = {
+    selectionTelemetry: INITIAL_RENDER_HOST_SELECTION_TELEMETRY,
+    instance: null,
+  } as Partial<RenderHostRuntimeState> as RenderHostRuntimeState;
+
+  state.mainFallbackRenderHostPort = new MainFallbackRenderHostPort(
+    () => state.selectionTelemetry
+  );
+  state.workerShadowRenderHostPort = createWorkerShadowRenderHostPort({
+    fallback: state.mainFallbackRenderHostPort,
+    getSelectionTelemetry: () => state.selectionTelemetry,
+  });
+  state.workerPresentingRenderHostPort = createWorkerPresentingRenderHostPort({
+    fallback: state.mainFallbackRenderHostPort,
+    getSelectionTelemetry: () => state.selectionTelemetry,
+    strictWorkerOnly: () => state.workerPrimaryStrictWorkerOnly,
+    presentationStrategy: () => state.workerPrimaryPresentationStrategy,
+  });
+  state.workerOnlyRenderHostPort = state.workerPresentingRenderHostPort;
+  state.workerPrimaryStrictWorkerOnly = false;
+  state.workerPrimaryPresentationStrategy = 'worker-cpu-present';
+
+  return state;
 }
 
-export interface RenderHostPort {
-  getTelemetry(): RenderHostTelemetry;
-  initialize(): Promise<boolean>;
-  startRenderLoop(renderFrame: RenderFrameCallback): void;
-  startStatsAndWatchdog(renderFrame: RenderFrameCallback): () => void;
-  stopRenderLoopForDiagnostics(): void;
-  startExistingRenderLoopForDiagnostics(): void;
-  setTimelineVisualDemand(hasDemand: boolean): void;
-  setIsPlaying(isPlaying: boolean): void;
-  setIsScrubbing(isScrubbing: boolean): void;
-  setContinuousRender(enabled: boolean): void;
-  getRamPreviewRenderEngine(): RamPreviewRenderEngine;
-  render(layers: Layer[]): void;
-  renderCachedFrame(time: number): boolean;
-  cacheCompositeFrame(time: number): Promise<void>;
-  cacheActiveCompOutput(compositionId: string): void;
-  getIsExporting(): boolean;
-  renderToPreviewCanvas(canvasId: string, layers: Layer[]): void;
-  copyNestedCompTextureToPreview(canvasId: string, compositionId: string): boolean;
-  setResolution(width: number, height: number): void;
-  getOutputDimensions(): { width: number; height: number };
-  readPixels(): Promise<Uint8ClampedArray | null>;
-  getCaptureCanvas(): RenderCaptureCanvas | null;
-  getDevice(): GPUDevice | null;
-  getLastRenderedTexture(): GPUTexture | null;
-  updateMaskTexture(layerId: string, imageData: ImageData | null): void;
-  removeMaskTexture(layerId: string): void;
-  updateCanvasTexture(canvas: HTMLCanvasElement): boolean;
-  invalidateCompositorBindings(layerId?: string): void;
-  registerTargetCanvas(targetId: string, canvas: HTMLCanvasElement): GPUCanvasContext | null;
-  unregisterTargetCanvas(targetId: string): void;
-  setPreviewCanvas(canvas: HTMLCanvasElement): void;
-  requestRender(): void;
-  requestNewFrameRender(): void;
-  clearVideoCache(): void;
-  clearScrubbingCache(videoSrc?: string): void;
-  clearCompositeCache(): void;
-  clearCaches(): void;
-  clearFrame(): void;
-  setGeneratingRamPreview(generating: boolean): void;
-  getScrubbingCachedRanges(videoSrc: string): Array<{ start: number; end: number }>;
-  getStats(): EngineStats;
-  getLayerCollector(): ReturnType<typeof engine.getLayerCollector>;
-  getScrubbingCacheStats(): ReturnType<typeof engine.getScrubbingCacheStats>;
-  getCompositeCacheStats(): ReturnType<typeof engine.getCompositeCacheStats>;
-  getWorkerFirstCacheRuntimeSnapshot(): WorkerFirstCacheRuntimeSnapshot;
-  getRenderLoop(): ReturnType<typeof engine.getRenderLoop>;
-  getDebugInfrastructureState(): ReturnType<typeof engine.getDebugInfrastructureState>;
-  getRenderDispatcherDebugSnapshot(): ReturnType<typeof engine.getRenderDispatcherDebugSnapshot>;
-  cleanupVideo(video: HTMLVideoElement): void;
-  preCacheVideoFrame(video: HTMLVideoElement, ownerId?: string): Promise<boolean>;
-  ensureVideoFrameCached(video: HTMLVideoElement, ownerId?: string): void;
-  cacheFrameAtTime(video: HTMLVideoElement, time: number): void;
-  captureVideoFrameAtTime(video: HTMLVideoElement, time: number, ownerId?: string): boolean;
-  markVideoFramePresented(video: HTMLVideoElement, time?: number, ownerId?: string): void;
-  getLastPresentedVideoTime(video: HTMLVideoElement): number | undefined;
-  markVideoGpuReady(video: HTMLVideoElement): void;
-  createOutputWindow(id: string, name: string): ReturnType<typeof engine.createOutputWindow>;
-  closeOutputWindow(id: string): void;
-  restoreOutputWindow(id: string): ReturnType<typeof engine.restoreOutputWindow>;
-  removeOutputTarget(id: string): void;
+const hotData = import.meta.hot?.data as
+  | { renderHostRuntimeState?: RenderHostRuntimeState; activeRenderHostPort?: RenderHostPort }
+  | undefined;
+const runtimeState = hotData?.renderHostRuntimeState ?? createRenderHostRuntimeState();
+runtimeState.workerPrimaryStrictWorkerOnly = runtimeState.workerPrimaryStrictWorkerOnly === true;
+runtimeState.workerPrimaryPresentationStrategy ??= 'worker-cpu-present';
+runtimeState.workerOnlyRenderHostPort = runtimeState.workerPresentingRenderHostPort;
+
+function applyRenderHostSelection(selection: RenderHostSelection<RenderHostPort>): RenderHostPort {
+  runtimeState.selectionTelemetry = selection.telemetry;
+  runtimeState.instance = selection.host;
+  return selection.host;
 }
 
-const log = Logger.create('RenderHostPort');
-
-function hasCaptureBackingStore(canvas: HTMLCanvasElement): boolean {
-  return canvas.width > 0 && canvas.height > 0;
-}
-
-function canvasIntersectsViewport(rect: DOMRect, win: Window): boolean {
-  const width = win.innerWidth || rect.right;
-  const height = win.innerHeight || rect.bottom;
-  return rect.width > 0
-    && rect.height > 0
-    && rect.right > 0
-    && rect.bottom > 0
-    && rect.left < width
-    && rect.top < height;
-}
-
-function canvasCenterIsVisible(canvas: HTMLCanvasElement, rect: DOMRect, doc: Document): boolean {
-  const win = doc.defaultView;
-  if (!win || typeof doc.elementFromPoint !== 'function') return false;
-  const width = win.innerWidth || rect.right;
-  const height = win.innerHeight || rect.bottom;
-  const x = Math.max(0, Math.min(width - 1, rect.left + rect.width / 2));
-  const y = Math.max(0, Math.min(height - 1, rect.top + rect.height / 2));
-  const element = doc.elementFromPoint(x, y);
-  return element === canvas || Boolean(element && canvas.contains(element));
-}
-
-function captureCanvasScore(canvas: HTMLCanvasElement, source: string): number {
-  if (!hasCaptureBackingStore(canvas)) return -1;
-
-  let score = 10;
-  if (source === 'mainPreviewCanvas') score += 5;
-  if (source === 'renderTarget:preview') score += 4;
-  if (source.startsWith('renderTarget:')) score += 2;
-
-  const doc = canvas.ownerDocument;
-  if (!canvas.isConnected || !doc || doc.visibilityState === 'hidden') return score;
-
-  score += 10;
-  const win = doc.defaultView;
-  if (!win) return score;
-
-  const rect = canvas.getBoundingClientRect();
-  if (canvasIntersectsViewport(rect, win)) score += 20;
-  if (canvasCenterIsVisible(canvas, rect, doc)) score += 20;
-  return score;
-}
-
-function selectBestCaptureCanvas(candidates: RenderCaptureCanvas[]): RenderCaptureCanvas | null {
-  let best: { candidate: RenderCaptureCanvas; score: number } | null = null;
-  for (const candidate of candidates) {
-    const score = captureCanvasScore(candidate.canvas, candidate.source);
-    if (score < 0) continue;
-    if (!best || score > best.score) {
-      best = { candidate, score };
+function readRenderHostDevMode(): RenderHostDevMode | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const value = localStorage.getItem(RENDER_HOST_DEV_MODE_STORAGE_KEY);
+    if (
+      value === 'main' ||
+      value === 'worker-shadow' ||
+      value === 'worker-presenting' ||
+      value === 'worker-only' ||
+      value === 'worker-gpu-only'
+    ) {
+      return value;
     }
+  } catch {
+    // Ignore unavailable storage in restricted browser contexts.
   }
-  return best?.candidate ?? null;
+  return null;
 }
 
-type PlaybackDebugStatsReader = (
-  decoder: EngineStats['decoder']
-) => NonNullable<EngineStats['playback']>;
-
-let playbackDebugStatsReader: PlaybackDebugStatsReader | null = null;
-let playbackDebugStatsReaderLoad: Promise<void> | null = null;
-
-function loadPlaybackDebugStatsReader(): void {
-  if (playbackDebugStatsReader || playbackDebugStatsReaderLoad) {
-    return;
-  }
-
-  playbackDebugStatsReaderLoad = import('../playbackDebugSnapshot')
-    .then((module) => {
-      playbackDebugStatsReader = module.getPlaybackDebugStats as PlaybackDebugStatsReader;
-    })
-    .catch((error) => {
-      playbackDebugStatsReaderLoad = null;
-      log.warn('Failed to load playback debug stats reader', error);
-    });
+export function getRenderHostDevMode(): RenderHostDevMode | null {
+  return readRenderHostDevMode();
 }
 
-function readPlaybackDebugStats(decoder: EngineStats['decoder']): EngineStats['playback'] | undefined {
-  if (playbackDebugStatsReader) {
-    return playbackDebugStatsReader(decoder);
-  }
-  loadPlaybackDebugStatsReader();
-  return undefined;
-}
-
-class MainRenderHostPort implements RenderHostPort {
-  private statsAndWatchdogInterval: ReturnType<typeof setInterval> | null = null;
-  private renderFrameCallbacks: RenderFrameCallback[] = [];
-  private initializePromise: Promise<boolean> | null = null;
-  private readonly ramPreviewRenderEngine: RamPreviewRenderEngine = {
-    render: (layers) => this.render(layers),
-    cacheCompositeFrame: (time) => this.cacheCompositeFrame(time),
-  };
-
-  getTelemetry(): RenderHostTelemetry {
-    return {
-      mode: 'main',
-      presentationStrategy: 'main-host-dev',
-      lifecycleOwner: 'renderHostPort',
-      statsOwner: 'renderHostPort',
-      watchdogOwner: 'renderHostPort',
-    };
-  }
-
-  initialize(): Promise<boolean> {
-    if (this.initializePromise) {
-      return this.initializePromise;
+function writeRenderHostDevMode(mode: RenderHostDevMode | null): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    if (mode) {
+      localStorage.setItem(RENDER_HOST_DEV_MODE_STORAGE_KEY, mode);
+    } else {
+      localStorage.removeItem(RENDER_HOST_DEV_MODE_STORAGE_KEY);
     }
-    this.initializePromise = this.initializeEngine();
-    return this.initializePromise;
+  } catch {
+    // Ignore unavailable storage in restricted browser contexts.
   }
+}
 
-  startRenderLoop(renderFrame: RenderFrameCallback): void {
-    engine.start(renderFrame);
-    void import('../playbackHealthMonitor')
-      .then(({ playbackHealthMonitor }) => {
-        playbackHealthMonitor.start();
-      })
-      .catch((error) => {
-        log.warn('Failed to start playback health monitor', error);
+function primaryForDevMode(mode: RenderHostDevMode | null): RenderHostPort {
+  return mode === 'worker-shadow'
+    ? runtimeState.workerShadowRenderHostPort
+    : mode === 'worker-only' || mode === 'worker-gpu-only'
+      ? runtimeState.workerOnlyRenderHostPort
+    : runtimeState.workerPresentingRenderHostPort;
+}
+
+function workerRuntimeAvailable(): boolean {
+  return flags.workerFirstRenderHost && isWorkerPresentingCanvasSupported();
+}
+
+function workerRuntimeBlockers(): readonly string[] {
+  if (!flags.workerFirstRenderHost) {
+    return [];
+  }
+  if (!isBrowserWorkerRenderHostRuntimeSupported()) {
+    return ['browser Worker unavailable for worker render host runtime'];
+  }
+  if (typeof HTMLCanvasElement === 'undefined') {
+    return ['HTMLCanvasElement unavailable for worker render host presentation'];
+  }
+  if (typeof HTMLCanvasElement.prototype.transferControlToOffscreen !== 'function') {
+    return ['OffscreenCanvas transfer unavailable for worker render host presentation'];
+  }
+  if (prefersSoftwareTimelineCanvas()) {
+    return ['software canvas preferred by platform policy; keeping main fallback presentation'];
+  }
+  return [];
+}
+
+const initialDevMode = readRenderHostDevMode();
+runtimeState.workerPrimaryStrictWorkerOnly = initialDevMode === 'worker-only' || initialDevMode === 'worker-gpu-only';
+runtimeState.workerPrimaryPresentationStrategy = initialDevMode === 'worker-gpu-only'
+  ? 'worker-webgpu-present'
+  : 'worker-cpu-present';
+if (
+  initialDevMode === 'worker-shadow' ||
+  initialDevMode === 'worker-presenting' ||
+  initialDevMode === 'worker-only' ||
+  initialDevMode === 'worker-gpu-only'
+) {
+  flags.workerFirstRenderHost = true;
+}
+if (initialDevMode === 'main') {
+  flags.workerFirstRenderHost = false;
+}
+
+function workerPrimaryAvailableForMode(mode: RenderHostDevMode | null): boolean {
+  if (mode === 'worker-shadow') {
+    return isBrowserWorkerRenderHostRuntimeSupported();
+  }
+  return workerRuntimeAvailable();
+}
+
+function workerPrimaryBlockersForMode(mode: RenderHostDevMode | null): readonly string[] {
+  if (mode === 'worker-shadow') {
+    return isBrowserWorkerRenderHostRuntimeSupported()
+      ? []
+      : ['browser Worker unavailable for worker render host runtime'];
+  }
+  const blockers = [...workerRuntimeBlockers()];
+  if (mode === 'worker-gpu-only' && (typeof navigator === 'undefined' || !navigator.gpu)) {
+    blockers.push('WebGPU unavailable in current browser');
+  }
+  return blockers;
+}
+
+let instance: RenderHostPort = runtimeState.instance
+  ?? hotData?.activeRenderHostPort
+  ?? applyRenderHostSelection(selectRenderHost<RenderHostPort>({
+    mainFallback: runtimeState.mainFallbackRenderHostPort,
+    workerPrimary: primaryForDevMode(initialDevMode),
+    preferWorkerPrimary: flags.workerFirstRenderHost,
+    workerPrimaryAvailable: workerPrimaryAvailableForMode(initialDevMode),
+    workerPrimaryBlockers: workerPrimaryBlockersForMode(initialDevMode),
+  }));
+if (!hotData?.renderHostRuntimeState && hotData?.activeRenderHostPort) {
+  runtimeState.selectionTelemetry = hotData.activeRenderHostPort.getTelemetry().selection;
+}
+runtimeState.instance = instance;
+
+export function configureRenderHostSelection(options: ConfigureRenderHostSelectionOptions = {}): void {
+  instance = applyRenderHostSelection(selectRenderHost<RenderHostPort>({
+    mainFallback: runtimeState.mainFallbackRenderHostPort,
+    workerPrimary: options.workerPrimary ?? runtimeState.workerPresentingRenderHostPort,
+    preferWorkerPrimary: options.preferWorkerPrimary ?? flags.workerFirstRenderHost,
+    workerPrimaryAvailable: options.workerPrimaryAvailable ?? workerRuntimeAvailable(),
+    workerPrimaryBlockers: options.workerPrimaryBlockers ?? workerRuntimeBlockers(),
+  }));
+}
+
+export function getRenderHostSelectionTelemetry(): RenderHostSelectionTelemetry {
+  return runtimeState.selectionTelemetry;
+}
+
+const renderHostPortProxy = new Proxy({} as RenderHostPort, {
+  get(_target, propertyKey: keyof RenderHostPort) {
+    if (propertyKey === 'getTelemetry') {
+      return () => ({
+        ...instance.getTelemetry(),
+        selection: runtimeState.selectionTelemetry,
       });
-  }
-
-  startStatsAndWatchdog(renderFrame: RenderFrameCallback): () => void {
-    this.renderFrameCallbacks.push(renderFrame);
-    if (this.statsAndWatchdogInterval !== null) {
-      return () => {
-        this.stopStatsAndWatchdog(renderFrame);
-      };
     }
-
-    this.statsAndWatchdogInterval = setInterval(() => {
-      try {
-        const renderLoop = engine.getRenderLoop();
-        if (playheadState.isUsingInternalPosition && renderLoop?.getIsRunning?.() !== true) {
-          const currentRenderFrame = this.renderFrameCallbacks[this.renderFrameCallbacks.length - 1];
-          if (!currentRenderFrame) {
-            return;
-          }
-          log.warn('Render loop was stopped during playback; restarting');
-          engine.start(currentRenderFrame);
-          engine.setIsPlaying(true);
-          engine.requestRender();
-        }
-        const stats = engine.getStats();
-        const statsUpdate: EngineStats = { ...stats };
-        try {
-          const playbackStats = readPlaybackDebugStats(stats.decoder);
-          if (playbackStats) {
-            statsUpdate.playback = playbackStats;
-          }
-        } catch (_e) {
-          // Keep base engine stats flowing even if optional debug collectors fail.
-        }
-        try {
-          statsUpdate.mainThread = framePhaseMonitor.summary();
-        } catch (_e) {
-          // Keep base engine stats flowing even if optional debug collectors fail.
-        }
-        useEngineStore.getState().setEngineStats(statsUpdate);
-      } catch (_e) {
-        // Stats and watchdog failures must not interrupt playback rendering.
-      }
-    }, 1000);
-
-    return () => {
-      this.stopStatsAndWatchdog(renderFrame);
-    };
-  }
-
-  stopRenderLoopForDiagnostics(): void {
-    engine.stop();
-  }
-
-  startExistingRenderLoopForDiagnostics(): void {
-    engine.getRenderLoop()?.start();
-  }
-
-  private stopStatsAndWatchdog(renderFrame: RenderFrameCallback): void {
-    const index = this.renderFrameCallbacks.lastIndexOf(renderFrame);
-    if (index !== -1) {
-      this.renderFrameCallbacks.splice(index, 1);
-    }
-
-    if (this.renderFrameCallbacks.length === 0 && this.statsAndWatchdogInterval !== null) {
-      clearInterval(this.statsAndWatchdogInterval);
-      this.statsAndWatchdogInterval = null;
-    }
-  }
-
-  private async initializeEngine(): Promise<boolean> {
-    const success = await engine.initialize();
-    const engineStore = useEngineStore.getState();
-    engineStore.setEngineReady(success);
-    if (success) {
-      engineStore.setGpuInfo(engine.getGPUInfo());
-      const isLinux = navigator.platform.toLowerCase().includes('linux');
-      if (isLinux) {
-        engineStore.setLinuxVulkanWarning(true);
-      }
-      return true;
-    }
-
-    const hasGPU = typeof navigator.gpu !== 'undefined';
-    const error = !hasGPU
-      ? 'WebGPU is not available in this browser. Please use Chrome 113+ or Edge 113+.'
-      : 'No compatible GPU adapter found. Your GPU may not support WebGPU. '
-        + 'Try enabling hardware acceleration in browser settings, '
-        + 'or switch to a GPU with Vulkan/D3D12 support.';
-    engineStore.setEngineInitFailed(true, error);
-    log.error('Engine initialization failed', { hasGPU, error });
-    return false;
-  }
-
-  setTimelineVisualDemand(hasDemand: boolean): void {
-    engine.setTimelineVisualDemand(hasDemand);
-  }
-
-  setIsPlaying(isPlaying: boolean): void {
-    engine.setIsPlaying(isPlaying);
-  }
-
-  setIsScrubbing(isScrubbing: boolean): void {
-    engine.setIsScrubbing(isScrubbing);
-  }
-
-  setContinuousRender(enabled: boolean): void {
-    engine.setContinuousRender(enabled);
-  }
-
-  getRamPreviewRenderEngine(): RamPreviewRenderEngine {
-    return this.ramPreviewRenderEngine;
-  }
-
-  render(layers: Layer[]): void {
-    engine.render(layers);
-  }
-
-  renderCachedFrame(time: number): boolean {
-    return engine.renderCachedFrame(time);
-  }
-
-  cacheCompositeFrame(time: number): Promise<void> {
-    return engine.cacheCompositeFrame(time);
-  }
-
-  cacheActiveCompOutput(compositionId: string): void {
-    engine.cacheActiveCompOutput(compositionId);
-  }
-
-  getIsExporting(): boolean {
-    return engine.getIsExporting();
-  }
-
-  renderToPreviewCanvas(canvasId: string, layers: Layer[]): void {
-    engine.renderToPreviewCanvas(canvasId, layers);
-  }
-
-  copyNestedCompTextureToPreview(canvasId: string, compositionId: string): boolean {
-    return engine.copyNestedCompTextureToPreview(canvasId, compositionId);
-  }
-
-  setResolution(width: number, height: number): void {
-    engine.setResolution(width, height);
-  }
-
-  getOutputDimensions(): { width: number; height: number } {
-    return engine.getOutputDimensions();
-  }
-
-  readPixels(): Promise<Uint8ClampedArray | null> {
-    return engine.readPixels();
-  }
-
-  getCaptureCanvas(): RenderCaptureCanvas | null {
-    const engineState = engine as unknown as {
-      mainPreviewCanvas?: HTMLCanvasElement | null;
-      targetCanvases?: Map<string, { canvas: HTMLCanvasElement; context: GPUCanvasContext }>;
-    };
-
-    const candidates: RenderCaptureCanvas[] = [];
-
-    const mainPreviewCanvas = engineState.mainPreviewCanvas;
-    if (mainPreviewCanvas) {
-      candidates.push({ canvas: mainPreviewCanvas, source: 'mainPreviewCanvas' });
-    }
-    const activeTargets = useRenderTargetStore.getState().getActiveCompTargets();
-    for (const target of activeTargets) {
-      if (target.canvas) {
-        candidates.push({ canvas: target.canvas, source: `renderTarget:${target.id}` });
-      }
-    }
-
-    const targetCanvases = engineState.targetCanvases;
-    if (targetCanvases) {
-      for (const [targetId, entry] of targetCanvases) {
-        candidates.push({ canvas: entry.canvas, source: `engineTarget:${targetId}` });
-      }
-    }
-
-    return selectBestCaptureCanvas(candidates);
-  }
-
-  getDevice(): GPUDevice | null {
-    return engine.getDevice();
-  }
-
-  getLastRenderedTexture(): GPUTexture | null {
-    return engine.getLastRenderedTexture();
-  }
-
-  updateMaskTexture(layerId: string, imageData: ImageData | null): void {
-    engine.updateMaskTexture(layerId, imageData);
-  }
-
-  removeMaskTexture(layerId: string): void {
-    engine.removeMaskTexture(layerId);
-  }
-
-  updateCanvasTexture(canvas: HTMLCanvasElement): boolean {
-    return engine.getTextureManager()?.updateCanvasTexture(canvas) ?? false;
-  }
-
-  invalidateCompositorBindings(layerId?: string): void {
-    const pipeline = (engine as unknown as {
-      compositorPipeline?: { invalidateBindGroupCache: (layerId?: string) => void };
-    }).compositorPipeline;
-    pipeline?.invalidateBindGroupCache(layerId);
-  }
-
-  registerTargetCanvas(targetId: string, canvas: HTMLCanvasElement): GPUCanvasContext | null {
-    return engine.registerTargetCanvas(targetId, canvas);
-  }
-
-  unregisterTargetCanvas(targetId: string): void {
-    engine.unregisterTargetCanvas(targetId);
-  }
-
-  setPreviewCanvas(canvas: HTMLCanvasElement): void {
-    engine.setPreviewCanvas(canvas);
-  }
-
-  requestRender(): void {
-    engine.requestRender();
-  }
-
-  requestNewFrameRender(): void {
-    engine.requestNewFrameRender();
-  }
-
-  clearVideoCache(): void {
-    engine.clearVideoCache();
-  }
-
-  clearScrubbingCache(videoSrc?: string): void {
-    engine.clearScrubbingCache(videoSrc);
-  }
-
-  clearCompositeCache(): void {
-    engine.clearCompositeCache();
-  }
-
-  clearCaches(): void {
-    engine.clearCaches();
-  }
-
-  clearFrame(): void {
-    engine.clearFrame();
-  }
-
-  setGeneratingRamPreview(generating: boolean): void {
-    engine.setGeneratingRamPreview(generating);
-  }
-
-  getScrubbingCachedRanges(videoSrc: string): Array<{ start: number; end: number }> {
-    return engine.getScrubbingCachedRanges(videoSrc);
-  }
-
-  getStats(): EngineStats {
-    return engine.getStats();
-  }
-
-  getLayerCollector(): ReturnType<typeof engine.getLayerCollector> {
-    return engine.getLayerCollector();
-  }
-
-  getScrubbingCacheStats(): ReturnType<typeof engine.getScrubbingCacheStats> {
-    return engine.getScrubbingCacheStats();
-  }
-
-  getCompositeCacheStats(): ReturnType<typeof engine.getCompositeCacheStats> {
-    return engine.getCompositeCacheStats();
-  }
-
-  getWorkerFirstCacheRuntimeSnapshot(): WorkerFirstCacheRuntimeSnapshot {
-    const engineWithCacheManager = engine as unknown as {
-      cacheManager?: {
-        getWorkerFirstCacheRuntimeSnapshot?: () => WorkerFirstCacheRuntimeSnapshot;
-      };
-    };
-    return engineWithCacheManager.cacheManager?.getWorkerFirstCacheRuntimeSnapshot?.() ?? {
-      generatedAtMs: Date.now(),
-      records: [],
-    };
-  }
-
-  getRenderLoop(): ReturnType<typeof engine.getRenderLoop> {
-    return engine.getRenderLoop();
-  }
-
-  getDebugInfrastructureState(): ReturnType<typeof engine.getDebugInfrastructureState> {
-    return engine.getDebugInfrastructureState();
-  }
-
-  getRenderDispatcherDebugSnapshot(): ReturnType<typeof engine.getRenderDispatcherDebugSnapshot> {
-    return engine.getRenderDispatcherDebugSnapshot();
-  }
-
-  cleanupVideo(video: HTMLVideoElement): void {
-    engine.cleanupVideo(video);
-  }
-
-  preCacheVideoFrame(video: HTMLVideoElement, ownerId?: string): Promise<boolean> {
-    return engine.preCacheVideoFrame(video, ownerId);
-  }
-
-  ensureVideoFrameCached(video: HTMLVideoElement, ownerId?: string): void {
-    engine.ensureVideoFrameCached(video, ownerId);
-  }
-
-  cacheFrameAtTime(video: HTMLVideoElement, time: number): void {
-    engine.cacheFrameAtTime(video, time);
-  }
-
-  captureVideoFrameAtTime(video: HTMLVideoElement, time: number, ownerId?: string): boolean {
-    return engine.captureVideoFrameAtTime(video, time, ownerId);
-  }
-
-  markVideoFramePresented(video: HTMLVideoElement, time?: number, ownerId?: string): void {
-    engine.markVideoFramePresented(video, time, ownerId);
-  }
-
-  getLastPresentedVideoTime(video: HTMLVideoElement): number | undefined {
-    return engine.getLastPresentedVideoTime(video);
-  }
-
-  markVideoGpuReady(video: HTMLVideoElement): void {
-    engine.markVideoGpuReady(video);
-  }
-
-  createOutputWindow(id: string, name: string): ReturnType<typeof engine.createOutputWindow> {
-    return engine.createOutputWindow(id, name);
-  }
-
-  closeOutputWindow(id: string): void {
-    engine.closeOutputWindow(id);
-  }
-
-  restoreOutputWindow(id: string): ReturnType<typeof engine.restoreOutputWindow> {
-    return engine.restoreOutputWindow(id);
-  }
-
-  removeOutputTarget(id: string): void {
-    engine.removeOutputTarget(id);
-  }
-}
-
-let instance: RenderHostPort = new MainRenderHostPort();
+    const value = instance[propertyKey];
+    return typeof value === 'function'
+      ? value.bind(instance)
+      : value;
+  },
+});
 
 if (import.meta.hot) {
   import.meta.hot.accept();
-  if (import.meta.hot.data?.renderHostPort) {
-    instance = import.meta.hot.data.renderHostPort;
-  }
   import.meta.hot.dispose((data) => {
-    data.renderHostPort = instance;
+    runtimeState.instance = instance;
+    data.renderHostRuntimeState = runtimeState;
+    data.activeRenderHostPort = instance;
   });
 }
 
-export const renderHostPort = instance;
+export const renderHostPort = renderHostPortProxy;
+
+export interface RenderHostDevControls {
+  getTelemetry(): RenderHostTelemetry;
+  getMode(): RenderHostDevMode | null;
+  setMode(mode: RenderHostDevMode | null): RenderHostTelemetry;
+  enableWorkerShadow(): RenderHostTelemetry;
+  enableWorkerPresenting(): RenderHostTelemetry;
+  enableWorkerOnly(): RenderHostTelemetry;
+  enableWorkerGpuOnly(): RenderHostTelemetry;
+  disableWorkerShadow(): RenderHostTelemetry;
+  disableWorkerPrimary(): RenderHostTelemetry;
+}
+
+function setWorkerShadowForDev(enabled: boolean): RenderHostTelemetry {
+  writeRenderHostDevMode(enabled ? 'worker-shadow' : null);
+  flags.workerFirstRenderHost = enabled;
+  runtimeState.workerPrimaryStrictWorkerOnly = false;
+  runtimeState.workerPrimaryPresentationStrategy = 'worker-cpu-present';
+  configureRenderHostSelection({
+    workerPrimary: enabled ? runtimeState.workerShadowRenderHostPort : runtimeState.workerPresentingRenderHostPort,
+    preferWorkerPrimary: enabled,
+    workerPrimaryAvailable: enabled ? isBrowserWorkerRenderHostRuntimeSupported() : false,
+    workerPrimaryBlockers: enabled && !isBrowserWorkerRenderHostRuntimeSupported()
+      ? ['browser Worker unavailable for worker render host runtime']
+      : [],
+  });
+  return renderHostPort.getTelemetry();
+}
+
+function setWorkerPresentingForDev(enabled: boolean): RenderHostTelemetry {
+  writeRenderHostDevMode(enabled ? 'worker-presenting' : null);
+  flags.workerFirstRenderHost = enabled;
+  runtimeState.workerPrimaryStrictWorkerOnly = false;
+  runtimeState.workerPrimaryPresentationStrategy = 'worker-cpu-present';
+  configureRenderHostSelection({
+    workerPrimary: runtimeState.workerPresentingRenderHostPort,
+    preferWorkerPrimary: enabled,
+    workerPrimaryAvailable: enabled ? workerRuntimeAvailable() : false,
+    workerPrimaryBlockers: enabled ? workerRuntimeBlockers() : [],
+  });
+  return renderHostPort.getTelemetry();
+}
+
+function setWorkerOnlyForDev(enabled: boolean): RenderHostTelemetry {
+  writeRenderHostDevMode(enabled ? 'worker-only' : null);
+  flags.workerFirstRenderHost = enabled;
+  runtimeState.workerPrimaryStrictWorkerOnly = enabled;
+  runtimeState.workerPrimaryPresentationStrategy = 'worker-cpu-present';
+  configureRenderHostSelection({
+    workerPrimary: runtimeState.workerOnlyRenderHostPort,
+    preferWorkerPrimary: enabled,
+    workerPrimaryAvailable: enabled ? workerRuntimeAvailable() : false,
+    workerPrimaryBlockers: enabled ? workerRuntimeBlockers() : [],
+  });
+  return renderHostPort.getTelemetry();
+}
+
+function setWorkerGpuOnlyForDev(enabled: boolean): RenderHostTelemetry {
+  writeRenderHostDevMode(enabled ? 'worker-gpu-only' : null);
+  flags.workerFirstRenderHost = enabled;
+  runtimeState.workerPrimaryStrictWorkerOnly = enabled;
+  runtimeState.workerPrimaryPresentationStrategy = enabled ? 'worker-webgpu-present' : 'worker-cpu-present';
+  configureRenderHostSelection({
+    workerPrimary: runtimeState.workerOnlyRenderHostPort,
+    preferWorkerPrimary: enabled,
+    workerPrimaryAvailable: enabled ? workerRuntimeAvailable() : false,
+    workerPrimaryBlockers: enabled ? workerPrimaryBlockersForMode('worker-gpu-only') : [],
+  });
+  return renderHostPort.getTelemetry();
+}
+
+export function setRenderHostDevMode(mode: RenderHostDevMode | null): RenderHostTelemetry {
+  if (mode === 'worker-shadow') {
+    return setWorkerShadowForDev(true);
+  }
+  if (mode === 'worker-presenting') {
+    return setWorkerPresentingForDev(true);
+  }
+  if (mode === 'worker-only') {
+    return setWorkerOnlyForDev(true);
+  }
+  if (mode === 'worker-gpu-only') {
+    return setWorkerGpuOnlyForDev(true);
+  }
+  if (mode === 'main') {
+    writeRenderHostDevMode('main');
+    flags.workerFirstRenderHost = false;
+    runtimeState.workerPrimaryStrictWorkerOnly = false;
+    runtimeState.workerPrimaryPresentationStrategy = 'worker-cpu-present';
+    configureRenderHostSelection({
+      workerPrimary: runtimeState.workerPresentingRenderHostPort,
+      preferWorkerPrimary: false,
+      workerPrimaryAvailable: false,
+      workerPrimaryBlockers: [],
+    });
+    return renderHostPort.getTelemetry();
+  }
+
+  writeRenderHostDevMode(null);
+  flags.workerFirstRenderHost = false;
+  runtimeState.workerPrimaryStrictWorkerOnly = false;
+  runtimeState.workerPrimaryPresentationStrategy = 'worker-cpu-present';
+  configureRenderHostSelection({
+    workerPrimary: runtimeState.workerPresentingRenderHostPort,
+    preferWorkerPrimary: false,
+    workerPrimaryAvailable: false,
+    workerPrimaryBlockers: [],
+  });
+  return renderHostPort.getTelemetry();
+}
+
+if (typeof window !== 'undefined') {
+  (window as Window & { __MS_RENDER_HOST__?: RenderHostDevControls }).__MS_RENDER_HOST__ = {
+    getTelemetry: () => renderHostPort.getTelemetry(),
+    getMode: () => readRenderHostDevMode(),
+    setMode: (mode: RenderHostDevMode | null) => setRenderHostDevMode(mode),
+    enableWorkerShadow: () => setWorkerShadowForDev(true),
+    enableWorkerPresenting: () => setWorkerPresentingForDev(true),
+    enableWorkerOnly: () => setWorkerOnlyForDev(true),
+    enableWorkerGpuOnly: () => setWorkerGpuOnlyForDev(true),
+    disableWorkerShadow: () => setWorkerShadowForDev(false),
+    disableWorkerPrimary: () => setWorkerPresentingForDev(false),
+  };
+}

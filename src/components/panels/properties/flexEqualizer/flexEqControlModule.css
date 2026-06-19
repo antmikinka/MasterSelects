@@ -107,7 +107,7 @@
   border-radius: 9px;
   background:
     linear-gradient(180deg, rgba(26, 18, 10, 0.42) 0%, rgba(8, 5, 2, 0.55) 100%),
-    url('../../audio-mixer/wood-theme/dark-leather.png') center / 300px auto repeat;
+    url('../../audio-mixer/wood-theme/dark-leather.webp') center / 300px auto repeat;
   box-shadow:
     inset 0 0 0 1px rgba(214, 178, 124, 0.14),
     inset 0 1px 0 rgba(255, 226, 178, 0.1),

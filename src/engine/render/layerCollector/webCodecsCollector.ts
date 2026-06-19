@@ -71,9 +71,15 @@ export class WebCodecsLayerCollector {
     const htmlPreviewDebugDisabled =
       flags.useFullWebCodecsPlayback &&
       flags.disableHtmlPreviewFallback;
+    const hasForcedRuntimeFramePreview =
+      source.forceRuntimeFramePreview === true &&
+      !!runtimeProvider?.isFullMode();
     const hasFullWebCodecsPreview =
-      flags.useFullWebCodecsPlayback &&
-      (!!clipProvider || !!runtimeProvider?.isFullMode());
+      hasForcedRuntimeFramePreview ||
+      (
+        flags.useFullWebCodecsPlayback &&
+        (!!clipProvider || !!runtimeProvider?.isFullMode())
+      );
 
     if (isDragging) {
       this.scrubGraceUntil = performance.now() + SCRUB_GRACE_MS;
@@ -89,6 +95,7 @@ export class WebCodecsLayerCollector {
     const allowHtmlVideoPreview =
       !!source.videoElement &&
       !htmlPreviewDebugDisabled &&
+      !hasForcedRuntimeFramePreview &&
       (!hasFullWebCodecsPreview ||
         ENABLE_VISUAL_HTML_VIDEO_FALLBACK ||
         allowHtmlScrubPreview);

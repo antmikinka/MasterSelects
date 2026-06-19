@@ -3,6 +3,7 @@
 import { useMemo } from 'react';
 import type { EngineStats } from '../../types';
 import { useEngineStore } from '../../stores/engineStore';
+import { useMediaStore } from '../../stores/mediaStore';
 
 interface StatsOverlayProps {
   stats: EngineStats;
@@ -30,7 +31,15 @@ function getFpsColor(fps: number, targetFps: number): string {
   return '#f44';
 }
 
-function getEffectiveFps(stats: EngineStats): {
+function resolveVisualTargetFps(stats: EngineStats, compositionFrameRate: number | undefined): number {
+  const renderTargetFps = normalizeFps(stats.targetFps) ?? 60;
+  const compFps = normalizeFps(compositionFrameRate);
+  return compFps === null
+    ? renderTargetFps
+    : Math.max(1, Math.min(renderTargetFps, compFps));
+}
+
+function getEffectiveFps(stats: EngineStats, visualTargetFps: number): {
   value: number;
   weakestLink: string;
   candidates: EffectiveFpsCandidate[];
@@ -39,9 +48,8 @@ function getEffectiveFps(stats: EngineStats): {
     return { value: 0, weakestLink: 'Idle', candidates: [] };
   }
 
-  const targetFps = normalizeFps(stats.targetFps) ?? 60;
   const candidates: EffectiveFpsCandidate[] = [
-    { label: 'Target', value: targetFps },
+    { label: 'Visual target', value: visualTargetFps },
   ];
 
   const renderFps = normalizeFps(stats.fps);
@@ -81,10 +89,18 @@ function getEffectiveFps(stats: EngineStats): {
 
 export function StatsOverlay({ stats, resolution, expanded, onToggle }: StatsOverlayProps) {
   const gpuInfo = useEngineStore(s => s.gpuInfo);
+  const compositionFrameRate = useMediaStore((s) => {
+    const activeCompositionId = s.activeCompositionId;
+    return s.compositions.find((composition) => composition.id === activeCompositionId)?.frameRate;
+  });
   const splatSequence = stats.renderDispatcher?.splatSequence;
   const splatVisualFps = splatSequence?.visualFrameChangesLastSecond;
-  const effectiveFps = useMemo(() => getEffectiveFps(stats), [stats]);
-  const effectiveFpsColor = getFpsColor(effectiveFps.value, stats.targetFps);
+  const visualTargetFps = useMemo(
+    () => resolveVisualTargetFps(stats, compositionFrameRate),
+    [compositionFrameRate, stats],
+  );
+  const effectiveFps = useMemo(() => getEffectiveFps(stats, visualTargetFps), [stats, visualTargetFps]);
+  const effectiveFpsColor = getFpsColor(effectiveFps.value, visualTargetFps);
   const fpsColor = getFpsColor(stats.fps, stats.targetFps);
   const splatFpsColor =
     splatVisualFps === undefined
@@ -95,7 +111,15 @@ export function StatsOverlay({ stats, resolution, expanded, onToggle }: StatsOve
           ? '#ff4'
           : '#f44';
   const dropColor = stats.drops.lastSecond > 0 ? '#f44' : '#4f4';
-  const decoderColor = stats.decoder === 'NativeHelper' ? '#4af' : stats.decoder === 'WebCodecs' ? '#4f4' : stats.decoder === 'ParallelDecode' ? '#a4f' : stats.decoder.startsWith('HTMLVideo') ? '#fa4' : '#888';
+  const decoderColor = stats.decoder === 'NativeHelper'
+    ? '#4af'
+    : stats.decoder === 'WebCodecs' || stats.decoder === 'WebCodecs+HTMLVideo'
+      ? '#4f4'
+      : stats.decoder === 'ParallelDecode'
+        ? '#a4f'
+        : stats.decoder.startsWith('HTMLVideo')
+          ? '#fa4'
+          : '#888';
   const playbackStatusColor = stats.playback?.status === 'bad' ? '#f44' : stats.playback?.status === 'warn' ? '#ff4' : '#4f4';
   // Render time color: green < 10ms, yellow < 16.67ms (60fps target), red >= 16.67ms
   const renderTime = stats.timing.total;
@@ -163,7 +187,7 @@ export function StatsOverlay({ stats, resolution, expanded, onToggle }: StatsOve
           <span style={{ color: '#888', marginLeft: 6, fontSize: 9 }}>[IDLE]</span>
         )}
         {stats.decoder !== 'none' && !stats.isIdle && (
-          <span style={{ color: decoderColor, marginLeft: 6, fontSize: 9 }}>[{stats.decoder === 'WebCodecs' ? 'WC' : stats.decoder === 'HTMLVideo(VF)' ? 'VF' : stats.decoder === 'NativeHelper' ? 'NH' : stats.decoder === 'ParallelDecode' ? 'PD' : 'HTML'}]</span>
+          <span style={{ color: decoderColor, marginLeft: 6, fontSize: 9 }}>[{stats.decoder === 'WebCodecs' ? 'WC' : stats.decoder === 'WebCodecs+HTMLVideo' ? 'WC+HTML' : stats.decoder === 'HTMLVideo(VF)' ? 'VF' : stats.decoder === 'NativeHelper' ? 'NH' : stats.decoder === 'ParallelDecode' ? 'PD' : 'HTML'}]</span>
         )}
         {splatSequence && !stats.isIdle && (
           <span
@@ -233,10 +257,14 @@ export function StatsOverlay({ stats, resolution, expanded, onToggle }: StatsOve
           <span>Render FPS</span>
           <span style={{ color: fpsColor }}>{stats.fps}</span>
         </div>
+        <div className="stats-row">
+          <span>Visual Target</span>
+          <span style={{ color: '#aaa' }}>{visualTargetFps}</span>
+        </div>
         {stats.playback && stats.playback.previewFrames > 0 && (
           <div className="stats-row">
             <span>Preview FPS</span>
-            <span style={{ color: getFpsColor(stats.playback.previewUpdateFps, stats.targetFps) }}>
+            <span style={{ color: getFpsColor(stats.playback.previewUpdateFps, visualTargetFps) }}>
               update {stats.playback.previewUpdateFps} / render {stats.playback.previewRenderFps}
             </span>
           </div>

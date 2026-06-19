@@ -106,6 +106,7 @@ export function buildLayerBuilderVideoLayer(params: BuildTimelineVideoLayerParam
     ctx,
     targetTime: timeInfo.clipTime,
     allowSharedPreviewSession: canUseSharedPreviewRuntimeSession(clip, ctx.clipsAtTime),
+    workerGpuMediaFile: mediaFile,
     continuationVideo: params.previewContinuationResolver?.getPreviewContinuationVideoElement(
       clip,
       timeInfo.clipTime,

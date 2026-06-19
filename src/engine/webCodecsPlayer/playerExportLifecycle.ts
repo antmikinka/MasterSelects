@@ -46,7 +46,7 @@ export abstract class WebCodecsPlayerExportLifecycle extends WebCodecsPlayerSeek
     }
     if (!this.videoTrack || this.samples.length === 0) return 0;
     const sample = this.samples[Math.min(this.sampleIndex, this.samples.length - 1)];
-    return sample.cts / sample.timescale;
+    return this.getSamplePresentationTimestampUs(sample) / 1_000_000;
   }
 
   destroy(): void {

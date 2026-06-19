@@ -41,7 +41,7 @@
     linear-gradient(180deg, transparent 0 8px, rgba(126, 78, 42, 0.24) 15px, rgba(58, 31, 15, 0.12) 23px, transparent 34px),
     linear-gradient(180deg, rgba(255, 232, 181, 0.05), transparent 17%, transparent 82%, rgba(0, 0, 0, 0.18)),
     radial-gradient(ellipse at center, transparent 50%, rgba(4, 2, 1, 0.18) 76%, rgba(0, 0, 0, 0.32)),
-    url('./center-recess.jpg');
+    url('./center-recess.webp');
   background-repeat: no-repeat;
   background-size: 100% 100%, 100% 100%, 100% 100%, auto var(--audio-mixer-center-well-photo-height);
   filter: brightness(0.82) contrast(1.04) saturate(0.94);

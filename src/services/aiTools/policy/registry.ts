@@ -109,8 +109,10 @@ const TOOL_POLICY_MAP = new Map<string, ToolPolicyEntry>([
   ['selectMediaItems', readOnly()],
   ['play', readOnly()],
   ['pause', readOnly()],
+  ['simulateFrameKeypresses', readOnly()],
   ['simulateScrub', readOnly()],
   ['simulatePlayback', readOnly()],
+  ['simulatePlaybackPulses', readOnly()],
   ['simulatePlaybackPath', readOnly()],
   ['undo', readOnly()],
   ['redo', readOnly()],
@@ -137,6 +139,7 @@ const TOOL_POLICY_MAP = new Map<string, ToolPolicyEntry>([
     riskLevel: 'low',
   }],
   ['getPlaybackTrace', bridgeTelemetry()],
+  ['samplePlaybackFramePacing', bridgeTelemetry()],
   ['purgePlaybackPath', {
     ...bridgeTelemetry(),
     readOnly: false,
@@ -245,6 +248,12 @@ const TOOL_POLICY_MAP = new Map<string, ToolPolicyEntry>([
     riskLevel: 'medium',
     allowedCallers: ['devBridge', 'internal'],
   }],
+  ['runWorkerFirstRealVideoRuntimeSmoke', {
+    ...bridgeTelemetry(),
+    readOnly: false,
+    riskLevel: 'medium',
+    allowedCallers: ['devBridge', 'internal'],
+  }],
   ['runWorkerFirstEffectsMasksTransitionsGoldenFixture', {
     ...bridgeTelemetry(),
     readOnly: false,
@@ -336,6 +345,12 @@ const TOOL_POLICY_MAP = new Map<string, ToolPolicyEntry>([
     allowedCallers: ['devBridge', 'internal'],
   }],
   ['reloadApp', bridgeTelemetry()],
+  ['setRenderHostMode', {
+    ...bridgeTelemetry(),
+    readOnly: false,
+    riskLevel: 'low',
+    allowedCallers: ['devBridge', 'console', 'internal'],
+  }],
   ['debugExport', {
     ...bridgeTelemetry(),
     readOnly: false,

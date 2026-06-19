@@ -140,6 +140,7 @@ export function animateDockLayoutTransition(container: HTMLElement, snapshot: Do
       }
 
       const clone = previous.clone;
+      if (!clone) return;
       const originalVisibility = element.style.visibility;
 
       if (previous.childItems.size > 0) {
@@ -226,6 +227,7 @@ export function animateDockLayoutTransition(container: HTMLElement, snapshot: Do
     const exitElement = shouldAnimateLiveLayoutElement(id) && previous.liveElement
       ? previous.liveElement
       : previous.clone;
+    if (!exitElement) return;
 
     if (exitElement === previous.liveElement) {
       exitElement.classList.add('dock-layout-transition-clone');

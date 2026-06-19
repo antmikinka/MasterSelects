@@ -117,6 +117,8 @@ function getInitialState(): Partial<TimelineStore> {
     ramPreviewProgress: null,
     ramPreviewRange: null,
     isRamPreviewing: false,
+    clipVideoBakeProgress: null,
+    isClipVideoBakeRendering: false,
     cachedFrameTimes: new Set<number>(),
     // Proxy cache state
     isProxyCaching: false,
@@ -329,13 +331,26 @@ export function createTestTimelineStore(overrides?: Partial<TimelineStore>) {
       toggleRamPreviewEnabled: () => {
         const { ramPreviewEnabled } = get();
         if (ramPreviewEnabled) {
-          set({ ramPreviewEnabled: false, isRamPreviewing: false, ramPreviewProgress: null, ramPreviewRange: null, cachedFrameTimes: new Set() });
+          set({
+            ramPreviewEnabled: false,
+            isRamPreviewing: false,
+            ramPreviewProgress: null,
+            ramPreviewRange: null,
+            clipVideoBakeProgress: null,
+            isClipVideoBakeRendering: false,
+            cachedFrameTimes: new Set(),
+          });
         } else {
           set({ ramPreviewEnabled: true });
         }
       },
       startRamPreview: async () => {},
       startRamPreviewForRange: async () => true,
+      startClipVideoBakeRenderRange: async () => {
+        set({ clipVideoBakeProgress: 0, isClipVideoBakeRendering: true });
+        set({ clipVideoBakeProgress: null, isClipVideoBakeRendering: false });
+        return true;
+      },
       cancelRamPreview: () => {
         set({ isRamPreviewing: false, ramPreviewProgress: null });
       },

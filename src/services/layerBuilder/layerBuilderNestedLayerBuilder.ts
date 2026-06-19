@@ -72,7 +72,7 @@ function buildNestedClipLayer(
     return null;
   }
 
-  if (hasLayerBuilderRenderableVideoSource(nestedClip.source, nestedClip)) {
+  if (hasLayerBuilderRenderableVideoSource(nestedClip.source, nestedClip, getMediaFileForClip(ctx, nestedClip))) {
     const nestedClipTime = getNestedClipSourceTime(nestedClip, nestedClipLocalTime);
 
     if (ctx.proxyEnabled) {
@@ -96,6 +96,7 @@ function buildNestedClipLayer(
       ctx,
       targetTime: nestedClipTime,
       allowSharedPreviewSession: true,
+      workerGpuMediaFile: getMediaFileForClip(ctx, nestedClip),
     });
     return videoSource
       ? ({ ...baseLayer, source: videoSource.source } as Layer)

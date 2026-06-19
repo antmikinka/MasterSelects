@@ -142,6 +142,61 @@ export abstract class WebCodecsPlayerFrameOutput extends WebCodecsPlayerSeekStat
     return Math.abs(this.currentFrameTimestampUs - targetUs) <= frameDurationUs * maxFrameDelta;
   }
 
+  protected resolvePendingSeekWithDisplayedFrame(
+    targetUs: number,
+    options: { readonly resetQueuedDecode?: boolean } = {}
+  ): boolean {
+    const frame = this.currentFrame;
+    if (
+      this._isPlaying ||
+      !frame ||
+      this.pendingSeekKind !== 'seek' ||
+      this.seekTargetUs === null ||
+      this.currentFrameTimestampUs === null
+    ) {
+      return false;
+    }
+
+    const frameDurationUs = 1_000_000 / Math.max(this.frameRate, 1);
+    const resolveToleranceUs = Math.min(
+      this.seekTargetToleranceUs || frameDurationUs,
+      frameDurationUs * 0.55
+    );
+    const diffUs = Math.abs(this.currentFrameTimestampUs - targetUs);
+    if (diffUs > resolveToleranceUs) {
+      return false;
+    }
+
+    if (
+      options.resetQueuedDecode === true &&
+      this.decoder &&
+      this.decoder.state === 'configured' &&
+      this.codecConfig
+    ) {
+      this.recordDecoderReset('seek');
+      this.decoder.reset();
+      this.decoder.configure(this.codecConfig);
+      this.resetDecodeQueueTracking();
+      this.clearFrameBuffer();
+      this.invalidateStrictPausedSeekFlush();
+    }
+
+    this.seekTargetUs = null;
+    this.seekTargetToleranceUs = 0;
+    this.clearPendingSeekFeed();
+    this.endPendingSeek('resolved');
+    webCodecsTelemetry.seekPublish(targetUs, frame.timestamp, diffUs, 'resolved');
+
+    this.holdCurrentFrameDuringPause();
+    this.startPausedPreroll();
+    this.onFrame?.(frame);
+    if (this.frameResolve) {
+      this.frameResolve();
+      this.frameResolve = null;
+    }
+    return true;
+  }
+
   protected clearDisplayedFrame(): void {
     if (this.currentFrame) {
       this.currentFrame.close();
@@ -160,6 +215,77 @@ export abstract class WebCodecsPlayerFrameOutput extends WebCodecsPlayerSeekStat
     }
     this.pendingSeekFallbackFrame = null;
     this.pendingSeekFallbackDiffUs = Number.POSITIVE_INFINITY;
+  }
+
+  protected promoteBufferedFrameForPausedSeekTarget(targetUs: number, toleranceUs: number): boolean {
+    if (this._isPlaying || this.frameBuffer.length === 0) {
+      return false;
+    }
+
+    let bestIndex = -1;
+    let bestDiffUs = Number.POSITIVE_INFINITY;
+    for (let index = 0; index < this.frameBuffer.length; index += 1) {
+      const frame = this.frameBuffer[index];
+      if (!frame) continue;
+      const diffUs = Math.abs(frame.timestamp - targetUs);
+      if (diffUs < bestDiffUs) {
+        bestDiffUs = diffUs;
+        bestIndex = index;
+      }
+    }
+
+    if (bestIndex < 0 || bestDiffUs > toleranceUs) {
+      return false;
+    }
+
+    const skippedFrames = this.frameBuffer.splice(0, bestIndex);
+    for (const skippedFrame of skippedFrames) {
+      if (skippedFrame !== this.currentFrame) {
+        skippedFrame.close();
+      }
+    }
+    const frame = this.frameBuffer.shift();
+    if (!frame) {
+      return false;
+    }
+
+    this.setDisplayedFrame(frame);
+    this.clearPendingSeekFallback(frame);
+    this.clearPendingSeekFeed();
+    this.endPendingSeek('resolved');
+    webCodecsTelemetry.seekPublish(targetUs, frame.timestamp, bestDiffUs, 'resolved');
+
+    this.holdCurrentFrameDuringPause();
+    this.startPausedPreroll();
+    this.onFrame?.(frame);
+    if (this.frameResolve) {
+      this.frameResolve();
+      this.frameResolve = null;
+    }
+    return true;
+  }
+
+  promoteBufferedFrameNearTime(timeSeconds: number, maxFrameDelta = 1.5): VideoFrame | null {
+    if (!Number.isFinite(timeSeconds)) {
+      return this.currentFrame;
+    }
+
+    const targetUs = timeSeconds * 1_000_000;
+    const frameDurationUs = 1_000_000 / Math.max(this.frameRate, 1);
+    const toleranceUs = Math.max(this.seekTargetToleranceUs, frameDurationUs * maxFrameDelta);
+    if (
+      this.currentFrame &&
+      this.currentFrameTimestampUs !== null &&
+      Math.abs(this.currentFrameTimestampUs - targetUs) <= toleranceUs
+    ) {
+      return this.currentFrame;
+    }
+
+    if (this.promoteBufferedFrameForPausedSeekTarget(targetUs, toleranceUs)) {
+      return this.currentFrame;
+    }
+
+    return null;
   }
 
   protected rememberPendingSeekFallback(frame: VideoFrame, diffUs: number): boolean {
@@ -221,21 +347,18 @@ export abstract class WebCodecsPlayerFrameOutput extends WebCodecsPlayerSeekStat
   protected handleDecodedFrame(frame: VideoFrame): void {
     const queueSize = this.noteDecodeDequeued();
     webCodecsTelemetry.decodeOutput(frame.timestamp, queueSize);
+    this.onDecodedFrame?.(frame);
 
     if (this.exportMode.isInExportMode) {
       this.exportMode.handleDecoderOutput(frame);
-    } else if (this._isPlaying) {
-      this.frameBuffer.push(frame);
-      while (this.frameBuffer.length > WEB_CODECS_PLAYER_LIMITS.MAX_FRAME_BUFFER) {
-        const oldest = this.frameBuffer[0];
-        if (oldest === this.currentFrame) break;
-        this.frameBuffer.shift()!.close();
-      }
     } else if (this.seekTargetUs !== null && this.pendingSeekKind !== null) {
       const diff = Math.abs(frame.timestamp - this.seekTargetUs);
       const publishPreview =
-        this.pendingSeekPreviewMode === 'interactive' &&
+        this.pendingSeekPreviewMode !== 'strict' &&
         this.shouldPublishInteractiveSeekPreview(frame.timestamp);
+      const resolvesPendingSeek =
+        diff <= this.seekTargetToleranceUs ||
+        (this._isPlaying && publishPreview);
 
       if (diff <= this.seekTargetToleranceUs || publishPreview) {
         this.setDisplayedFrame(frame);
@@ -248,7 +371,7 @@ export abstract class WebCodecsPlayerFrameOutput extends WebCodecsPlayerSeekStat
           publishPreview ? 'interactive_preview' : 'resolved'
         );
 
-        if (diff <= this.seekTargetToleranceUs) {
+        if (resolvesPendingSeek) {
           this.seekTargetUs = null;
           this.seekTargetToleranceUs = 0;
           this.clearPendingSeekFeed();
@@ -274,6 +397,13 @@ export abstract class WebCodecsPlayerFrameOutput extends WebCodecsPlayerSeekStat
         }
         // Don't return early - fall through so feedPendingSeekSamples
         // continues feeding the decoder towards the seek target.
+      }
+    } else if (this._isPlaying) {
+      this.frameBuffer.push(frame);
+      while (this.frameBuffer.length > WEB_CODECS_PLAYER_LIMITS.MAX_FRAME_BUFFER) {
+        const oldest = this.frameBuffer[0];
+        if (oldest === this.currentFrame) break;
+        this.frameBuffer.shift()!.close();
       }
     } else if (this.pausedPrerollEndIndex !== null) {
       if (
@@ -321,7 +451,7 @@ export abstract class WebCodecsPlayerFrameOutput extends WebCodecsPlayerSeekStat
 
     const chunk = new EncodedVideoChunk({
       type: 'key',
-      timestamp: (firstSample.cts * 1_000_000) / firstSample.timescale,
+      timestamp: this.getSamplePresentationTimestampUs(firstSample),
       duration: (firstSample.duration * 1_000_000) / firstSample.timescale,
       data: firstSample.data,
     });
@@ -332,8 +462,8 @@ export abstract class WebCodecsPlayerFrameOutput extends WebCodecsPlayerSeekStat
       this.sampleIndex = 0;
       this.feedIndex = 1;
       this.clearAdvanceSeekState();
-    } catch {
-      // Ignore decode errors on first frame
+    } catch (error) {
+      this.recordDecodeError(error, 'decodeFirstFrame.decode');
     }
   }
 
@@ -353,7 +483,30 @@ export abstract class WebCodecsPlayerFrameOutput extends WebCodecsPlayerSeekStat
   }
 
   /** Debug info for stats overlay (null in simple mode) */
-  getDebugInfo(): { codec: string; hwAccel: string; decodeQueueSize: number; samplesLoaded: number; sampleIndex: number } | null {
+  getDebugInfo(): {
+    codec: string;
+    hwAccel: string;
+    decodeQueueSize: number;
+    samplesLoaded: number;
+    sampleIndex: number;
+    feedIndex?: number;
+    frameBufferSize?: number;
+    decoderState?: string | null;
+    currentFrameTimestampSeconds?: number | null;
+    pendingSeekKind?: string | null;
+    pendingSeekTargetSeconds?: number | null;
+    pendingSeekFeedEndIndex?: number | null;
+    decodeErrorCount?: number;
+    lastDecodeError?: string | null;
+    lastSeekPlan?: {
+      targetIndex: number;
+      keyframeIndex: number;
+      feedEndIndex: number;
+      targetTimeSeconds: number;
+      targetSampleTimeSeconds: number | null;
+      keyframeTimeSeconds: number | null;
+    } | null;
+  } | null {
     if (this.useSimpleMode || !this.codecConfig) return null;
     return {
       codec: this.codecConfig.codec,
@@ -361,6 +514,20 @@ export abstract class WebCodecsPlayerFrameOutput extends WebCodecsPlayerSeekStat
       decodeQueueSize: this.getEffectiveDecodeQueueSize(),
       samplesLoaded: this.samples.length,
       sampleIndex: this.sampleIndex,
+      feedIndex: this.feedIndex,
+      frameBufferSize: this.frameBuffer.length,
+      decoderState: this.decoder?.state ?? null,
+      currentFrameTimestampSeconds: this.currentFrameTimestampUs === null
+        ? null
+        : this.currentFrameTimestampUs / 1_000_000,
+      pendingSeekKind: this.pendingSeekKind,
+      pendingSeekTargetSeconds: this.pendingSeekTargetDebugUs === null
+        ? null
+        : this.pendingSeekTargetDebugUs / 1_000_000,
+      pendingSeekFeedEndIndex: this.pendingSeekFeedEndIndex,
+      decodeErrorCount: this.decodeErrorCount,
+      lastDecodeError: this.lastDecodeError,
+      lastSeekPlan: this.lastSeekPlanDebug,
     };
   }
 }

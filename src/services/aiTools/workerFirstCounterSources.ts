@@ -1,6 +1,8 @@
 import type { FrameProviderStatus } from '../../engine/render/contracts/frameProviderPolicy';
 import type { RenderCacheRegistrySnapshot } from '../renderJobs/renderCacheRegistry';
 import type { RenderSchedulerSnapshot } from '../renderJobs/renderJobScheduler';
+import type { WorkerGpuOnlyPlaybackDiagnostics } from '../../types/engineStats';
+import { summarizeWorkerGpuOnlyPlaybackPaths } from '../playbackDebugStats';
 import type { WorkerFirstProofCounters } from './workerFirstProofHarness';
 import type { WorkerFirstProofCounterSources } from './workerFirstGateInputs';
 
@@ -11,9 +13,23 @@ export interface WorkerFirstRuntimeCounterSourceSnapshot {
   readonly transferLatencyMs: number | null;
   readonly providerWaitMs: number | null;
   readonly presentedFrameId: string | null;
+  readonly presentedFrames: readonly WorkerFirstPresentedFrameEvent[];
+  readonly workerGpuOnly: WorkerGpuOnlyPlaybackDiagnostics;
   readonly visiblePixels: Partial<WorkerFirstProofCounters['visiblePixels']>;
   readonly updatedAt: number | null;
 }
+
+export interface WorkerFirstPresentedFrameEvent {
+  readonly t: number;
+  readonly frameId: string;
+  readonly targetId: string;
+  readonly source: string;
+  readonly changed: boolean;
+  readonly targetMoved: boolean;
+  readonly driftMs?: number;
+}
+
+const MAX_PRESENTED_FRAME_EVENTS = 2000;
 
 let schedulerSnapshot: RenderSchedulerSnapshot | null = null;
 let cacheSnapshot: RenderCacheRegistrySnapshot | null = null;
@@ -21,6 +37,7 @@ let providerStatuses: FrameProviderStatus[] = [];
 let transferLatencyMs: number | null = null;
 let providerWaitMs: number | null = null;
 let presentedFrameId: string | null = null;
+let presentedFrames: WorkerFirstPresentedFrameEvent[] = [];
 let visiblePixels: Partial<WorkerFirstProofCounters['visiblePixels']> = {};
 let updatedAt: number | null = null;
 
@@ -56,6 +73,17 @@ function cloneProvider(status: FrameProviderStatus): FrameProviderStatus {
   };
 }
 
+function summarizeWorkerGpuOnlyPresentedFrames(
+  frames: readonly WorkerFirstPresentedFrameEvent[],
+): WorkerGpuOnlyPlaybackDiagnostics {
+  const previewPathCounts: Record<string, number> = {};
+  for (const frame of frames) {
+    const source = frame.source || 'worker-presenting';
+    previewPathCounts[source] = (previewPathCounts[source] ?? 0) + 1;
+  }
+  return summarizeWorkerGpuOnlyPlaybackPaths(previewPathCounts);
+}
+
 export function clearWorkerFirstCounterSources(): void {
   schedulerSnapshot = null;
   cacheSnapshot = null;
@@ -63,12 +91,17 @@ export function clearWorkerFirstCounterSources(): void {
   transferLatencyMs = null;
   providerWaitMs = null;
   presentedFrameId = null;
+  presentedFrames = [];
   visiblePixels = {};
   updatedAt = null;
 }
 
 export function clearWorkerFirstCounterSourcesForTests(): void {
   clearWorkerFirstCounterSources();
+}
+
+export function clearWorkerFirstPresentedFrameEvents(): void {
+  presentedFrames = [];
 }
 
 export function recordWorkerFirstSchedulerSnapshot(
@@ -112,6 +145,35 @@ export function recordWorkerFirstTimingCounters(input: {
   }
 }
 
+export function recordWorkerFirstPresentedFrame(input: {
+  readonly frameId: string;
+  readonly targetId: string;
+  readonly source?: string;
+  readonly changed?: boolean;
+  readonly targetMoved?: boolean;
+  readonly driftMs?: number;
+  readonly t?: number;
+}, capturedAt?: number): void {
+  touch(capturedAt);
+  presentedFrameId = input.frameId;
+  presentedFrames.push({
+    t: typeof input.t === 'number' && Number.isFinite(input.t)
+      ? input.t
+      : typeof performance !== 'undefined'
+        ? performance.now()
+        : Date.now(),
+    frameId: input.frameId,
+    targetId: input.targetId,
+    source: input.source ?? 'worker-presenting',
+    changed: input.changed ?? true,
+    targetMoved: input.targetMoved ?? true,
+    ...(typeof input.driftMs === 'number' && Number.isFinite(input.driftMs) ? { driftMs: input.driftMs } : {}),
+  });
+  if (presentedFrames.length > MAX_PRESENTED_FRAME_EVENTS) {
+    presentedFrames = presentedFrames.slice(-MAX_PRESENTED_FRAME_EVENTS);
+  }
+}
+
 export function recordWorkerFirstVisiblePixelCounters(
   input: Partial<WorkerFirstProofCounters['visiblePixels']>,
   capturedAt?: number,
@@ -131,6 +193,7 @@ export function recordWorkerFirstCounterSources(
   transferLatencyMs = sources.transferLatencyMs ?? null;
   providerWaitMs = sources.providerWaitMs ?? null;
   presentedFrameId = sources.presentedFrameId ?? null;
+  presentedFrames = [];
   visiblePixels = { ...(sources.visiblePixels ?? {}) };
 }
 
@@ -142,9 +205,25 @@ export function getWorkerFirstCounterSourceSnapshot(): WorkerFirstRuntimeCounter
     transferLatencyMs,
     providerWaitMs,
     presentedFrameId,
+    presentedFrames: presentedFrames.map((frame) => ({ ...frame })),
+    workerGpuOnly: summarizeWorkerGpuOnlyPresentedFrames(presentedFrames),
     visiblePixels: { ...visiblePixels },
     updatedAt,
   };
+}
+
+export function getWorkerFirstGpuOnlyPresentedFrameSummary(): WorkerGpuOnlyPlaybackDiagnostics {
+  return summarizeWorkerGpuOnlyPresentedFrames(presentedFrames);
+}
+
+export function getWorkerFirstPresentedFrameEvents(
+  windowMs: number,
+  now = typeof performance !== 'undefined' ? performance.now() : Date.now(),
+): readonly WorkerFirstPresentedFrameEvent[] {
+  const start = now - Math.max(0, windowMs);
+  return presentedFrames
+    .filter((frame) => frame.t >= start && frame.t <= now)
+    .map((frame) => ({ ...frame }));
 }
 
 export function getWorkerFirstCounterSources(): WorkerFirstProofCounterSources {

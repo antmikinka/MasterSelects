@@ -1,5 +1,6 @@
 import { FrameExporter, downloadBlob } from '../../../engine/export';
 import type { ExportMode, ExportProgress, VideoCodec, ContainerFormat } from '../../../engine/export';
+import { exportRenderHostPort } from '../../../engine/export/exportRenderHostPort';
 import { useExportStore } from '../../../stores/exportStore';
 import { useTimelineStore } from '../../../stores/timeline';
 import { exportDiagnostics } from '../../export/exportDiagnostics';
@@ -10,11 +11,14 @@ import type { ToolResult } from '../types';
 const log = Logger.create('AIExport');
 
 function finiteNumber(value: unknown, fallback: number, min?: number, max?: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
+  const numericValue = typeof value === 'string' && value.trim() !== ''
+    ? Number(value)
+    : value;
+  if (typeof numericValue !== 'number' || !Number.isFinite(numericValue)) {
     return fallback;
   }
 
-  let next = value;
+  let next = numericValue;
   if (min !== undefined) next = Math.max(min, next);
   if (max !== undefined) next = Math.min(max, next);
   return next;
@@ -82,11 +86,14 @@ export async function handleDebugExport(args: Record<string, unknown>): Promise<
   const settingsMode: ExportMode = exportSettings.encoder === 'webcodecs' ? 'fast' : 'precise';
 
   const startTime = finiteNumber(args.startTime, range.startTime, 0);
-  let endTime = finiteNumber(args.endTime, range.endTime, startTime);
   const durationSeconds = finiteNumber(args.durationSeconds, 0, 0);
-  if (durationSeconds > 0) {
-    endTime = Math.min(endTime, startTime + durationSeconds);
-  }
+  const timelineDuration = Number.isFinite(timeline.duration) && timeline.duration > 0
+    ? timeline.duration
+    : Number.POSITIVE_INFINITY;
+  let endTime = durationSeconds > 0
+    ? startTime + durationSeconds
+    : finiteNumber(args.endTime, range.endTime, startTime);
+  endTime = Math.min(endTime, timelineDuration);
 
   if (endTime <= startTime) {
     return { success: false, error: `Invalid export range ${startTime}s-${endTime}s` };
@@ -142,6 +149,7 @@ export async function handleDebugExport(args: Record<string, unknown>): Promise<
 
   log.info('Starting debug export', { startTime, endTime, width, height, fps, includeAudio, exportMode, maxRuntimeMs });
   const engineBefore = renderHostPort.getDebugInfrastructureState();
+  const exportHostBefore = exportRenderHostPort.getTelemetry();
   timeline.startExport(startTime, endTime);
   const timeoutId = window.setTimeout(() => {
     timedOut = true;
@@ -164,6 +172,7 @@ export async function handleDebugExport(args: Record<string, unknown>): Promise<
 
     const elapsedMs = Math.round(performance.now() - startedAt);
     const engineAfter = renderHostPort.getDebugInfrastructureState();
+    const exportHostAfter = exportRenderHostPort.getTelemetry();
     const errors = recentExportErrors(startedAtIso);
 
     if (!blob) {
@@ -178,6 +187,8 @@ export async function handleDebugExport(args: Record<string, unknown>): Promise<
           exportStats: exportDiagnostics.snapshot(),
           engineBefore,
           engineAfter,
+          exportHostBefore,
+          exportHostAfter,
           errors,
         },
       };
@@ -198,6 +209,8 @@ export async function handleDebugExport(args: Record<string, unknown>): Promise<
         exportStats: exportDiagnostics.snapshot(),
         engineBefore,
         engineAfter,
+        exportHostBefore,
+        exportHostAfter,
         errors,
         downloaded: download,
       },
@@ -217,6 +230,8 @@ export async function handleDebugExport(args: Record<string, unknown>): Promise<
         exportStats: exportDiagnostics.snapshot(),
         engineBefore,
         engineAfter: renderHostPort.getDebugInfrastructureState(),
+        exportHostBefore,
+        exportHostAfter: exportRenderHostPort.getTelemetry(),
         errors: recentExportErrors(startedAtIso),
       },
     };

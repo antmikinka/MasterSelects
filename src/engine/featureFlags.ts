@@ -29,6 +29,7 @@ export const flags = {
   guidedActionsTutorials: true,  // Tutorial scenarios using guided actions
   guidedActionsRecorder: false,  // Future guided action authoring/recording layer
   timelineCanvasWorker: true,  // issue #228 P4: OffscreenCanvas clip renderer for eligible rows; verified by timeline canvas worker smokes.
+  workerFirstRenderHost: false,  // Worker-first playback renderer primary host; remains gated until W5 and worker host mount are green.
 };
 
 // Expose for runtime toggling from devtools

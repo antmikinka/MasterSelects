@@ -58,6 +58,8 @@ export const selectRamPreviewEnabled = (state: TimelineStore) => state.ramPrevie
 export const selectRamPreviewProgress = (state: TimelineStore) => state.ramPreviewProgress;
 export const selectRamPreviewRange = (state: TimelineStore) => state.ramPreviewRange;
 export const selectIsRamPreviewing = (state: TimelineStore) => state.isRamPreviewing;
+export const selectClipVideoBakeProgress = (state: TimelineStore) => state.clipVideoBakeProgress;
+export const selectIsClipVideoBakeRendering = (state: TimelineStore) => state.isClipVideoBakeRendering;
 export const selectIsExporting = (state: TimelineStore) => state.isExporting;
 export const selectExportProgress = (state: TimelineStore) => state.exportProgress;
 export const selectExportRange = (state: TimelineStore) => state.exportRange;
@@ -127,6 +129,8 @@ export const selectPreviewExportState = (state: TimelineStore) => ({
   ramPreviewProgress: state.ramPreviewProgress,
   ramPreviewRange: state.ramPreviewRange,
   isRamPreviewing: state.isRamPreviewing,
+  clipVideoBakeProgress: state.clipVideoBakeProgress,
+  isClipVideoBakeRendering: state.isClipVideoBakeRendering,
   isExporting: state.isExporting,
   exportProgress: state.exportProgress,
   exportRange: state.exportRange,

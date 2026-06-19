@@ -1,3 +1,29 @@
+export const WORKER_GPU_ONLY_PREVIEW_PATH_LABELS = [
+  'worker-gpu-only:gpu-test-pattern',
+  'worker-gpu-only:VideoFrame',
+  'worker-gpu-only:solid',
+  'worker-gpu-only:image',
+  'worker-gpu-only:text',
+  'worker-gpu-only:nested',
+  'worker-gpu-only:readback',
+] as const;
+
+export type WorkerGpuOnlyPreviewPathLabel = typeof WORKER_GPU_ONLY_PREVIEW_PATH_LABELS[number];
+
+export type WorkerGpuOnlyFrameState =
+  | 'no-gpu-frame'
+  | 'gpu-test-pattern'
+  | 'real-gpu-source';
+
+export interface WorkerGpuOnlyPlaybackDiagnostics {
+  readonly frameState: WorkerGpuOnlyFrameState;
+  readonly previewFrames: number;
+  readonly testPatternFrames: number;
+  readonly realSourceFrames: number;
+  readonly unknownSourceFrames: number;
+  readonly pathCounts: Record<WorkerGpuOnlyPreviewPathLabel, number>;
+}
+
 export interface EngineStats {
   fps: number;
   frameTime: number;
@@ -20,7 +46,7 @@ export interface EngineStats {
   layerCount: number;
   targetFps: number;
   // Decoder info
-  decoder: 'WebCodecs' | 'HTMLVideo(VF)' | 'HTMLVideo' | 'HTMLVideo(cached)' | 'HTMLVideo(paused-cache)' | 'HTMLVideo(seeking-cache)' | 'HTMLVideo(scrub-cache)' | 'NativeHelper' | 'ParallelDecode' | 'none';
+  decoder: 'WebCodecs' | 'WebCodecs+HTMLVideo' | 'HTMLVideo(VF)' | 'HTMLVideo' | 'HTMLVideo(cached)' | 'HTMLVideo(paused-cache)' | 'HTMLVideo(seeking-cache)' | 'HTMLVideo(scrub-cache)' | 'NativeHelper' | 'ParallelDecode' | 'none';
   // WebCodecs debug info (only in full mode)
   webCodecsInfo?: {
     codec: string;
@@ -93,6 +119,7 @@ export interface EngineStats {
     lastPreviewFreezeDurationMs?: number;
     previewPathCounts?: Record<string, number>;
     scrubPathCounts?: Record<string, number>;
+    workerGpuOnly?: WorkerGpuOnlyPlaybackDiagnostics;
   };
   // Render dispatcher debug snapshot, including non-video visual cadence.
   renderDispatcher?: {

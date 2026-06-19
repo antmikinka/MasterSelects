@@ -6,6 +6,10 @@ import type { TimelineRuntimeAdmissionDecision } from '../timeline/runtimeCoordi
 import { timelineRuntimeCoordinator } from '../timeline/timelineRuntimeCoordinator';
 import { mediaRuntimeRegistry } from './registry';
 import {
+  createWorkerWebCodecsFrameProvider,
+  WorkerWebCodecsFrameProvider,
+} from './workerWebCodecsFrameProvider';
+import {
   INTERACTIVE_PLAYBACK_SESSION_PREFIX,
   INTERACTIVE_SCRUB_SESSION_PREFIX,
   PLAYBACK_RUNTIME_POLICY_IDS,
@@ -109,6 +113,20 @@ function releaseRuntimeProviderResources(sourceId: string, sessionKey: string): 
       getRuntimeProviderResourceId(policy, sourceId, sessionKey, 'frame-provider')
     );
   }
+}
+
+export interface EnsureRuntimeFrameProviderOptions {
+  readonly preferWorkerWebCodecs?: boolean;
+}
+
+function canUseWorkerWebCodecsFrameProvider(): boolean {
+  return (
+    renderHostPort.getTelemetry().mode === 'worker-presenting' ||
+    renderHostPort.getTelemetry().mode === 'worker-only' ||
+    renderHostPort.getTelemetry().mode === 'worker-gpu-only'
+  )
+    && typeof Worker !== 'undefined'
+    && typeof createImageBitmap === 'function';
 }
 
 export function resolveRuntimePlaybackBinding(
@@ -401,7 +419,8 @@ export function setRuntimeFrameProvider(
 export async function ensureRuntimeFrameProvider(
   source: RuntimeBackedSource | null | undefined,
   policy: DecodeSessionPolicy = 'interactive',
-  sourceTime?: number
+  sourceTime?: number,
+  options: EnsureRuntimeFrameProviderOptions = {}
 ): Promise<RuntimeFrameProvider | null> {
   const hadSession =
     hasRuntimeBinding(source) &&
@@ -422,14 +441,23 @@ export async function ensureRuntimeFrameProvider(
     runtime.updateSessionTime(binding.sessionKey, sourceTime);
   }
 
-  if (binding.frameProvider) {
+  const wantsWorkerWebCodecs =
+    options.preferWorkerWebCodecs === true &&
+    canUseWorkerWebCodecsFrameProvider();
+
+  if (binding.frameProvider && !wantsWorkerWebCodecs) {
     return binding.frameProvider;
   }
 
+  if (binding.frameProvider instanceof WorkerWebCodecsFrameProvider) {
+    return binding.frameProvider;
+  }
+
+  const canBuildMainThreadWebCodecsProvider = source?.webCodecsPlayer?.isFullMode() === true;
   if (
     policy !== 'interactive' ||
-    !isInteractiveScrubSessionKey(binding.sessionKey) ||
-    !source?.webCodecsPlayer?.isFullMode()
+    (!isInteractiveScrubSessionKey(binding.sessionKey) && !wantsWorkerWebCodecs) ||
+    (!wantsWorkerWebCodecs && !canBuildMainThreadWebCodecsProvider)
   ) {
     return null;
   }
@@ -460,32 +488,58 @@ export async function ensureRuntimeFrameProvider(
 
   const initialTime = sourceTime ?? binding.session.currentTime;
   const loadPromise = (async () => {
-    const player = new WebCodecsPlayer({
-      loop: false,
-      useSimpleMode: false,
-      onFrame: () => {
-        renderHostPort.requestNewFrameRender();
-      },
-      onError: () => {
-        renderHostPort.requestRender();
-      },
-    });
-
     try {
-      await player.loadFile(file);
-      runtime.setSessionFrameProvider(binding.sessionKey, player, {
-        ownsProvider: true,
+      if (wantsWorkerWebCodecs) {
+        const workerProvider = await createWorkerWebCodecsFrameProvider({
+          sourceId: `${binding.sourceId}:${binding.sessionKey}`,
+          file,
+          onFrame: () => {
+            renderHostPort.requestNewFrameRender();
+          },
+          onError: () => {
+            renderHostPort.requestRender();
+          },
+        });
+
+        if (workerProvider) {
+          runtime.setSessionFrameProvider(binding.sessionKey, workerProvider, {
+            ownsProvider: true,
+          });
+          if (Number.isFinite(initialTime) && initialTime !== undefined) {
+            workerProvider.seek(initialTime);
+          }
+          renderHostPort.requestRender();
+          return workerProvider;
+        }
+      }
+
+      const player = new WebCodecsPlayer({
+        loop: false,
+        useSimpleMode: false,
+        onFrame: () => {
+          renderHostPort.requestNewFrameRender();
+        },
+        onError: () => {
+          renderHostPort.requestRender();
+        },
       });
 
-      if (Number.isFinite(initialTime) && initialTime !== undefined) {
-        player.seek(initialTime);
+      try {
+        await player.loadFile(file);
+        runtime.setSessionFrameProvider(binding.sessionKey, player, {
+          ownsProvider: true,
+        });
+
+        if (Number.isFinite(initialTime) && initialTime !== undefined) {
+          player.seek(initialTime);
+        }
+        renderHostPort.requestRender();
+        return player;
+      } catch {
+        reservation.release();
+        player.destroy?.();
+        return null;
       }
-      renderHostPort.requestRender();
-      return player;
-    } catch {
-      reservation.release();
-      player.destroy?.();
-      return null;
     } finally {
       pendingRuntimeProviderLoads.delete(loadKey);
     }

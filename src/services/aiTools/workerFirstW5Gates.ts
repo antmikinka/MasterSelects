@@ -315,15 +315,48 @@ function workerStrategyCheck(proofs: readonly WorkerVisiblePresentationProof[]):
       blockers: ['strategy proofs missing'],
     });
   }
-  const blocked = proofs.filter((proof) => proof.strategy === 'main-host-dev');
+  const blocked = proofs.filter((proof) => proof.strategy === 'main-host-fallback');
   return makeCheck({
     id: 'worker-presentation-strategy-selected',
     status: blocked.length === 0 ? 'passed' : 'blocked',
     summary: blocked.length === 0
       ? 'Every visible proof uses a worker-capable presentation strategy.'
-      : `${blocked.length} platforms still select the temporary main-host-dev strategy.`,
+      : `${blocked.length} platforms still select the legacy main-host fallback strategy.`,
     evidence: proofs.map((proof) => `${proof.platform}:${proof.strategy}`),
     blockers: blocked.map((proof) => proof.platform),
+  });
+}
+
+function workerRuntimeWebCodecsCheck(proofs: readonly WorkerVisiblePresentationProof[]): WorkerFirstGateCheck {
+  if (proofs.length === 0) {
+    return makeCheck({
+      id: 'worker-runtime-webcodecs-proven',
+      status: 'blocked',
+      summary: 'No worker-runtime WebCodecs capability proofs have been captured.',
+      evidence: [],
+      blockers: ['capability proofs missing'],
+    });
+  }
+
+  const missing = proofs.filter((proof) => !proof.capabilityProbe);
+  const unsupported = proofs.filter((proof) => (
+    proof.capabilityProbe && !proof.capabilityProbe.facts.webCodecsWorker
+  ));
+  const blockers = [
+    ...missing.map((proof) => `${proof.platform}:capability-probe-missing`),
+    ...unsupported.map((proof) => `${proof.platform}:webCodecsWorker:false`),
+  ];
+
+  return makeCheck({
+    id: 'worker-runtime-webcodecs-proven',
+    status: blockers.length === 0 ? 'passed' : 'blocked',
+    summary: blockers.length === 0
+      ? 'Every visible proof reports WebCodecs decode support in the runtime worker.'
+      : `${blockers.length} platform proofs do not yet prove worker-runtime WebCodecs decode support.`,
+    evidence: proofs
+      .filter((proof) => proof.capabilityProbe)
+      .map((proof) => `${proof.platform}:webCodecsWorker:${proof.capabilityProbe?.facts.webCodecsWorker}`),
+    blockers,
   });
 }
 
@@ -334,6 +367,7 @@ function evaluateVisiblePresentation(options: WorkerFirstW5PrerequisiteOptions):
     platformProofCheck(proofs, requiredPlatforms),
     domVisibleNonblankCheck(proofs, options.minVisibleNonBlankRatio ?? 0.05),
     noStaleFramesCheck(proofs),
+    workerRuntimeWebCodecsCheck(proofs),
     workerStrategyCheck(proofs),
   ];
   return {

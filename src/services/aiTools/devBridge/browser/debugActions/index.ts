@@ -1,5 +1,6 @@
 import { useTimelineStore } from '../../../../../stores/timeline';
 import { useMediaStore } from '../../../../../stores/mediaStore';
+import { useDockStore } from '../../../../../stores/dockStore';
 import {
   HISTORY_DEBUG_DISABLE_STORAGE_KEY,
   isHistoryDisabledForDebug,
@@ -160,6 +161,56 @@ export async function runDebugAction(action: string, args: Record<string, unknow
           record: null,
         },
       };
+    case 'click-toolbar-layout-switch': {
+      const requestedName = typeof args.name === 'string'
+        ? args.name.trim().toLowerCase()
+        : '';
+      const requestedId = typeof args.id === 'string'
+        ? args.id.trim().toLowerCase()
+        : '';
+      const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('.toolbar-layout-switch'));
+      const button = buttons.find((candidate) => {
+        const label = candidate.textContent?.trim().toLowerCase() ?? '';
+        const title = candidate.title.trim().toLowerCase();
+        return (
+          (requestedName && (label === requestedName || title === `load ${requestedName}`)) ||
+          (requestedId && candidate.getAttribute('data-layout-id')?.toLowerCase() === requestedId)
+        );
+      }) ?? null;
+      if (!button) {
+        return {
+          success: false,
+          error: 'Toolbar layout switch button not found',
+          data: {
+            requestedName,
+            requestedId,
+            buttons: buttons.map((candidate) => ({
+              text: candidate.textContent?.trim() ?? '',
+              title: candidate.title,
+              active: candidate.classList.contains('active'),
+            })),
+          },
+        };
+      }
+      button.click();
+      const waitMs = Math.max(0, Math.min(Number(args.waitMs) || 0, 5000));
+      if (waitMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
+      return {
+        success: true,
+        data: {
+          action,
+          clicked: button.textContent?.trim() ?? '',
+          activeSavedLayoutId: useDockStore.getState().activeSavedLayoutId,
+          buttons: buttons.map((candidate) => ({
+            text: candidate.textContent?.trim() ?? '',
+            title: candidate.title,
+            active: candidate.classList.contains('active'),
+          })),
+        },
+      };
+    }
     case 'measure-dock-resize-interaction':
       return measureDockResizeInteraction(args);
     case 'measure-mixer-fader-interaction':

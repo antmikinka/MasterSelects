@@ -8,12 +8,13 @@ import { PropertiesPanel } from '../panels/properties';
 import { MediaPanel } from '../panels/MediaPanel';
 import { Timeline } from '../timeline/Timeline';
 import { normalizePreviewPanelSource } from '../../utils/previewPanelSource';
+import { importAudioMixerPanel } from '../panels/audio-mixer/audioMixerPanelLoader';
 
 // Lazy-loaded panels: only loaded when the user opens them
 // This keeps the initial bundle small by deferring export pipeline,
 // AI services and multicam analysis code
 const ExportPanel = lazy(() => import('../export/ExportPanel').then(m => ({ default: m.ExportPanel })));
-const AudioMixerPanel = lazy(() => import('../panels/audio-mixer/AudioMixerPanel').then(m => ({ default: m.AudioMixerPanel })));
+const AudioMixerPanel = lazy(importAudioMixerPanel);
 const NodeWorkspacePanel = lazy(() => import('../panels/nodes/NodeWorkspacePanel').then(m => ({ default: m.NodeWorkspacePanel })));
 const MultiCamPanel = lazy(() => import('../panels/MultiCamPanel').then(m => ({ default: m.MultiCamPanel })));
 const AIChatPanel = lazy(() => import('../panels/AIChatPanel').then(m => ({ default: m.AIChatPanel })));

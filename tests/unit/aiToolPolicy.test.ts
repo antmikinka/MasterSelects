@@ -55,7 +55,7 @@ describe('AI Tool Policy Registry', () => {
     const readOnlyTools = [
       'getTimelineState', 'getClipDetails', 'getClipsInTimeRange',
       'getMediaItems', 'play', 'pause', 'undo', 'redo',
-      'simulateScrub', 'simulatePlayback', 'simulatePlaybackPath', 'captureFrame', 'getKeyframes', 'getMarkers', 'getMasks',
+      'simulateFrameKeypresses', 'simulateScrub', 'simulatePlayback', 'simulatePlaybackPath', 'captureFrame', 'getKeyframes', 'getMarkers', 'getMasks',
     ];
     for (const name of readOnlyTools) {
       const policy = getToolPolicy(name);
@@ -133,7 +133,7 @@ describe('AI Tool Policy Registry', () => {
   });
 
   it('devBridge can access playback simulation tools', () => {
-    for (const tool of ['simulateScrub', 'simulatePlayback', 'simulatePlaybackPath']) {
+    for (const tool of ['simulateFrameKeypresses', 'simulateScrub', 'simulatePlayback', 'simulatePlaybackPath']) {
       const result = checkToolAccess(tool, 'devBridge');
       expect(result.allowed, `${tool} should be allowed for devBridge`).toBe(true);
     }
@@ -144,6 +144,18 @@ describe('AI Tool Policy Registry', () => {
       const result = checkToolAccess(tool, 'devBridge');
       expect(result.allowed, `${tool} should be allowed for devBridge`).toBe(true);
     }
+  });
+
+  it('render host mode control is limited to dev/test callers', () => {
+    const policy = getToolPolicy('setRenderHostMode');
+    expect(policy).toBeDefined();
+    expect(policy!.readOnly).toBe(false);
+    expect(policy!.riskLevel).toBe('low');
+    expect(checkToolAccess('setRenderHostMode', 'devBridge').allowed).toBe(true);
+    expect(checkToolAccess('setRenderHostMode', 'console').allowed).toBe(true);
+    expect(checkToolAccess('setRenderHostMode', 'internal').allowed).toBe(true);
+    expect(checkToolAccess('setRenderHostMode', 'chat').allowed).toBe(false);
+    expect(checkToolAccess('setRenderHostMode', 'nativeHelper').allowed).toBe(false);
   });
 
   it('worker-first capability probe is devBridge-only telemetry mutation', () => {
@@ -482,6 +494,19 @@ describe('AI Tool Policy Registry', () => {
     expect(checkToolAccess('runWorkerFirstRuntimeExportPlaybackSmoke', 'chat').allowed).toBe(false);
     expect(checkToolAccess('runWorkerFirstRuntimeExportPlaybackSmoke', 'console').allowed).toBe(false);
     expect(checkToolAccess('runWorkerFirstRuntimeExportPlaybackSmoke', 'nativeHelper').allowed).toBe(false);
+  });
+
+  it('worker-first real-video runtime smoke is controlled devBridge automation', () => {
+    const policy = getToolPolicy('runWorkerFirstRealVideoRuntimeSmoke');
+    expect(policy).toBeDefined();
+    expect(policy!.readOnly).toBe(false);
+    expect(policy!.riskLevel).toBe('medium');
+    expect(policy!.requiresConfirmation).toBe(false);
+    expect(checkToolAccess('runWorkerFirstRealVideoRuntimeSmoke', 'devBridge').allowed).toBe(true);
+    expect(checkToolAccess('runWorkerFirstRealVideoRuntimeSmoke', 'internal').allowed).toBe(true);
+    expect(checkToolAccess('runWorkerFirstRealVideoRuntimeSmoke', 'chat').allowed).toBe(false);
+    expect(checkToolAccess('runWorkerFirstRealVideoRuntimeSmoke', 'console').allowed).toBe(false);
+    expect(checkToolAccess('runWorkerFirstRealVideoRuntimeSmoke', 'nativeHelper').allowed).toBe(false);
   });
 
   it('worker-first golden fixture capture is controlled devBridge automation', () => {

@@ -16,6 +16,13 @@ import { useMediaStore } from '../mediaStore';
 
 const log = Logger.create('RamPreviewSlice');
 
+type RangeGenerationActivity = 'ram-preview' | 'clip-video-bake';
+
+interface RangeGenerationOptions {
+  publishRamPreviewRange?: boolean;
+  activity?: RangeGenerationActivity;
+}
+
 export interface RamPreviewGenerationErrorInfo {
   message: string;
   stack?: string;
@@ -45,9 +52,19 @@ export const createRamPreviewSlice: SliceCreator<RamPreviewActions> = (set, get)
     end: number,
     centerTime: number,
     label: string,
+    options: RangeGenerationOptions = {},
   ): Promise<boolean> => {
-    const { clips, tracks, isRamPreviewing, addCachedFrame } = get();
-    if (isRamPreviewing) return false;
+    const {
+      clips,
+      tracks,
+      isRamPreviewing,
+      isClipVideoBakeRendering,
+      addCachedFrame,
+    } = get();
+    if (isRamPreviewing || isClipVideoBakeRendering) return false;
+
+    const isClipVideoBake = options.activity === 'clip-video-bake';
+    const activityLabel = isClipVideoBake ? 'Clip video bake render' : 'RAM preview';
 
     const rangeStart = Math.max(0, Math.min(start, end));
     const rangeEnd = Math.max(rangeStart, Math.max(start, end));
@@ -72,13 +89,15 @@ export const createRamPreviewSlice: SliceCreator<RamPreviewActions> = (set, get)
     const admission = canRetainRamPreviewRunJob(runJobReport);
     if (!admission.admitted) {
       lastRamPreviewGenerationError = {
-        message: `RAM preview skipped by runtime admission: ${admission.reason ?? 'not admitted'}`,
+        message: `${activityLabel} skipped by runtime admission: ${admission.reason ?? 'not admitted'}`,
       };
       return false;
     }
 
     renderHostPort.setGeneratingRamPreview(true);
-    set({ isRamPreviewing: true, ramPreviewProgress: 0, ramPreviewRange: null });
+    set(isClipVideoBake
+      ? { isClipVideoBakeRendering: true, clipVideoBakeProgress: 0 }
+      : { isRamPreviewing: true, ramPreviewProgress: 0, ramPreviewRange: null });
     reportRamPreviewRunJob(runJobReport);
 
     try {
@@ -94,10 +113,12 @@ export const createRamPreviewSlice: SliceCreator<RamPreviewActions> = (set, get)
         },
         {
           isCancelled: () => {
-            const cancelled = !get().isRamPreviewing;
+            const cancelled = isClipVideoBake
+              ? !get().isClipVideoBakeRendering
+              : !get().isRamPreviewing;
             if (cancelled && !lastRamPreviewGenerationError) {
               lastRamPreviewGenerationError = {
-                message: 'RAM preview was cancelled because isRamPreviewing became false',
+                message: `${activityLabel} was cancelled because its render state became false`,
               };
             }
             return cancelled;
@@ -110,13 +131,24 @@ export const createRamPreviewSlice: SliceCreator<RamPreviewActions> = (set, get)
             return { width: comp?.width || 1920, height: comp?.height || 1080 };
           },
           onFrameCached: (time) => addCachedFrame(time),
-          onProgress: (percent) => set({ ramPreviewProgress: percent }),
+          onProgress: (percent) => set(isClipVideoBake
+            ? { clipVideoBakeProgress: percent }
+            : { ramPreviewProgress: percent }),
         }
       );
 
       completed = result.completed;
       if (completed) {
-        set({ ramPreviewRange: { start: rangeStart, end: rangeEnd }, ramPreviewProgress: null });
+        if (isClipVideoBake) {
+          set({ clipVideoBakeProgress: null });
+        } else {
+          set({
+            ...(options.publishRamPreviewRange === false
+              ? {}
+              : { ramPreviewRange: { start: rangeStart, end: rangeEnd } }),
+            ramPreviewProgress: null,
+          });
+        }
         log.debug(`${label} complete`, {
           totalFrames: result.frameCount,
           start: rangeStart.toFixed(1),
@@ -132,7 +164,9 @@ export const createRamPreviewSlice: SliceCreator<RamPreviewActions> = (set, get)
     } finally {
       renderHostPort.setGeneratingRamPreview(false);
       releaseRamPreviewRunResources(runId);
-      set({ isRamPreviewing: false, ramPreviewProgress: null });
+      set(isClipVideoBake
+        ? { isClipVideoBakeRendering: false, clipVideoBakeProgress: null }
+        : { isRamPreviewing: false, ramPreviewProgress: null });
     }
 
     return completed;
@@ -140,13 +174,17 @@ export const createRamPreviewSlice: SliceCreator<RamPreviewActions> = (set, get)
 
   return {
   toggleRamPreviewEnabled: () => {
-    const { ramPreviewEnabled } = get();
+    const { ramPreviewEnabled, isClipVideoBakeRendering } = get();
     if (ramPreviewEnabled) {
       // Turning OFF - cancel any running preview and clear cache
       set({ ramPreviewEnabled: false, isRamPreviewing: false, ramPreviewProgress: null });
-      renderHostPort.setGeneratingRamPreview(false);
-      renderHostPort.clearCompositeCache();
-      set({ ramPreviewRange: null, cachedFrameTimes: new Set() });
+      if (!isClipVideoBakeRendering) {
+        renderHostPort.setGeneratingRamPreview(false);
+        renderHostPort.clearCompositeCache();
+        set({ ramPreviewRange: null, cachedFrameTimes: new Set() });
+      } else {
+        set({ ramPreviewRange: null });
+      }
     } else {
       // Turning ON - enable automatic RAM preview
       set({ ramPreviewEnabled: true });
@@ -175,22 +213,37 @@ export const createRamPreviewSlice: SliceCreator<RamPreviewActions> = (set, get)
     );
   },
 
+  startClipVideoBakeRenderRange: async (start, end, options = {}) => {
+    return generateRange(
+      start,
+      end,
+      options.centerTime ?? (start + end) / 2,
+      options.label ?? 'Clip video bake render range',
+      { activity: 'clip-video-bake', publishRamPreviewRange: false },
+    );
+  },
+
   cancelRamPreview: () => {
     // IMMEDIATELY set state to cancel the loop - this must be synchronous!
     // The RAM preview loop checks !get().isRamPreviewing to know when to stop
     set({ isRamPreviewing: false, ramPreviewProgress: null });
     // Then async cleanup the engine
-    renderHostPort.setGeneratingRamPreview(false);
+    if (!get().isClipVideoBakeRendering) {
+      renderHostPort.setGeneratingRamPreview(false);
+    }
   },
 
   clearRamPreview: async () => {
-    renderHostPort.setGeneratingRamPreview(false);
-    renderHostPort.clearCompositeCache();
+    const { isClipVideoBakeRendering } = get();
+    if (!isClipVideoBakeRendering) {
+      renderHostPort.setGeneratingRamPreview(false);
+      renderHostPort.clearCompositeCache();
+    }
     set({
       isRamPreviewing: false,
       ramPreviewRange: null,
       ramPreviewProgress: null,
-      cachedFrameTimes: new Set(),
+      ...(isClipVideoBakeRendering ? {} : { cachedFrameTimes: new Set() }),
     });
   },
 

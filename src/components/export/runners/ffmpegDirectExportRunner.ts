@@ -134,7 +134,7 @@ export async function runFfmpegDirectExport(
     const frameStartTime = performance.now();
 
     try {
-      renderSession.begin();
+      await renderSession.begin();
 
       for (let i = 0; i < totalFrames; i++) {
         if (ffmpegFrameRenderer.isCancelled()) {

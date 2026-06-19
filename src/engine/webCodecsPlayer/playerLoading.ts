@@ -9,6 +9,7 @@ export abstract class WebCodecsPlayerLoading extends WebCodecsPlayerBase {
   async loadArrayBuffer(buffer: ArrayBuffer): Promise<void> {
     return loadMp4ForWebCodecs(buffer, {
       log: webCodecsPlayerLog,
+      hardwareAcceleration: this.hardwareAcceleration,
       onMp4FileCreated: (mp4File) => {
         this.mp4FileRef.current = mp4File;
       },
@@ -22,6 +23,7 @@ export abstract class WebCodecsPlayerLoading extends WebCodecsPlayerBase {
       },
       onSamples: (samples) => {
         this.samples.push(...samples);
+        this.refreshPresentationOffset();
 
         // Mark ready when we have samples and decoder (for playback mode)
         if (!this.ready && this.samples.length > 0 && this.decoderInitialized) {
@@ -53,6 +55,7 @@ export abstract class WebCodecsPlayerLoading extends WebCodecsPlayerBase {
       },
       error: (e) => {
         webCodecsPlayerLog.error('VideoDecoder error', e);
+        this.recordDecodeError(e, 'VideoDecoder.error');
         this.onError?.(new Error(`Decoder error: ${e.message}`));
       },
     });

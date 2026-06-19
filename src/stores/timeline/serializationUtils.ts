@@ -18,6 +18,7 @@ import {
 import { releaseAllLazyTimelineMediaElements } from '../../services/timeline/lazyMediaElements';
 import { releaseAllLazyTimelineImageElements } from '../../services/timeline/lazyImageElements';
 import { releaseLegacyTimelineClipSourceRuntimes } from '../../services/timeline/timelineClipSourceRuntimeCleanup';
+import { scheduleCompositionAudioMixdownWarmup } from '../../services/timeline/compositionAudioMixdownWarmup';
 import { blobUrlManager } from './helpers/blobUrlManager';
 import { createSerializableTimelineState } from './serialization/serializableTimelineState';
 import { createLoadStateGeneratedClip } from './serialization/loadStateGeneratedClipRestore';
@@ -184,6 +185,22 @@ export const createSerializationUtils: SliceCreator<SerializationUtils> = (set, 
         clips: state.clips.map(c => c.id === clipId ? updater(c) : c),
       }));
     };
+    const scheduleRestoredCompositionAudioWarmup = () => {
+      scheduleCompositionAudioMixdownWarmup({
+        deps: {
+          getState: () => ({
+            clips: get().clips,
+            timelineSessionId,
+          }),
+          setClips: (updater) => {
+            if (!isCurrentTimelineSession()) return;
+            set(state => ({
+              clips: updater(state.clips),
+            }));
+          },
+        },
+      });
+    };
 
     let restoreYieldCounter = 0;
     for (const serializedClip of data.clips) {
@@ -241,6 +258,7 @@ export const createSerializationUtils: SliceCreator<SerializationUtils> = (set, 
 
     flushRestoredClipBuffer();
     get().relinkClipStemSeparationJobsFromMediaLibrary();
+    scheduleRestoredCompositionAudioWarmup();
     });
   },
 
@@ -272,6 +290,8 @@ export const createSerializationUtils: SliceCreator<SerializationUtils> = (set, 
       ramPreviewProgress: null,
       ramPreviewRange: null,
       isRamPreviewing: false,
+      clipVideoBakeProgress: null,
+      isClipVideoBakeRendering: false,
       videoBakeRegionSelection: null,
       videoBakeRegions: [],
       clipKeyframes: new Map<string, Keyframe[]>(),

@@ -468,7 +468,7 @@ export const createVideoBakeSlice: SliceCreator<VideoBakeActions> = (set, get) =
         : currentClip),
     });
 
-    const completed = await get().startRamPreviewForRange(bakeRange.startTime, bakeRange.endTime, {
+    const completed = await get().startClipVideoBakeRenderRange(bakeRange.startTime, bakeRange.endTime, {
       centerTime: (bakeRange.startTime + bakeRange.endTime) / 2,
       label: 'Bake clip video region',
     });

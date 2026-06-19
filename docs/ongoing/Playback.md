@@ -1,5 +1,9 @@
 # Playback Preview Notes
 
+> Status: Supporting investigation note for the worker-first playback renderer.
+> Keep here until the worker-first remaining gates close, then archive with that
+> workstream.
+
 ## Review Findings - 2026-06-14
 
 ### RAM Preview Cached Frames May Be Bypassed
@@ -148,18 +152,23 @@ anymore.
 
 It is not dead code:
 
-- `videoBakeSlice.bakeClipVideoBakeRegion()` calls
-  `startRamPreviewForRange()` directly for clip-scoped video bake regions.
+- `videoBakeSlice.bakeClipVideoBakeRegion()` now calls the explicit
+  `startClipVideoBakeRenderRange()` action for clip-scoped video bake regions.
+  That avoids publishing a user-facing `ramPreviewRange` and avoids the public
+  `startRamPreviewForRange()` action. The explicit clip-bake range render also
+  has its own transient store state (`isClipVideoBakeRendering` /
+  `clipVideoBakeProgress`), but the implementation still shares the
+  RAM-preview renderer, runtime policy reporting, and cache ownership.
 - AI timeline-canvas RAM preview smokes call both direct `RamPreviewEngine` and
   `startRamPreviewForRange()` paths.
 - `useEngine()` still attempts `engine.renderCachedFrame(currentPlayhead)` every
   render tick before live layer building.
 - `useLayerSync()` still attempts cached-frame rendering while paused/scrubbing.
 
-The video-bake exception explains why the feature gate preserves RAM preview
-state while active bake regions exist. Composition-scoped video bake uses a
-different `videoBakeProxyCache` artifact path; clip-scoped bake still relies on
-the transient RAM preview cache.
+The video-bake exception explains why the feature gate preserves RAM-preview
+cache state while active bake regions exist. Composition-scoped video bake uses
+a different `videoBakeProxyCache` artifact path; clip-scoped bake still relies
+on the transient RAM-preview cache through the explicit clip-bake range action.
 
 ### Main Risk
 
