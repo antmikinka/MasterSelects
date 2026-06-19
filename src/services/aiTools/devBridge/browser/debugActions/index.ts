@@ -14,6 +14,7 @@ import { proxyFrameCache } from '../../../../proxyFrameCache';
 import { collectStemDebugState, runAudioElementBenchmark } from './audio';
 import { measureClipDragInteraction } from './clipDragInteraction';
 import { measureDockResizeInteraction } from './dock';
+import { probeVideoEncoderConfigs, runExportPanelButtonProbe } from './exportPanel';
 import { measureTimelineInteraction } from './interaction';
 import {
   armMixerFaderRecording,
@@ -46,6 +47,281 @@ import {
 } from './realClipDragRecorder';
 import { measureStoreChurn } from './storeChurn';
 
+const waitForTransformProbe = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+function cloneForTransformProbe<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function readTransformProbeValue(clipId: string, property: string): unknown {
+  const clip = useTimelineStore.getState().clips.find((entry) => entry.id === clipId);
+  if (!clip) return undefined;
+
+  if (property === 'opacity') return clip.transform.opacity;
+  if (property === 'position.x') return clip.transform.position.x;
+  if (property === 'position.y') return clip.transform.position.y;
+  if (property === 'scale.all') return clip.transform.scale.all ?? 1;
+  if (property === 'scale.x') return clip.transform.scale.x;
+  if (property === 'scale.y') return clip.transform.scale.y;
+  if (property === 'rotation.z') return clip.transform.rotation.z;
+
+  return undefined;
+}
+
+function findTransformProbeControl(clipId: string, property: string, inputIndex = 0): HTMLElement | null {
+  const root = document.querySelector<HTMLElement>(
+    `[data-guided-property="${property}"][data-guided-clip-id="${clipId}"]`,
+  );
+  if (!root) {
+    const labelText = property === 'opacity' ? 'Opacity' : property === 'speed' ? 'Speed' : null;
+    if (!labelText) return null;
+
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('.control-row.transform-param-row'));
+    const row = rows.find((entry) => entry.querySelector('.prop-label')?.textContent?.trim().startsWith(labelText));
+    return row?.querySelectorAll<HTMLElement>('.draggable-number')[inputIndex] ?? null;
+  }
+
+  return root.querySelectorAll<HTMLElement>('.draggable-number')[inputIndex] ?? null;
+}
+
+function createTransformProbeMouseEvent(
+  type: string,
+  init: MouseEventInit & { movementX?: number } = {},
+): MouseEvent {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    view: window,
+    ...init,
+  });
+  if (init.buttons !== undefined) {
+    Object.defineProperty(event, 'buttons', { configurable: true, get: () => init.buttons });
+  }
+  if (init.movementX !== undefined) {
+    Object.defineProperty(event, 'movementX', { configurable: true, get: () => init.movementX });
+  }
+  return event;
+}
+
+function setTransformProbeInputValue(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  if (setter) {
+    setter.call(input, value);
+  } else {
+    input.value = value;
+  }
+}
+
+async function editTransformProbeControl(
+  clipId: string,
+  property: string,
+  value: string,
+  inputIndex = 0,
+) {
+  const control = findTransformProbeControl(clipId, property, inputIndex);
+  if (!control) {
+    return { success: false, error: `Control not found for ${property}` };
+  }
+
+  control.dispatchEvent(new MouseEvent('dblclick', {
+    bubbles: true,
+    cancelable: true,
+    detail: 2,
+    view: window,
+  }));
+  await waitForTransformProbe(80);
+
+  const root = control.closest<HTMLElement>('[data-guided-property]');
+  const input = root?.querySelector<HTMLInputElement>('input.draggable-number-input')
+    ?? (document.activeElement instanceof HTMLInputElement ? document.activeElement : null);
+  if (!input) {
+    return { success: false, error: `Editable input did not open for ${property}` };
+  }
+
+  input.focus();
+  setTransformProbeInputValue(input, value);
+  input.dispatchEvent(new InputEvent('input', {
+    bubbles: true,
+    cancelable: true,
+    data: value,
+    inputType: 'insertText',
+  }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  await waitForTransformProbe(80);
+  input.dispatchEvent(new KeyboardEvent('keydown', {
+    bubbles: true,
+    cancelable: true,
+    key: 'Enter',
+    code: 'Enter',
+  }));
+  await waitForTransformProbe(80);
+  input.blur();
+  await waitForTransformProbe(80);
+
+  return { success: true };
+}
+
+async function dragTransformProbeControl(clipId: string, property: string, deltaX: number, inputIndex = 0) {
+  const control = findTransformProbeControl(clipId, property, inputIndex);
+  if (!control) {
+    return { success: false, error: `Control not found for ${property}` };
+  }
+
+  const rect = control.getBoundingClientRect();
+  const startX = rect.left + Math.max(2, rect.width / 2);
+  const y = rect.top + Math.max(2, rect.height / 2);
+  control.dispatchEvent(createTransformProbeMouseEvent('mousedown', {
+    button: 0,
+    buttons: 1,
+    clientX: startX,
+    clientY: y,
+  }));
+  await waitForTransformProbe(50);
+
+  const steps = 5;
+  for (let step = 1; step <= steps; step += 1) {
+    const previousX = startX + (deltaX * (step - 1)) / steps;
+    const nextX = startX + (deltaX * step) / steps;
+    window.dispatchEvent(createTransformProbeMouseEvent('mousemove', {
+      button: 0,
+      buttons: 1,
+      clientX: nextX,
+      clientY: y,
+      movementX: nextX - previousX,
+    }));
+    await waitForTransformProbe(20);
+  }
+
+  window.dispatchEvent(createTransformProbeMouseEvent('mouseup', {
+    button: 0,
+    buttons: 0,
+    clientX: startX + deltaX,
+    clientY: y,
+  }));
+  await waitForTransformProbe(120);
+
+  return { success: true };
+}
+
+function transformProbeNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function transformProbeClose(actual: unknown, expected: number, tolerance = 0.001): boolean {
+  const value = transformProbeNumber(actual);
+  return value !== null && Math.abs(value - expected) <= tolerance;
+}
+
+async function runTransformPanelInputProbe(args: Record<string, unknown> = {}) {
+  const timeline = useTimelineStore.getState();
+  const clipId = typeof args.clipId === 'string' && args.clipId.trim()
+    ? args.clipId.trim()
+    : timeline.primarySelectedClipId ?? Array.from(timeline.selectedClipIds)[0] ?? '';
+  const clip = timeline.clips.find((entry) => entry.id === clipId);
+  if (!clip) {
+    return { success: false, error: 'No clip found for transform panel probe.' };
+  }
+
+  const restore = args.restore !== false;
+  const originalTransform = cloneForTransformProbe(clip.transform);
+  const activeComp = useMediaStore.getState().getActiveComposition();
+  const compWidth = activeComp?.width ?? 1920;
+  const compHeight = activeComp?.height ?? 1080;
+  const tests: Array<Record<string, unknown>> = [];
+
+  useDockStore.getState().activatePanelType('clip-properties');
+  await waitForTransformProbe(180);
+
+  document.querySelector<HTMLElement>('[data-guided-target="properties-tab:transform"]')?.click();
+  await waitForTransformProbe(120);
+
+  const panel = document.querySelector<HTMLElement>('[data-guided-properties-tab="transform"]');
+  if (!panel) {
+    return {
+      success: false,
+      error: 'Transform panel is not visible.',
+      data: {
+        clipId,
+        availableProperties: Array.from(document.querySelectorAll<HTMLElement>('[data-guided-property]'))
+          .map((element) => element.getAttribute('data-guided-property')),
+      },
+    };
+  }
+
+  useTimelineStore.getState().updateClipTransform(clipId, {
+    opacity: 1,
+    blendMode: 'normal',
+    position: { x: 0, y: 0, z: 0 },
+    scale: { all: 1, x: 1, y: 1 },
+    rotation: { x: 0, y: 0, z: 0 },
+  });
+  await waitForTransformProbe(120);
+
+  const runEdit = async (
+    name: string,
+    property: string,
+    inputValue: string,
+    expected: number,
+    inputIndex = 0,
+    tolerance = 0.001,
+  ) => {
+    const before = readTransformProbeValue(clipId, property);
+    const editResult = await editTransformProbeControl(clipId, property, inputValue, inputIndex);
+    const after = readTransformProbeValue(clipId, property);
+    tests.push({
+      name,
+      property,
+      inputValue,
+      before,
+      after,
+      expected,
+      success: editResult.success && transformProbeClose(after, expected, tolerance),
+      editResult,
+    });
+  };
+
+  await runEdit('type Position X', 'position.x', '120.0', 120 / (compWidth / 2), 0, 0.0005);
+  await runEdit('type Position Y', 'position.y', '-54.0', -54 / (compHeight / 2), 0, 0.0005);
+  await runEdit('type Scale All', 'scale.all', '125.0', 1.25);
+  await runEdit('type Opacity', 'opacity', '72.0', 0.72);
+  await runEdit('type Rotation Z degrees', 'rotation.z', '18.5', 18.5, 1);
+
+  const dragBefore = readTransformProbeValue(clipId, 'scale.x');
+  const dragResult = await dragTransformProbeControl(clipId, 'scale.x', 80);
+  const dragAfter = readTransformProbeValue(clipId, 'scale.x');
+  const dragBeforeNumber = transformProbeNumber(dragBefore);
+  const dragAfterNumber = transformProbeNumber(dragAfter);
+  tests.push({
+    name: 'drag Scale X',
+    property: 'scale.x',
+    before: dragBefore,
+    after: dragAfter,
+    success: dragResult.success &&
+      dragBeforeNumber !== null &&
+      dragAfterNumber !== null &&
+      Math.abs(dragAfterNumber - dragBeforeNumber) > 0.0001,
+    dragResult,
+  });
+
+  if (restore) {
+    useTimelineStore.getState().updateClipTransform(clipId, originalTransform);
+    await waitForTransformProbe(120);
+  }
+
+  return {
+    success: tests.every((test) => test.success === true),
+    data: {
+      action: 'probe-transform-panel-inputs',
+      clipId,
+      restore,
+      compWidth,
+      compHeight,
+      tests,
+      restoredTransform: restore ? useTimelineStore.getState().clips.find((entry) => entry.id === clipId)?.transform : null,
+    },
+  };
+}
+
 export async function runDebugAction(action: string, args: Record<string, unknown> = {}) {
   const timelineState = useTimelineStore.getState();
   const mediaState = useMediaStore.getState();
@@ -59,6 +335,12 @@ export async function runDebugAction(action: string, args: Record<string, unknow
       return measureUiFrameLoop(args);
     case 'measure-playback-frame-loop':
       return measurePlaybackFrameLoop(args);
+    case 'probe-transform-panel-inputs':
+      return runTransformPanelInputProbe(args);
+    case 'probe-export-panel-button':
+      return runExportPanelButtonProbe(args);
+    case 'probe-video-encoder-configs':
+      return probeVideoEncoderConfigs(args);
     case 'pause-playback': {
       timelineState.pause();
       return {
@@ -250,6 +532,19 @@ export async function runDebugAction(action: string, args: Record<string, unknow
           undoStackLength: useHistoryStore.getState().undoStack.length,
           redoStackLength: useHistoryStore.getState().redoStack.length,
           hasCurrentSnapshot: useHistoryStore.getState().currentSnapshot !== null,
+        },
+      };
+    case 'get-project-file-debug-state':
+      return {
+        success: true,
+        data: {
+          action,
+          activeBackend: projectFileService.activeBackend,
+          isOpen: projectFileService.isProjectOpen(),
+          hasUnsavedChanges: projectFileService.hasUnsavedChanges(),
+          projectPath: projectFileService.getProjectPath(),
+          projectName: projectFileService.getProjectData()?.name ?? null,
+          recentProjects: projectFileService.getRecentProjects(),
         },
       };
     case 'get-proxy-audio-cache-state':

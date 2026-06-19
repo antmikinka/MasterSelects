@@ -53,9 +53,32 @@ export class VideoEncoderWrapper {
       bitrate: this.settings.bitrate,
       framerate: this.settings.fps,
     };
+    // Safari may report realtime H.264 as supported, then close the encoder on
+    // the first 1080p frame. Export is offline work, so prefer quality configs.
     const buildEncoderConfigCandidates = (bitrateMode: VideoEncoderBitrateMode): VideoEncoderConfig[] => [
       {
         ...supportCheckConfig,
+        latencyMode: 'quality',
+        hardwareAcceleration: 'prefer-hardware',
+        bitrateMode,
+        contentHint: 'motion',
+      },
+      {
+        ...supportCheckConfig,
+        latencyMode: 'quality',
+        hardwareAcceleration: 'no-preference',
+        bitrateMode,
+        contentHint: 'motion',
+      },
+      {
+        ...supportCheckConfig,
+        latencyMode: 'quality',
+        hardwareAcceleration: 'prefer-software',
+        bitrateMode,
+        contentHint: 'motion',
+      },
+      {
+        ...supportCheckConfig,
         latencyMode: 'realtime',
         hardwareAcceleration: 'prefer-hardware',
         bitrateMode,
@@ -70,15 +93,8 @@ export class VideoEncoderWrapper {
       },
       {
         ...supportCheckConfig,
-        latencyMode: 'quality',
-        hardwareAcceleration: 'prefer-hardware',
-        bitrateMode,
-        contentHint: 'motion',
-      },
-      {
-        ...supportCheckConfig,
-        latencyMode: 'quality',
-        hardwareAcceleration: 'no-preference',
+        latencyMode: 'realtime',
+        hardwareAcceleration: 'prefer-software',
         bitrateMode,
         contentHint: 'motion',
       },

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { engine } from '../../src/engine/WebGPUEngine';
 import type { TimelineClip, TimelineTrack } from '../../src/types';
 import type { FrameContext } from '../../src/services/layerBuilder/types';
+import { NativeHelperClient } from '../../src/services/nativeHelper/NativeHelperClient';
 import {
   getLazyTimelineAudioElementForClip,
   getLazyTimelineMediaElementCount,
@@ -19,6 +20,7 @@ import {
   mediaObjectUrlManager,
   revokeAllMediaObjectUrls,
 } from '../../src/services/project/mediaObjectUrlManager';
+import { useMediaStore } from '../../src/stores/mediaStore';
 import { timelineRuntimeCoordinator } from '../../src/services/timeline/timelineRuntimeCoordinator';
 import {
   configureRenderHostSelection,
@@ -115,7 +117,7 @@ function makeImageClip(
 function makeContext(params: {
   clips: TimelineClip[];
   tracks: TimelineTrack[];
-  mediaFiles: Array<{ id: string; name: string; type: string; url?: string; file?: File; duration?: number }>;
+  mediaFiles: Array<{ id: string; name: string; type: string; url?: string; file?: File; duration?: number; absolutePath?: string; hasFileHandle?: boolean }>;
   isPlaying?: boolean;
   now?: number;
   playheadPosition?: number;
@@ -239,6 +241,13 @@ describe('lazy timeline media elements', () => {
       workerPrimaryAvailable: false,
       workerPrimaryBlockers: [],
     });
+    useMediaStore.setState({ files: [] });
+    const nativeClient = NativeHelperClient as unknown as {
+      parseFileReferenceUrl?: unknown;
+      getReferencedFile?: unknown;
+    };
+    delete nativeClient.parseFileReferenceUrl;
+    delete nativeClient.getReferencedFile;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -300,6 +309,75 @@ describe('lazy timeline media elements', () => {
     expect(videoClip.source?.videoElement).toBeUndefined();
     expect(getLazyTimelineAudioElementForClip(audioClip)).toBe(audioClip.source?.audioElement);
     expect(audioClip.source?.audioElement).toBeInstanceOf(HTMLAudioElement);
+  });
+
+  it('resolves native helper media references before attaching lazy video elements', async () => {
+    const videoTrack = makeTrack('video', 'track-v1');
+    const videoClip = makeClip('clip-v1', videoTrack, 'video', 'media-v1');
+    videoClip.file = undefined;
+    const nativeUrl = 'native-helper-file://%2FProjects%2FMasterSelects%2FRaw%2Fclip-v1.mp4';
+    const mediaFile = {
+      id: 'media-v1',
+      name: videoClip.name,
+      type: 'video',
+      parentId: null,
+      createdAt: 1,
+      url: nativeUrl,
+      duration: 4,
+      hasAudio: false,
+    };
+    const setMediaState = useMediaStore.setState as unknown as ReturnType<typeof vi.fn>;
+    setMediaState.mockClear();
+
+    const nativeClient = NativeHelperClient as unknown as {
+      parseFileReferenceUrl: ReturnType<typeof vi.fn>;
+      getReferencedFile: ReturnType<typeof vi.fn>;
+    };
+    nativeClient.parseFileReferenceUrl = vi.fn(() => '/Projects/MasterSelects/Raw/clip-v1.mp4');
+    nativeClient.getReferencedFile = vi.fn(async () => (
+      new File(['native-video'], videoClip.name, { type: 'video/mp4' })
+    ));
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:native-lazy-video');
+    const requestRender = vi.spyOn(renderHostPort, 'requestNewFrameRender').mockImplementation(noop);
+
+    const ctx = makeContext({
+      clips: [videoClip],
+      tracks: [videoTrack],
+      mediaFiles: [mediaFile],
+    });
+
+    hydrateTimelineMediaWindow(ctx);
+    expect(getLazyTimelineMediaElementCount()).toBe(0);
+    expect(videoClip.source?.videoElement).toBeUndefined();
+    expect(nativeClient.getReferencedFile).toHaveBeenCalledWith(nativeUrl, videoClip.name);
+
+    await vi.waitFor(() => {
+      expect(setMediaState).toHaveBeenCalledWith(expect.any(Function));
+    });
+    const updateFiles = setMediaState.mock.calls.find(([arg]) => typeof arg === 'function')?.[0] as
+      | ((state: { files: Array<typeof mediaFile> }) => { files: Array<typeof mediaFile> })
+      | undefined;
+    expect(updateFiles).toBeDefined();
+    const patchedState = updateFiles?.({ files: [mediaFile] });
+    expect(patchedState?.files[0]).toMatchObject({
+      id: 'media-v1',
+      file: expect.any(File),
+      url: 'blob:native-lazy-video',
+      hasFileHandle: true,
+      absolutePath: '/Projects/MasterSelects/Raw/clip-v1.mp4',
+    });
+    expect(requestRender).toHaveBeenCalled();
+
+    const hydratedCtx = makeContext({
+      clips: [videoClip],
+      tracks: [videoTrack],
+      mediaFiles: patchedState?.files ?? [],
+    });
+    hydrateTimelineMediaWindow(hydratedCtx);
+
+    expect(getLazyTimelineMediaElementCount()).toBe(1);
+    expect(videoClip.source?.videoElement).toBeInstanceOf(HTMLVideoElement);
+    expect(videoClip.source?.videoElement?.src).toBe('blob:native-lazy-video');
   });
 
   it('skips file-backed lazy video allocation when interactive html-media admission is over budget', () => {
