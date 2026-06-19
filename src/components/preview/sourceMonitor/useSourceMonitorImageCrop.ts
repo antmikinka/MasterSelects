@@ -4,11 +4,11 @@ import type { SourceMonitorImageCropApplyRequest } from './SourceMonitorImageCro
 import { createSourceMonitorCroppedFile } from './sourceMonitorImageCropFile';
 
 export function useSourceMonitorImageCrop(file: MediaFile, isImage: boolean) {
-  const sourceMonitorCropRequestId = useMediaStore(state => state.sourceMonitorCropRequestId);
   const files = useMediaStore(state => state.files);
   const importFile = useMediaStore(state => state.importFile);
   const setSelection = useMediaStore(state => state.setSelection);
   const setSourceMonitorFile = useMediaStore(state => state.setSourceMonitorFile);
+  const sourceMonitorCropRequestId = useMediaStore(state => state.sourceMonitorCropRequestId);
   const handledCropRequestIdRef = useRef(0);
   const [cropMode, setCropMode] = useState(false);
   const [cropBusy, setCropBusy] = useState(false);
