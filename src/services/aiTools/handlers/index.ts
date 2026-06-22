@@ -97,6 +97,7 @@ import {
   handlePlay,
   handlePause,
   handleSimulateFrameKeypresses,
+  handleMonitorManualPause,
   handleSimulateScrub,
   handleSimulatePlayback,
   handleSimulatePlaybackPulses,
@@ -236,6 +237,7 @@ const timelineHandlers: Record<string, (args: Record<string, unknown>, store: Re
   // Playback & Control
   play: handlePlay,
   pause: handlePause,
+  monitorManualPause: handleMonitorManualPause,
   simulateFrameKeypresses: handleSimulateFrameKeypresses,
   simulateScrub: handleSimulateScrub,
   simulatePlayback: handleSimulatePlayback,

@@ -22,6 +22,7 @@ import {
   hydrateTimelineMediaWindow,
   releaseAllLazyTimelineMediaElements,
 } from '../../src/services/timeline/lazyMediaElements';
+import { useTimelineStore } from '../../src/stores/timeline';
 import type { FrameContext } from '../../src/services/layerBuilder/types';
 import type { TimelineClip } from '../../src/types/timeline';
 
@@ -1171,6 +1172,57 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     expect(video.playbackRate).toBe(2);
     expect(video.play).toHaveBeenCalled();
     expect(throttledSeek).not.toHaveBeenCalled();
+  });
+
+  it('does not snap the timeline backward when pausing HTML playback with a lagging video element', () => {
+    flags.useFullWebCodecsPlayback = false;
+
+    const manager = createManager();
+    mockRenderHostMode('main');
+    const previousPlayheadPosition = useTimelineStore.getState().playheadPosition;
+    const { clip, ctx, video } = createLazyVideoClip('clip-stop-lag', {
+      currentTime: 1.5,
+      muted: false,
+      paused: false,
+      seeking: false,
+      readyState: 4,
+      duration: 10,
+      played: { length: 1 } as TimeRanges,
+      pause: vi.fn() as HTMLVideoElement['pause'],
+      play: vi.fn(() => Promise.resolve()) as HTMLVideoElement['play'],
+      playbackRate: 1,
+      src: 'blob:clip-stop-lag',
+    });
+
+    try {
+      ctx.isPlaying = true;
+      ctx.playheadPosition = 1.5;
+      ctx.getSourceTimeForClip = () => 1.5;
+      manager.syncClipVideo(clip, ctx);
+      testEngine.markVideoFramePresented.mockClear();
+      testEngine.captureVideoFrameAtTime.mockClear();
+      testEngine.ensureVideoFrameCached.mockClear();
+
+      useTimelineStore.setState({ playheadPosition: 2 });
+      const pausedCtx = {
+        ...ctx,
+        isPlaying: false,
+        playheadPosition: 2,
+        getSourceTimeForClip: () => 2,
+      } as FrameContext;
+      video.currentTime = 1.7;
+
+      manager.syncClipVideo(clip, pausedCtx);
+
+      expect(useTimelineStore.getState().playheadPosition).toBe(2);
+      expect(video.currentTime).toBe(2);
+      expect(testEngine.markVideoFramePresented).not.toHaveBeenCalledWith(video, 1.7, clip.id);
+      expect(testEngine.captureVideoFrameAtTime).not.toHaveBeenCalledWith(video, 1.7, clip.id);
+      expect(testEngine.ensureVideoFrameCached).not.toHaveBeenCalled();
+      expect(testEngine.requestNewFrameRender).toHaveBeenCalled();
+    } finally {
+      useTimelineStore.setState({ playheadPosition: previousPlayheadPosition });
+    }
   });
 
   it('mutes HTML video source audio even when no linked audio clip exists', () => {

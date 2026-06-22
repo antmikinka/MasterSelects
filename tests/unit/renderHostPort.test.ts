@@ -31,7 +31,7 @@ describe('renderHostPort', () => {
     expect(source).toContain('strictWorkerOnly: () => state.workerPrimaryStrictWorkerOnly');
   });
 
-  it('requests the worker GPU renderer by default and reports main fallback when unavailable', () => {
+  it('uses the main fallback renderer by default', () => {
     expect(renderHostPort.getTelemetry()).toMatchObject({
       mode: 'main',
       presentationStrategy: 'main-host-fallback',
@@ -41,7 +41,7 @@ describe('renderHostPort', () => {
       selection: {
         selectedId: 'main-fallback',
         selectedRole: 'fallback',
-        workerPrimaryRequested: true,
+        workerPrimaryRequested: false,
         workerPrimaryRegistered: true,
         workerPrimaryAvailable: false,
       },
@@ -464,7 +464,7 @@ describe('renderHostPort', () => {
         selection: {
           selectedId: 'main-fallback',
           selectedRole: 'fallback',
-          workerPrimaryRequested: true,
+          workerPrimaryRequested: false,
         },
       });
     } finally {

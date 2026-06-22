@@ -81,18 +81,18 @@ describe('audio mixer wood theme settings', () => {
     expect(useSettingsStore.getState().audioMixerWoodThemeEnabled).toBe(false);
   });
 
-  it('keeps worker WebCodecs playback enabled even when the legacy toggle is set false', async () => {
+  it('keeps HTML video playback active even when the legacy WebCodecs toggle is set true', async () => {
     const { useSettingsStore, mockedFlags } = await importSettingsStoreWithMocks();
 
-    expect(useSettingsStore.getState().webCodecsEnabled).toBe(true);
+    expect(useSettingsStore.getState().webCodecsEnabled).toBe(false);
 
-    useSettingsStore.getState().setWebCodecsEnabled(false);
+    useSettingsStore.getState().setWebCodecsEnabled(true);
 
-    expect(useSettingsStore.getState().webCodecsEnabled).toBe(true);
+    expect(useSettingsStore.getState().webCodecsEnabled).toBe(false);
     expect(mockedFlags).toMatchObject({
-      useFullWebCodecsPlayback: true,
-      disableHtmlPreviewFallback: true,
-      workerFirstRenderHost: true,
+      useFullWebCodecsPlayback: false,
+      disableHtmlPreviewFallback: false,
+      workerFirstRenderHost: false,
     });
   });
 });

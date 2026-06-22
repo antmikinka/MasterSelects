@@ -47,6 +47,7 @@ export class RenderLoop {
 
   private readonly IDLE_TIMEOUT = 1000; // 1s before idle
   private readonly IDLE_SUPPRESSION_TIMEOUT = 3000; // bounded reload warmup
+  private readonly PAUSED_PREVIEW_HOLD_FRAME_TIME = 15; // WebGPU canvas contents are not persistent between presents
   private readonly VIDEO_FRAME_TIME = 15; // ~60fps target with tolerance for 16.6ms display ticks
   private readonly SCRUB_FRAME_TIME = 15; // ~60fps during scrubbing with tolerance for 16.6ms display ticks
   private readonly WATCHDOG_INTERVAL = 2000; // Check every 2s
@@ -97,10 +98,27 @@ export class RenderLoop {
 
       const playbackRenderActive = this.isPlaying && this.timelineVisualDemand;
       const scrubRenderActive = this.isScrubbing && this.timelineVisualDemand;
+      const pausedPreviewHoldActive =
+        !playbackRenderActive &&
+        !scrubRenderActive &&
+        !this.continuousRender &&
+        this.timelineVisualDemand &&
+        this.hasActiveVideo;
+      const pausedPreviewHoldDue =
+        pausedPreviewHoldActive &&
+        (
+          this.renderRequested ||
+          timestamp - this.lastRenderTime >= this.PAUSED_PREVIEW_HOLD_FRAME_TIME
+        );
 
       if (this.continuousRender || playbackRenderActive || scrubRenderActive) {
         this.isIdle = false;
         this.lastActivityTime = timestamp;
+      } else if (pausedPreviewHoldActive) {
+        // Browser WebGPU canvases are not reliable as persistent frame stores
+        // after the render loop goes idle. Re-present the held paused frame at
+        // display cadence so pause does not decay into a black preview.
+        this.isIdle = false;
       } else if (!this.idleSuppressed) {
         // Idle detection (briefly suppressed after reload to allow video GPU warmup)
         const timeSinceActivity = timestamp - this.lastActivityTime;
@@ -129,6 +147,11 @@ export class RenderLoop {
         return;
       }
 
+      if (pausedPreviewHoldActive && !pausedPreviewHoldDue) {
+        this.animationId = requestAnimationFrame(loop);
+        return;
+      }
+
       // Frame rate limiting: during playback always limit to ~60fps even when
       // the current frame comes from the scrubbing cache (isVideo=false).
       // Without this, a 30fps video on a 120Hz display causes hasActiveVideo
@@ -139,6 +162,11 @@ export class RenderLoop {
         if (playbackRenderActive || this.continuousRender) {
           // Playback: ~60fps target
           if (timeSinceLastRender < this.VIDEO_FRAME_TIME) {
+            this.animationId = requestAnimationFrame(loop);
+            return;
+          }
+        } else if (pausedPreviewHoldActive) {
+          if (timeSinceLastRender < this.PAUSED_PREVIEW_HOLD_FRAME_TIME) {
             this.animationId = requestAnimationFrame(loop);
             return;
           }

@@ -158,7 +158,8 @@ export class VideoSyncHtmlClipCoordinator {
 
     const timeDiff = Math.abs(video.currentTime - timeInfo.clipTime);
 
-    if (!ctx.isPlaying && !isInteractivePreview && !video.seeking && video.readyState >= 2) {
+    const justStoppedPlayback = this.deps.clipWasPlaying.has(clip.id);
+    if (!ctx.isPlaying && !isInteractivePreview && !justStoppedPlayback && !video.seeking && video.readyState >= 2) {
       renderHostPort.ensureVideoFrameCached(video, clip.id);
     }
 
@@ -321,10 +322,6 @@ export class VideoSyncHtmlClipCoordinator {
         vfPipelineMonitor.record('vf_pause', { clipId: clip.id });
       }
       const pauseTargetTime = actualVideo.currentTime;
-      renderHostPort.markVideoFramePresented(actualVideo, pauseTargetTime, clip.id);
-      if (!renderHostPort.captureVideoFrameAtTime(actualVideo, pauseTargetTime, clip.id)) {
-        renderHostPort.ensureVideoFrameCached(actualVideo, clip.id);
-      }
       const effectiveSpeed = timeInfo.absSpeed > 0.01 ? timeInfo.absSpeed : 1;
       const videoClipTime = pauseTargetTime;
       const newPlayheadPos = clip.reversed
@@ -333,14 +330,35 @@ export class VideoSyncHtmlClipCoordinator {
       const currentPlayhead = playheadState.isUsingInternalPosition
         ? playheadState.position
         : ctx.playheadPosition;
-      const videoAdvanced = Math.abs(newPlayheadPos - currentPlayhead) > 0.01;
+      const playheadDelta = newPlayheadPos - currentPlayhead;
+      const videoAdvanced = playheadDelta > 0.01;
+      const videoLaggedBehindPlayhead = playheadDelta < -0.01;
       const shouldSnapPlayheadToStopFrame =
-        Math.abs(newPlayheadPos - currentPlayhead) <= VideoSyncHtmlClipCoordinator.PLAYBACK_STOP_SNAP_MAX_DELTA;
+        playheadDelta <= VideoSyncHtmlClipCoordinator.PLAYBACK_STOP_SNAP_MAX_DELTA;
+      const handoffReleased = clipVideoElement !== actualVideo;
+      if (videoLaggedBehindPlayhead) {
+        if (handoffReleased) {
+          this.deps.setHandoff(clip.id, actualVideo);
+        }
+        this.deps.beginOrQueueSettleSeek(
+          clip.id,
+          handoffReleased ? clipVideoElement : actualVideo,
+          timeInfo.clipTime,
+          { playbackStopLag: 'true' },
+          'playback-stop'
+        );
+        renderHostPort.requestNewFrameRender();
+        return;
+      }
+
+      renderHostPort.markVideoFramePresented(actualVideo, pauseTargetTime, clip.id);
+      if (!renderHostPort.captureVideoFrameAtTime(actualVideo, pauseTargetTime, clip.id)) {
+        renderHostPort.ensureVideoFrameCached(actualVideo, clip.id);
+      }
       if (videoAdvanced && shouldSnapPlayheadToStopFrame) {
         playheadState.position = newPlayheadPos;
         useTimelineStore.setState({ playheadPosition: newPlayheadPos });
       }
-      const handoffReleased = clipVideoElement !== actualVideo;
       if (handoffReleased) {
         this.deps.setHandoff(clip.id, actualVideo);
         const ownVideoTimeDiff = Math.abs(clipVideoElement.currentTime - pauseTargetTime);

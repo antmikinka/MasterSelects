@@ -28,7 +28,7 @@ export const FEATURED_VIDEO: {
   banner: {
     type: 'success',
     title: 'MasterSelects 2.3.0',
-    message: 'Worker GPU playback is now the production default: fresh sessions and migrated settings request the worker-gpu-only render host and keep timeline video playback on Worker WebCodecs instead of the legacy HTML path.',
+    message: 'This branch is locked to the origin/master playback default: main-thread HTML video presentation remains active while Worker WebCodecs and worker-gpu-only stay opt-in diagnostics only.',
     animated: true,
   },
 };
@@ -37,7 +37,7 @@ export const FEATURED_VIDEO: {
 export const BUILD_NOTICE: ChangelogNotice | null = {
   type: 'success',
   title: 'MasterSelects 2.3.0',
-  message: 'Worker GPU playback is now the production default: fresh sessions and migrated settings request the worker-gpu-only render host and keep timeline video playback on Worker WebCodecs instead of the legacy HTML path.',
+  message: 'This branch is locked to the origin/master playback default: main-thread HTML video presentation remains active while Worker WebCodecs and worker-gpu-only stay opt-in diagnostics only.',
   animated: true,
 };
 

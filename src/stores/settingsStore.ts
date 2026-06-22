@@ -63,10 +63,10 @@ export {
 
 const log = Logger.create('SettingsStore');
 
-function forceWorkerVideoPlaybackFlags(): void {
-  flags.useFullWebCodecsPlayback = true;
-  flags.disableHtmlPreviewFallback = true;
-  flags.workerFirstRenderHost = true;
+function forceMainThreadHtmlPlaybackFlags(): void {
+  flags.useFullWebCodecsPlayback = false;
+  flags.disableHtmlPreviewFallback = false;
+  flags.workerFirstRenderHost = false;
 }
 
 function persistChangelogStateToProject(
@@ -177,7 +177,7 @@ interface SettingsState {
   lastSeenChangelogVersion: string | null;
 
   // Playback engine mode
-  webCodecsEnabled: boolean;  // Worker WebCodecs is always enabled for timeline video playback.
+  webCodecsEnabled: boolean;  // false = origin/master HTML video playback path.
 
   // UI state
   isSettingsOpen: boolean;
@@ -319,7 +319,7 @@ export const useSettingsStore = create<SettingsState>()(
       completedTutorials: [], // Campaign IDs that have been completed
       showChangelogOnStartup: true, // Show changelog dialog on every startup
       lastSeenChangelogVersion: null, // Latest app version whose changelog was acknowledged
-      webCodecsEnabled: true, // Worker WebCodecs is the default video decoder.
+      webCodecsEnabled: false, // Default to HTML Video.
       isSettingsOpen: false,
 
       // Output settings
@@ -571,8 +571,8 @@ export const useSettingsStore = create<SettingsState>()(
         persistChangelogStateToProject(get().showChangelogOnStartup, version);
       },
       setWebCodecsEnabled: (_enabled: boolean) => {
-        forceWorkerVideoPlaybackFlags();
-        set({ webCodecsEnabled: true });
+        forceMainThreadHtmlPlaybackFlags();
+        set({ webCodecsEnabled: false });
       },
       openSettings: () => set({ isSettingsOpen: true }),
       closeSettings: () => set({ isSettingsOpen: false }),
@@ -686,10 +686,10 @@ export const useSettingsStore = create<SettingsState>()(
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {
-          // Older releases persisted false here. The worker-only playback branch
-          // no longer supports making HTML video the timeline playback default.
-          state.webCodecsEnabled = true;
-          forceWorkerVideoPlaybackFlags();
+          // Force the origin/master playback path even if this branch previously
+          // persisted Worker WebCodecs as the default.
+          state.webCodecsEnabled = false;
+          forceMainThreadHtmlPlaybackFlags();
         }
       },
     }
