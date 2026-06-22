@@ -36,6 +36,7 @@ import type {
 import {
   createWorkerGpuTargetSurface,
   presentGpuTestPattern,
+  type WorkerGpuPresentResult,
   type WorkerGpuTargetSurface,
 } from './workerGpuTargetSurface';
 import {
@@ -45,6 +46,10 @@ import {
   presentGpuVideoFrameLayers,
   type WorkerGpuVideoFramePresentLayer,
 } from './workerGpuVideoFrameLayerPresenter';
+import {
+  hasCompositorRenderLayer,
+  presentGpuVideoFrameCompositedLayers,
+} from './workerGpuVideoFrameCompositor';
 import { probeRuntimeCapabilities } from './workerRenderHostRuntimeCapabilities';
 import {
   acceptWorkerWebCodecsCommand,
@@ -716,6 +721,7 @@ function commandWebCodecsLayers(
 
 function shouldUseLayerVideoFramePresenter(layers: readonly WorkerGpuWebCodecsFrameLayer[]): boolean {
   return layers.length > 1 || layers.some((layer) => (
+    !!layer.renderLayer ||
     Math.abs(layer.opacity - 1) > 0.000001 ||
     layer.blendMode !== 'normal' ||
     Math.abs((layer.inlineBrightness ?? 0)) > 0.000001 ||
@@ -756,6 +762,21 @@ function isGpuVideoFrameLayerRead(
   value: WorkerGpuVideoFrameLayerRead | WorkerGpuVideoFrameRead,
 ): value is WorkerGpuVideoFrameLayerRead {
   return 'presentLayers' in value;
+}
+
+async function presentWorkerGpuVideoFrameLayers(
+  surface: WorkerGpuTargetSurface,
+  options: {
+    readonly targetId: string;
+    readonly requestId: string;
+    readonly frameIndex: number;
+    readonly layers: readonly WorkerGpuVideoFramePresentLayer[];
+  },
+): Promise<WorkerGpuPresentResult> {
+  if (hasCompositorRenderLayer(options.layers)) {
+    return presentGpuVideoFrameCompositedLayers(surface, options);
+  }
+  return presentGpuVideoFrameLayers(surface, options);
 }
 
 function compositeFrameKeyForLayerRead(
@@ -828,8 +849,10 @@ async function readGpuVideoFrameLayersForPresentation(input: {
   const presentLayers: WorkerGpuVideoFramePresentLayer[] = layerReads.map(({ layer, frameRead }) => ({
     frame: frameRead.frame!,
     timestampSeconds: frameRead.timestampSeconds,
+    mediaTime: layer.mediaTime,
     opacity: layer.opacity,
     blendMode: layer.blendMode,
+    renderLayer: layer.renderLayer,
     inlineBrightness: layer.inlineBrightness,
     inlineContrast: layer.inlineContrast,
     inlineSaturation: layer.inlineSaturation,
@@ -1056,7 +1079,7 @@ async function presentGpuWebCodecsStreamTick(session: WorkerGpuWebCodecsStreamSe
 
   const requestId = `${session.sessionId}:frame:${frameIndex}`;
   const result = isGpuVideoFrameLayerRead(layerRead)
-    ? await presentGpuVideoFrameLayers(surface, {
+    ? await presentWorkerGpuVideoFrameLayers(surface, {
         targetId: session.targetId,
         requestId,
         frameIndex,
@@ -1224,7 +1247,7 @@ async function startGpuWebCodecsStream(
 
   if (firstRead.frame) {
     const result = isGpuVideoFrameLayerRead(firstLayerRead)
-      ? await presentGpuVideoFrameLayers(surface, {
+      ? await presentWorkerGpuVideoFrameLayers(surface, {
           targetId: command.targetId,
           requestId: `${command.commandId}:start`,
           frameIndex: command.frameIndex,
@@ -1581,7 +1604,7 @@ async function presentGpuWebCodecsFrame(
   }
 
   const result = isGpuVideoFrameLayerRead(layerRead)
-    ? await presentGpuVideoFrameLayers(surface, {
+    ? await presentWorkerGpuVideoFrameLayers(surface, {
         targetId: command.targetId,
         requestId: command.commandId,
         frameIndex: command.frameIndex,

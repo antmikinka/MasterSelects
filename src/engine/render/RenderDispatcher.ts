@@ -406,6 +406,7 @@ export class RenderDispatcher {
           nc.sceneTracks,
           0,
           skipEffects,
+          d.exportCanvasManager.getIsExporting() ? 'export' : 'preview',
         );
         if (view) data.textureView = view;
       }
@@ -428,6 +429,8 @@ export class RenderDispatcher {
       device, sampler: d.sampler, pingView, pongView, outputWidth: width, outputHeight: height,
       skipEffects,
       effectTempTexture, effectTempView, effectTempTexture2, effectTempView2,
+      motionTime: this.getEffectiveTimelineTime(),
+      particleQuality: d.exportCanvasManager.getIsExporting() ? 'export' : 'preview',
     });
     const renderTime = performance.now() - t2;
 

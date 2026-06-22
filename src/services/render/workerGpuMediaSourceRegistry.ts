@@ -1,8 +1,12 @@
 import type { Layer } from '../../types';
 import type { MediaFile } from '../../stores/mediaStore/types';
 import { splitLayerEffects } from '../../engine/render/layerEffectStack';
+import { Logger } from '../logger';
 import type { WorkerRenderHostRuntimeBridge } from './workerRenderHostRuntimeBridge';
 import type { WorkerRenderHostRuntimeJobOutput } from './workerRenderHostRuntimeHandlers';
+import type { WorkerGpuWebCodecsRenderLayer } from './workerGpuRuntimeCommands';
+
+const log = Logger.create('WorkerGpuMediaSourceRegistry');
 
 export interface WorkerGpuVideoPresentationSource {
   readonly sourceId: string;
@@ -17,6 +21,7 @@ export interface WorkerGpuVideoPresentationSource {
 
 export interface WorkerGpuVideoPresentationLayer extends WorkerGpuVideoPresentationSource {
   readonly layerId: string;
+  readonly renderLayer: WorkerGpuWebCodecsRenderLayer;
   readonly opacity: number;
   readonly blendMode: string;
   readonly inlineBrightness: number;
@@ -80,6 +85,10 @@ export interface WorkerGpuVideoPresentationLayer extends WorkerGpuVideoPresentat
   readonly levelsOutputWhite: number;
   readonly levelsEnabled: boolean;
   readonly complexEffectCount: number;
+  readonly renderEffectFallback?: 'opacity-envelope';
+  readonly renderEffectFallbackOpacity?: number;
+  readonly unsupportedRenderEffectTypes?: readonly string[];
+  readonly ignoredAfterRenderEffectTypes?: readonly string[];
 }
 
 export type WorkerGpuVideoSourceLoadResult =
@@ -103,6 +112,33 @@ function createSourceKey(layer: Layer): string {
   return `layer:${layer.sourceClipId ?? layer.id}`;
 }
 
+function cloneRenderLayer(layer: Layer): WorkerGpuWebCodecsRenderLayer {
+  return {
+    id: layer.id,
+    name: layer.name,
+    sourceClipId: layer.sourceClipId,
+    visible: layer.visible,
+    opacity: layer.opacity,
+    blendMode: layer.blendMode,
+    position: { ...layer.position },
+    scale: { ...layer.scale },
+    rotation: typeof layer.rotation === 'number'
+      ? layer.rotation
+      : { ...layer.rotation },
+    sourceRect: layer.sourceRect ? { ...layer.sourceRect } : undefined,
+    effects: layer.effects.map((effect) => ({
+      ...effect,
+      params: { ...effect.params },
+    })),
+    colorCorrection: layer.colorCorrection,
+    maskFeather: layer.maskFeather,
+    maskFeatherQuality: layer.maskFeatherQuality,
+    maskInvert: layer.maskInvert,
+    maskClipId: layer.maskClipId,
+    transitionRender: layer.transitionRender ? { ...layer.transitionRender } : undefined,
+  };
+}
+
 function runtimeOutputHasError(output: WorkerRenderHostRuntimeJobOutput | null): boolean {
   return output?.statusEvents.some((event) => event.type === 'error') ?? true;
 }
@@ -113,6 +149,59 @@ function finiteEffectNumber(value: unknown, fallback: number): number {
 
 function effectBoolean(value: unknown): boolean {
   return value === true || value === 1;
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  const t = clamp01((value - edge0) / Math.max(0.00001, edge1 - edge0));
+  return t * t * (3 - 2 * t);
+}
+
+function renderEffectFallbackOpacity(effectStack: ReturnType<typeof splitLayerEffects>): number {
+  const effect = effectStack.renderEffects?.[0];
+  const progress = clamp01(finiteEffectNumber(effect?.params.progress, 0));
+  return 1 - smoothstep(0.15, 0.55, progress);
+}
+
+function applyWorkerInlineEffect(
+  params: {
+    inlineBrightness: number;
+    inlineContrast: number;
+    inlineSaturation: number;
+    inlineInvert: boolean;
+  },
+  effect: { readonly type: string; readonly params: Record<string, unknown> },
+): void {
+  switch (effect.type) {
+    case 'brightness':
+      params.inlineBrightness = finiteEffectNumber(effect.params.amount, 0);
+      break;
+    case 'contrast':
+      params.inlineContrast = finiteEffectNumber(effect.params.amount, 1);
+      break;
+    case 'saturation':
+      params.inlineSaturation = finiteEffectNumber(effect.params.amount, 1);
+      break;
+    case 'invert':
+      params.inlineInvert = true;
+      break;
+  }
+}
+
+function workerGpuInlineParams(effectStack: ReturnType<typeof splitLayerEffects>) {
+  const params = {
+    inlineBrightness: effectStack.inlineEffects.brightness,
+    inlineContrast: effectStack.inlineEffects.contrast,
+    inlineSaturation: effectStack.inlineEffects.saturation,
+    inlineInvert: effectStack.inlineEffects.invert,
+  };
+  for (const effect of effectStack.complexEffects ?? []) {
+    applyWorkerInlineEffect(params, effect);
+  }
+  return params;
 }
 
 function workerGpuEffectParams(effects: ReturnType<typeof splitLayerEffects>['complexEffects']) {
@@ -291,6 +380,14 @@ function workerGpuEffectParams(effects: ReturnType<typeof splitLayerEffects>['co
 export class WorkerGpuMediaSourceRegistry {
   private readonly loadedSourceIds = new Set<string>();
   private readonly pendingSourceLoads = new Map<string, Promise<WorkerGpuVideoSourceLoadResult>>();
+  private readonly warnedUnsupportedRenderEffectKeys = new Set<string>();
+  private unsupportedRenderEffectFallbacks: Array<{
+    readonly layerId: string;
+    readonly effectTypes: readonly string[];
+    readonly ignoredAfterRenderEffectTypes: readonly string[];
+    readonly fallback: 'opacity-envelope';
+    readonly opacity: number;
+  }> = [];
 
   get loadedSourceCount(): number {
     return this.loadedSourceIds.size;
@@ -298,6 +395,20 @@ export class WorkerGpuMediaSourceRegistry {
 
   get pendingLoadCount(): number {
     return this.pendingSourceLoads.size;
+  }
+
+  get unsupportedRenderEffectFallbackCount(): number {
+    return this.unsupportedRenderEffectFallbacks.length;
+  }
+
+  get lastUnsupportedRenderEffectFallbacks(): readonly {
+    readonly layerId: string;
+    readonly effectTypes: readonly string[];
+    readonly ignoredAfterRenderEffectTypes: readonly string[];
+    readonly fallback: 'opacity-envelope';
+    readonly opacity: number;
+  }[] {
+    return this.unsupportedRenderEffectFallbacks;
   }
 
   resolveVideoPresentationSource(
@@ -313,6 +424,7 @@ export class WorkerGpuMediaSourceRegistry {
   ): readonly WorkerGpuVideoPresentationLayer[] {
     const mediaFileById = new Map(mediaFiles.map((file) => [file.id, file]));
     const sources: WorkerGpuVideoPresentationLayer[] = [];
+    this.unsupportedRenderEffectFallbacks = [];
     for (const layer of layers) {
       const source = layer.source;
       if (!layer.visible || source?.type !== 'video') continue;
@@ -323,24 +435,58 @@ export class WorkerGpuMediaSourceRegistry {
       if (!file) continue;
       const sourceKey = createSourceKey(layer);
       const effectStack = splitLayerEffects(layer.effects);
+      const inlineEffects = workerGpuInlineParams(effectStack);
       const gpuEffects = workerGpuEffectParams(effectStack.complexEffects);
+      const baseOpacity = typeof layer.opacity === 'number' && Number.isFinite(layer.opacity)
+        ? clamp01(layer.opacity)
+        : 1;
+      const renderEffectTypes = effectStack.renderEffects?.map((effect) => effect.type) ?? [];
+      const ignoredAfterRenderEffectTypes =
+        effectStack.unsupportedAfterRenderEffect?.map((effect) => effect.type) ?? [];
+      const hasUnsupportedWorkerRenderEffect = renderEffectTypes.length > 0;
+      const fallbackOpacity = hasUnsupportedWorkerRenderEffect
+        ? renderEffectFallbackOpacity(effectStack)
+        : 1;
+      if (hasUnsupportedWorkerRenderEffect) {
+        const warningKey = `${layer.id}:${renderEffectTypes.join(',')}:${ignoredAfterRenderEffectTypes.join(',')}`;
+        if (!this.warnedUnsupportedRenderEffectKeys.has(warningKey)) {
+          this.warnedUnsupportedRenderEffectKeys.add(warningKey);
+          log.warn('Worker WebGPU preview is using opacity-envelope fallback for unsupported render effect', {
+            layerId: layer.id,
+            effects: renderEffectTypes,
+            ignoredAfterRenderEffects: ignoredAfterRenderEffectTypes,
+          });
+        }
+        this.unsupportedRenderEffectFallbacks.push({
+          layerId: layer.id,
+          effectTypes: renderEffectTypes,
+          ignoredAfterRenderEffectTypes,
+          fallback: 'opacity-envelope',
+          opacity: fallbackOpacity,
+        });
+      }
       sources.push({
         sourceId: `gpu-video:${sourceKey}:${createFileSignature(file)}`,
         sourceKey,
         file,
         layerId: layer.id,
+        renderLayer: cloneRenderLayer(layer),
         mediaTime,
         timelineTime: mediaTime,
-        opacity: typeof layer.opacity === 'number' && Number.isFinite(layer.opacity)
-          ? Math.max(0, Math.min(1, layer.opacity))
-          : 1,
+        opacity: baseOpacity * fallbackOpacity,
         blendMode: typeof layer.blendMode === 'string' ? layer.blendMode : 'normal',
-        inlineBrightness: effectStack.inlineEffects.brightness,
-        inlineContrast: effectStack.inlineEffects.contrast,
-        inlineSaturation: effectStack.inlineEffects.saturation,
-        inlineInvert: effectStack.inlineEffects.invert,
+        inlineBrightness: inlineEffects.inlineBrightness,
+        inlineContrast: inlineEffects.inlineContrast,
+        inlineSaturation: inlineEffects.inlineSaturation,
+        inlineInvert: inlineEffects.inlineInvert,
         ...gpuEffects,
         complexEffectCount: effectStack.complexEffects?.length ?? 0,
+        renderEffectFallback: hasUnsupportedWorkerRenderEffect ? 'opacity-envelope' : undefined,
+        renderEffectFallbackOpacity: hasUnsupportedWorkerRenderEffect ? fallbackOpacity : undefined,
+        unsupportedRenderEffectTypes: hasUnsupportedWorkerRenderEffect ? renderEffectTypes : undefined,
+        ignoredAfterRenderEffectTypes: ignoredAfterRenderEffectTypes.length > 0
+          ? ignoredAfterRenderEffectTypes
+          : undefined,
         mediaFileId: source.mediaFileId,
         runtimeSourceId: source.runtimeSourceId,
         runtimeSessionKey: source.runtimeSessionKey,
@@ -394,5 +540,7 @@ export class WorkerGpuMediaSourceRegistry {
   clear(): void {
     this.loadedSourceIds.clear();
     this.pendingSourceLoads.clear();
+    this.unsupportedRenderEffectFallbacks = [];
+    this.warnedUnsupportedRenderEffectKeys.clear();
   }
 }

@@ -1518,6 +1518,191 @@ describe('LayerCollector', () => {
     });
   });
 
+  it('copies stable paused HTML frames before live import so still renders stay visible', () => {
+    flags.useFullWebCodecsPlayback = false;
+
+    const video = {
+      src: 'blob:test-video',
+      currentTime: 6,
+      readyState: 4,
+      seeking: false,
+      paused: true,
+      videoWidth: 1920,
+      videoHeight: 1080,
+    } as unknown as HTMLVideoElement;
+
+    const copiedFrame = {
+      view: { label: 'copied-paused-frame' },
+      width: 1920,
+      height: 1080,
+      mediaTime: 6,
+    };
+    let captured = false;
+    const textureManager = {
+      importVideoTexture: vi.fn(() => ({ label: 'html-video-texture' })),
+    };
+    const scrubbingCache = {
+      getLastPresentedTime: vi.fn(() => undefined),
+      getLastPresentedOwner: vi.fn(() => undefined),
+      getLastFrameOwner: vi.fn(() => undefined),
+      getLastFrame: vi.fn(() => null),
+      getLastFrameNearTime: vi.fn(() => captured ? copiedFrame : null),
+      getCachedFrameEntry: vi.fn(() => null),
+      getNearestCachedFrameEntry: vi.fn(() => null),
+      getLastCaptureTime: vi.fn(() => 0),
+      captureVideoFrame: vi.fn(() => {
+        captured = true;
+        return true;
+      }),
+      setLastCaptureTime: vi.fn(),
+      cacheFrameAtTime: vi.fn(),
+      captureVideoFrameIfCloser: vi.fn(),
+    };
+
+    const collector = new LayerCollector();
+    const result = collector.collect([{
+      id: 'layer-paused-html-copy',
+      sourceClipId: 'clip-paused-html-copy',
+      name: 'Video',
+      visible: true,
+      opacity: 1,
+      blendMode: 'normal',
+      effects: [],
+      position: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1 },
+      rotation: 0,
+      source: {
+        type: 'video',
+        mediaTime: 6,
+        videoElement: video,
+      },
+    } as unknown as Layer], {
+      textureManager: textureManager as unknown as TextureManager,
+      scrubbingCache: scrubbingCache as unknown as ScrubbingCache,
+      getLastVideoTime: () => undefined,
+      setLastVideoTime: () => {},
+      isExporting: false,
+      isPlaying: false,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(textureManager.importVideoTexture).not.toHaveBeenCalled();
+    expect(scrubbingCache.captureVideoFrame).toHaveBeenCalledWith(video, 'clip-paused-html-copy');
+    expect(result[0]).toMatchObject({
+      isVideo: false,
+      externalTexture: null,
+      textureView: copiedFrame.view,
+      sourceWidth: 1920,
+      sourceHeight: 1080,
+      displayedMediaTime: 6,
+      targetMediaTime: 6,
+      previewPath: 'copied-preview',
+    });
+  });
+
+  it('allows paused particle render effects to use a stable HTML still when full WebCodecs has no frame', () => {
+    const video = {
+      src: 'blob:test-video',
+      currentTime: 6,
+      readyState: 4,
+      seeking: false,
+      paused: true,
+      videoWidth: 1920,
+      videoHeight: 1080,
+    } as unknown as HTMLVideoElement;
+    const webCodecsPlayer = {
+      currentTime: 6,
+      isPlaying: false,
+      isFullMode: () => true,
+      isSimpleMode: () => false,
+      hasFrame: () => false,
+      getCurrentFrame: vi.fn(() => null),
+      getPendingSeekTime: vi.fn(() => null),
+      getDebugInfo: vi.fn(() => null),
+      pause: vi.fn(),
+      seek: vi.fn(),
+    };
+
+    hoisted.getRuntimeFrameProvider.mockReturnValue(null);
+    hoisted.readRuntimeFrameForSource.mockReturnValue(null);
+
+    const copiedFrame = {
+      view: { label: 'particle-paused-frame' },
+      width: 1920,
+      height: 1080,
+      mediaTime: 6,
+    };
+    let captured = false;
+    const textureManager = {
+      importVideoTexture: vi.fn(() => ({ label: 'webcodecs-texture' })),
+    };
+    const scrubbingCache = {
+      getLastPresentedTime: vi.fn(() => undefined),
+      getLastPresentedOwner: vi.fn(() => undefined),
+      getLastFrameOwner: vi.fn(() => undefined),
+      getLastFrame: vi.fn(() => null),
+      getLastFrameNearTime: vi.fn(() => captured ? copiedFrame : null),
+      getCachedFrameEntry: vi.fn(() => null),
+      getNearestCachedFrameEntry: vi.fn(() => null),
+      getLastCaptureTime: vi.fn(() => 0),
+      captureVideoFrame: vi.fn(() => {
+        captured = true;
+        return true;
+      }),
+      setLastCaptureTime: vi.fn(),
+      cacheFrameAtTime: vi.fn(),
+      captureVideoFrameIfCloser: vi.fn(),
+    };
+
+    const collector = new LayerCollector();
+    const result = collector.collect([{
+      id: 'layer-particle-paused-html-copy',
+      sourceClipId: 'clip-particle-paused-html-copy',
+      name: 'Video',
+      visible: true,
+      opacity: 1,
+      blendMode: 'normal',
+      effects: [{
+        id: 'fx-particle',
+        name: 'Pixel Particle Disintegrate',
+        type: 'pixel-particle-disintegrate',
+        enabled: true,
+        params: { progress: 0.35 },
+      }],
+      position: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1 },
+      rotation: 0,
+      source: {
+        type: 'video',
+        mediaTime: 6,
+        videoElement: video,
+        webCodecsPlayer,
+      },
+    } as unknown as Layer], {
+      textureManager: textureManager as unknown as TextureManager,
+      scrubbingCache: scrubbingCache as unknown as ScrubbingCache,
+      getLastVideoTime: () => undefined,
+      setLastVideoTime: () => {},
+      isExporting: false,
+      isPlaying: false,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(webCodecsPlayer.getCurrentFrame).not.toHaveBeenCalled();
+    expect(textureManager.importVideoTexture).not.toHaveBeenCalled();
+    expect(scrubbingCache.captureVideoFrame).toHaveBeenCalledWith(video, 'clip-particle-paused-html-copy');
+    expect(result[0]).toMatchObject({
+      isVideo: false,
+      externalTexture: null,
+      textureView: copiedFrame.view,
+      sourceWidth: 1920,
+      sourceHeight: 1080,
+      displayedMediaTime: 6,
+      targetMediaTime: 6,
+      previewPath: 'copied-preview',
+    });
+  });
+
   it('uses copied HTML video frames on Firefox instead of external textures', () => {
     flags.useFullWebCodecsPlayback = false;
     Object.defineProperty(globalThis.navigator, 'userAgent', {

@@ -25,6 +25,7 @@ import { timelineRuntimeCoordinator } from '../../src/services/timeline/timeline
 import {
   configureRenderHostSelection,
   renderHostPort,
+  type RenderHostPort,
 } from '../../src/services/render/renderHostPort';
 
 const noop = () => undefined;
@@ -212,10 +213,15 @@ function makeNestedVideoCompositionContext() {
   return { ctx, nestedVideo, parentComp };
 }
 
-function mockRenderHostMode(mode: ReturnType<typeof renderHostPort.getTelemetry>['mode']): void {
+function mockRenderHostMode(
+  mode: ReturnType<typeof renderHostPort.getTelemetry>['mode'],
+  overrides: Partial<RenderHostPort> = {},
+): void {
   configureRenderHostSelection({
     workerPrimary: {
       getTelemetry: () => ({ mode }) as ReturnType<typeof renderHostPort.getTelemetry>,
+      cleanupVideo: noop,
+      ...overrides,
     } as unknown as typeof renderHostPort,
     preferWorkerPrimary: true,
     workerPrimaryAvailable: true,
@@ -338,7 +344,8 @@ describe('lazy timeline media elements', () => {
       new File(['native-video'], videoClip.name, { type: 'video/mp4' })
     ));
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:native-lazy-video');
-    const requestRender = vi.spyOn(renderHostPort, 'requestNewFrameRender').mockImplementation(noop);
+    const requestRender = vi.fn(noop);
+    mockRenderHostMode('main', { requestNewFrameRender: requestRender });
 
     const ctx = makeContext({
       clips: [videoClip],

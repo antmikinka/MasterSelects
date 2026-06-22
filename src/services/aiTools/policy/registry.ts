@@ -104,6 +104,12 @@ const TOOL_POLICY_MAP = new Map<string, ToolPolicyEntry>([
   ['captureFrame', readOnly()],
   ['getCutPreviewQuad', readOnly()],
   ['getFramesAtTimes', readOnly()],
+  ['runPixelParticleDisintegrateQa', {
+    ...bridgeTelemetry(),
+    readOnly: false,
+    riskLevel: 'medium',
+    allowedCallers: ['devBridge', 'console', 'internal'],
+  }],
   ['selectClips', readOnly()],
   ['clearSelection', readOnly()],
   ['selectMediaItems', readOnly()],

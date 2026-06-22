@@ -367,7 +367,7 @@ class WorkerPresentingRenderHostPortCore {
     this.requestRender();
     void import('../playbackHealthMonitor')
       .then(({ playbackHealthMonitor }) => {
-        playbackHealthMonitor.start();
+        playbackHealthMonitor?.start?.();
       })
       .catch((error) => {
         log.warn('Failed to start playback health monitor', error);
@@ -1043,6 +1043,17 @@ class WorkerPresentingRenderHostPortCore {
     return this.presentationStrategy === 'worker-webgpu-present' ? 'worker-gpu-only' : 'worker-only';
   }
 
+  private resolvePresentedTelemetrySource(
+    output: WorkerRenderHostRuntimeJobOutput,
+    requestedSource: string | undefined,
+    diagnostics: WorkerSoftwarePreviewFrameDiagnostics | null | undefined,
+  ): string {
+    if (output.presentedFrameId?.includes(':gpu-video-composite:')) {
+      return 'worker-gpu-only:video-frame-compositor';
+    }
+    return requestedSource ?? `${this.getTelemetrySourcePrefix()}:${this.getPresentedDecoder(diagnostics)}`;
+  }
+
   private recordRuntimeOutput(
     output: WorkerRenderHostRuntimeJobOutput,
     options: {
@@ -1086,7 +1097,11 @@ class WorkerPresentingRenderHostPortCore {
       recordWorkerFirstPresentedFrame({
         frameId: output.presentedFrameId,
         targetId: framePresentedEvent?.targetId ?? output.presentedFrameId.split(':')[0] ?? 'preview',
-        source: options.source ?? `${this.getTelemetrySourcePrefix()}:${this.getPresentedDecoder(options.diagnostics)}`,
+        source: this.resolvePresentedTelemetrySource(
+          output,
+          options.source,
+          options.diagnostics,
+        ),
         changed: options.changed ?? true,
         targetMoved: options.targetMoved ?? options.changed ?? true,
         driftMs: options.diagnostics?.maxVideoDriftMs,
@@ -1302,6 +1317,7 @@ class WorkerPresentingRenderHostPortCore {
       mediaTime: source.mediaTime,
       opacity: source.opacity,
       blendMode: source.blendMode,
+      renderLayer: source.renderLayer,
       inlineBrightness: source.inlineBrightness,
       inlineContrast: source.inlineContrast,
       inlineSaturation: source.inlineSaturation,
@@ -1562,7 +1578,11 @@ class WorkerPresentingRenderHostPortCore {
         recordWorkerFirstPresentedFrame({
           frameId: `${targetId}:${sourceId}:worker-stream:${previousPresented + index + 1}`,
           targetId,
-          source: 'worker-gpu-only:video-frame',
+          source: this.resolvePresentedTelemetrySource(
+            output,
+            'worker-gpu-only:video-frame',
+            null,
+          ),
           changed,
           targetMoved: true,
           t: now - (deltaPresented - index - 1) * frameIntervalMs,
@@ -2586,6 +2606,8 @@ class WorkerPresentingRenderHostPortCore {
       lastGpuOnlyVideoFrameStats: this.lastGpuOnlyVideoFrameStats,
       gpuOnlyVideoSourceLoadCount: this.gpuOnlyVideoSourceLoadCount,
       gpuOnlyVideoSourceLoadFailureCount: this.gpuOnlyVideoSourceLoadFailureCount,
+      gpuOnlyUnsupportedRenderEffectFallbackCount: this.workerGpuMediaSources.unsupportedRenderEffectFallbackCount,
+      gpuOnlyUnsupportedRenderEffectFallbacks: this.workerGpuMediaSources.lastUnsupportedRenderEffectFallbacks,
       loadedGpuVideoSourceCount: this.workerGpuMediaSources.loadedSourceCount,
       pendingGpuVideoSourceLoadCount: this.workerGpuMediaSources.pendingLoadCount,
       targetIds: [...this.targetRecords.keys()],

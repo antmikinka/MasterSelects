@@ -63,10 +63,18 @@ export function collectReadyHtmlVideo(
     ? Math.abs(lastPresentedTime - targetTime)
     : undefined;
   const currentTimeDriftSeconds = Math.abs(currentTime - targetTime);
+  const hasStablePausedHtmlFrame =
+    !deps.isPlaying &&
+    !isDragging &&
+    !isSettling &&
+    !video.seeking &&
+    Number.isFinite(currentTime) &&
+    currentTimeDriftSeconds <= 0.12;
   const awaitingPausedTargetFrame =
     hasPresentedOwnerMismatch ||
     !deps.isPlaying &&
     !isDragging &&
+    !hasStablePausedHtmlFrame &&
     (!isSettling &&
       (!hasConfirmedPresentedFrame || Math.abs(lastPresentedTime - targetTime) > 0.05));
   const cacheSearchDistanceFrames = isDragging ? 10 : 6;
@@ -197,7 +205,7 @@ export function collectReadyHtmlVideo(
   if (!controller.isVideoGpuReady(video) && !deps.isExporting) {
     if (!video.paused && !video.seeking) {
       controller.markVideoGpuReady(video);
-    } else if (!deps.isPlaying) {
+    } else if (!deps.isPlaying && !hasStablePausedHtmlFrame) {
       if (safeFallback) {
         controller.armHtmlHold(layerReuseKey);
         controller.traceScrubPath(layer, 'gpu-cached', video, targetTime, lastPresentedTime);
@@ -226,7 +234,8 @@ export function collectReadyHtmlVideo(
       deps.scrubbingCache,
       targetTime,
       layer.sourceClipId,
-      captureOwnerId
+      captureOwnerId,
+      hasStablePausedHtmlFrame
     );
     if (copiedFrame) {
       controller.clearHtmlHold(layerReuseKey);

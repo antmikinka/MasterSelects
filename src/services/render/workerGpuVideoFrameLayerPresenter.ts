@@ -8,6 +8,7 @@ import {
   VIDEO_FRAME_LAYER_COMPOSITE_SHADER,
   VIDEO_FRAME_LAYER_DISPLAY_SHADER,
 } from './workerGpuVideoFrameLayerShaderSource';
+import type { WorkerGpuWebCodecsRenderLayer } from './workerGpuRuntimeCommands';
 
 interface WorkerGpuVideoFrameLayerPresenterResources {
   readonly compositePipeline: GPURenderPipeline;
@@ -27,8 +28,10 @@ interface WorkerGpuVideoFrameDimensions {
 export interface WorkerGpuVideoFramePresentLayer {
   readonly frame: VideoFrame;
   readonly timestampSeconds?: number | null;
+  readonly mediaTime?: number | null;
   readonly opacity: number;
   readonly blendMode: string;
+  readonly renderLayer?: WorkerGpuWebCodecsRenderLayer;
   readonly inlineBrightness?: number;
   readonly inlineContrast?: number;
   readonly inlineSaturation?: number;
