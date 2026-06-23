@@ -1,6 +1,6 @@
 // App version
 // Format: MAJOR.MINOR.PATCH
-export const APP_VERSION = '2.3.1';
+export const APP_VERSION = '2.3.2';
 
 export interface ChangelogNotice {
   type: 'info' | 'warning' | 'success' | 'danger';
@@ -27,8 +27,8 @@ export const FEATURED_VIDEO: {
   title: 'MasterSelects Demo',
   banner: {
     type: 'success',
-    title: 'MasterSelects 2.3.1',
-    message: 'Timeline file drops now import through the Media Panel path first, and production clears stale worker render modes so scrubbing falls back to the stable main renderer.',
+    title: 'MasterSelects 2.3.2',
+    message: 'Timeline linked clips now stay visually synced during marquee selection, drag, and trim previews; property numbers also accept direct double-click typing.',
     animated: true,
   },
 };
@@ -36,8 +36,8 @@ export const FEATURED_VIDEO: {
 // Build/Platform notice shown at top of changelog (set to null to hide)
 export const BUILD_NOTICE: ChangelogNotice | null = {
   type: 'success',
-  title: 'MasterSelects 2.3.1',
-  message: 'Timeline file drops now import through the Media Panel path first, and production clears stale worker render modes so scrubbing falls back to the stable main renderer.',
+  title: 'MasterSelects 2.3.2',
+  message: 'Timeline linked clips now stay visually synced during marquee selection, drag, and trim previews; property numbers also accept direct double-click typing.',
   animated: true,
 };
 

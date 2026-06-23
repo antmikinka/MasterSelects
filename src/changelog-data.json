@@ -2,6 +2,13 @@
   {
     "date": "2026-06-23",
     "type": "fix",
+    "title": "MasterSelects 2.3.2",
+    "description": "Timeline polish release: linked audio/video and manual linked-group clips now stay visually synced during marquee selection, live drag, and trim previews, including linked trim ghosts. Property-panel numeric values can be edited directly by double-clicking, and the Account dialog's price view can scroll and jump straight to plan changes.",
+    "section": "Release"
+  },
+  {
+    "date": "2026-06-23",
+    "type": "fix",
     "title": "MasterSelects 2.3.1",
     "description": "Timeline file drop and scrub hotfix release: OS files dropped directly on the timeline now import through the same Media Panel path first, then multiple-file drops ask whether to stack clips on layers or place them side by side. Production also clears stale worker render modes so scrubbing falls back to the stable main renderer.",
     "section": "Release"
