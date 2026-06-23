@@ -22,6 +22,7 @@ import {
   hydrateTimelineMediaWindow,
   releaseAllLazyTimelineMediaElements,
 } from '../../src/services/timeline/lazyMediaElements';
+import { useTimelineStore } from '../../src/stores/timeline';
 import type { FrameContext } from '../../src/services/layerBuilder/types';
 import type { TimelineClip } from '../../src/types/timeline';
 
@@ -836,7 +837,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     expect(throttledSeek).toHaveBeenCalledTimes(1);
   });
 
-  it('routes reverse worker playback even when full WebCodecs preview is disabled', () => {
+  it('keeps reverse worker playback on HTML fallback when full WebCodecs preview is disabled', () => {
     flags.useFullWebCodecsPlayback = false;
 
     const manager = createManager();
@@ -862,12 +863,10 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
 
     manager.syncClipVideo(clip, ctx);
 
-    expect(syncFullWebCodecs).toHaveBeenCalledTimes(1);
+    expect(syncFullWebCodecs).not.toHaveBeenCalled();
   });
 
   it('creates a transient reverse worker runtime binding for reloaded clips without runtime handles', () => {
-    flags.useFullWebCodecsPlayback = false;
-
     const manager = createManager();
     const syncFullWebCodecs = vi.spyOn(manager, 'syncFullWebCodecs').mockImplementation(() => {});
     mockRenderHostMode('worker-presenting');
@@ -903,7 +902,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     expect(routedClip?.source?.runtimeSessionKey).toBe(`interactive:${clip.id}`);
   });
 
-  it('builds reverse worker playback layers with the transient runtime source after reload without forcing missing frames', () => {
+  it('uses HTML fallback layers after reload when full WebCodecs preview is disabled', () => {
     flags.useFullWebCodecsPlayback = false;
     mockRenderHostMode('worker-presenting');
 
@@ -943,7 +942,7 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     expect(result?.source.videoElement).toBeTruthy();
   });
 
-  it('presents reverse worker playback frames once the provider has a frame even with HTML fallback available', () => {
+  it('keeps the attached provider available without forcing runtime frames when full WebCodecs preview is disabled', () => {
     flags.useFullWebCodecsPlayback = false;
     mockRenderHostMode('worker-presenting');
 
@@ -982,10 +981,10 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
 
     expect(result?.source.runtimeSourceId).toBe('media:worker-reverse-shared-guard');
     expect(result?.source.runtimeSessionKey).toBe(
-      'interactive:clip-worker-reverse-shared-guard'
+      'interactive-track:track-v1:media:worker-reverse-shared-guard'
     );
     expect(result?.source.webCodecsPlayer).toBe(provider);
-    expect(result?.source.forceRuntimeFramePreview).toBe(true);
+    expect(result?.source.forceRuntimeFramePreview).toBeUndefined();
     expect(result?.source.videoElement).toBeTruthy();
   });
 
@@ -1171,6 +1170,57 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
     expect(video.playbackRate).toBe(2);
     expect(video.play).toHaveBeenCalled();
     expect(throttledSeek).not.toHaveBeenCalled();
+  });
+
+  it('does not snap the timeline backward when pausing HTML playback with a lagging video element', () => {
+    flags.useFullWebCodecsPlayback = false;
+
+    const manager = createManager();
+    mockRenderHostMode('main');
+    const previousPlayheadPosition = useTimelineStore.getState().playheadPosition;
+    const { clip, ctx, video } = createLazyVideoClip('clip-stop-lag', {
+      currentTime: 1.5,
+      muted: false,
+      paused: false,
+      seeking: false,
+      readyState: 4,
+      duration: 10,
+      played: { length: 1 } as TimeRanges,
+      pause: vi.fn() as HTMLVideoElement['pause'],
+      play: vi.fn(() => Promise.resolve()) as HTMLVideoElement['play'],
+      playbackRate: 1,
+      src: 'blob:clip-stop-lag',
+    });
+
+    try {
+      ctx.isPlaying = true;
+      ctx.playheadPosition = 1.5;
+      ctx.getSourceTimeForClip = () => 1.5;
+      manager.syncClipVideo(clip, ctx);
+      testEngine.markVideoFramePresented.mockClear();
+      testEngine.captureVideoFrameAtTime.mockClear();
+      testEngine.ensureVideoFrameCached.mockClear();
+
+      useTimelineStore.setState({ playheadPosition: 2 });
+      const pausedCtx = {
+        ...ctx,
+        isPlaying: false,
+        playheadPosition: 2,
+        getSourceTimeForClip: () => 2,
+      } as FrameContext;
+      video.currentTime = 1.7;
+
+      manager.syncClipVideo(clip, pausedCtx);
+
+      expect(useTimelineStore.getState().playheadPosition).toBe(2);
+      expect(video.currentTime).toBe(2);
+      expect(testEngine.markVideoFramePresented).not.toHaveBeenCalledWith(video, 1.7, clip.id);
+      expect(testEngine.captureVideoFrameAtTime).not.toHaveBeenCalledWith(video, 1.7, clip.id);
+      expect(testEngine.ensureVideoFrameCached).not.toHaveBeenCalled();
+      expect(testEngine.requestNewFrameRender).toHaveBeenCalled();
+    } finally {
+      useTimelineStore.setState({ playheadPosition: previousPlayheadPosition });
+    }
   });
 
   it('mutes HTML video source audio even when no linked audio clip exists', () => {
@@ -1403,6 +1453,77 @@ describe('VideoSyncManager paused WebCodecs provider selection', () => {
       proactive: true,
       requestRender: true,
     });
+  });
+
+  it('does not start paused preload while an HTML clip is completing playback stop', () => {
+    flags.useFullWebCodecsPlayback = false;
+
+    const manager = createManager();
+    const { clip, ctx, video } = createLazyVideoClip('clip-stop-preload', {
+      currentTime: 4.8,
+      muted: false,
+      paused: false,
+      seeking: false,
+      readyState: 4,
+      duration: 10,
+      played: { length: 1 } as TimeRanges,
+      pause: vi.fn() as HTMLVideoElement['pause'],
+      play: vi.fn(() => Promise.resolve()) as HTMLVideoElement['play'],
+      playbackRate: 1,
+      preload: 'metadata',
+      src: 'blob:clip-stop-preload',
+      currentSrc: 'blob:clip-stop-preload',
+    });
+
+    ctx.isPlaying = true;
+    ctx.playheadPosition = 4.8;
+    ctx.getSourceTimeForClip = () => 4.8;
+    manager.syncClipVideo(clip, ctx);
+
+    const startTargetedWarmup = vi
+      .spyOn(manager, 'startTargetedWarmup')
+      .mockImplementation(() => {});
+    const pausedCtx = {
+      ...ctx,
+      isPlaying: false,
+      playheadPosition: 5,
+      clips: [clip],
+      clipsAtTime: [clip],
+      getSourceTimeForClip: () => 5,
+    } as FrameContext;
+
+    manager.preloadPausedJumpNeighborhood(pausedCtx);
+
+    expect(startTargetedWarmup).not.toHaveBeenCalled();
+    expect(video.play).toHaveBeenCalledTimes(0);
+  });
+
+  it('does not start paused preload while playback-stop settle is pending', () => {
+    flags.useFullWebCodecsPlayback = false;
+
+    const manager = createManager();
+    const startTargetedWarmup = vi
+      .spyOn(manager, 'startTargetedWarmup')
+      .mockImplementation(() => {});
+
+    const { clip, ctx, video } = createLazyVideoClip('clip-stop-settle-preload', {
+      currentTime: 4.8,
+      readyState: 4,
+      seeking: false,
+      preload: 'metadata',
+      src: 'blob:clip-stop-settle-preload',
+      currentSrc: 'blob:clip-stop-settle-preload',
+    });
+    ctx.playheadPosition = 5;
+    ctx.clips = [clip];
+    ctx.clipsAtTime = [clip];
+    ctx.getSourceTimeForClip = () => 5;
+    scrubSettleState.begin(clip.id, 5, 500, 'playback-stop');
+
+    manager.preloadPausedJumpNeighborhood(ctx);
+
+    expect(startTargetedWarmup).not.toHaveBeenCalled();
+    expect(video.currentTime).toBe(4.8);
   });
 
   it('does not spam paused jump preload for the same paused target', () => {

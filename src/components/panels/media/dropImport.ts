@@ -21,6 +21,16 @@ export interface DroppedMediaImportBatch {
   }>;
 }
 
+export interface DroppedMediaImportActions<TImportResult = unknown> {
+  createFolder: FolderCreator;
+  existingFolders: MediaFolderLike[];
+  importFiles: (files: File[], parentId?: string | null) => Promise<TImportResult[] | TImportResult>;
+  importFilesWithHandles: (
+    filesWithHandles: DroppedMediaImportBatch['filesWithHandles'],
+    parentId?: string | null,
+  ) => Promise<TImportResult[] | TImportResult>;
+}
+
 type FolderCreator = (name: string, parentId: string | null) => MediaFolderLike;
 
 type DataTransferItemWithHandle = DataTransferItem & {
@@ -332,4 +342,44 @@ export function planDroppedMediaImports(
   }
 
   return Array.from(batches.values());
+}
+
+function appendImportResult<TImportResult>(
+  imported: TImportResult[],
+  result: TImportResult[] | TImportResult,
+): void {
+  if (Array.isArray(result)) {
+    imported.push(...result);
+    return;
+  }
+
+  imported.push(result);
+}
+
+export async function importDroppedMediaFiles<TImportResult = unknown>(
+  records: DroppedMediaFileRecord[],
+  targetParentId: string | null,
+  actions: DroppedMediaImportActions<TImportResult>,
+): Promise<TImportResult[]> {
+  if (records.length === 0) return [];
+
+  const importBatches = planDroppedMediaImports(
+    records,
+    actions.existingFolders,
+    targetParentId,
+    actions.createFolder,
+  );
+  const imported: TImportResult[] = [];
+
+  for (const batch of importBatches) {
+    if (batch.filesWithHandles.length > 0) {
+      appendImportResult(imported, await actions.importFilesWithHandles(batch.filesWithHandles, batch.parentId));
+    }
+
+    if (batch.files.length > 0) {
+      appendImportResult(imported, await actions.importFiles(batch.files, batch.parentId));
+    }
+  }
+
+  return imported;
 }

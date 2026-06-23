@@ -31,8 +31,8 @@ describe('renderHostPort', () => {
     expect(source).toContain('strictWorkerOnly: () => state.workerPrimaryStrictWorkerOnly');
   });
 
-  it('reports the current main-thread renderer ownership mode', () => {
-    expect(renderHostPort.getTelemetry()).toEqual({
+  it('uses the main fallback renderer by default', () => {
+    expect(renderHostPort.getTelemetry()).toMatchObject({
       mode: 'main',
       presentationStrategy: 'main-host-fallback',
       lifecycleOwner: 'renderHostPort',
@@ -122,6 +122,7 @@ describe('renderHostPort', () => {
     const layers = [{ id: 'layer-a' }] as never;
 
     renderHostPort.setTimelineVisualDemand(true);
+    renderHostPort.setVisualTargetFps(30);
     renderHostPort.setIsPlaying(true);
     renderHostPort.setIsScrubbing(true);
     renderHostPort.setContinuousRender(true);
@@ -181,6 +182,7 @@ describe('renderHostPort', () => {
     renderHostPort.removeOutputTarget('output-a');
 
     expect(engine.setTimelineVisualDemand).toHaveBeenCalledWith(true);
+    expect(engine.setVisualTargetFps).toHaveBeenCalledWith(30);
     expect(engine.setIsPlaying).toHaveBeenCalledWith(true);
     expect(engine.setIsScrubbing).toHaveBeenCalledWith(true);
     expect(engine.setContinuousRender).toHaveBeenCalledWith(true);

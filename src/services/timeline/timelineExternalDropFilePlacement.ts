@@ -1,9 +1,12 @@
 import type { MediaFile, SignalAssetItem } from '../../stores/mediaStore';
+import type { FileImportResult } from '../../stores/mediaStore/types';
+import { isMediaFileImportResult } from '../../stores/mediaStore/helpers/importResult';
 import type { AddClipOptions } from '../../stores/timeline/types';
 import { classifyMediaType } from '../../stores/timeline/helpers/mediaTypeHelpers';
 import { createSignalTimelineAdapterPlan } from '../../runtime/renderers/signalTimelineRendererAdapter';
 import {
   getTimelineDropMediaTypeOverride,
+  resolveMediaFileForTimelineDrop,
   resolveTimelineDropImportResult,
   resolveTimelineDropMediaFile,
   setTimelineDroppedFilePath,
@@ -18,7 +21,10 @@ export interface TimelineExternalDropFileRecord {
   absolutePath?: string;
 }
 
+export type TimelineExternalDropArrangement = 'side-by-side' | 'stack';
+
 export interface TimelineExternalDropFilePlacementActions {
+  addTrack?: (type: 'video' | 'audio') => string | undefined;
   addClip: (
     trackId: string,
     file: File,
@@ -40,6 +46,8 @@ export interface PlaceTimelineExternalDropFilesParams {
   baseStartTime: number;
   fallbackDuration?: number;
   filePath?: string;
+  importResults?: FileImportResult[];
+  arrangement?: TimelineExternalDropArrangement;
   records: TimelineExternalDropFileRecord[];
   resolveStartTime?: (desiredStartTime: number, duration?: number) => number;
   trackId: string;
@@ -49,6 +57,26 @@ export interface PlaceTimelineExternalDropFilesParams {
 interface TimelineExternalDropClipPlacement {
   startTime: number;
   endTime: number;
+}
+
+function getImportedResultDuration(importResult: FileImportResult, fallbackDuration?: number): number {
+  if (isMediaFileImportResult(importResult)) {
+    return importResult.duration ?? fallbackDuration ?? 5;
+  }
+
+  return createSignalTimelineAdapterPlan(importResult).duration;
+}
+
+function isImportedResultAudioOnly(importResult: FileImportResult): boolean {
+  return isMediaFileImportResult(importResult) && importResult.type === 'audio';
+}
+
+function getImportedResultTrackType(importResult: FileImportResult): 'video' | 'audio' {
+  return isImportedResultAudioOnly(importResult) ? 'audio' : 'video';
+}
+
+function getImportedResultName(importResult: FileImportResult): string {
+  return importResult.name;
 }
 
 async function addTimelineExternalDropMediaClip(params: {
@@ -193,24 +221,165 @@ async function addTimelineExternalDropSignalClip(params: {
   return { startTime, endTime: startTime + plan.duration };
 }
 
+async function addTimelineExternalDropImportedMediaClip(params: {
+  actions: TimelineExternalDropFilePlacementActions;
+  fallbackDuration?: number;
+  mediaFile: MediaFile;
+  startTime: number;
+  trackId: string;
+}): Promise<TimelineExternalDropClipPlacement | null> {
+  const {
+    actions,
+    fallbackDuration,
+    mediaFile,
+    startTime,
+    trackId,
+  } = params;
+
+  const file = await resolveMediaFileForTimelineDrop(mediaFile);
+  if (!file) {
+    log.warn('Could not resolve imported timeline drop media before creating clip', {
+      mediaFileId: mediaFile.id,
+      name: mediaFile.name,
+    });
+    return null;
+  }
+
+  setTimelineDroppedFilePath(file, mediaFile.absolutePath ?? mediaFile.filePath);
+  const resolvedDuration = mediaFile.duration ?? fallbackDuration ?? 5;
+  const clipId = await actions.addClip(
+    trackId,
+    file,
+    startTime,
+    resolvedDuration,
+    mediaFile.id,
+    getTimelineDropMediaTypeOverride(mediaFile),
+  );
+  if (!clipId) {
+    log.warn('Could not place imported timeline drop media clip', {
+      mediaFileId: mediaFile.id,
+      name: mediaFile.name,
+      trackId,
+    });
+    return null;
+  }
+
+  return { startTime, endTime: startTime + resolvedDuration };
+}
+
+async function addTimelineExternalDropImportedSignalClip(params: {
+  actions: TimelineExternalDropFilePlacementActions;
+  signalAsset: SignalAssetItem;
+  startTime: number;
+  trackId: string;
+}): Promise<TimelineExternalDropClipPlacement | null> {
+  const {
+    actions,
+    signalAsset,
+    startTime,
+    trackId,
+  } = params;
+
+  const plan = createSignalTimelineAdapterPlan(signalAsset);
+  const clipId = await actions.addSignalAssetClip(trackId, signalAsset, startTime);
+
+  if (!clipId) {
+    log.warn('Could not place imported timeline drop signal asset', {
+      signalAssetId: signalAsset.id,
+      name: signalAsset.name,
+    });
+    return null;
+  }
+
+  return { startTime, endTime: startTime + plan.duration };
+}
+
 export async function placeTimelineExternalDropFiles(
   params: PlaceTimelineExternalDropFilesParams,
 ): Promise<boolean> {
   const {
     actions,
+    arrangement = 'side-by-side',
     baseStartTime,
     fallbackDuration,
     filePath,
+    importResults,
     records,
     resolveStartTime,
     trackId,
     trackIsVideo,
   } = params;
 
-  if (records.length === 0) return false;
+  if (records.length === 0 && (!importResults || importResults.length === 0)) return false;
 
   let cursorTime = baseStartTime;
+  let stackStartTime: number | null = null;
   let placedAny = false;
+
+  if (importResults && importResults.length > 0) {
+    let placedCount = 0;
+
+    for (const importResult of importResults) {
+      const resultTrackType = getImportedResultTrackType(importResult);
+      if (resultTrackType === 'audio' && trackIsVideo) {
+        log.debug('Skipping imported audio file dropped on a video track', {
+          name: getImportedResultName(importResult),
+        });
+        continue;
+      }
+      if (resultTrackType === 'video' && !trackIsVideo) {
+        log.debug('Skipping imported non-audio file dropped on an audio track', {
+          name: getImportedResultName(importResult),
+        });
+        continue;
+      }
+
+      const duration = getImportedResultDuration(importResult, fallbackDuration);
+      const startTime = arrangement === 'stack'
+        ? stackStartTime ?? (stackStartTime = resolveStartTime
+          ? resolveStartTime(baseStartTime, duration)
+          : baseStartTime)
+        : resolveStartTime
+          ? resolveStartTime(cursorTime, duration)
+          : cursorTime;
+      let placementTrackId = trackId;
+
+      if (arrangement === 'stack' && placedCount > 0) {
+        const nextTrackId = actions.addTrack?.(resultTrackType);
+        if (!nextTrackId) {
+          log.warn('Could not create stack track for timeline drop', {
+            name: getImportedResultName(importResult),
+            trackType: resultTrackType,
+          });
+          continue;
+        }
+        placementTrackId = nextTrackId;
+      }
+
+      const placement = isMediaFileImportResult(importResult)
+        ? await addTimelineExternalDropImportedMediaClip({
+          actions,
+          trackId: placementTrackId,
+          mediaFile: importResult,
+          startTime,
+          fallbackDuration,
+        })
+        : await addTimelineExternalDropImportedSignalClip({
+          actions,
+          trackId: placementTrackId,
+          signalAsset: importResult,
+          startTime,
+        });
+
+      if (placement) {
+        placedAny = true;
+        placedCount += 1;
+        cursorTime = arrangement === 'stack' ? cursorTime : placement.endTime;
+      }
+    }
+
+    return placedAny;
+  }
 
   for (const record of records) {
     const { file, handle, absolutePath } = record;

@@ -10,6 +10,7 @@ import type {
 } from '../../engine/texture/ScrubbingCache';
 import type { EngineStats } from '../../types/engineStats';
 import type { Layer } from '../../types/layers';
+import { flags } from '../../engine/featureFlags';
 import { useEngineStore } from '../../stores/engineStore';
 import { useMediaStore } from '../../stores/mediaStore';
 import { useRenderTargetStore } from '../../stores/renderTargetStore';
@@ -37,6 +38,7 @@ import type {
 } from './renderHostTypes';
 import type { WorkerRenderHostRuntimeJobOutput } from './workerRenderHostRuntimeHandlers';
 import type {
+  WorkerRenderHostGpuTransferredVideoFrameLayer,
   WorkerRenderHostWebCodecsSeekMode,
   WorkerRenderSoftwareLayer,
 } from './workerRenderHostRuntimeCommands';
@@ -75,6 +77,7 @@ import {
 } from './workerSoftwareHtmlVideoSnapshotCache';
 import {
   WorkerGpuMediaSourceRegistry,
+  resolveWorkerGpuVideoPresentationLayerStyle,
   type WorkerGpuVideoPresentationLayer,
   type WorkerGpuVideoPresentationSource,
 } from './workerGpuMediaSourceRegistry';
@@ -367,7 +370,7 @@ class WorkerPresentingRenderHostPortCore {
     this.requestRender();
     void import('../playbackHealthMonitor')
       .then(({ playbackHealthMonitor }) => {
-        playbackHealthMonitor.start();
+        playbackHealthMonitor?.start?.();
       })
       .catch((error) => {
         log.warn('Failed to start playback health monitor', error);
@@ -568,6 +571,10 @@ class WorkerPresentingRenderHostPortCore {
     if (this.timelineVisualDemand === hasDemand) return;
     this.timelineVisualDemand = hasDemand;
     this.requestRender();
+  }
+
+  setVisualTargetFps(_targetFps: number): void {
+    // Worker presentation derives cadence from the active composition directly.
   }
 
   setIsPlaying(isPlaying: boolean): void {
@@ -1043,6 +1050,17 @@ class WorkerPresentingRenderHostPortCore {
     return this.presentationStrategy === 'worker-webgpu-present' ? 'worker-gpu-only' : 'worker-only';
   }
 
+  private resolvePresentedTelemetrySource(
+    output: WorkerRenderHostRuntimeJobOutput,
+    requestedSource: string | undefined,
+    diagnostics: WorkerSoftwarePreviewFrameDiagnostics | null | undefined,
+  ): string {
+    if (output.presentedFrameId?.includes(':gpu-video-composite:')) {
+      return 'worker-gpu-only:video-frame-compositor';
+    }
+    return requestedSource ?? `${this.getTelemetrySourcePrefix()}:${this.getPresentedDecoder(diagnostics)}`;
+  }
+
   private recordRuntimeOutput(
     output: WorkerRenderHostRuntimeJobOutput,
     options: {
@@ -1086,7 +1104,11 @@ class WorkerPresentingRenderHostPortCore {
       recordWorkerFirstPresentedFrame({
         frameId: output.presentedFrameId,
         targetId: framePresentedEvent?.targetId ?? output.presentedFrameId.split(':')[0] ?? 'preview',
-        source: options.source ?? `${this.getTelemetrySourcePrefix()}:${this.getPresentedDecoder(options.diagnostics)}`,
+        source: this.resolvePresentedTelemetrySource(
+          output,
+          options.source,
+          options.diagnostics,
+        ),
         changed: options.changed ?? true,
         targetMoved: options.targetMoved ?? options.changed ?? true,
         driftMs: options.diagnostics?.maxVideoDriftMs,
@@ -1302,6 +1324,7 @@ class WorkerPresentingRenderHostPortCore {
       mediaTime: source.mediaTime,
       opacity: source.opacity,
       blendMode: source.blendMode,
+      renderLayer: source.renderLayer,
       inlineBrightness: source.inlineBrightness,
       inlineContrast: source.inlineContrast,
       inlineSaturation: source.inlineSaturation,
@@ -1364,6 +1387,57 @@ class WorkerPresentingRenderHostPortCore {
       levelsEnabled: source.levelsEnabled,
       complexEffectCount: source.complexEffectCount,
     }));
+  }
+
+  private async createGpuOnlyHtmlVideoFrameLayers(
+    layers: readonly Layer[],
+  ): Promise<{
+    readonly layers: readonly WorkerRenderHostGpuTransferredVideoFrameLayer[];
+    readonly transfer: Transferable[];
+  }> {
+    if (typeof createImageBitmap !== 'function') {
+      return { layers: [], transfer: [] };
+    }
+
+    const capturedLayers = await Promise.all([...layers].reverse().map(async (
+      layer,
+    ): Promise<WorkerRenderHostGpuTransferredVideoFrameLayer | null> => {
+      const source = layer.source;
+      if (!layer.visible || source?.type !== 'video' || !source.videoElement) return null;
+      const video = source.videoElement;
+      if (video.readyState < 2 || video.videoWidth <= 0 || video.videoHeight <= 0) return null;
+
+      const mediaTime = typeof source.mediaTime === 'number' && Number.isFinite(source.mediaTime)
+        ? source.mediaTime
+        : video.currentTime;
+      const timestampSeconds = Number.isFinite(video.currentTime)
+        ? video.currentTime
+        : mediaTime;
+
+      try {
+        const frame = await createImageBitmap(video);
+        return {
+          sourceId: `html-video:${layer.sourceClipId ?? layer.id}`,
+          mediaTime,
+          frame,
+          timestampSeconds,
+          ...resolveWorkerGpuVideoPresentationLayerStyle(layer),
+        };
+      } catch (error) {
+        log.warn('HTMLVideo frame transfer capture failed', {
+          layerId: layer.id,
+          name: error instanceof Error ? error.name : 'Error',
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }
+    }));
+    const htmlLayers = capturedLayers.filter((layer): layer is WorkerRenderHostGpuTransferredVideoFrameLayer => !!layer);
+
+    return {
+      layers: htmlLayers,
+      transfer: htmlLayers.map((layer) => layer.frame as unknown as Transferable),
+    };
   }
 
   private async ensureGpuOnlyVideoSourceLoaded(
@@ -1562,7 +1636,11 @@ class WorkerPresentingRenderHostPortCore {
         recordWorkerFirstPresentedFrame({
           frameId: `${targetId}:${sourceId}:worker-stream:${previousPresented + index + 1}`,
           targetId,
-          source: 'worker-gpu-only:video-frame',
+          source: this.resolvePresentedTelemetrySource(
+            output,
+            'worker-gpu-only:video-frame',
+            null,
+          ),
           changed,
           targetMoved: true,
           t: now - (deltaPresented - index - 1) * frameIntervalMs,
@@ -1951,7 +2029,53 @@ class WorkerPresentingRenderHostPortCore {
     try {
       const previousTargetKey = this.lastTargetKeyByTarget.get(record.target.id);
       const targetMoved = previousTargetKey !== undefined && previousTargetKey !== request.targetKey;
-      const videoSources = this.resolveGpuOnlyVideoPresentationSources(request.layers);
+      const htmlFramePacket = !flags.useFullWebCodecsPlayback
+        ? await this.createGpuOnlyHtmlVideoFrameLayers(request.layers)
+        : null;
+      if (htmlFramePacket && htmlFramePacket.layers.length > 0) {
+        attemptedVideoFrame = true;
+        this.stopGpuOnlyStreamPresentation(record.target.id, 'transferred HTMLVideo frame');
+        const output = await bridge.presentGpuTransferredVideoFrames(
+          requestId,
+          record.target.id,
+          request.layers[0]?.source?.mediaTime ?? 0,
+          sequence,
+          htmlFramePacket.layers,
+          htmlFramePacket.transfer,
+        );
+        this.lastGpuOnlyVideoFrameStats = this.runtimeOutputStats(output);
+        const presented = this.runtimeOutputPresentedRequest(output, requestId);
+        const sourceFrameChanged = presented
+          ? this.updateGpuOnlyVideoFrameTimestamp(
+            this.runtimeOutputNumberStat(output, 'workerGpu.videoFrame.timestampSeconds')
+          )
+          : false;
+        const playbackTargetMoved = (this.isPlaying || this.isScrubbing) && targetMoved;
+        this.recordRuntimeOutput(output, {
+          changed: sourceFrameChanged,
+          targetMoved: playbackTargetMoved,
+          source: 'worker-gpu-only:video-frame',
+        });
+        if (!presented) {
+          this.presentationFailures += 1;
+          this.gpuOnlyVideoFrameFailureCount += 1;
+        } else {
+          this.resetGpuOnlySeekRetry(record.target.id);
+          this.gpuOnlyVideoFrameCount += 1;
+          if (sourceFrameChanged) {
+            this.gpuOnlyDistinctVideoFrameCount += 1;
+          } else {
+            this.gpuOnlyRepeatedVideoFrameCount += 1;
+          }
+          this.lastTargetKeyByTarget.set(record.target.id, request.targetKey);
+        }
+        this.publishEngineStats();
+        return;
+      }
+
+      const videoSources = flags.useFullWebCodecsPlayback
+        ? this.resolveGpuOnlyVideoPresentationSources(request.layers)
+        : [];
       const videoSource = videoSources[0] ?? null;
       if (videoSource) {
         attemptedVideoFrame = true;
@@ -2586,6 +2710,8 @@ class WorkerPresentingRenderHostPortCore {
       lastGpuOnlyVideoFrameStats: this.lastGpuOnlyVideoFrameStats,
       gpuOnlyVideoSourceLoadCount: this.gpuOnlyVideoSourceLoadCount,
       gpuOnlyVideoSourceLoadFailureCount: this.gpuOnlyVideoSourceLoadFailureCount,
+      gpuOnlyUnsupportedRenderEffectFallbackCount: this.workerGpuMediaSources.unsupportedRenderEffectFallbackCount,
+      gpuOnlyUnsupportedRenderEffectFallbacks: this.workerGpuMediaSources.lastUnsupportedRenderEffectFallbacks,
       loadedGpuVideoSourceCount: this.workerGpuMediaSources.loadedSourceCount,
       pendingGpuVideoSourceLoadCount: this.workerGpuMediaSources.pendingLoadCount,
       targetIds: [...this.targetRecords.keys()],

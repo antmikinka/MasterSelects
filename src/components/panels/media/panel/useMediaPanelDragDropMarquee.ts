@@ -8,7 +8,7 @@ import {
   createExternalDragPayloadForProjectItem,
   setExternalDragPayload,
 } from '../../../timeline/utils/externalDragSession';
-import { collectDroppedMediaFiles, planDroppedMediaImports } from '../dropImport';
+import { collectDroppedMediaFiles, importDroppedMediaFiles } from '../dropImport';
 import { isImportedMediaFileItem } from '../itemTypeGuards';
 
 const log = Logger.create('MediaPanel');
@@ -208,22 +208,12 @@ export function useMediaPanelDragDropMarquee({
       return;
     }
 
-    const importBatches = planDroppedMediaImports(
-      droppedFiles,
-      folders,
-      targetParentId,
+    await importDroppedMediaFiles(droppedFiles, targetParentId, {
       createFolder,
-    );
-
-    for (const batch of importBatches) {
-      if (batch.filesWithHandles.length > 0) {
-        await importFilesWithHandles(batch.filesWithHandles, batch.parentId);
-      }
-
-      if (batch.files.length > 0) {
-        await importFiles(batch.files, batch.parentId);
-      }
-    }
+      existingFolders: folders,
+      importFiles,
+      importFilesWithHandles,
+    });
   }, [createFolder, folders, importFiles, importFilesWithHandles]);
 
   const handleDragOver = useCallback((e: ReactDragEvent) => {
