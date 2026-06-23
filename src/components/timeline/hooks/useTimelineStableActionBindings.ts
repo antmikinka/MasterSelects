@@ -67,6 +67,7 @@ export function useTimelineStableActionBindings() {
     removeMarker: store.removeMarker,
     rippleDeleteSelection: store.rippleDeleteSelection,
     selectClip: store.selectClip,
+    selectClips: store.selectClips,
     selectKeyframe: store.selectKeyframe,
     setAudioDisplayMode: store.setAudioDisplayMode,
     setClipParent: store.setClipParent,

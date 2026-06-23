@@ -21,6 +21,14 @@ export interface TimelineClipCanvasGeometryInput {
   trackId: string;
 }
 
+export function isTimelineClipCanvasTrimPreviewClip(
+  clip: Pick<TimelinePaintSourceClip, 'id' | 'linkedClipId'>,
+  clipTrim?: ClipTrimState | null,
+): boolean {
+  if (!clipTrim) return false;
+  return clip.id === clipTrim.clipId || (!clipTrim.altKey && clip.linkedClipId === clipTrim.clipId);
+}
+
 export function resolveClipGeometry(
   clip: TimelinePaintSourceClip,
   props: TimelineClipCanvasGeometryInput,
@@ -35,18 +43,35 @@ export function resolveClipGeometry(
   const sourceDuration = getTimelineClipSourceDuration(clip);
   const dragPreviewPatch = clipDragPreview?.patches[clip.id];
   const isPrimaryDragClip = clipDrag?.clipId === clip.id;
+  const dragTimelineDelta = clipDrag && clipDrag.snappedTime !== null
+    ? clipDrag.snappedTime - clipDrag.originalStartTime
+    : null;
+  const movesWithDirectDrag = Boolean(
+    clipDrag &&
+      dragTimelineDelta !== null &&
+      !clipDrag.altKeyPressed &&
+      !isPrimaryDragClip &&
+      (
+        clipDrag.multiSelectClipIds?.includes(clip.id) ||
+        clip.linkedClipId === clipDrag.clipId ||
+        clip.id === clipDrag.linkedClipId ||
+        (clipDrag.linkedGroupId && clip.linkedGroupId === clipDrag.linkedGroupId)
+      ),
+  );
   const isLinkedSlipClip = Boolean(
     clipDrag?.toolGesture === 'slip' &&
       !clipDrag.altKeyPressed &&
-      clip.linkedClipId === clipDrag.clipId,
+      (clip.linkedClipId === clipDrag.clipId || clip.id === clipDrag.linkedClipId),
   );
 
   if (isPrimaryDragClip) {
     visible = clipDrag.currentTrackId === trackId;
     const previewStartTime = dragPreviewPatch ? Math.max(0, dragPreviewPatch.startTime) : startTime;
     startTime = clipDrag.snappedTime !== null ? clipDrag.snappedTime : previewStartTime;
-  } else if (clipDrag?.multiSelectClipIds?.includes(clip.id) && clipDrag.multiSelectTimeDelta !== undefined) {
-    startTime = Math.max(0, clip.startTime + clipDrag.multiSelectTimeDelta);
+  } else if (movesWithDirectDrag) {
+    startTime = Math.max(0, clip.startTime + (clipDrag?.multiSelectClipIds?.includes(clip.id)
+      ? clipDrag.multiSelectTimeDelta ?? dragTimelineDelta ?? 0
+      : dragTimelineDelta ?? 0));
   } else if (dragPreviewPatch) {
     startTime = Math.max(0, dragPreviewPatch.startTime);
     visible = (dragPreviewPatch.trackId ?? clip.trackId) === trackId;
@@ -64,31 +89,36 @@ export function resolveClipGeometry(
     outPoint = nextInPoint + visibleSourceDuration;
   }
 
-  if (clipTrim?.clipId === clip.id) {
+  if (clipTrim && isTimelineClipCanvasTrimPreviewClip(clip, clipTrim)) {
     trimEdge = clipTrim.edge;
     const deltaTime = clipTrim.appliedDelta;
+    const isPrimaryTrimClip = clip.id === clipTrim.clipId;
+    const originalStartTime = isPrimaryTrimClip ? clipTrim.originalStartTime : clip.startTime;
+    const originalDuration = isPrimaryTrimClip ? clipTrim.originalDuration : clip.duration;
+    const originalInPoint = isPrimaryTrimClip ? clipTrim.originalInPoint : inPoint;
+    const originalOutPoint = isPrimaryTrimClip ? clipTrim.originalOutPoint : outPoint;
     const sourceType = clip.source?.type;
     const isInfiniteClip = isInfiniteTimelineSourceType(sourceType);
     if (clipTrim.edge === 'left') {
-      const maxTrim = clipTrim.originalDuration - MIN_CLIP_DURATION;
+      const maxTrim = originalDuration - MIN_CLIP_DURATION;
       const minTrim = isInfiniteClip
-        ? -clipTrim.originalStartTime
-        : -clipTrim.originalInPoint;
+        ? -originalStartTime
+        : -originalInPoint;
       const clampedDelta = Math.max(minTrim, Math.min(maxTrim, deltaTime));
-      startTime = clipTrim.originalStartTime + clampedDelta;
-      duration = clipTrim.originalDuration - clampedDelta;
-      inPoint = clipTrim.originalInPoint + clampedDelta;
-      outPoint = clipTrim.originalOutPoint;
+      startTime = originalStartTime + clampedDelta;
+      duration = originalDuration - clampedDelta;
+      inPoint = originalInPoint + clampedDelta;
+      outPoint = originalOutPoint;
     } else {
       const maxExtend = isInfiniteClip || canLoopExtendTimelineVectorClip(clip)
         ? Number.MAX_SAFE_INTEGER
-        : sourceDuration - clipTrim.originalOutPoint;
-      const minTrim = -(clipTrim.originalDuration - MIN_CLIP_DURATION);
+        : sourceDuration - originalOutPoint;
+      const minTrim = -(originalDuration - MIN_CLIP_DURATION);
       const clampedDelta = Math.max(minTrim, Math.min(maxExtend, deltaTime));
-      startTime = clipTrim.originalStartTime;
-      duration = clipTrim.originalDuration + clampedDelta;
-      inPoint = clipTrim.originalInPoint;
-      outPoint = clipTrim.originalOutPoint + clampedDelta;
+      startTime = originalStartTime;
+      duration = originalDuration + clampedDelta;
+      inPoint = originalInPoint;
+      outPoint = originalOutPoint + clampedDelta;
     }
   }
 

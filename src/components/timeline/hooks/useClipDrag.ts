@@ -136,6 +136,8 @@ export function useClipDrag({
 
       const initialDrag: ClipDragState = {
         clipId,
+        linkedClipId: clip.linkedClipId,
+        linkedGroupId: clip.linkedGroupId,
         toolGesture,
         originalStartTime: clip.startTime,
         originalTrackId: clip.trackId,

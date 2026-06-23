@@ -159,7 +159,7 @@ The current generator stack is no longer best described as "PiAPI as one unified
 The practical rule for the current branch is:
 - Production is Cloudflare-secret-only for hosted AI. User-entered provider keys are hidden from production generation/chat paths.
 - The Media generator tray is Cloud-first. In development, BYO providers are hidden until the API-key settings section is unlocked and the matching key is marked as default.
-- Cloud media pricing is shown in the Account dialog's price view only as MasterSelects Cloud credits. Hosted Kie.ai media uses a `6x` vendor-credit conversion for margin after VAT, Stripe, and FX; BYO API-key pricing is intentionally not shown in that Cloud price list.
+- Cloud media pricing is shown in the Account dialog's scrollable price view only as MasterSelects Cloud credits. Its Change Plan action opens the full plan selector. Hosted Kie.ai media uses a `6x` vendor-credit conversion for margin after VAT, Stripe, and FX; BYO API-key pricing is intentionally not shown in that Cloud price list.
 - Hosted compact chat charges by model round. If a tool call requires another hosted model follow-up, that follow-up request is charged separately; local tool execution itself is not a separate hosted charge unless the tool calls another hosted media route.
 - Image generation providers implement the shared FlashBoard image-provider adapter, so adding another async image service is a catalog entry plus a provider adapter instead of another hardcoded job-service branch.
 - ElevenLabs-only access opens the composer on the audio text-to-speech target.

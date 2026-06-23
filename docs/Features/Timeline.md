@@ -151,6 +151,8 @@ getTrackChildren()  // Query child tracks
 | Create Subcomposition | Clip context menu action that moves the selected timeline clips into a new composition and inserts that composition back into the current timeline. |
 | Blend mode | `+` / `-` cycles blend modes on selected clips. |
 
+- Linked clip partners use the same live drag geometry as the directly dragged clip, so linked audio/video and manual linked-group peers stay visually in sync while moving.
+
 ### Copy and Paste
 - Copying clips includes linked audio automatically when the video clip is selected.
 - Copy/paste preserves vector animation clip type and vector animation settings.
@@ -185,6 +187,7 @@ getTrackChildren()  // Query child tracks
 ### Trim Tools
 - Trim-to-playhead and ripple-trim-to-playhead commands run through the shared operation kernel and preserve linked audio/video timing.
 - Edge Trim, Ripple Trim, Rolling Edit, and Rate Stretch reuse the existing trim handles, but commit through `applyTimelineEditOperation` instead of direct clip mutations.
+- Edge-trimming a linked video/audio clip resizes the linked partner live in the canvas preview, including the source-extension ghost; holding `Alt` keeps the partner independent.
 - Slip and Slide are available as registered operation-kernel modes. Dragging a clip body with either tool previews the slip/slide and commits through `applyTimelineEditOperation`; `Alt` slips independently from linked audio/video.
 - Trim mode activation owns the edge handles before legacy clip drag, fade, and cut behaviors, so Blade/Hand/Zoom/Range clicks are no longer swallowed by trim/fade handles.
 
@@ -212,6 +215,7 @@ getTrackChildren()  // Query child tracks
 - `Ctrl+Click` adds or removes a clip from the selection.
 - `Shift+Click` toggles only the clicked clip, which is different from the normal linked-selection behavior.
 - Normal click on a linked video clip selects both the video and linked audio clip.
+- Marquee selection also activates linked audio partners for selected video clips.
 - Click empty space to clear selection.
 - Marquee selection works from empty timeline space.
 - Keyframe selection uses the same shift-toggle pattern.

@@ -67,6 +67,12 @@ function hasLockedAffectedClip(clips: TimelineClip[], tracks: TimelineTrack[], a
   return clips.some((clip) => affectedClipIds.has(clip.id) && isTrackLocked(tracks, clip.trackId));
 }
 
+function orderedAffectedClipIds(clips: TimelineClip[], affectedClipIds: Set<string>): string[] {
+  return clips
+    .filter((clip) => affectedClipIds.has(clip.id))
+    .map((clip) => clip.id);
+}
+
 export const createLinkedGroupSlice: SliceCreator<LinkedGroupActions> = (set, get) => ({
   createLinkedGroup: (clipIds, offsets) => {
     const { clips, invalidateCache } = get();
@@ -108,43 +114,44 @@ export const createLinkedGroupSlice: SliceCreator<LinkedGroupActions> = (set, ge
     const targetClipIds = uniqueExistingClipIds(clips, clipIds);
     if (targetClipIds.length < 2) return;
 
-    const selectedClipIds = new Set(targetClipIds);
     const cleanup = collectLinkCleanupTargets(clips, targetClipIds);
     if (hasLockedAffectedClip(clips, tracks, cleanup.affectedClipIds)) {
       log.warn('Cannot link clips with locked linked targets', { clipIds: targetClipIds });
       return;
     }
 
-    const manualGroupId = targetClipIds.length > 2 ? generateManualLinkedGroupId() : null;
+    const linkTargetClipIds = orderedAffectedClipIds(clips, cleanup.affectedClipIds);
+    const useManualGroup = linkTargetClipIds.length > 2;
+    const manualGroupId = useManualGroup ? generateManualLinkedGroupId() : null;
     const [firstClipId, secondClipId] = targetClipIds;
 
-    captureSnapshot(targetClipIds.length === 2 ? 'Link clips' : 'Link clip group');
+    captureSnapshot(useManualGroup ? 'Link clip group' : 'Link clips');
     set({
       clips: clips.map((clip) => {
         let nextClip = clip;
-        if (cleanup.pairClipIds.has(clip.id)) {
+        if (!useManualGroup && cleanup.pairClipIds.has(clip.id)) {
           nextClip = { ...nextClip, linkedClipId: undefined };
         }
         if (nextClip.linkedGroupId && cleanup.manualGroupIds.has(nextClip.linkedGroupId)) {
           nextClip = { ...nextClip, linkedGroupId: undefined };
         }
 
-        if (targetClipIds.length === 2) {
+        if (!useManualGroup) {
           if (clip.id === firstClipId) return { ...nextClip, linkedClipId: secondClipId };
           if (clip.id === secondClipId) return { ...nextClip, linkedClipId: firstClipId };
           return nextClip;
         }
 
-        if (manualGroupId && selectedClipIds.has(clip.id)) {
+        if (manualGroupId && cleanup.affectedClipIds.has(clip.id)) {
           return { ...nextClip, linkedGroupId: manualGroupId };
         }
         return nextClip;
       }),
-      selectedClipIds: new Set(targetClipIds),
-      primarySelectedClipId: targetClipIds[0] ?? null,
+      selectedClipIds: new Set(useManualGroup ? linkTargetClipIds : targetClipIds),
+      primarySelectedClipId: (useManualGroup ? linkTargetClipIds[0] : targetClipIds[0]) ?? null,
     });
     invalidateCache();
-    log.debug('Linked clips', { clipIds: targetClipIds, groupId: manualGroupId });
+    log.debug('Linked clips', { clipIds: linkTargetClipIds, groupId: manualGroupId });
   },
 
   unlinkClips: (clipIds) => {

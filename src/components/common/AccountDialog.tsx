@@ -53,7 +53,7 @@ function formatBillingDate(value: string | null | undefined): string | null {
 }
 
 export function AccountDialog({ onClose }: AccountDialogProps) {
-  const { billingSummary, error, isLoading, logout, openBillingPortal } = useAccountStore();
+  const { billingSummary, error, isLoading, logout, openBillingPortal, openPricingDialog } = useAccountStore();
   const [isClosing, setIsClosing] = useState(false);
   const [detailView, setDetailView] = useState<AccountDetailView>('usage');
 
@@ -246,6 +246,9 @@ export function AccountDialog({ onClose }: AccountDialogProps) {
               type="button"
             >
               {detailView === 'usage' ? 'Prices' : 'Recent usage'}
+            </button>
+            <button className="auth-dialog-action-secondary" disabled={isLoading} onClick={openPricingDialog} type="button">
+              Change plan
             </button>
             {hasBillingAccount && (
               <button className="auth-dialog-action-secondary" disabled={isLoading} onClick={() => openBillingPortal()} type="button">

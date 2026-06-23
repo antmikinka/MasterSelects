@@ -229,6 +229,7 @@ export function Timeline() {
     prepareTimelinePlacementRange: timelineActions.prepareTimelinePlacementRange,
     scrollX,
     selectClip: timelineActions.selectClip,
+    selectClips: timelineActions.selectClips,
     selectKeyframe: timelineActions.selectKeyframe,
     selectedClipIds,
     selectedKeyframeIds,

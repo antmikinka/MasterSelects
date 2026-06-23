@@ -28,6 +28,8 @@ import type {
 // Clip drag state (Premiere-style)
 export interface ClipDragState {
   clipId: string;
+  linkedClipId?: string;
+  linkedGroupId?: string;
   toolGesture?: 'slip' | 'slide';
   originalStartTime: number;
   originalTrackId: string;

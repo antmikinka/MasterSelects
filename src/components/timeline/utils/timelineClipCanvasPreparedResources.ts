@@ -50,6 +50,7 @@ export interface TimelineClipCanvasPreparedResourceClipInput {
   mixdownGenerating?: boolean;
   hasMixdownAudio?: boolean;
   reversed?: boolean;
+  linkedClipId?: string;
   linkedGroupId?: string;
   isPendingDownload?: boolean;
   downloadProgress?: number;
@@ -80,6 +81,7 @@ interface CreateTimelineClipCanvasWorkerPreparedResourcesInput {
   viewportWidth: number;
   timeToPixel: (time: number) => number;
   activeTrimClipId?: string | null;
+  activeTrimIncludeLinked?: boolean;
   renderOverscanPx: number;
   minThumbnailWidth: number;
   thumbnailSlotPx: number;
@@ -193,7 +195,8 @@ export function createTimelineClipCanvasWorkerPreparedResourcesByClipId(
       maxBitmapWidth: TIMELINE_CLIP_CANVAS_WORKER_THUMBNAIL_STRIP_MAX_WIDTH,
       maxBitmapHeight: TIMELINE_CLIP_CANVAS_WORKER_THUMBNAIL_STRIP_MAX_HEIGHT,
     });
-    const trimVisuals = input.activeTrimClipId === clip.id
+    const trimVisuals = input.activeTrimClipId === clip.id ||
+      (input.activeTrimIncludeLinked === true && clip.linkedClipId === input.activeTrimClipId)
       ? createTimelineClipCanvasWorkerTrimVisualsResource({
         geometry,
         canvasOffsetX: input.canvasOffsetX,

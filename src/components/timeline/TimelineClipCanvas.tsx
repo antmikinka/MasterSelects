@@ -223,6 +223,7 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
       viewportWidth,
       timeToPixel,
       activeTrimClipId: clipTrim?.clipId ?? null,
+      activeTrimIncludeLinked: clipTrim ? !clipTrim.altKey : false,
       renderOverscanPx: CANVAS_RENDER_OVERSCAN_PX,
       minThumbnailWidth: LOD_THUMB_PX,
       thumbnailSlotPx: CANVAS_THUMB_SLOT_PX,

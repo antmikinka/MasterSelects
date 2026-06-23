@@ -6,6 +6,7 @@ import type { TimelineClip, TimelineTrack, AnimatableProperty } from '../../../t
 import type { MarqueeState, ClipDragState, ClipTrimState, MarkerDragState } from '../types';
 import { useTimelineStore } from '../../../stores/timeline';
 import type { TimelineToolId } from '../../../stores/timeline/types';
+import { isManualLinkedGroupId } from '../../../stores/timeline/helpers/idGenerator';
 import { isTimelineActiveTarget } from '../utils/timelineActiveTargets';
 import {
   buildTimelineTrackClipGeometryMap,
@@ -43,6 +44,7 @@ interface UseMarqueeSelectionProps {
 
   // Actions
   selectClip: (clipId: string | null, addToSelection?: boolean) => void;
+  selectClips: (clipIds: string[]) => void;
   selectKeyframe: (keyframeId: string, addToSelection?: boolean) => void;
   deselectAllKeyframes: () => void;
   setTimelineRangeSelection: ReturnType<typeof useTimelineStore.getState>['setTimelineRangeSelection'];
@@ -61,6 +63,34 @@ interface UseMarqueeSelectionReturn {
   handleMarqueeMouseDown: (e: React.MouseEvent) => void;
 }
 
+export function expandTimelineMarqueeClipSelection(
+  clipIds: Iterable<string>,
+  clips: readonly Pick<TimelineClip, 'id' | 'linkedClipId' | 'linkedGroupId'>[],
+): string[] {
+  const selected = new Set(clipIds);
+  const manualGroupIds = new Set<string>();
+  for (const clip of clips) {
+    if (!selected.has(clip.id)) continue;
+    if (clip.linkedClipId) selected.add(clip.linkedClipId);
+    const groupId = clip.linkedGroupId;
+    if (groupId && isManualLinkedGroupId(groupId)) manualGroupIds.add(groupId);
+  }
+
+  for (const clip of clips) {
+    if (clip.linkedClipId && selected.has(clip.linkedClipId)) selected.add(clip.id);
+    if (clip.linkedGroupId && manualGroupIds.has(clip.linkedGroupId)) selected.add(clip.id);
+  }
+
+  const ordered: string[] = [];
+  for (const clipId of clipIds) {
+    if (selected.has(clipId) && !ordered.includes(clipId)) ordered.push(clipId);
+  }
+  for (const clip of clips) {
+    if (selected.has(clip.id) && !ordered.includes(clip.id)) ordered.push(clip.id);
+  }
+  return ordered;
+}
+
 export function useMarqueeSelection({
   trackLanesRef,
   scrollX,
@@ -75,6 +105,7 @@ export function useMarqueeSelection({
   markerDrag,
   isDraggingPlayhead,
   selectClip,
+  selectClips,
   selectKeyframe,
   deselectAllKeyframes,
   setTimelineRangeSelection,
@@ -407,19 +438,19 @@ export function useMarqueeSelection({
       const intersectingClips = getClipsInRect(left, right, top, bottom);
 
       // Combine with initial selection (for shift+drag)
-      const newClipSelection = new Set([...m.initialSelection, ...intersectingClips]);
+      const newClipSelection = expandTimelineMarqueeClipSelection(
+        [...m.initialSelection, ...intersectingClips],
+        clips,
+      );
 
       // Update clip selection
       const currentClipSelection = useTimelineStore.getState().selectedClipIds;
       const clipSelectionChanged =
-        newClipSelection.size !== currentClipSelection.size ||
-        [...newClipSelection].some(id => !currentClipSelection.has(id));
+        newClipSelection.length !== currentClipSelection.size ||
+        newClipSelection.some(id => !currentClipSelection.has(id));
 
       if (clipSelectionChanged) {
-        selectClip(null, false);
-        for (const clipId of newClipSelection) {
-          selectClip(clipId, true);
-        }
+        selectClips(newClipSelection);
       }
 
       // Get keyframes that intersect with the rectangle
@@ -453,7 +484,7 @@ export function useMarqueeSelection({
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [marquee, trackLanesRef, scrollX, stackXToTimelineTime, setTimelineRangeSelection, getTrackIdsInRect, selectClip, getClipsInRect, getKeyframesInRect, selectKeyframe, deselectAllKeyframes]);
+  }, [marquee, trackLanesRef, scrollX, stackXToTimelineTime, setTimelineRangeSelection, getTrackIdsInRect, selectClips, clips, getClipsInRect, getKeyframesInRect, selectKeyframe, deselectAllKeyframes]);
 
   return {
     marquee,

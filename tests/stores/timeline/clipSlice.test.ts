@@ -187,6 +187,28 @@ describe('clipSlice', () => {
       expect(linkedClips.map(c => c.linkedGroupId)).toEqual([groupId, groupId, groupId]);
     });
 
+    it('links video clips with their existing audio pairs as one manual group', () => {
+      const clips = [
+        createMockClip({ id: 'video-1', trackId: 'video-1', linkedClipId: 'audio-1' }),
+        createMockClip({ id: 'audio-1', trackId: 'audio-1', source: { type: 'audio' }, linkedClipId: 'video-1' }),
+        createMockClip({ id: 'video-2', trackId: 'video-2', startTime: 2, linkedClipId: 'audio-2' }),
+        createMockClip({ id: 'audio-2', trackId: 'audio-2', startTime: 2, source: { type: 'audio' }, linkedClipId: 'video-2' }),
+      ];
+      store = createTestTimelineStore({ clips });
+
+      store.getState().linkClips(['video-1', 'video-2']);
+
+      const linkedClips = store.getState().clips;
+      const groupId = linkedClips.find(c => c.id === 'video-1')?.linkedGroupId;
+      expect(groupId).toMatch(/^clip-link-/);
+      expect(linkedClips.map(c => c.linkedGroupId)).toEqual([groupId, groupId, groupId, groupId]);
+      expect(linkedClips.find(c => c.id === 'video-1')?.linkedClipId).toBe('audio-1');
+      expect(linkedClips.find(c => c.id === 'audio-1')?.linkedClipId).toBe('video-1');
+      expect(linkedClips.find(c => c.id === 'video-2')?.linkedClipId).toBe('audio-2');
+      expect(linkedClips.find(c => c.id === 'audio-2')?.linkedClipId).toBe('video-2');
+      expect([...store.getState().selectedClipIds]).toEqual(['video-1', 'audio-1', 'video-2', 'audio-2']);
+    });
+
     it('unlinks pairs and manual clip groups', () => {
       const clips = [
         createMockClip({ id: 'clip-1', trackId: 'video-1' }),

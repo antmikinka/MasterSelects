@@ -47,12 +47,14 @@ function MarqueeHarness({
   selectKeyframe,
   deselectAllKeyframes,
   selectClip = vi.fn(),
+  selectClips = vi.fn(),
   geometryX,
   timeToPixel = (time) => time * 10,
 }: {
   selectKeyframe: (keyframeId: string, addToSelection?: boolean) => void;
   deselectAllKeyframes: () => void;
   selectClip?: (clipId: string | null, addToSelection?: boolean) => void;
+  selectClips?: (clipIds: string[]) => void;
   geometryX?: number;
   timeToPixel?: (time: number) => number;
 }) {
@@ -87,6 +89,7 @@ function MarqueeHarness({
     markerDrag: null,
     isDraggingPlayhead: false,
     selectClip,
+    selectClips,
     selectKeyframe,
     deselectAllKeyframes,
     setTimelineRangeSelection: vi.fn(),
@@ -171,9 +174,11 @@ describe('useMarqueeSelection', () => {
       timelineRangeSelection: null,
     });
     const selectClip = vi.fn();
+    const selectClips = vi.fn();
     const { container, getByTestId } = render(
       <MarqueeHarness
         selectClip={selectClip}
+        selectClips={selectClips}
         selectKeyframe={vi.fn()}
         deselectAllKeyframes={vi.fn()}
         timeToPixel={(time) => (time === 1 ? 10 : time * 1000)}
@@ -192,7 +197,7 @@ describe('useMarqueeSelection', () => {
     fireEvent.mouseMove(document, { clientX: 35, clientY: 30 });
 
     await waitFor(() => {
-      expect(selectClip).toHaveBeenCalledWith('clip-video', true);
+      expect(selectClips).toHaveBeenCalledWith(['clip-video']);
     });
   });
 

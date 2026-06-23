@@ -402,6 +402,7 @@
 /* Wide variant for Account + Pricing */
 .welcome-overlay.auth-dialog-wide {
   width: 680px;
+  max-height: min(92vh, 920px);
 }
 
 .welcome-overlay.auth-dialog-pricing {
@@ -1049,7 +1050,12 @@
 /* Account Dialog Overrides */
 
 .account-dialog-content {
+  flex: 1 1 auto;
   gap: 20px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
 }
 
 .account-hero {
@@ -1260,6 +1266,7 @@
 
 .account-prices-card {
   gap: 16px;
+  min-height: 0;
 }
 
 .account-price-rate {
@@ -1274,6 +1281,11 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  max-height: min(42vh, 440px);
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.24) transparent;
 }
 
 .account-price-entry {
@@ -1377,7 +1389,7 @@
 
 .account-actions-row {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   align-items: stretch;
 }
@@ -1388,7 +1400,7 @@
 }
 
 .account-actions-row-single {
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .account-signout-row {
