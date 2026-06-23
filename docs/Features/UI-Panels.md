@@ -174,6 +174,7 @@ MasterSelects currently exposes 18 active dockable panel types, plus the Slot Gr
 - Grid breadcrumb navigation for folder drilling
 - Add menu for compositions, folders, text, 3D text, solids, cameras, splat effectors, mesh primitives, and Gaussian splat import
 - Dragging files or folders from the OS recreates the folder structure inside the project
+- Dropping multiple OS files directly on the timeline asks whether to place them side by side or stacked on new layers, while still importing through the Media Panel file path first
 - Drag-to-timeline support
 - Type-specific project items for text, solids, meshes, cameras, and splat effectors
 - Board mode right-drag supports smooth edge autopan; dragging far out onto a timeline lane hands off to the same timeline drag preview/drop path as list-view media drags, then restores the item at its original board position
