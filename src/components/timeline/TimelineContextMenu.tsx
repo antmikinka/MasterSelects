@@ -126,6 +126,7 @@ export function TimelineContextMenu({
   showInExplorer,
 }: TimelineContextMenuProps) {
   const { menuRef: contextMenuRef, adjustedPosition: contextMenuPosition } = useContextMenuPosition(contextMenu);
+  const playheadPosition = useTimelineStore((state) => state.playheadPosition);
 
   // Get the media file for a clip
   const getMediaFileForClip = useCallback(
@@ -278,7 +279,7 @@ export function TimelineContextMenu({
         alert('Could not export current frame.');
         return false;
       }
-      downloadBlob(blob, getFrameExportFilename(clip, useTimelineStore.getState().playheadPosition));
+      downloadBlob(blob, getFrameExportFilename(clip, playheadPosition));
       return true;
     },
     showInExplorer,

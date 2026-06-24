@@ -1,6 +1,6 @@
 // App version
 // Format: MAJOR.MINOR.PATCH
-export const APP_VERSION = '2.3.2';
+export const APP_VERSION = '2.3.3';
 
 export interface ChangelogNotice {
   type: 'info' | 'warning' | 'success' | 'danger';
@@ -27,8 +27,8 @@ export const FEATURED_VIDEO: {
   title: 'MasterSelects Demo',
   banner: {
     type: 'success',
-    title: 'MasterSelects 2.3.2',
-    message: 'Timeline linked clips now stay visually synced during marquee selection, drag, and trim previews; property numbers also accept direct double-click typing.',
+    title: 'MasterSelects 2.3.3',
+    message: 'Source monitor zoom and crop tools now support deep exponential zoom, middle-mouse pan, crop presets, current-frame JPG export, and tighter linked-clip trim behavior.',
     animated: true,
   },
 };
@@ -36,8 +36,8 @@ export const FEATURED_VIDEO: {
 // Build/Platform notice shown at top of changelog (set to null to hide)
 export const BUILD_NOTICE: ChangelogNotice | null = {
   type: 'success',
-  title: 'MasterSelects 2.3.2',
-  message: 'Timeline linked clips now stay visually synced during marquee selection, drag, and trim previews; property numbers also accept direct double-click typing.',
+  title: 'MasterSelects 2.3.3',
+  message: 'Source monitor zoom and crop tools now support deep exponential zoom, middle-mouse pan, crop presets, current-frame JPG export, and tighter linked-clip trim behavior.',
   animated: true,
 };
 

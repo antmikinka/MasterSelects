@@ -185,9 +185,10 @@ export const classCHardTargets = [
   { path: 'src/services/audio/stemSeparation/StemSeparationService.ts', maxCurrentHits: 1 },
   { path: 'src/services/audioAnalyzer.ts', maxCurrentHits: 1 },
   { path: 'src/services/clipAnalyzer.ts', maxCurrentHits: 4 },
-  // Packet 267: 4 -> 2 + 2 (transcription artifact module), total conserved.
-  { path: 'src/services/clipTranscriber.ts', maxCurrentHits: 2 },
+  // Packet 267: 4 -> 2+2; 2.3.3 adds hosted transcription account/balance bridge.
+  { path: 'src/services/clipTranscriber.ts', maxCurrentHits: 3 },
   { path: 'src/services/transcription/artifactPersistence.ts', maxCurrentHits: 2 },
+  { path: 'src/services/transcription/cloudProviders.ts', maxCurrentHits: 1 },
   { path: 'src/services/cloudAiService.ts', maxCurrentHits: 2 },
   { path: 'src/services/compositionAudioMixer.ts', maxCurrentHits: 2 },
   // 12 -> 11: packet 237 retired one hit during the composition render split.
@@ -282,7 +283,6 @@ export const classCHardTargets = [
 ] as const satisfies readonly GetStateClassCHardTarget[];
 
 export const getStateAccessPolicyBaselines = {
-  // 21 -> 22: packet-221 grant moved into recording/commitRecording.ts.
   allowedAdapterPathCount: 23,
   // Running redistribution log: 178 (packet 172), 182 (183), 187 (186),
   // 189 (189+190: ExportPanel/MediaPanel hits moved into runner/board-hook
@@ -290,10 +290,10 @@ export const getStateAccessPolicyBaselines = {
   // only (669 -> 665 via the packet-188 Preview ceiling cut).
   // fileCount log (totals conserved per split redistribution):
   // 192 ->193(218) ->196(227) ->199(231) ->203(239) ->205(246) ->206(253/254)
-  // ->207(259) ->208(267) ->212(279) ->216(287) ->230(audio mixer split).
-  classCHardTargetFileCount: 230,
+  // ->207(259) ->208(267) ->212(279) ->216(287) ->230(audio mixer) ->231(2.3.3).
+  classCHardTargetFileCount: 231,
   // 669 -> 665 (packet 188 Preview cut) -> 664 (packet 209 retired one hit)
   // -> 659 (packet 231 retired the dispatcher ceiling slack: 16 -> 11 actual)
   // -> 658 (packet 237 retired one compositionRenderer hit).
-  classCHardTargetMaxHits: 655,
+  classCHardTargetMaxHits: 657,
 } as const;

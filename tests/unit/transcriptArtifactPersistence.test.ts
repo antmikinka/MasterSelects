@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useTimelineStore } from '../../src/stores/timeline';
 import { updateClipTranscript } from '../../src/services/transcription/artifactPersistence';
-import type { TranscriptWord } from '../../src/types';
+import type { TranscriptWord } from '../../src/types/clipMetadata';
 import { createMockClip } from '../helpers/mockData';
 
 const initialTimelineState = useTimelineStore.getState();

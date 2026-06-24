@@ -52,6 +52,12 @@ function decodeBase64(value: string): Uint8Array {
   return bytes;
 }
 
+function copyBytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 function readFourCc(view: DataView, offset: number): string {
   return String.fromCharCode(
     view.getUint8(offset),
@@ -125,7 +131,7 @@ export async function createHostedOpenAITranscription(
   input: PreparedHostedOpenAITranscription,
 ): Promise<HostedOpenAITranscriptionResult> {
   const formData = new FormData();
-  formData.append('file', new Blob([input.bytes], { type: input.mimeType }), input.fileName);
+  formData.append('file', new Blob([copyBytesToArrayBuffer(input.bytes)], { type: input.mimeType }), input.fileName);
   formData.append('model', OPENAI_TRANSCRIPTION_MODEL);
   formData.append('response_format', 'verbose_json');
   formData.append('timestamp_granularities[]', 'word');

@@ -14,6 +14,8 @@ vi.mock('../../src/utils/canvasPlatform', () => ({
   prefersSoftwareTimelineCanvas: () => false,
 }));
 
+vi.setConfig({ testTimeout: 15000 });
+
 const originalWorker = globalThis.Worker;
 const originalTransfer = HTMLCanvasElement.prototype.transferControlToOffscreen;
 

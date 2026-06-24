@@ -33,8 +33,6 @@ import {
 import type { TimelineClipCanvasSpectrogramTileSetMap } from './utils/timelineClipCanvasSpectrogramResource';
 import type { TimelineClipCanvasWaveformPyramidMap } from './utils/timelineClipCanvasWaveformResource';
 import {
-  getTimelineClipCanvasPassiveDecorationBadgeReserve,
-  getTimelineClipCanvasPassiveDecorationBadges,
   hasTimelineClipCanvasPassiveDecorations,
   type TimelineClipCanvasMediaStatus,
 } from './utils/timelineClipCanvasPassiveDecorations';
@@ -51,6 +49,10 @@ import {
   createTimelineClipCanvasWorkerPaintClipInput,
   getTimelineClipCanvasWorkerEligibility,
 } from './utils/timelineClipCanvasWorkerModel';
+import {
+  createTimelineClipCanvasChromeOverlays,
+  getTimelineClipCanvasMediaStatus,
+} from './utils/timelineClipCanvasChromeOverlays';
 
 // Viewport-bounded canvas sizing (the Linux/Mesa blank-canvas guard) lives in
 // useTimelineClipCanvasViewport; see docs/Features/Linux-Mesa-GPU.md.
@@ -83,59 +85,6 @@ interface TimelineClipCanvasProps {
   clipTrim?: ClipTrimState | null;
   waveformPyramids?: TimelineClipCanvasWaveformPyramidMap;
   spectrogramTileSets?: TimelineClipCanvasSpectrogramTileSetMap;
-}
-
-type MediaFileCanvasStatusMap = ReadonlyMap<string, TimelineClipCanvasMediaStatus>;
-
-interface TimelineClipCanvasChromeBadge {
-  label: string;
-  fill: string;
-  stroke?: string;
-  width: number;
-  right: number;
-}
-
-interface TimelineClipCanvasChromeOverlay {
-  id: string;
-  label: string;
-  left: number;
-  width: number;
-  badges: readonly TimelineClipCanvasChromeBadge[];
-  badgeReserve: number;
-}
-
-function getCanvasClipMediaFileId(clip: TimelinePaintSourceClip): string | null {
-  return clip.source?.mediaFileId ?? clip.mediaFileId ?? null;
-}
-
-function getMediaFileCanvasStatus(
-  clip: TimelinePaintSourceClip,
-  mediaFileStatusById: MediaFileCanvasStatusMap,
-): TimelineClipCanvasMediaStatus | undefined {
-  const mediaFileId = getCanvasClipMediaFileId(clip);
-  return mediaFileId ? mediaFileStatusById.get(mediaFileId) : undefined;
-}
-
-function createTimelineClipCanvasChromeBadge(
-  badge: ReturnType<typeof getTimelineClipCanvasPassiveDecorationBadges>[number],
-): TimelineClipCanvasChromeBadge {
-  return {
-    ...badge,
-    width: Math.max(14, badge.label.length * 6 + 8),
-    right: 4,
-  };
-}
-
-function createTimelineClipCanvasChromeBadges(
-  badges: ReturnType<typeof getTimelineClipCanvasPassiveDecorationBadges>,
-): TimelineClipCanvasChromeBadge[] {
-  const chromeBadges = badges.map(createTimelineClipCanvasChromeBadge);
-  let right = 4;
-  for (let index = chromeBadges.length - 1; index >= 0; index -= 1) {
-    chromeBadges[index] = { ...chromeBadges[index], right };
-    right += chromeBadges[index].width + 3;
-  }
-  return chromeBadges;
 }
 
 function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
@@ -281,7 +230,7 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
       thumbnailSlotPx: CANVAS_THUMB_SLOT_PX,
       maxThumbnailSlots: MAX_THUMB_SLOTS,
       resolveGeometry: (clip) => resolveClipGeometry(clip as TimelinePaintSourceClip, geometryProps),
-      getMediaStatus: (clip) => getMediaFileCanvasStatus(clip as TimelinePaintSourceClip, mediaFileStatusById),
+      getMediaStatus: (clip) => getTimelineClipCanvasMediaStatus(clip as TimelinePaintSourceClip, mediaFileStatusById),
     });
       void redrawNonce;
       return preparedResources;
@@ -299,7 +248,7 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
   const passiveDecorationClipIds = useMemo(() => {
     const ids = new Set<string>();
     workerDrawableClips.forEach((clip) => {
-      if (hasTimelineClipCanvasPassiveDecorations(clip, getMediaFileCanvasStatus(clip, mediaFileStatusById))) {
+      if (hasTimelineClipCanvasPassiveDecorations(clip, getTimelineClipCanvasMediaStatus(clip, mediaFileStatusById))) {
         ids.add(clip.id);
       }
     });
@@ -307,34 +256,15 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
   }, [mediaFileStatusById, workerDrawableClips]);
   const hasPassiveDecorations = passiveDecorationClipIds.size > 0;
   const chromeOverlays = useMemo(() => {
-    const overlays: TimelineClipCanvasChromeOverlay[] = [];
-    for (const clip of clips) {
-      const geometry = resolveClipGeometry(clip, geometryProps);
-      if (!geometry.visible || geometry.duration <= 0) continue;
-
-      const absoluteX = timeToPixel(geometry.startTime);
-      const absoluteW = timeToPixel(geometry.duration);
-      const visibleLeft = Math.max(absoluteX, chromeScrollX);
-      const visibleRight = Math.min(absoluteX + absoluteW, chromeScrollX + chromeViewportWidth);
-      const visibleW = visibleRight - visibleLeft;
-      if (visibleW <= 0 || visibleW < LOD_LABEL_PX) continue;
-
-      const passiveBadges = getTimelineClipCanvasPassiveDecorationBadges(
-        clip,
-        getMediaFileCanvasStatus(clip, mediaFileStatusById),
-      );
-      if (!clip.name && passiveBadges.length === 0) continue;
-
-      overlays.push({
-        id: clip.id,
-        label: clip.name,
-        left: visibleLeft - chromeScrollX,
-        width: visibleW,
-        badges: createTimelineClipCanvasChromeBadges(passiveBadges),
-        badgeReserve: getTimelineClipCanvasPassiveDecorationBadgeReserve(passiveBadges),
-      });
-    }
-    return overlays;
+    return createTimelineClipCanvasChromeOverlays({
+      chromeScrollX,
+      chromeViewportWidth,
+      clips,
+      geometryProps,
+      mediaFileStatusById,
+      minLabelWidthPx: LOD_LABEL_PX,
+      timeToPixel,
+    });
   }, [chromeScrollX, chromeViewportWidth, clips, geometryProps, mediaFileStatusById, timeToPixel]);
   const workerEligibility = useMemo(() => getTimelineClipCanvasWorkerEligibility({
     clips: workerPaintClips,
@@ -403,7 +333,7 @@ function TimelineClipCanvasComponent(props: TimelineClipCanvasProps) {
     mediaFileStatusById,
     redrawNonce,
     resolveGeometry: (clip) => resolveClipGeometry(clip, geometryProps),
-    getMediaStatus: (clip) => getMediaFileCanvasStatus(clip, mediaFileStatusById),
+    getMediaStatus: (clip) => getTimelineClipCanvasMediaStatus(clip, mediaFileStatusById),
     requestRedraw: bumpRedraw,
     renderOverscanPx: CANVAS_RENDER_OVERSCAN_PX,
     thumbnailViewportOverscanPx: THUMBNAIL_VIEWPORT_OVERSCAN_PX,

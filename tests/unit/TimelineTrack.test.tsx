@@ -605,7 +605,7 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
   });
 
-  it('keeps a drag-hover shell without the legacy overlay body', () => {
+  it('keeps a drag shell without the legacy overlay body while dragging over the row', () => {
 
     const { container, row } = renderTimelineTrack({
       clips: [createClip()],
@@ -634,12 +634,12 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
 
     expect(shell).toBeTruthy();
     expect(shell?.dataset.clipId).toBe('clip-video');
-    expect(shell?.dataset.mountReasons).toBe('hover drag');
-    expect(shell?.dataset.activeSlots).toBe('trim fade');
+    expect(shell?.dataset.mountReasons).toBe('drag');
+    expect(shell?.dataset.activeSlots).toBe('');
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
   });
 
-  it('keeps a multi-drag-hover shell without the legacy overlay body', () => {
+  it('keeps a multi-drag shell without the legacy overlay body while dragging over the row', () => {
     const secondaryClip = createClip({
       id: 'clip-secondary',
       name: 'Secondary Clip',
@@ -677,8 +677,8 @@ describe('TimelineTrack empty lane right mouse behavior', () => {
     const secondaryShell = container.querySelector<HTMLElement>('.clip-interaction-shell[data-clip-id="clip-secondary"]');
 
     expect(secondaryShell).toBeTruthy();
-    expect(secondaryShell?.dataset.mountReasons).toBe('hover multi-drag');
-    expect(secondaryShell?.dataset.activeSlots).toBe('trim fade');
+    expect(secondaryShell?.dataset.mountReasons).toBe('multi-drag');
+    expect(secondaryShell?.dataset.activeSlots).toBe('');
     expect(container.querySelector('.timeline-canvas-dom-overlay .timeline-clip')).toBeNull();
   });
 
