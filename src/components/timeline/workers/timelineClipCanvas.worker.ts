@@ -520,10 +520,21 @@ function draw(msg: DrawMessage): DrawnMessage {
   const { clips, height, cssWidth, dpr, trackColor } = msg;
   const startedAt = performance.now();
 
-  canvas.width = Math.round(cssWidth * dpr);
-  canvas.height = Math.round(height * dpr);
+  canvas.width = Math.max(0, Math.round(cssWidth * dpr));
+  canvas.height = Math.max(0, Math.round(height * dpr));
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, cssWidth, height);
+  ctx.clearRect(0, 0, Math.max(0, cssWidth), Math.max(0, height));
+  if (height <= 2 || cssWidth <= 0) {
+    return {
+      type: 'drawn',
+      requestId: msg.requestId,
+      drawnClipCount: 0,
+      thumbnailClipCount: 0,
+      thumbnailDrawCount: 0,
+      drawMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      resourceBytes: canvas.width * canvas.height * 4,
+    };
+  }
 
   const radius = Math.min(4, height / 4);
   // Clip body color comes from `trackColor` (resolved by getTimelineTrackColor),

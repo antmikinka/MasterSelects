@@ -97,7 +97,7 @@ export function drawTimelineClipCanvasMainThread(
     getMediaStatus,
     requestRedraw,
   } = input;
-  ctx.clearRect(0, 0, cssWidth, height);
+  ctx.clearRect(0, 0, Math.max(0, cssWidth), Math.max(0, height));
   const diagnostics: TimelineCanvasDrawDiagnostics = {
     inputClipCount: clips.length,
     visibleClipCount: 0,
@@ -107,6 +107,7 @@ export function drawTimelineClipCanvasMainThread(
     waveformClipCount: 0,
     workerMode: false,
   };
+  if (height <= 2 || cssWidth <= 0) return diagnostics;
 
   const thumbVisibleLeft = scrollX - thumbnailViewportOverscanPx;
   const thumbVisibleRight = scrollX + viewportWidth + thumbnailViewportOverscanPx;
