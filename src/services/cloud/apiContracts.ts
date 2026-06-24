@@ -228,7 +228,7 @@ export interface CloudAiAudioSpeechRequest {
 }
 
 export interface CloudAiAudioMusicRequest {
-  action: 'music';
+  action: 'music' | 'sound';
   idempotencyKey?: string;
   params: {
     audioWeight?: number;
@@ -239,6 +239,7 @@ export interface CloudAiAudioMusicRequest {
     outputType?: 'audio';
     prompt: string;
     provider?: string;
+    soundLoop?: boolean;
     style?: string;
     styleWeight?: number;
     title?: string;
@@ -247,10 +248,27 @@ export interface CloudAiAudioMusicRequest {
   };
 }
 
+export interface CloudAiAudioTranscriptionRequest {
+  action: 'transcription';
+  idempotencyKey?: string;
+  params: {
+    audioBase64: string;
+    fileName?: string;
+    language?: string;
+    mimeType?: string;
+  };
+}
+
 export interface CloudAiAudioMusicCreateResponse {
   outputType: 'audio';
   provider: string;
   taskId: string;
+}
+
+export interface CloudAiAudioTranscriptionResponse {
+  durationSeconds: number;
+  model: string;
+  words: Array<{ word: string; start: number; end: number }>;
 }
 
 export interface CloudAiAudioModelsResponse {

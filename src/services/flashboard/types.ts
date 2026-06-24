@@ -77,4 +77,8 @@ export interface CatalogEntry {
   maxReferenceImages?: number;
   maxReferenceMedia?: number;
   outputType?: FlashBoardOutputType;
+  promptRefinerProfile?: string;
+  requiredReferenceMediaType?: FlashBoardMediaType | 'visual';
+  requiresPrompt?: boolean;
+  requiresReferenceMedia?: boolean;
 }

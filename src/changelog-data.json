@@ -1,5 +1,12 @@
 [
   {
+    "date": "2026-06-24",
+    "type": "new",
+    "title": "MasterSelects 2.3.3",
+    "description": "Source monitor workflow release: images and videos can now zoom deeply with exponential mouse-wheel control, pan with the middle mouse button, recenter cleanly when zoomed out, and crop accurately while zoomed. The crop tool adds aspect-ratio presets, visual clips can export the current preview frame as a JPG, linked timeline trims respect selection and Shift single-trim behavior, and AI generation controls include the latest hosted model updates.",
+    "section": "Release"
+  },
+  {
     "date": "2026-06-23",
     "type": "fix",
     "title": "MasterSelects 2.3.2",

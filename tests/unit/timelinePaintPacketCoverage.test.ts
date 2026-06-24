@@ -157,12 +157,15 @@ describe('timeline paint packet coverage', () => {
   it('makes the worker renderer consume paint packets for base clip geometry and state', () => {
     const source = readFileSync(workerPath, 'utf8');
     const passivePainterSource = readFileSync(workerPassivePainterPath, 'utf8');
+    const workerModelSource = readFileSync(workerModelPath, 'utf8');
+    const canvasSource = readFileSync(canvasSourcePath, 'utf8');
 
     expect(source).toContain('clip.paintPacket.bodyRect.x');
     expect(source).toContain('clip.paintPacket.bodyRect.width');
     expect(source).toContain('clip.paintPacket.state.selected');
     expect(source).toContain('clip.paintPacket.state.hovered');
-    expect(source).toContain('clip.paintPacket.label');
+    expect(workerModelSource).toContain('label: input.clip.label');
+    expect(canvasSource).toContain('createTimelineClipCanvasChromeOverlays');
     expect(source).toContain("workerClipPaintResourceId(clip, 'thumbnail-strip'");
     expect(source).toContain("workerClipHasPaintResource(clip, 'waveform'");
     expect(source).toContain("workerClipPaintResourceId(clip, 'spectrogram'");
