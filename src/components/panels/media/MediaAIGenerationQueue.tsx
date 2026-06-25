@@ -404,6 +404,7 @@ function MediaAIGenerationQueueImpl() {
         const metaLabel = isDownload ? getDownloadMetaLabel(job!) : getMetaLabel(request!);
         const aspectRatio = isDownload ? '16 / 9' : getPreviewAspectRatio(request!);
         const error = isDownload ? job!.error : record!.job?.error;
+        const refund = isDownload ? undefined : record!.job?.refund;
 
         return (
           <div
@@ -463,6 +464,11 @@ function MediaAIGenerationQueueImpl() {
               {status === 'failed' && error && (
                 <div className="media-ai-generation-error" title={error}>
                   {error}
+                </div>
+              )}
+              {status === 'failed' && refund && (
+                <div className="media-ai-generation-error" title={`Job ${refund.jobId}`}>
+                  Refunded {refund.credits} credits
                 </div>
               )}
             </div>

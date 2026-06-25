@@ -115,6 +115,9 @@ describe('FlashBoard audio catalog contract', () => {
 
   it('exposes current Kie.ai image generation and edit models', () => {
     const entries = getCatalogEntries();
+    const findImageEntry = (providerId: string) => entries.find((candidate) => (
+      candidate.service === 'kieai' && candidate.providerId === providerId
+    ));
     const providerIds = entries
       .filter((candidate) => candidate.service === 'kieai' && candidate.outputType === 'image')
       .map((candidate) => candidate.providerId);
@@ -122,8 +125,6 @@ describe('FlashBoard audio catalog contract', () => {
     expect(providerIds).toEqual(expect.arrayContaining([
       'nano-banana-2',
       'nano-banana-pro',
-      'google/imagen4-fast',
-      'google/imagen4-ultra',
       'gpt-image-2-text-to-image',
       'gpt-image-2-image-to-image',
       'flux-2/pro-text-to-image',
@@ -136,6 +137,25 @@ describe('FlashBoard audio catalog contract', () => {
       'recraft/crisp-upscale',
       'topaz/image-upscale',
     ]));
+    expect(providerIds).not.toEqual(expect.arrayContaining([
+      'google/imagen4-fast',
+      'google/imagen4-ultra',
+    ]));
+
+    expect(findImageEntry('gpt-image-2-text-to-image')?.aspectRatios).toEqual([
+      'auto', '1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16',
+      '2:1', '1:2', '3:1', '1:3', '21:9', '9:21', '5:4', '4:5',
+    ]);
+    expect(findImageEntry('gpt-image-2-image-to-image')?.aspectRatios).toEqual([
+      'auto', '1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16',
+      '2:1', '1:2', '3:1', '1:3', '21:9', '9:21', '5:4', '4:5',
+    ]);
+    expect(findImageEntry('flux-2/pro-text-to-image')?.aspectRatios).toEqual(['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3']);
+    expect(findImageEntry('flux-2/pro-image-to-image')?.aspectRatios).toEqual(['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', 'auto']);
+    expect(findImageEntry('seedream/5-lite-text-to-image')?.aspectRatios).toEqual(['1:1', '4:3', '3:4', '16:9', '9:16', '2:3', '3:2', '21:9']);
+    expect(findImageEntry('seedream/5-lite-image-to-image')?.aspectRatios).toEqual(['1:1', '4:3', '3:4', '16:9', '9:16', '2:3', '3:2', '21:9']);
+    expect(findImageEntry('flux-kontext-pro')?.aspectRatios).toEqual(['16:9', '21:9', '4:3', '1:1', '3:4', '9:16', '16:21']);
+    expect(findImageEntry('flux-kontext-max')?.aspectRatios).toEqual(['16:9', '21:9', '4:3', '1:1', '3:4', '9:16', '16:21']);
 
     expect(entries.find((candidate) => candidate.providerId === 'gpt-image-2-image-to-image')).toMatchObject({
       requiresReferenceMedia: true,
@@ -176,7 +196,13 @@ describe('FlashBoard audio catalog contract', () => {
       outputType: 'video',
       durations: [5, 10],
       modes: ['720p', '1080p'],
+      aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
       promptRefinerProfile: 'runway',
+    });
+    expect(entries.find((candidate) => (
+      candidate.service === 'cloud' && candidate.providerId === 'runway-video'
+    ))).toMatchObject({
+      aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
     });
     expect(entries.find((candidate) => candidate.providerId === 'topaz/video-upscale')).toMatchObject({
       service: 'kieai',

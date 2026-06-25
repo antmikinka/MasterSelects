@@ -1,6 +1,6 @@
 import { Logger } from '../logger';
 import type { GenerationReferenceMedia } from '../piApiService';
-import type { FlashBoardGenerationRequest, FlashBoardMediaType } from '../../stores/flashboardStore/types';
+import type { FlashBoardGenerationRequest, FlashBoardJobRefund, FlashBoardMediaType } from '../../stores/flashboardStore/types';
 import type { SubmitGenerationJobInput, SubmitGenerationJobResult } from './types';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useMediaStore } from '../../stores/mediaStore';
@@ -121,6 +121,7 @@ type JobUpdateCallback = (recordId: string, update: {
   assetUrl?: string;
   assetFile?: File;
   mediaType?: FlashBoardMediaType;
+  refund?: FlashBoardJobRefund;
 }) => void;
 
 class FlashBoardJobService {

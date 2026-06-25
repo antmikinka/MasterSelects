@@ -311,6 +311,7 @@ export function MediaPanel() {
     getAiReferenceMediaFileIds: () => useFlashBoardStore.getState().composer.referenceMediaFileIds ?? [],
     updateAiReferenceMediaFileIds: (referenceMediaFileIds) => updateFlashBoardComposer({ referenceMediaFileIds }),
     importFiles,
+    importFilesWithHandles,
     importFilesWithPicker,
     createComposition,
     createFolder,

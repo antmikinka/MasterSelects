@@ -4,6 +4,7 @@ import { createDefaultFlashBoardComposer } from './defaults';
 import type {
   FlashBoardActiveGenerationRecord,
   FlashBoardGenerationRequest,
+  FlashBoardJobRefund,
   FlashBoardJobState,
   FlashBoardResult,
   FlashBoardStoreState,
@@ -131,10 +132,11 @@ export function updateFlashBoardActiveGenerationJob(
 export function failFlashBoardActiveGenerationRecord(
   recordId: string,
   error: string,
+  refund?: FlashBoardJobRefund,
 ): void {
   updateFlashBoardActiveGenerationRecord(recordId, (record) => ({
     ...record,
-    job: { ...record.job, status: 'failed', error },
+    job: { ...record.job, status: 'failed', error, refund: refund ?? record.job?.refund },
     updatedAt: Date.now(),
   }));
 }

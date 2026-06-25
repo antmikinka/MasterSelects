@@ -1,5 +1,6 @@
 import type { VideoProvider } from '../piApiService';
 import {
+  RUNWAY_ASPECT_RATIOS,
   RUNWAY_VIDEO_PROVIDER_ID,
   SEEDANCE_2_ASPECT_RATIOS,
   SEEDANCE_2_DURATIONS,
@@ -61,7 +62,7 @@ const KIEAI_PROVIDERS: VideoProvider[] = [
     versions: ['latest'],
     supportedModes: ['720p', '1080p'],
     supportedDurations: [5, 10],
-    supportedAspectRatios: ['16:9', '9:16', '1:1'],
+    supportedAspectRatios: RUNWAY_ASPECT_RATIOS,
     supportsImageToVideo: true,
     supportsTextToVideo: true,
   },

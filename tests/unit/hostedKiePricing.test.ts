@@ -11,7 +11,7 @@ import {
   createHostedSunoSoundsTask,
   getHostedKlingTask,
 } from '../../functions/lib/kieai';
-import { normalizeHostedKlingParams } from '../../functions/lib/providers/kieai';
+import { normalizeHostedImageParams, normalizeHostedKlingParams } from '../../functions/lib/providers/kieai';
 import type { Env } from '../../functions/lib/env';
 import { getModelCreditCost } from '../../functions/lib/modelPricing';
 import { getFlashBoardPriceEstimate } from '../../src/services/flashboard/FlashBoardPricing';
@@ -32,6 +32,50 @@ describe('hosted Kie.ai pricing', () => {
     expect(calculateHostedImageCost('nano-banana-2', '1K')).toBe(48);
     expect(calculateHostedImageCost('nano-banana-2', '2K')).toBe(72);
     expect(calculateHostedImageCost('nano-banana-2', '4K')).toBe(108);
+  });
+
+  it('rejects currently failing hosted Imagen providers at the route boundary', () => {
+    expect(normalizeHostedImageParams({
+      aspectRatio: '16:9',
+      outputType: 'image',
+      prompt: 'tree',
+      provider: 'google/imagen4-fast',
+      resolution: '1K',
+    })).toBeNull();
+  });
+
+  it('uses hosted image edit provider input keys', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          downloadUrl: 'https://cdn.example.com/download/source',
+          fileUrl: 'https://cdn.example.com/source.png',
+        },
+        success: true,
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        code: 200,
+        data: { taskId: 'gpt_image_edit_task_1' },
+        msg: 'success',
+      }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(createHostedImageTask({
+      KIEAI_API_KEY: 'kie_test_key',
+    } as Partial<Env> as Env, {
+      aspectRatio: 'auto',
+      imageInputs: ['data:image/png;base64,AAAA'],
+      prompt: 'Keep the subject and replace the background.',
+      provider: 'gpt-image-2-image-to-image',
+      resolution: '1K',
+    })).resolves.toEqual({ taskId: 'gpt_image_edit_task_1' });
+
+    const createBody = JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string);
+    expect(createBody.input).toEqual({
+      aspect_ratio: 'auto',
+      input_urls: ['https://cdn.example.com/source.png'],
+      prompt: 'Keep the subject and replace the background.',
+    });
   });
 
   it('normalizes hosted Kling reference media for production cloud requests', () => {

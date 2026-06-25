@@ -139,6 +139,13 @@ export interface FlashBoardJobState {
   startedAt?: number;
   completedAt?: number;
   error?: string;
+  refund?: FlashBoardJobRefund;
+}
+
+export interface FlashBoardJobRefund {
+  creditBalance: number;
+  credits: number;
+  jobId: string;
 }
 
 export interface FlashBoardResult {

@@ -2,7 +2,7 @@ import { piApiService } from '../piApiService';
 import { kieAiService } from '../kieAiService';
 import { cloudAiService } from '../cloudAiService';
 import type { TextToVideoParams, ImageToVideoParams, GenerationReferenceMedia } from '../piApiService';
-import type { FlashBoardGenerationRequest, FlashBoardMediaType } from '../../stores/flashboardStore/types';
+import type { FlashBoardGenerationRequest, FlashBoardJobRefund, FlashBoardMediaType } from '../../stores/flashboardStore/types';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useMediaStore } from '../../stores/mediaStore';
 import { getCatalogEntry } from './FlashBoardModelCatalog';
@@ -30,6 +30,7 @@ export type FlashBoardProviderRunnerResult = {
   assetUrl?: string;
   assetFile?: File;
   mediaType?: FlashBoardMediaType;
+  refund?: FlashBoardJobRefund;
 } | null;
 
 interface FlashBoardProviderRunnerContext {
@@ -184,6 +185,7 @@ async function runSunoMusicJob({
   return {
     status: 'failed',
     error: task.error || 'Suno generation finished without an audio URL.',
+    refund: task.refund,
     remoteTaskId,
   };
 }
@@ -259,6 +261,7 @@ async function runSunoSoundsJob({
   return {
     status: 'failed',
     error: task.error || 'Suno Sounds generation finished without an audio URL.',
+    refund: task.refund,
     remoteTaskId,
   };
 }
@@ -385,6 +388,7 @@ async function runImageJob({
   return {
     status: 'failed',
     error: result.error || 'Image generation failed',
+    refund: result.refund,
     remoteTaskId,
   };
 }
@@ -503,10 +507,10 @@ async function runVideoJob({
   );
 
   if (task.status === 'completed' && task.videoUrl) {
-    return { status: 'completed', assetUrl: task.videoUrl, mediaType: 'video' };
+    return { status: 'completed', assetUrl: task.videoUrl, mediaType: 'video', remoteTaskId };
   }
   if (task.status === 'failed') {
-    return { status: 'failed', error: task.error || 'Generation failed' };
+    return { status: 'failed', error: task.error || 'Generation failed', refund: task.refund, remoteTaskId };
   }
 
   return null;

@@ -31,6 +31,7 @@ interface UseMediaPanelCommandBindingsInput {
   getAiReferenceMediaFileIds: () => string[];
   updateAiReferenceMediaFileIds: (referenceMediaFileIds: string[]) => void;
   importFiles: MediaStoreState['importFiles'];
+  importFilesWithHandles: MediaStoreState['importFilesWithHandles'];
   importFilesWithPicker: MediaStoreState['importFilesWithPicker'];
   createComposition: MediaStoreState['createComposition'];
   createFolder: MediaStoreState['createFolder'];
@@ -89,6 +90,7 @@ export function useMediaPanelCommandBindings({
   getAiReferenceMediaFileIds,
   updateAiReferenceMediaFileIds,
   importFiles,
+  importFilesWithHandles,
   importFilesWithPicker,
   createComposition,
   createFolder,
@@ -198,6 +200,10 @@ export function useMediaPanelCommandBindings({
     duplicateMediaItems,
     pasteMediaItems,
     hasMediaClipboard,
+    folders,
+    createFolder,
+    importFiles,
+    importFilesWithHandles,
     handleDelete,
   });
 
